@@ -14,7 +14,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import path, { basename, dirname } from "node:path";
 import type {
 	Agent,
 	AgentEvent,
@@ -34,6 +34,7 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@v3dqnt/vivianne-agent-ai/compat";
+import { getAgentDir } from "../config.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -51,6 +52,7 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.ts";
+import { getEnvironmentalContext } from "./context/environment.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
@@ -81,6 +83,7 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
+import { MemoryManager } from "./memory/memory-manager.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import type { ModelRegistry } from "./model-registry.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
@@ -91,13 +94,9 @@ import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
-import { getEnvironmentalContext } from "./context/environment.ts";
-import { MemoryManager } from "./memory/memory-manager.ts";
-import path from "node:path";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
-import { createAllToolDefinitions } from "./tools/index.ts";
+import { createAllToolDefinitions, TodoListStore } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
-import { getAgentDir } from "../config.ts";
 
 // ============================================================================
 // Skill Block Parsing
@@ -152,7 +151,13 @@ export type AgentSessionEvent =
 	  }
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
-	| { type: "ask_user_tool"; question: string; recommendations?: string[]; resolve: (response: string) => void; reject: (err: any) => void };
+	| {
+			type: "ask_user_tool";
+			question: string;
+			recommendations?: string[];
+			resolve: (response: string) => void;
+			reject: (err: any) => void;
+	  };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -337,6 +342,11 @@ export class AgentSession {
 	private _baseSystemPrompt = "";
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
 	private _memoryManager: MemoryManager;
+	private _todoStore = new TodoListStore();
+	// Caps how many times a single user turn can be auto-continued because the todo list
+	// still has unfinished items, so a model that won't update its own list can't loop forever.
+	private _todoNudgeCount = 0;
+	private static readonly MAX_TODO_NUDGES = 1;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -991,9 +1001,49 @@ export class AgentSession {
 			return true;
 		}
 
+		if (this._checkIncompleteTodos(msg)) {
+			return true;
+		}
+
 		// The agent loop drains both queues before emitting agent_end. Any messages
 		// here were queued by agent_end extension handlers and need a continuation.
 		return this.agent.hasQueuedMessages();
+	}
+
+	/**
+	 * If the agent stopped organically (no tool calls, no error) while the todo list still has
+	 * unfinished items, nudge it to keep going instead of ending the turn silently. Capped at
+	 * MAX_TODO_NUDGES per user turn so a model that won't update its own list can't loop forever.
+	 */
+	private _checkIncompleteTodos(msg: AssistantMessage): boolean {
+		if (msg.stopReason !== "stop") return false;
+		if (!this._toolRegistry.has("todo_write")) return false;
+		if (this._todoNudgeCount >= AgentSession.MAX_TODO_NUDGES) return false;
+
+		const incomplete = this._todoStore.getItems().filter((item) => item.status !== "completed");
+		if (incomplete.length === 0) return false;
+
+		this._todoNudgeCount++;
+		const list = incomplete.map((item) => `- [${item.status}] ${item.content}`).join("\n");
+		this.agent.followUp({
+			role: "user",
+			content: [
+				{
+					type: "text",
+					text: `Your todo list still has unfinished items:\n${list}\n\nContinue the task. If you're genuinely blocked or an item is no longer needed, call todo_write to update its status and say why in your next message.`,
+				},
+			],
+			timestamp: Date.now(),
+		});
+		return true;
+	}
+
+	/** Fire-and-forget: store a compaction summary as an episodic memory. Failures are logged, not thrown. */
+	private _storeMemoryEpisode(summary: string): void {
+		const sessionId = this.sessionManager.getSessionId();
+		void this._memoryManager.extractAndStoreEpisode(summary, sessionId).catch((e) => {
+			console.error("Failed to store memory episode:", e);
+		});
 	}
 
 	/**
@@ -1009,6 +1059,8 @@ export class AgentSession {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
 		let messages: AgentMessage[] | undefined;
+		// A new user-initiated turn gets a fresh todo-nudge budget.
+		this._todoNudgeCount = 0;
 
 		try {
 			// Handle extension commands first (execute immediately, even during streaming)
@@ -1677,7 +1729,9 @@ export class AgentSession {
 					if (resolvedModel) {
 						compactionModel = resolvedModel;
 					} else {
-						console.warn(`Failed to resolve compactionModel '${settings.compactionModel}', falling back to main model.`);
+						console.warn(
+							`Failed to resolve compactionModel '${settings.compactionModel}', falling back to main model.`,
+						);
 					}
 				}
 			}
@@ -1756,12 +1810,7 @@ export class AgentSession {
 
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension);
 
-			if (this._memoryManager) {
-				const sessionId = this.sessionManager.getSessionId();
-				void this._memoryManager.extractAndStoreEpisode(summary, sessionId).catch((e) => {
-					console.error("Failed to store memory episode:", e);
-				});
-			}
+			this._storeMemoryEpisode(summary);
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
@@ -2044,12 +2093,7 @@ export class AgentSession {
 
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension);
 
-			if (this._memoryManager) {
-				const sessionId = this.sessionManager.getSessionId();
-				void this._memoryManager.extractAndStoreEpisode(summary, sessionId).catch((e) => {
-					console.error("Failed to store memory episode:", e);
-				});
-			}
+			this._storeMemoryEpisode(summary);
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
@@ -2459,6 +2503,13 @@ export class AgentSession {
 							});
 						},
 					},
+					todo_write: { store: this._todoStore },
+					recall: {
+						onRecall: (query, limit) => this._memoryManager.recall(query, limit),
+					},
+					remember: {
+						onRemember: (content) => this._memoryManager.remember(content, this.sessionManager.getSessionId()),
+					},
 				});
 
 		this._baseToolDefinitions = new Map(
@@ -2487,7 +2538,7 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write", "ask_user"];
+			: ["read", "bash", "edit", "write", "ask_user", "todo_write", "recall", "remember"];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,

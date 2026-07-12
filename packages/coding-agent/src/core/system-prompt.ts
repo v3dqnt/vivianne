@@ -110,6 +110,8 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const hasFind = tools.includes("find");
 	const hasLs = tools.includes("ls");
 	const hasRead = tools.includes("read");
+	const hasTodoWrite = tools.includes("todo_write");
+	const hasRecall = tools.includes("recall") || tools.includes("remember");
 
 	// File exploration guidelines
 	if (hasBash && !hasGrep && !hasFind && !hasLs) {
@@ -129,6 +131,23 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
 
+	const disciplineLines: string[] = [
+		"Each turn, either make tool calls because you need information or need to change something, or write your final answer because the task is done and verified. Never end a turn with a plan, a list of next steps, or a promise to do something later - if your message describes work, do that work with tool calls instead of describing it.",
+		"You are not done when: tests still fail, an error appeared you haven't explained, or you've only completed part of a multi-step request. Keep going - retrying after a fixable error is your job, not a reason to stop. If the same fix has failed twice for the same reason, stop and re-read the relevant code before trying again rather than repeating it.",
+		"Verify before reporting success: after a change, run the cheapest check that would catch it being wrong (tests, the affected command, a reproduction) and look at the output. If you truly cannot verify, say so explicitly instead of claiming it works.",
+	];
+	if (hasTodoWrite) {
+		disciplineLines.push(
+			"For tasks with 3+ distinct steps you might otherwise lose track of, use todo_write to track them and update statuses as you go. Check the list before ending your turn - finish remaining items or explicitly explain why you're leaving one incomplete.",
+		);
+	}
+	if (hasRecall) {
+		disciplineLines.push(
+			"Use recall at the start of a task that plausibly touches prior context (a project you've seen before, stated user preferences). Use remember for durable facts: user preferences, project constraints, corrections you were given - not things the repo already records or that only matter this session.",
+		);
+	}
+	const discipline = disciplineLines.map((line) => `- ${line}`).join("\n");
+
 	let prompt = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
 
 <system_directives>
@@ -136,9 +155,9 @@ Current OS: {{ os_name }} (Battery: {{ battery_level }}%)
 Current Active App: {{ active_window_title }}
 </system_directives>
 
-<user_preferences>
-{{ retrieved_semantic_preferences }}
-</user_preferences>
+<agent_discipline>
+${discipline}
+</agent_discipline>
 
 Available tools:
 ${toolsList}
@@ -186,7 +205,7 @@ Pi documentation (read only when the user asks about pi itself, its SDK, extensi
 			prompt = prompt.replace(new RegExp(`{{ ${key} }}`, "g"), value);
 		}
 	}
-	
+
 	// Clean up any unfilled templates
 	prompt = prompt.replace(/{{[^}]+}}/g, "unknown");
 

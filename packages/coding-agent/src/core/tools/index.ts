@@ -1,4 +1,10 @@
 export {
+	type AskUserToolInput,
+	type AskUserToolOptions,
+	createAskUserTool,
+	createAskUserToolDefinition,
+} from "./ask-user.ts";
+export {
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
@@ -10,17 +16,11 @@ export {
 	createLocalBashOperations,
 } from "./bash.ts";
 export {
-	createComputerTool,
-	createComputerToolDefinition,
 	type ComputerToolInput,
 	type ComputerToolOptions,
+	createComputerTool,
+	createComputerToolDefinition,
 } from "./computer.ts";
-export {
-	createAskUserTool,
-	createAskUserToolDefinition,
-	type AskUserToolInput,
-	type AskUserToolOptions,
-} from "./ask-user.ts";
 export {
 	createEditTool,
 	createEditToolDefinition,
@@ -63,6 +63,27 @@ export {
 	type ReadToolOptions,
 } from "./read.ts";
 export {
+	createRecallTool,
+	createRecallToolDefinition,
+	type RecalledMemory,
+	type RecallToolInput,
+	type RecallToolOptions,
+} from "./recall.ts";
+export {
+	createRememberTool,
+	createRememberToolDefinition,
+	type RememberToolInput,
+	type RememberToolOptions,
+} from "./remember.ts";
+export {
+	createTodoWriteTool,
+	createTodoWriteToolDefinition,
+	type TodoItem,
+	TodoListStore,
+	type TodoWriteToolInput,
+	type TodoWriteToolOptions,
+} from "./todo.ts";
+export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	formatSize,
@@ -82,20 +103,48 @@ export {
 
 import type { AgentTool } from "@v3dqnt/vivianne-agent-agent-core";
 import type { ToolDefinition } from "../extensions/types.ts";
+import { type AskUserToolOptions, createAskUserTool, createAskUserToolDefinition } from "./ask-user.ts";
 import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.ts";
+import { type ComputerToolOptions, createComputerTool, createComputerToolDefinition } from "./computer.ts";
 import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./edit.ts";
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./find.ts";
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./grep.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
+import { createRecallTool, createRecallToolDefinition, type RecallToolOptions } from "./recall.ts";
+import { createRememberTool, createRememberToolDefinition, type RememberToolOptions } from "./remember.ts";
+import { createTodoWriteTool, createTodoWriteToolDefinition, type TodoWriteToolOptions } from "./todo.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.ts";
-import { createComputerTool, createComputerToolDefinition, type ComputerToolOptions } from "./computer.ts";
-import { createAskUserTool, createAskUserToolDefinition, type AskUserToolOptions } from "./ask-user.ts";
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
-export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls" | "computer" | "ask_user";
-export const allToolNames: Set<ToolName> = new Set(["read", "bash", "edit", "write", "grep", "find", "ls", "computer", "ask_user"]);
+export type ToolName =
+	| "read"
+	| "bash"
+	| "edit"
+	| "write"
+	| "grep"
+	| "find"
+	| "ls"
+	| "computer"
+	| "ask_user"
+	| "todo_write"
+	| "recall"
+	| "remember";
+export const allToolNames: Set<ToolName> = new Set([
+	"read",
+	"bash",
+	"edit",
+	"write",
+	"grep",
+	"find",
+	"ls",
+	"computer",
+	"ask_user",
+	"todo_write",
+	"recall",
+	"remember",
+]);
 
 export interface ToolsOptions {
 	read?: ReadToolOptions;
@@ -107,6 +156,9 @@ export interface ToolsOptions {
 	ls?: LsToolOptions;
 	computer?: ComputerToolOptions;
 	ask_user?: AskUserToolOptions;
+	todo_write?: TodoWriteToolOptions;
+	recall?: RecallToolOptions;
+	remember?: RememberToolOptions;
 }
 
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
@@ -129,6 +181,12 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createComputerToolDefinition(options?.computer);
 		case "ask_user":
 			return createAskUserToolDefinition(options?.ask_user);
+		case "todo_write":
+			return createTodoWriteToolDefinition(options?.todo_write);
+		case "recall":
+			return createRecallToolDefinition(options?.recall);
+		case "remember":
+			return createRememberToolDefinition(options?.remember);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -154,6 +212,12 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createComputerTool(options?.computer);
 		case "ask_user":
 			return createAskUserTool(options?.ask_user);
+		case "todo_write":
+			return createTodoWriteTool(options?.todo_write);
+		case "recall":
+			return createRecallTool(options?.recall);
+		case "remember":
+			return createRememberTool(options?.remember);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -188,6 +252,9 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		ls: createLsToolDefinition(cwd, options?.ls),
 		computer: createComputerToolDefinition(options?.computer),
 		ask_user: createAskUserToolDefinition(options?.ask_user),
+		todo_write: createTodoWriteToolDefinition(options?.todo_write),
+		recall: createRecallToolDefinition(options?.recall),
+		remember: createRememberToolDefinition(options?.remember),
 	};
 }
 
@@ -220,5 +287,8 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		ls: createLsTool(cwd, options?.ls),
 		computer: createComputerTool(options?.computer),
 		ask_user: createAskUserTool(options?.ask_user),
+		todo_write: createTodoWriteTool(options?.todo_write),
+		recall: createRecallTool(options?.recall),
+		remember: createRememberTool(options?.remember),
 	};
 }
