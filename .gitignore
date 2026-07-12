@@ -1,0 +1,68 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+*.tsbuildinfo
+# packages/*/node_modules/
+packages/*/dist/
+packages/*/dist-chrome/
+packages/*/dist-firefox/
+*.cpuprofile
+
+# Environment
+.env
+
+# Editor files
+.vscode/
+.zed/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+
+# Package specific
+.npm/
+coverage/
+.nyc_output/
+.pi_config/
+tui-debug.log
+compaction-results/
+.opencode/
+syntax.jsonl
+out.jsonl
+pi-*.html
+out.html
+packages/coding-agent/binaries/
+todo.md
+plans/
+.pi/hf-sessions/
+.pi/hf-sessions-backup/
+collect.sh
+
+# ── Heavy vendored / build artifacts — must never be pushed ──
+# Vendored native deps and model weights (multi-GB; GitHub rejects >100MB files).
+llama.cpp/
+llama.cpp-src/
+models/
+raw-models/
+ssm-moe/
+# Rust build output.
+target/
+packages/*/src-tauri/target/
+# Next.js build output.
+.next/
+out/
+packages/*/.next/
+packages/*/out/
+# Stray Windows artifact.
+nul
+
+# ── Secrets — never commit ──
+*.key
+*.pem
+*.p12
+*.pfx
+id_rsa
+credentials.json
+.env.*

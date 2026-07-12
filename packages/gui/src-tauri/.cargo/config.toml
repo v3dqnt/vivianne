@@ -1,0 +1,22 @@
+# Point whisper-rs's bindgen at the LLVM install so it can find libclang.dll
+# without requiring a manually-set LIBCLANG_PATH environment variable.
+# Installed via `winget install LLVM.LLVM`.
+[env]
+LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
+# CMake is installed (winget Kitware.CMake) but not on PATH in every shell;
+# the `cmake` crate used by whisper-rs-sys honors this override.
+CMAKE = "C:\\Program Files\\CMake\\bin\\cmake.exe"
+# CMake's Visual Studio generator auto/manual detection could not enumerate
+# any installed VS instance on this machine (2019 BuildTools, 2022 BuildTools,
+# and 2026 Community are all present, but every "Visual Studio NN YYYY"
+# generator failed with "could not find any instance of Visual Studio").
+# Ninja sidesteps that lookup entirely — it just needs cl.exe/link.exe on
+# PATH, which we provide by running the build from inside a VS Developer
+# environment (see scripts/build-with-msvc.ps1).
+CMAKE_GENERATOR = "Ninja"
+# whisper-rs-sys's shipped bindings.rs is generated on Linux (its layout tests
+# reference glibc types like _G_fpos_t) so it can never compile on Windows —
+# bindgen MUST run here. Point clang at its own builtin-header resource dir
+# explicitly so `stdbool.h` resolves regardless of the invoking environment
+# (npm → tauri → cargo loses whatever made it resolve implicitly).
+BINDGEN_EXTRA_CLANG_ARGS = "-I\"C:\\Program Files\\LLVM\\lib\\clang\\22\\include\""

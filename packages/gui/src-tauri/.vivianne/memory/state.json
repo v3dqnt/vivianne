@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "autoConsolidate": true,
+  "createdAt": 1783799671061,
+  "updatedAt": 1783799673665,
+  "lastInjectedAt": 1783872081937,
+  "extractionEnabled": true,
+  "lastExtractionAt": null,
+  "lastPersonaSynthesisAt": null
+}

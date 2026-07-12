@@ -1,0 +1,192 @@
+@import "tailwindcss";
+@source "../../node_modules/streamdown/dist/*.js";
+
+@theme {
+  /* ── Colors (Cream / Charcoal Palette — see design.md) ── */
+  --color-primary: #1c1c1c;
+  --color-on-primary: #fcfbf8;
+  --color-ink: #1c1c1c;
+  --color-ink-strong: rgba(28,28,28,0.83);
+  --color-ink-deep: #141414;
+  --color-charcoal: #1c1c1c;
+  --color-body: #5f5f5d;
+  --color-mute: rgba(28,28,28,0.4);
+  --color-canvas: #ffffff;
+  --color-canvas-warm: #fafafa;
+  --color-surface-soft: rgba(28,28,28,0.04);
+  --color-surface-subtle: rgba(28,28,28,0.03);
+  --color-surface-card: #ffffff;
+  --color-surface-elevated: #ffffff;
+  --color-surface-dark: #171717;
+  --color-hairline: #e5e5e5;
+  --color-hairline-strong: rgba(28,28,28,0.4);
+  --color-on-dark: #fcfbf8;
+  --color-on-dark-mute: rgba(252,251,248,0.7);
+  --color-focus-ring: rgba(59,130,246,0.5);
+
+  /* ── Font Families ── */
+  --font-sans: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono), ui-monospace, monospace;
+  --font-display: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+
+  /* ── Radii (Ollama Pill + Card) ── */
+  --radius-none: 0px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* ── Spacing (Ollama 8px Base) ── */
+  --spacing-px: 1px;
+  --spacing-0: 0px;
+  --spacing-px: 1px;
+  --spacing-0\.5: 2px;
+  --spacing-1: 4px;
+  --spacing-1\.5: 6px;
+  --spacing-2: 8px;
+  --spacing-2\.5: 10px;
+  --spacing-3: 12px;
+  --spacing-3\.5: 14px;
+  --spacing-4: 16px;
+  --spacing-5: 20px;
+  --spacing-6: 24px;
+  --spacing-7: 28px;
+  --spacing-8: 32px;
+  --spacing-9: 36px;
+  --spacing-10: 40px;
+  --spacing-11: 44px;
+  --spacing-12: 48px;
+  --spacing-14: 56px;
+  --spacing-16: 64px;
+  --spacing-20: 80px;
+  --spacing-22: 88px;
+  --spacing-24: 96px;
+  --spacing-28: 112px;
+  --spacing-32: 128px;
+  --spacing-36: 144px;
+  --spacing-40: 160px;
+  --spacing-44: 176px;
+  --spacing-48: 192px;
+  --spacing-52: 208px;
+  --spacing-56: 224px;
+  --spacing-60: 240px;
+  --spacing-64: 256px;
+  --spacing-72: 288px;
+  --spacing-80: 320px;
+  --spacing-96: 384px;
+
+  /* ── shadcn/ui semantic tokens (mapped onto the Cream/Charcoal palette) ── */
+  --color-background: var(--color-canvas);
+  --color-foreground: var(--color-ink);
+  --color-card: var(--color-surface-card);
+  --color-card-foreground: var(--color-ink);
+  --color-popover: var(--color-surface-elevated);
+  --color-popover-foreground: var(--color-ink);
+  --color-primary-foreground: var(--color-on-primary);
+  --color-secondary: var(--color-surface-soft);
+  --color-secondary-foreground: var(--color-ink);
+  --color-muted: var(--color-surface-soft);
+  --color-muted-foreground: var(--color-body);
+  --color-accent: var(--color-surface-soft);
+  --color-accent-foreground: var(--color-ink);
+  --color-destructive: #b91c1c;
+  --color-destructive-foreground: #fcfbf8;
+  --color-border: var(--color-hairline);
+  --color-input: var(--color-hairline);
+  --color-ring: var(--color-focus-ring);
+
+  /* ── Easing (motion.dev) ── */
+  --ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── Document ── */
+html, body {
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  margin: 0;
+}
+
+/* ── Selection ── */
+::selection {
+  background-color: rgba(0, 0, 0, 0.1);
+  color: var(--color-ink);
+}
+
+/* ── Scrollbar (Minimal) ── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-hairline);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-hairline-strong);
+}
+
+/* ── Focus Ring ── */
+*:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* ── Code / Monospace ── */
+code, pre, kbd, samp {
+  font-family: var(--font-mono);
+}
+
+/* ── Siri-orb glow — small conic rainbow halo behind the mic glyph while the
+   voice pipeline is actively listening/transcribing/responding. ── */
+@property --lg-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.liquid-orb--active::before {
+  content: "";
+  position: absolute;
+  inset: -60%;
+  border-radius: 9999px;
+  background: conic-gradient(
+    from var(--lg-angle),
+    #7dd3fc 0deg,
+    #a78bfa 70deg,
+    #f472b6 140deg,
+    #fb923c 200deg,
+    #facc15 260deg,
+    #7dd3fc 360deg
+  );
+  filter: blur(6px) saturate(1.7);
+  opacity: 0.85;
+  animation: lg-spin 3.5s linear infinite;
+  z-index: 0;
+}
+
+@keyframes lg-spin {
+  to {
+    --lg-angle: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liquid-orb--active::before {
+    animation: none;
+  }
+}

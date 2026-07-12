@@ -1,0 +1,1 @@
+{"id":"84ae8f35-0c5a-43b8-9e44-362b8760efd0","key":"auto_ran_npm_run_build_npm_install","text":"Ran: npm run build; npm install; cd packages/gui && npm install; dir. Result: Let's check the directory structure to find where the `package.json` is:","kind":"auto","sessionId":null,"createdAt":1783801626323}

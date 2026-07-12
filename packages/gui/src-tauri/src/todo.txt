@@ -1,0 +1,302 @@
+[
+  {
+    "content": "1️⃣ Analyse Nanobot Image‑Generation UI & API",
+    "status": "pending"
+  },
+  {
+    "content": "  • Nanobot UI: webui/src/components/settings/SettingsView.tsx (section \"image\")",
+    "status": "pending"
+  },
+  {
+    "content": "  • Nanobot UI: webui/src/components/thread/ThreadComposer.tsx (image attach handling)",
+    "status": "pending"
+  },
+  {
+    "content": "  • Nanobot API: webui/src/lib/api.ts → updateImageGenerationSettings, fetchSettings",
+    "status": "pending"
+  },
+  {
+    "content": "  • Outcome: list of required UI behaviours (provider picker, size/aspect‑ratio dropdown, max‑images/turn) and the JSON schema Nanobot stores in the gateway.",
+    "status": "pending"
+  },
+
+  {
+    "content": "2️⃣ Implement Rust image‑generation command (cmd_generate_image)",
+    "status": "pending"
+  },
+  {
+    "content": "  • New file: viv‑main‑gui‑exp/packages/gui/src‑tauri/src/image.rs",
+    "status": "pending"
+  },
+  {
+    "content": "  • Function signature: #[tauri::command] async fn cmd_generate_image(prompt: String, provider: Option<String>, size: Option<String>, aspect: Option<String>, state: State<'_, Arc<AppState>>) -> Result<String, String>",
+    "status": "pending"
+  },
+  {
+    "content": "  • Use `reqwest` + `serde_json` to call the configured provider’s HTTP API (e.g. OpenAI DALL‑E, Stability AI).",
+    "status": "pending"
+  },
+  {
+    "content": "  • Return a data‑URL (`data:image/png;base64,…`) that the front‑end can inline‑display.",
+    "status": "pending"
+  },
+  {
+    "content": "  • Persist the chosen provider/size/aspect in the app‑data store via `tauri-plugin-store` (key: \"image_settings\").",
+    "status": "pending"
+  },
+
+  {
+    "content": "3️⃣ Add Image‑Generation Settings commands (get / set) + UI hook",
+    "status": "pending"
+  },
+  {
+    "content": "  • Commands in src‑tauri/src/lib.rs (invoke_handler): cmd_get_image_settings, cmd_set_image_settings",
+    "status": "pending"
+  },
+  {
+    "content": "  • Store schema (provider, size, aspect, max_per_turn) in a tiny struct `ImageSettings` (derive Serialize/Deserialize).",
+    "status": "pending"
+  },
+  {
+    "content": "  • Front‑end stub: create `src/components/settings/ImageSettings.tsx` (mirrors Nanobot’s UI) that calls the new Tauri commands via `invoke`.  (Only a placeholder – UI can be built later.)",
+    "status": "pending"
+  },
+
+  {
+    "content": "4️⃣ Analyse Nanobot Automation UI & API",
+    "status": "pending"
+  },
+  {
+    "content": "  • UI: webui/src/components/AutomationsPanel.tsx (list, filter, sort, run‑now, pause, edit, delete).",
+    "status": "pending"
+  },
+  {
+    "content": "  • API: webui/src/lib/api.ts → fetchAutomations, runAutomationAction, updateAutomation, etc.",
+    "status": "pending"
+  },
+  {
+    "content": "  • Backend (gateway) stores automations in a SQLite/JSON table and uses `croniter`‑style scheduling.",
+    "status": "pending"
+  },
+
+  {
+    "content": "5️⃣ Create Rust automation subsystem",
+    "status": "pending"
+  },
+  {
+    "content": "  • New folder: viv‑main‑gui‑exp/packages/gui/src‑tauri/src/automation",
+    "status": "pending"
+  },
+  {
+    "content": "  • Types: `Automation { id: Uuid, name: String, schedule: Option<String>, trigger: Option<String>, linked_chat: Option<String>, enabled: bool, next_run: Option<DateTime<Utc>> }`",
+    "status": "pending"
+  },
+  {
+    "content": "  • Storage: `automation_store.json` in app‑data via `tauri-plugin-store` (read/write with serde).",
+    "status": "pending"
+  },
+  {
+    "content": "  • Scheduler: use the `cron` crate + a background `tokio::task` that wakes on the next due `DateTime` and emits a Tauri event `automation_fired` (payload `Automation`).",
+    "status": "pending"
+  },
+  {
+    "content": "  • Commands (all `#[tauri::command]`):",
+    "status": "pending"
+  },
+  {
+    "content": "    • cmd_automation_list() → Vec<Automation>",
+    "status": "pending"
+  },
+  {
+    "content": "    • cmd_automation_create(name, schedule, trigger, linked_chat) → Automation",
+    "status": "pending"
+  },
+  {
+    "content": "    • cmd_automation_update(id, fields…) → Automation",
+    "status": "pending"
+  },
+  {
+    "content": "    • cmd_automation_delete(id) → bool",
+    "status": "pending"
+  },
+  {
+    "content": "    • cmd_automation_run_now(id) → Result<(), String> (pushes a synthetic message into the Agent queue).",
+    "status": "pending"
+  },
+  {
+    "content": "    • cmd_automation_pause(id) / cmd_automation_resume(id)",
+    "status": "pending"
+  },
+
+  {
+    "content": "6️⃣ Wire automation commands into Tauri `invoke_handler` (lib.rs)",
+    "status": "pending"
+  },
+
+  {
+    "content": "7️⃣ Add minimal Automation UI stub (frontend)",
+    "status": "pending"
+  },
+  {
+    "content": "  • File: src/components/AutomationPanelStub.tsx – fetches list via `invoke('cmd_automation_list')` and renders a table with Run/Pause buttons.",
+    "status": "pending"
+  },
+
+  {
+    "content": "8️⃣ Analyse Nanobot Token‑Usage Heatmap",
+    "status": "pending"
+  },
+  {
+    "content": "  • UI: webui/src/components/settings/TokenUsageHeatmap.tsx",
+    "status": "pending"
+  },
+  {
+    "content": "  • API: webui/src/lib/api.ts → fetchSettingsUsage (returns per‑model token counts).",
+    "status": "pending"
+  },
+
+  {
+    "content": "9️⃣ Implement Rust token‑usage tracking",
+    "status": "pending"
+  },
+  {
+    "content": "  • Extend `AppState` with `token_counters: Arc<Mutex<HashMap<String, u64>>>` (key = model name).",
+    "status": "pending"
+  },
+  {
+    "content": "  • Every tool/LLM call (in `agent/agent.rs` → `prompt` / `continue_run`) increments the appropriate counter (by the number of tokens reported by the provider).",
+    "status": "pending"
+  },
+  {
+    "content": "  • New command: #[tauri::command] async fn cmd_get_token_usage(state: State<'_, Arc<AppState>>) -> Result<HashMap<String,u64>,String>",
+    "status": "pending"
+  },
+
+  {
+    "content": "10️⃣ Add UI hook for token heatmap (optional – can reuse Nanobot’s component).",
+    "status": "pending"
+  },
+
+  {
+    "content": "11️⃣ Analyse Nanobot Model‑Configuration UI & API",
+    "status": "pending"
+  },
+  {
+    "content": "  • UI: SettingsView → models tab (dropdown of providers & models).",
+    "status": "pending"
+  },
+  {
+    "content": "  • API: fetchModels, getModelsConfig, saveModelsConfig, setModelConfiguration (all in lib/api.ts).",
+    "status": "pending"
+  },
+
+  {
+    "content": "12️⃣ Add Rust model‑configuration commands",
+    "status": "pending"
+  },
+  {
+    "content": "  • Types: `ModelConfig { provider: String, model: String, context_window: u32, temperature: f32, ...}`",
+    "status": "pending"
+  },
+  {
+    "content": "  • Persistence: `model_config.json` via `tauri-plugin-store`.",
+    "status": "pending"
+  },
+  {
+    "content": "  • Commands:",
+    "status": "pending"
+  },
+  {
+    "content": "    • cmd_get_models_config() → Vec<ModelConfig>",
+    "status": "pending"
+  },
+  {
+    "content": "    • cmd_save_models_config(config: Vec<ModelConfig>) → bool",
+    "status": "pending"
+  },
+
+  {
+    "content": "13️⃣ Add Runtime‑Surface / Access‑Mode commands (already partially present in Vivianne but add missing UI bits)",
+    "status": "pending"
+  },
+  {
+    "content": "  • Commands (if not existing): cmd_get_runtime_surface, cmd_set_runtime_surface, cmd_set_access_mode.",
+    "status": "pending"
+  },
+
+  {
+    "content": "14️⃣ Analyse Nanobot Language Switcher",
+    "status": "pending"
+  },
+  {
+    "content": "  • UI: src/components/LanguageSwitcher.tsx (loads locales from src/i18n/locales/*.json).",
+    "status": "pending"
+  },
+  {
+    "content": "  • No Rust side needed – just copy the locale JSON into Vivianne’s `src-tauri/src/i18n/` and expose a tiny `cmd_get_locales` that returns the list of language codes.",
+    "status": "pending"
+  },
+  {
+    "content": "  • Add command: cmd_get_locales() → Vec<String>",
+    "status": "pending"
+  },
+
+  {
+    "content": "15️⃣ (Optional) Implement Observability Dashboard",
+    "status": "pending"
+  },
+  {
+    "content": "  • New UI page `src/components/ObservabilityPanel.tsx` (shows agent uptime, queue lengths, recent token usage).",
+    "status": "pending"
+  },
+  {
+    "content": "  • Backend commands:",
+    "status": "pending"
+  },
+  {
+    "content": "    • cmd_get_runtime_stats() → {uptime_secs, queued_messages, cpu_usage, …}",
+    "status": "pending"
+  },
+
+  {
+    "content": "16️⃣ Update Tauri `invoke_handler` registration (lib.rs) to include every new command listed above.",
+    "status": "pending"
+  },
+
+  {
+    "content": "17️⃣ Write unit‑tests for each new command (using `tauri::test::invoke` or plain Rust tests) and add them under `src-tauri/tests/`.",
+    "status": "pending"
+  },
+
+  {
+    "content": "18️⃣ Documentation: add a section to the repo `README.md` (or `docs/FEATURES.md`) describing the new features, how they map to Nanobot equivalents, and how to use them from the front‑end.",
+    "status": "pending"
+  }
+]
+
+| Feature | Nanobot file(s) | What the file does |
+| --- | --- | --- |
+| Image‑generation UI | webui/src/components/settings/SettingsView.tsx (image tab)  webui/src/components/thread/ThreadComposer.tsx (attach & send) | UI for selecting provider / size / aspect ratio, attaches images to the payload, calls api.updateImageGenerationSettings. |
+| Image‑generation API | webui/src/lib/api.ts – updateImageGenerationSettings, fetchSettings | Sends a PATCH to /api/settings/image-generation/update… and stores the config in the gateway. |
+| Automation UI | webui/src/components/AutomationsPanel.tsx | Table with filter/sort, Run‑Now, Pause/Resume buttons. |
+| Automation API | webui/src/lib/api.ts – fetchAutomations, runAutomationAction, updateAutomation | HTTP endpoints /api/automations (GET/POST/PUT/DELETE) that talk to the gateway’s scheduler. |
+| Token‑Usage Heatmap | webui/src/components/settings/TokenUsageHeatmap.tsx | Renders a heat‑map of per‑model token consumption. |
+| Token‑Usage API | webui/src/lib/api.ts – fetchSettingsUsage | Returns {model: tokens} JSON from the gateway. |
+| Model‑Config UI | webui/src/components/settings/SettingsView.tsx (models tab) | Dropdowns for provider, model, temperature, context‑window. |
+| Model‑Config API | webui/src/lib/api.ts – getModelsConfig, saveModelsConfig, cmd_set_model (gateway) | CRUD for model presets. |
+| Runtime / Access‑Mode UI | webui/src/components/settings/SettingsView.tsx (runtime tab) | Toggles Full / Restricted access and picks a workspace directory. |
+| Runtime API | webui/src/lib/api.ts – fetchWorkspaces, fetchSettings, updateSettings | Calls /api/workspaces, /api/settings etc. |
+| Language Switcher | webui/src/components/LanguageSwitcher.tsx + locale JSON files under webui/src/i18n/locales/* | UI dropdown that loads locale bundles via i18next. |
+| Diff Viewer | webui/src/components/thread/ThreadShell.tsx (unified diff rendering) | Parses diff strings, collapses unchanged hunks, shows “View diff”. |
+| Observability / Stats | (spread across) webui/src/components/settings/TokenUsageHeatmap.tsx, webui/src/components/settings/RuntimeSurface.tsx | Shows runtime health, token heat‑map, etc. |
+
+| Capability | Suggested Crates | Implementation Sketch |
+| --- | --- | --- |
+| Image Generation | reqwest, serde_json, base64, tokio | 1. Read the stored ImageSettings (provider, size, aspect). 2. Build provider‑specific HTTP request (e.g., POST https://api.openai.com/v1/images/generations). 3. Parse the returned base64 image, return data:image/png;base64,…. 4. Emit a ToolResult event so the UI can render it. |
+| Automation Scheduler | cron, tokio, uuid, serde, tauri-plugin-store | 1. Define Automation struct + JSON persistence file. 2. On app start, spawn a background task that loads all enabled automations, computes the next run via cron::Schedule, tokio::time::sleep_until. 3. When a fire time arrives, emit a automation_fired event; the front‑end can forward the payload to cmd_agent_prompt. 4. CRUD commands modify the JSON file and wake the scheduler via an async channel. |
+| Token Usage Counter | std::collections::HashMap, tokio::sync::Mutex | 1. Add token_counters: Arc<Mutex<HashMap<String,u64>>> to AppState. 2. Every time agent.prompt receives a response from the LLM, read the usage.total_tokens field (provided by the provider), lock the map, and +=. 3. Expose cmd_get_token_usage. |
+| Model Configuration | serde, tauri-plugin-store | 1. Define ModelConfig struct mirroring Nanobot’s JSON schema. 2. Store in model_config.json. 3. Commands cmd_get_models_config / cmd_save_models_config read/write the file. 4. cmd_agent_set_model (already exists) can pull the active config from AppState before each prompt. |
+| Runtime / Access‑Mode | tauri-plugin-store | 1. Persist runtime_surface.json containing fields like `{access_mode: "full |
+| Language/Locale List | No extra crate (just read dir) | 1. Place Nanobot’s src/i18n/locales/*.json into src-tauri/src/i18n/. 2. cmd_get_locales reads the directory entries and returns the locale codes. |
+| Diff Generation | difflib or similar crate | 1. Expose cmd_generate_diff(old: String, new: String) -> String that returns a unified diff. 2. The UI can call this when a tool returns a file edit (instead of sending the raw diff string). |
+| Observability Stats | sysinfo (cpu/memory), chrono (uptime) | 1. In AppState store start_time: Instant. 2. cmd_get_runtime_stats returns uptime_secs, current queue lengths, optional CPU usage via sysinfo. |

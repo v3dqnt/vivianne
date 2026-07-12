@@ -1,0 +1,73 @@
+[package]
+name = "app"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-shell = "2.2.0"
+tauri-plugin-store = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-dialog = "2"
+# Auto-update from GitHub Releases. `process` is needed to relaunch the app
+# after an update installs.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+reqwest = { version = "0.13.3", features = ["json", "stream"] }
+tokio = { version = "1.0", features = ["full"] }
+futures = "0.3.32"
+async-stream = "0.3.6"
+async-trait = "0.1.89"
+dirs = "6.0.0"
+base64 = "0.22.1"
+rand = "0.9.4"
+sha2 = "0.10.9"
+lazy_static = "1.5.0"
+regex = "1.12.4"
+url = "2.5.8"
+hmac = "0.12.1"
+tiktoken-rs = "0.11.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+cron = "0.12"
+toml = "0.8"
+serde_yaml = "0.9"
+enigo = "0.6"
+xcap = "0.9"
+image = "0.25"
+which = "7.0"
+# Native whisper.cpp STT bindings. Bundles + builds whisper.cpp; the "whisper-cpp-log"
+# feature is off by default. Uses prebuilt bindings so libclang is not required
+# on recent versions, but the C++ toolchain (MSVC on Windows) still must be present.
+# log_backend routes whisper.cpp's extremely chatty stderr output (per-token
+# decode traces) into the `log` crate, where our Info-level filter drops it.
+whisper-rs = { version = "0.16", features = ["log_backend"] }
+# Bundled sqlite3 (no system dep) with FTS5 for real BM25 lexical memory search.
+# Note: FTS5 is compiled into the bundled sqlite3 amalgamation by default
+# (no separate rusqlite cargo feature needed for it).
+rusqlite = { version = "0.32", features = ["bundled"] }
+# OS-native credential storage (Windows Credential Manager / macOS Keychain / libsecret)
+# for API keys, replacing plaintext credentials.json.
+# The per-platform feature flags are REQUIRED: with none enabled, keyring 3.x
+# builds only its in-memory "mock" store, which silently discards every write —
+# i.e. keys appear to save but never persist. Each feature is cfg-gated to its
+# own OS, so enabling all three is the standard cross-platform setup.
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }

@@ -1,0 +1,16 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"paths": {
+			"@v3dqnt/vivianne-agent-coding-agent": ["./src/index.ts"],
+			"@v3dqnt/vivianne-agent-coding-agent/hooks": ["./src/core/hooks/index.ts"],
+			"@v3dqnt/vivianne-agent-tui": ["../tui/src/index.ts"],
+			"@v3dqnt/vivianne-agent-ai": ["../ai/src/index.ts"],
+			"typebox": ["../../node_modules/typebox"]
+		},
+		"skipLibCheck": true
+	},
+	"include": ["examples/**/*.ts"],
+	"exclude": ["node_modules", "dist"]
+}
