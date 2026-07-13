@@ -8,20 +8,9 @@
 			"@v3dqnt/vivianne-agent-ai/oauth": ["./packages/ai/src/oauth.ts"],
 			"@v3dqnt/vivianne-agent-ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
 			"@v3dqnt/vivianne-agent-ai/dist/*": ["./packages/ai/src/*"],
-			"@v3dqnt/vivianne-agent-agent-core": ["./packages/agent/src/index.ts"],
-			"@v3dqnt/vivianne-agent-agent-core/*": ["./packages/agent/src/*"],
-			"@v3dqnt/vivianne-agent-coding-agent": ["./packages/coding-agent/src/index.ts"],
-			"@v3dqnt/vivianne-agent-coding-agent/hooks": ["./packages/coding-agent/src/core/hooks/index.ts"],
-			"@v3dqnt/vivianne-agent-coding-agent/*": ["./packages/coding-agent/src/*"],
-			"@v3dqnt/vivianne-agent-orchestrator": ["./packages/orchestrator/src/index.ts"],
-			"@v3dqnt/vivianne-agent-orchestrator/*": ["./packages/orchestrator/src/*"],
-			"typebox": ["./node_modules/typebox"],
-			"@v3dqnt/vivianne-agent-tui": ["./packages/tui/src/index.ts"],
-			"@v3dqnt/vivianne-agent-tui/*": ["./packages/tui/src/*"],
-			"@v3dqnt/vivianne-agent-agent-old": ["./packages/agent-old/src/index.ts"],
-			"@v3dqnt/vivianne-agent-agent-old/*": ["./packages/agent-old/src/*"]
+			"typebox": ["./node_modules/typebox"]
 		}
 	},
-	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*"],
-	"exclude": ["**/dist/**", "packages/coding-agent/examples/extensions/gondolin/**"]
+	"include": ["packages/*/src/**/*", "packages/*/test/**/*"],
+	"exclude": ["**/dist/**"]
 }
