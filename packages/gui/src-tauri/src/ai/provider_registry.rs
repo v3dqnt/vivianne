@@ -23,10 +23,14 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApiKind {
     AnthropicMessages,
-    /// OpenAI Chat Completions shape — covers OpenAI itself and every
-    /// OpenAI-compatible host (Groq, xAI, DeepSeek, Together, Fireworks,
-    /// OpenRouter, Cerebras, NVIDIA NIM).
+    /// OpenAI Chat Completions shape — covers every OpenAI-*compatible* host
+    /// that only implements this legacy-but-still-supported endpoint (Groq,
+    /// xAI, DeepSeek, Together, Fireworks, OpenRouter, Cerebras, NVIDIA NIM).
+    /// Direct OpenAI no longer routes here — see `OpenAiResponses`.
     OpenAiChat,
+    /// OpenAI's Responses API (`/v1/responses`) — direct OpenAI only. None of
+    /// the OpenAI-compatible third-party hosts implement this endpoint.
+    OpenAiResponses,
     GoogleGenerative,
     MistralChat,
     Bedrock,
@@ -49,7 +53,7 @@ pub fn provider_spec(provider: &str) -> Option<ProviderSpec> {
     use ApiKind::*;
     Some(match provider {
         "anthropic" => ProviderSpec { default_base_url: Some("https://api.anthropic.com"), api_kind: AnthropicMessages },
-        "openai" => ProviderSpec { default_base_url: Some("https://api.openai.com/v1"), api_kind: OpenAiChat },
+        "openai" => ProviderSpec { default_base_url: Some("https://api.openai.com/v1"), api_kind: OpenAiResponses },
         "groq" => ProviderSpec { default_base_url: Some("https://api.groq.com/openai/v1"), api_kind: OpenAiChat },
         "xai" => ProviderSpec { default_base_url: Some("https://api.x.ai/v1"), api_kind: OpenAiChat },
         "deepseek" => ProviderSpec { default_base_url: Some("https://api.deepseek.com/v1"), api_kind: OpenAiChat },
@@ -58,10 +62,31 @@ pub fn provider_spec(provider: &str) -> Option<ProviderSpec> {
         "openrouter" => ProviderSpec { default_base_url: Some("https://openrouter.ai/api/v1"), api_kind: OpenAiChat },
         "cerebras" => ProviderSpec { default_base_url: Some("https://api.cerebras.ai/v1"), api_kind: OpenAiChat },
         "nvidia" | "nvidia-nim" => ProviderSpec { default_base_url: Some("https://integrate.api.nvidia.com/v1"), api_kind: OpenAiChat },
+        "huggingface" => ProviderSpec { default_base_url: Some("https://router.huggingface.co/v1"), api_kind: OpenAiChat },
+        // No default: the URL is account-specific (account id, optional
+        // gateway id — see `api::cloudflare::resolve_cloudflare_url`). The
+        // model's own `base_url` must carry the already-resolved endpoint,
+        // same requirement as "local"/"ssm-moe" above.
+        "cloudflare-workers-ai" => ProviderSpec { default_base_url: None, api_kind: OpenAiChat },
         "google" => ProviderSpec { default_base_url: Some("https://generativelanguage.googleapis.com"), api_kind: GoogleGenerative },
         "mistral" => ProviderSpec { default_base_url: Some("https://api.mistral.ai/v1"), api_kind: MistralChat },
         "bedrock" => ProviderSpec { default_base_url: None, api_kind: Bedrock },
         "azure-openai-responses" => ProviderSpec { default_base_url: None, api_kind: AzureOpenAiResponses },
+        // Local ssm-moe engine (see the ssm-moe/ crate in this workspace):
+        // one shared MoEPipeline behind an OpenAI-compatible /v1/chat/completions
+        // endpoint. `default_base_url` is `None` on purpose — the port is
+        // user-chosen at `ssm-moe --serve --port N`, so the model config MUST
+        // provide its own `base_url` (typically http://127.0.0.1:8090/v1).
+        // No API key is required; the server ignores the Authorization header,
+        // but the openai_completions client demands *something*, so users set
+        // any non-empty value.
+        "ssm-moe" => ProviderSpec { default_base_url: None, api_kind: OpenAiChat },
+        // Local providers: any OpenAI-compatible server running on the user's
+        // machine (llama.cpp, colibri, custom endpoints). No default URL — the
+        // base URL comes from the local endpoint registry or the model's own
+        // `base_url` field. API key is handled as a dummy placeholder (local
+        // servers ignore Authorization).
+        "local" => ProviderSpec { default_base_url: None, api_kind: OpenAiChat },
         _ => return None,
     })
 }
@@ -93,14 +118,32 @@ mod tests {
 
     #[test]
     fn openai_compatible_hosts_share_the_chat_kind() {
-        for p in ["openai", "groq", "xai", "deepseek", "together", "fireworks", "openrouter", "cerebras", "nvidia", "nvidia-nim"] {
+        for p in ["groq", "xai", "deepseek", "together", "fireworks", "openrouter", "cerebras", "nvidia", "nvidia-nim", "huggingface", "cloudflare-workers-ai"] {
             assert_eq!(provider_spec(p).unwrap_or_else(|| panic!("missing spec for {p}")).api_kind, ApiKind::OpenAiChat);
         }
     }
 
     #[test]
+    fn direct_openai_uses_the_responses_kind() {
+        // Only api.openai.com implements /v1/responses — every OpenAI-*compatible*
+        // third-party host (OpenRouter, Groq, ...) stays on Chat Completions.
+        assert_eq!(provider_spec("openai").unwrap().api_kind, ApiKind::OpenAiResponses);
+    }
+
+    #[test]
     fn unknown_provider_returns_none_not_a_guess() {
         assert!(provider_spec("totally-made-up-provider").is_none());
+    }
+
+    #[test]
+    fn ssm_moe_is_openai_shape_with_no_default_url() {
+        // ssm-moe is a local server on a user-chosen port — a default URL
+        // here would be wrong for every user whose port isn't the default;
+        // config MUST supply base_url per-model. Wire format is standard
+        // OpenAI chat completions (see ssm-moe/src/server.rs).
+        let spec = provider_spec("ssm-moe").expect("ssm-moe should be registered");
+        assert_eq!(spec.api_kind, ApiKind::OpenAiChat);
+        assert!(spec.default_base_url.is_none(), "ssm-moe base_url must come from model config");
     }
 
     #[test]

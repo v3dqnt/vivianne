@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use futures::StreamExt;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::AppHandle;
 use tauri::Emitter;
@@ -121,6 +121,7 @@ impl SseState {
 // ── Streaming block tracker ────────────────────────────────────────────────────
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum Block {
     Text {
         text: String,
@@ -338,10 +339,12 @@ fn convert_tools(context: &Context) -> Option<Vec<AnthropicTool>> {
     if tools.is_empty() {
         return None;
     }
+    let count = tools.len();
     Some(
         tools
             .iter()
-            .map(|t| {
+            .enumerate()
+            .map(|(i, t)| {
                 let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let description = t.get("description").and_then(|v| v.as_str()).map(|s| s.to_string());
                 let parameters = t.get("parameters").cloned().unwrap_or(json!({"type": "object", "properties": {}}));
@@ -349,7 +352,11 @@ fn convert_tools(context: &Context) -> Option<Vec<AnthropicTool>> {
                     name,
                     description,
                     input_schema: parameters,
-                    cache_control: None,
+                    // The tool list barely changes within a session — mark the
+                    // last tool as a cache breakpoint so the whole (large)
+                    // tool-schema block gets cached along with the system
+                    // prompt instead of re-sent/re-processed every turn.
+                    cache_control: if i == count - 1 { Some(json!({ "type": "ephemeral" })) } else { None },
                 }
             })
             .collect(),
@@ -394,6 +401,7 @@ pub async fn stream(
                 delta: String::new(),
                 done: true,
                 message: Some(error_msg),
+                is_thinking: false,
             },
         );
     }
@@ -415,9 +423,17 @@ async fn stream_inner(
     let messages = convert_messages(&context);
     let tools = convert_tools(&context);
 
-    // System prompt
+    // System prompt — marked as a cache breakpoint: it's the largest, most
+    // stable part of every request in a session (directive + skills +
+    // workspace + project docs), so caching it is the single biggest lever
+    // for cutting repeat-request token cost. Anthropic caches everything up
+    // to and including the marked block.
     let system = context.system_prompt.as_ref().map(|sp| {
-        vec![AnthropicSystemBlock { kind: "text".to_string(), text: sp.clone(), cache_control: None }]
+        vec![AnthropicSystemBlock {
+            kind: "text".to_string(),
+            text: sp.clone(),
+            cache_control: Some(json!({ "type": "ephemeral" })),
+        }]
     });
 
     let thinking = if options.thinking_enabled == Some(true) {
@@ -567,6 +583,7 @@ async fn stream_inner(
             delta: String::new(),
             done: true,
             message: Some(output),
+            is_thinking: false,
         },
     );
 
@@ -637,7 +654,7 @@ fn process_event(
 
                     let _ = app.emit(
                         "ai-stream-token",
-                        StreamTokenEvent { stream_id: stream_id.to_string(), delta: String::new(), done: false, message: None },
+                        StreamTokenEvent { stream_id: stream_id.to_string(), delta: String::new(), done: false, message: None, is_thinking: false },
                     );
                 }
                 "thinking" => {
@@ -707,6 +724,7 @@ fn process_event(
                             delta: text.to_string(),
                             done: false,
                             message: None,
+                            is_thinking: false,
                         },
                     );
                 }
@@ -722,6 +740,16 @@ fn process_event(
                             }
                         }
                     }
+                    let _ = app.emit(
+                        "ai-stream-token",
+                        StreamTokenEvent {
+                            stream_id: stream_id.to_string(),
+                            delta: thinking_text.to_string(),
+                            done: false,
+                            message: None,
+                            is_thinking: true,
+                        },
+                    );
                 }
 
                 "input_json_delta" => {
@@ -746,6 +774,7 @@ fn process_event(
                             delta: partial.to_string(),
                             done: false,
                             message: None,
+                            is_thinking: false,
                         },
                     );
                 }

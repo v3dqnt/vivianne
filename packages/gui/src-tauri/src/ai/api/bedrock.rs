@@ -4,13 +4,13 @@
 #![allow(dead_code, unused_variables)]
 
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::ai::types::{AssistantMessage, Context, MessageContent, StreamOptions, StreamTokenEvent, ToolCall, Usage};
+use crate::ai::types::{AssistantMessage, Context, MessageContent, StreamTokenEvent, ToolCall, Usage};
 use tauri::{AppHandle, Emitter};
 // ── SigV4 helpers ────────────────────────────────────────────────────────────
 
@@ -267,6 +267,20 @@ fn build_converse_request(context: &Context, options: &BedrockOptions) -> Value 
         body["inferenceConfig"] = inference_config;
     }
 
+    if options.thinking_enabled == Some(true) {
+        let budget = options.thinking_budget_tokens.unwrap_or(1024);
+        body["additionalModelRequestFields"] = json!({
+            "thinking": { "type": "enabled", "budget_tokens": budget }
+        });
+        // Extended thinking requires temperature to be unset/1 on the
+        // Anthropic side too — mirrors anthropic.rs's same constraint.
+        if let Some(cfg) = body.get_mut("inferenceConfig") {
+            if let Some(obj) = cfg.as_object_mut() {
+                obj.remove("temperature");
+            }
+        }
+    }
+
     body
 }
 
@@ -423,6 +437,13 @@ pub struct BedrockOptions {
     pub model_id: Option<String>,
     pub base_url: Option<String>,
     pub bearer_token: Option<String>,
+    /// Claude's extended-thinking mode, requested via Converse's
+    /// `additionalModelRequestFields` passthrough (the Anthropic-on-Bedrock
+    /// integration accepts the same `thinking: {type, budget_tokens}` shape
+    /// the native Anthropic Messages API does). No-op for non-Claude Bedrock
+    /// models, which just ignore the unrecognized field.
+    pub thinking_enabled: Option<bool>,
+    pub thinking_budget_tokens: Option<u32>,
 }
 
 // ── Main streaming function ───────────────────────────────────────────────────
@@ -446,6 +467,7 @@ pub async fn stream_bedrock(
                     delta: String::new(),
                     done: true,
                     message: Some(msg),
+                    is_thinking: false,
                 },
             );
         };
@@ -592,6 +614,9 @@ pub async fn stream_bedrock(
         // Parse binary event-stream frames
         let frames = parse_event_frames(&bytes);
         let mut full_text = String::new();
+        // Extended-thinking text, streamed via contentBlockDelta's
+        // `reasoningContent.text` field when thinking is enabled.
+        let mut full_thinking = String::new();
         // Per-block partial JSON accumulator for tool calls
         let mut tool_partial: HashMap<usize, String> = HashMap::new();
 
@@ -610,6 +635,7 @@ pub async fn stream_bedrock(
                             delta: String::new(),
                             done: false,
                             message: None,
+                            is_thinking: false,
                         },
                     );
                 }
@@ -642,6 +668,19 @@ pub async fn stream_bedrock(
                                 delta: text.to_string(),
                                 done: false,
                                 message: None,
+                                is_thinking: false,
+                            },
+                        );
+                    } else if let Some(thinking_text) = delta["reasoningContent"]["text"].as_str() {
+                        full_thinking.push_str(thinking_text);
+                        let _ = app.emit(
+                            "ai-stream-token",
+                            StreamTokenEvent {
+                                stream_id: stream_id.clone(),
+                                delta: thinking_text.to_string(),
+                                done: false,
+                                message: None,
+                                is_thinking: true,
                             },
                         );
                     } else if let Some(partial_json) = delta["toolUse"]["input"].as_str() {
@@ -692,6 +731,15 @@ pub async fn stream_bedrock(
         // If we accumulated plain text, insert it as a Text block
         if !full_text.is_empty() && !output.content.iter().any(|c| matches!(c, MessageContent::Text { .. })) {
             output.content.insert(0, MessageContent::Text { text: full_text });
+        }
+        // Thinking always precedes the answer it led to, same ordering
+        // convention anthropic.rs/google.rs use.
+        if !full_thinking.is_empty() {
+            output.content.insert(0, MessageContent::Thinking {
+                thinking: full_thinking,
+                thinking_signature: None,
+                redacted: false,
+            });
         }
 
         emit_done(&app, &stream_id, output);

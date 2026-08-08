@@ -362,6 +362,13 @@ impl FileBackedCredentialStore {
         let mut file = tokio::fs::File::create(&self.path).await.map_err(|e| e.to_string())?;
         file.write_all(json.as_bytes()).await.map_err(|e| e.to_string())?;
         file.flush().await.map_err(|e| e.to_string())?;
+        // Restrict file permissions to owner-only on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            let _ = file.set_permissions(perms).await;
+        }
         Ok(())
     }
 }

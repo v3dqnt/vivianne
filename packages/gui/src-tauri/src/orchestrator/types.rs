@@ -52,6 +52,9 @@ pub struct InstanceSummary {
     pub id: String,
     pub status: InstanceStatus,
     pub cwd: String,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -60,6 +63,14 @@ pub struct InstanceSummary {
     pub session_file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub radius_pi_id: Option<String>,
+    /// Model id the instance's agent is currently using (e.g. "gpt-4",
+    /// "claude-sonnet-5"). Surfaced so the Agents panel can show what each
+    /// subagent is running without a separate round-trip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    /// Number of messages accumulated in the instance's conversation so far.
+    #[serde(default)]
+    pub message_count: usize,
 }
 
 impl From<InstanceRecord> for InstanceSummary {
@@ -68,10 +79,14 @@ impl From<InstanceRecord> for InstanceSummary {
             id: record.id,
             status: record.status,
             cwd: record.cwd,
+            created_at: record.created_at,
+            last_seen_at: record.last_seen_at,
             label: record.label,
             session_id: record.session_id,
             session_file: record.session_file,
             radius_pi_id: record.radius_pi_id,
+            model_id: None,
+            message_count: 0,
         }
     }
 }

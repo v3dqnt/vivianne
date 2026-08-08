@@ -9,6 +9,7 @@ pub mod google_shared;
 // Full streaming provider implementations
 pub mod anthropic;
 pub mod openai_completions;
+pub mod openai_responses;
 pub mod google;
 pub mod mistral;
 pub mod bedrock;

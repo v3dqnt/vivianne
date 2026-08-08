@@ -11,12 +11,29 @@ use tokio::sync::mpsc;
 pub enum AgentEvent {
     /// Agent lifecycle start
     AgentStart,
-    /// Agent lifecycle end
-    AgentEnd { messages: Vec<AgentMessage> },
+    /// Agent lifecycle end — includes stats and cost so the frontend can
+    /// skip the three redundant IPC calls (loadMessages, refreshSessionStats,
+    /// refreshSessionCost) that used to follow every turn.
+    AgentEnd {
+        messages: Vec<AgentMessage>,
+        /// Serialized SessionStats, or None if unavailable.
+        #[serde(default)]
+        stats: Option<serde_json::Value>,
+        /// Serialized session cost, or None if unavailable.
+        #[serde(default)]
+        cost: Option<serde_json::Value>,
+    },
     /// Turn lifecycle start (assistant response + tool calls/results)
     TurnStart,
-    /// Turn lifecycle end
-    TurnEnd { message: AgentMessage, tool_results: Vec<AgentMessage> },
+    /// Turn lifecycle end — includes stats and cost for the same reason as AgentEnd.
+    TurnEnd {
+        message: AgentMessage,
+        tool_results: Vec<AgentMessage>,
+        #[serde(default)]
+        stats: Option<serde_json::Value>,
+        #[serde(default)]
+        cost: Option<serde_json::Value>,
+    },
     /// Message lifecycle start
     MessageStart { message: AgentMessage },
     /// Message update during streaming (assistant messages only)
@@ -68,6 +85,63 @@ pub enum AgentEvent {
         questions: Vec<QuestionSpec>,
     },
     QuestionResolved { request_id: String },
+    /// The `confirm_action` tool is waiting on a single yes/no confirmation
+    /// before proceeding — distinct from tool-call permission gating
+    /// (`PermissionAsked`, tied to a fixed gated-tool list) in that the
+    /// *model* decides, for any reason, that this specific action deserves
+    /// an explicit check-in (e.g. "delete this record?"), independent of
+    /// whether the underlying tool is on the gated list at all.
+    ConfirmationAsked {
+        request_id: String,
+        tool_call_id: String,
+        message: String,
+        /// "low" | "medium" | "high" — the frontend colors the dialog
+        /// accordingly (informational vs. destructive-action framing).
+        danger_level: String,
+    },
+    ConfirmationResolved { request_id: String, approved: bool },
+    /// The `web_preview` tool wants a URL opened in the app's live preview
+    /// panel. Purely advisory to the frontend — the tool call itself
+    /// returns immediately either way, since opening a panel isn't
+    /// something the model needs to wait on. `screenshot_base64` is a real
+    /// render from camoufox-browser (a real, separate browser process),
+    /// not an iframe — that's what lets this work for sites that block
+    /// framing (X-Frame-Options/CSP), and `None` only when camoufox-browser
+    /// itself isn't reachable.
+    WebPreviewRequested {
+        url: String,
+        screenshot_base64: Option<String>,
+        error: Option<String>,
+    },
+    /// A provider call failed with a transient/retryable error and is being
+    /// retried after a backoff delay. Transient by design — the frontend
+    /// should show this as a subtle "Retrying (2/4)…" indicator that clears
+    /// on the next event, not append it to the message transcript. Only if
+    /// every attempt is exhausted does a real error message ever land in
+    /// the transcript (via the normal MessageStart/MessageEnd error path),
+    /// so a turn that eventually succeeds never shows the intermediate
+    /// failures at all — this is the "buffer noisy retries, only surface on
+    /// final failure" behavior.
+    RetryStatus {
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+        reason: String,
+    },
+    /// The primary model exhausted its retries (or hit a non-retryable
+    /// provider-wide failure like a quota/billing error) and the turn is
+    /// being retried once against the configured fallback model instead.
+    /// Fires at most once per turn — unlike RetryStatus this isn't cleared
+    /// automatically by the frontend on the next MessageStart, since
+    /// "you're talking to a different model than you picked" is worth
+    /// staying visible for the rest of the turn.
+    ModelFallback {
+        from_provider: String,
+        from_model: String,
+        to_provider: String,
+        to_model: String,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

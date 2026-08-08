@@ -9,18 +9,27 @@ use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
 
-/// Spawn a new agent instance.
+/// Spawn a new agent instance. Inherits the primary agent's currently
+/// selected model by default, so a freshly spawned subagent can actually
+/// make a model call without the user separately configuring it — pass
+/// `model` to override.
 #[tauri::command]
 pub async fn cmd_orch_spawn(
     cwd: String,
     label: Option<String>,
+    model: Option<crate::agent::types::ModelRef>,
     supervisor: State<'_, Arc<Mutex<Supervisor>>>,
+    main_state: State<'_, Arc<crate::agent::commands::AppState>>,
 ) -> Result<SpawnResponse, String> {
+    let model = match model {
+        Some(m) => Some(m),
+        None => Some(main_state.agent.lock().await.state.model().await),
+    };
     let record = supervisor
         .inner()
         .lock()
         .await
-        .spawn_instance(&cwd, label)
+        .spawn_instance(&cwd, label, model)
         .await;
     Ok(SpawnResponse {
         ok: true,
@@ -39,10 +48,7 @@ pub async fn cmd_orch_list(
         .await
         .list_instances()
         .await;
-    Ok(ListResponse {
-        ok: true,
-        instances: instances.into_iter().map(|r| r.into()).collect(),
-    })
+    Ok(ListResponse { ok: true, instances })
 }
 
 /// Get the status of a specific instance.
@@ -59,10 +65,7 @@ pub async fn cmd_orch_status(
         .await
         .ok_or_else(|| format!("Unknown instance: {}", instance_id))?;
 
-    Ok(StatusResponse {
-        ok: true,
-        instance: instance.into(),
-    })
+    Ok(StatusResponse { ok: true, instance })
 }
 
 /// Stop an agent instance.

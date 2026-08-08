@@ -39,6 +39,15 @@ struct AgentStateInner {
     compaction_enabled: bool,
     reserve_tokens: u32,
     keep_recent_tokens: u32,
+    /// Whether compaction tries an LLM-authored structured summary
+    /// (Goal/Constraints/Progress/Decisions/Next-Steps) before falling back
+    /// to the deterministic Mermaid diagram. On by default; users on
+    /// slow/cheap/local models may want the zero-latency Mermaid-only path.
+    llm_summary_enabled: bool,
+    /// How many of the most recent images (user attachments + computer-tool
+    /// screenshots) stay intact in live context; older ones are evicted to a
+    /// text placeholder each turn (`coding_agent::context_shaping::evict_old_images`).
+    image_keep_last_n: u32,
     /// Active workspace folders — first entry is "primary" (used for
     /// relative-path resolution in tool execution, the same role the old
     /// single `cwd` field played). Empty means "no workspace configured yet,
@@ -49,10 +58,27 @@ struct AgentStateInner {
 
 impl AgentState {
     pub fn new() -> Self {
-        Self {
+        Self::with_model(ModelRef::default())
+    }
+
+    /// Construct with a specific starting model instead of `ModelRef::default()`.
+    /// Used by the orchestrator to seed a spawned instance with the same model
+    /// the primary agent is currently using, without an extra async round-trip
+    /// through `set_model` right after construction.
+    pub fn with_model(model: ModelRef) -> Self {
+        Self::with_model_and_workspace(model, Vec::new())
+    }
+
+    /// Like `with_model`, but also scopes the workspace up front — used by
+    /// the orchestrator so a spawned instance's file tools resolve against
+    /// its own directory from the very first tool call, not the process cwd.
+    /// Sync (no `set_workspace().await` round-trip needed): the lock has no
+    /// other holders yet, so `try_write` always succeeds here.
+    pub fn with_model_and_workspace(model: ModelRef, workspace_folders: Vec<String>) -> Self {
+        let state = Self {
             inner: Arc::new(RwLock::new(AgentStateInner {
                 system_prompt: String::new(),
-                model: ModelRef::default(),
+                model,
                 thinking_level: ThinkingLevel::default(),
                 persona_mode: PersonaMode::default(),
                 messages: Vec::new(),
@@ -63,10 +89,18 @@ impl AgentState {
                 compaction_enabled: true,
                 reserve_tokens: 16_384,
                 keep_recent_tokens: 20_000,
+                llm_summary_enabled: true,
+                image_keep_last_n: 4,
                 workspace_folders: Vec::new(),
                 access_mode: WorkspaceAccessMode::Full,
             })),
+        };
+        if !workspace_folders.is_empty() {
+            if let Ok(mut inner) = state.inner.try_write() {
+                inner.workspace_folders = workspace_folders;
+            }
         }
+        state
     }
 
     pub async fn system_prompt(&self) -> String {
@@ -115,6 +149,14 @@ impl AgentState {
 
     pub async fn keep_recent_tokens(&self) -> u32 {
         self.inner.read().await.keep_recent_tokens
+    }
+
+    pub async fn llm_summary_enabled(&self) -> bool {
+        self.inner.read().await.llm_summary_enabled
+    }
+
+    pub async fn image_keep_last_n(&self) -> u32 {
+        self.inner.read().await.image_keep_last_n
     }
 
     pub async fn workspace_folders(&self) -> Vec<String> {
@@ -210,11 +252,13 @@ impl AgentState {
         self.inner.write().await.error_message = message;
     }
 
-    pub async fn set_compaction_config(&self, enabled: bool, reserve_tokens: u32, keep_recent_tokens: u32) {
+    pub async fn set_compaction_config(&self, enabled: bool, reserve_tokens: u32, keep_recent_tokens: u32, llm_summary_enabled: bool, image_keep_last_n: u32) {
         let mut inner = self.inner.write().await;
         inner.compaction_enabled = enabled;
         inner.reserve_tokens = reserve_tokens;
         inner.keep_recent_tokens = keep_recent_tokens;
+        inner.llm_summary_enabled = llm_summary_enabled;
+        inner.image_keep_last_n = image_keep_last_n;
     }
 
     pub async fn clear(&self) {
@@ -224,6 +268,13 @@ impl AgentState {
         inner.streaming_message = None;
         inner.pending_tool_calls.clear();
         inner.error_message = None;
+        // A fresh thread must not carry forward the previous conversation's
+        // accumulated system prompt (old workspace/skills/project-memory
+        // blocks stacked in by `cmd_agent_prompt`'s per-turn rebuild) — start
+        // it exactly like a true first launch, from empty, so the next
+        // prompt's rebuild has a clean base instead of stripping leftovers
+        // from a discarded conversation.
+        inner.system_prompt.clear();
     }
 }
 

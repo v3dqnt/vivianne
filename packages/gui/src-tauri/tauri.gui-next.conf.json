@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Vivianne (gui-next preview)",
+  "build": {
+    "frontendDist": "../../gui-next/dist",
+    "devUrl": null,
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  }
+}

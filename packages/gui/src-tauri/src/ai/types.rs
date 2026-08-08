@@ -190,6 +190,11 @@ pub struct StreamTokenEvent {
     pub done: bool,
     /// Full message metadata, present only when done=true
     pub message: Option<AssistantMessage>,
+    /// Whether this delta is reasoning/thinking text rather than regular
+    /// assistant text. Defaults to false so existing providers/callers that
+    /// don't set it are unaffected.
+    #[serde(default)]
+    pub is_thinking: bool,
 }
 
 // ── Legacy AiMessage (kept for backward compat) ──────────────────────────────

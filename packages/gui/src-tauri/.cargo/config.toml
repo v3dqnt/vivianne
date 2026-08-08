@@ -16,7 +16,8 @@ CMAKE = "C:\\Program Files\\CMake\\bin\\cmake.exe"
 CMAKE_GENERATOR = "Ninja"
 # whisper-rs-sys's shipped bindings.rs is generated on Linux (its layout tests
 # reference glibc types like _G_fpos_t) so it can never compile on Windows —
-# bindgen MUST run here. Point clang at its own builtin-header resource dir
-# explicitly so `stdbool.h` resolves regardless of the invoking environment
-# (npm → tauri → cargo loses whatever made it resolve implicitly).
-BINDGEN_EXTRA_CLANG_ARGS = "-I\"C:\\Program Files\\LLVM\\lib\\clang\\22\\include\""
+# bindgen MUST run here. The INCLUDE env var set by VsDevCmd.bat gets lost in
+# the npm → tauri → cargo process chain, so we spell out every system-header
+# search path that clang needs: LLVM builtins (stdbool.h), MSVC CRT, and the
+# Windows SDK (UCRT for stdio.h, shared, um).
+BINDGEN_EXTRA_CLANG_ARGS = "-I\"C:\\Program Files\\LLVM\\lib\\clang\\22\\include\" -I\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\BuildTools\\VC\\Tools\\MSVC\\14.29.30133\\include\" -I\"C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.19041.0\\ucrt\" -I\"C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.19041.0\\shared\" -I\"C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.19041.0\\um\""

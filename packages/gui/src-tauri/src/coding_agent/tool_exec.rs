@@ -1,6 +1,6 @@
 //! Tool Execution — Rust rewrite of `packages/coding-agent/src/core/tools/`
 //!
-//! Provides implementations for the built-in tools (read, write, edit, bash, ls, grep, find).
+//! Provides implementations for the built-in tools (read, write, edit, bash, ls, grep).
 
 use async_trait::async_trait;
 use serde_json::json;
@@ -27,19 +27,19 @@ pub trait Tool: Send + Sync {
 /// Factory for creating the default set of coding tools.
 pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
     vec![
+        // ── Raw file / shell / search tools (unchanged) ────────────────────
         Box::new(ReadTool::new(cwd.clone())),
         Box::new(WriteTool::new(cwd.clone())),
         Box::new(EditTool::new(cwd.clone())),
         Box::new(BashTool::new(cwd.clone())),
         Box::new(LsTool::new(cwd.clone())),
         Box::new(GrepTool::new(cwd.clone())),
-        Box::new(FindTool::new(cwd.clone())),
         Box::new(CodeSearchTool::new(cwd.clone())),
         Box::new(super::computer::ComputerTool::new()),
         Box::new(super::apply_patch::ApplyPatchTool::new(cwd.clone())),
         Box::new(super::repo_tools::RepoCloneTool::new()),
         Box::new(super::repo_tools::RepoOverviewTool::new(cwd.clone())),
-        // Extra tools ported from claude-code-gg (src/tools/*)
+        // ── Extra tools ported from claude-code-gg (src/tools/*) ──────────
         Box::new(super::tools_ext::GlobTool::new(cwd.clone())),
         Box::new(super::tools_ext::PowerShellTool::new(cwd.clone())),
         Box::new(super::tools_ext::NotebookEditTool::new(cwd.clone())),
@@ -47,8 +47,53 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         Box::new(super::tools_ext::WebSearchTool::new()),
         Box::new(super::tools_ext::SleepTool::new()),
         Box::new(super::tools_ext::TodoWriteTool::new()),
-        Box::new(super::tools_ext::DiagnosticsTool::new(cwd)),
+        Box::new(super::tools_ext::DiagnosticsTool::new(cwd.clone())),
+        // ── Grok-parity: subagent orchestration ────────────────────────────
+        // No `task` entry here: the live loop (`agent/tool_exec.rs`)
+        // special-cases "task" and dispatches it directly via
+        // `execute_task_tool` before this registry is ever consulted, so a
+        // `TaskTool` entry under the same name would only ever be shadowed
+        // dead weight (it was — see git history, removed together).
+        Box::new(super::orchestration::TaskOutputTool::new()),
+        Box::new(super::orchestration::WaitTasksTool::new()),
+        Box::new(super::orchestration::KillTaskTool::new()),
+        Box::new(super::orchestration::AskUserQuestionTool::new()),
+        Box::new(super::orchestration::EnterPlanModeTool::new()),
+        Box::new(super::orchestration::ExitPlanModeTool::new()),
+        // ── Grok-parity: memory ───────────────────────────────────────────
+        Box::new(super::memory_tools::MemoryGetTool::new(cwd.clone())),
+        Box::new(super::memory_tools::MemorySearchTool::new(cwd.clone())),
+        // ── Grok-parity: enriched read/list ───────────────────────────────
+        Box::new(super::tools_enh::ReadFileTool::new(cwd.clone())),
+        Box::new(super::tools_enh::ListDirTool::new(cwd.clone())),
+        // ── Grok-parity: OpenCode-style aliases ───────────────────────────
+        Box::new(super::opencode::OpenCodeReadTool::new(cwd.clone())),
+        Box::new(super::opencode::OpenCodeWriteTool::new(cwd.clone())),
+        Box::new(super::opencode::OpenCodeEditTool::new(cwd.clone())),
+        Box::new(super::opencode::OpenCodeGlobTool::new(cwd.clone())),
+        Box::new(super::opencode::OpenCodeGrepTool::new(cwd.clone())),
+        Box::new(super::opencode::SkillTool::new(cwd.clone())),
+        Box::new(super::opencode::RichTodoWriteTool::new()),
+        // ── Grok-parity: streaming shell ──────────────────────────────────
+        Box::new(super::streaming::StreamingBashTool::new(cwd.clone())),
+        Box::new(super::streaming::StreamingPowerShellTool::new(cwd)),
     ]
+}
+
+/// Check whether a mutating tool should be refused because plan mode is on.
+/// Called from the mutating tools (write, edit, apply_patch, bash, powershell,
+/// notebook_edit, streaming_*) before doing any work.
+pub(crate) fn plan_mode_gate(tool_name: &str) -> Option<ToolResult> {
+    if !super::orchestration::PlanModeState::global().is_active() {
+        return None;
+    }
+    Some(ToolResult {
+        content: format!(
+            "'{tool_name}' is disabled while plan mode is active. Call exit_plan_mode first, or use a read-only tool."
+        ),
+        is_error: true,
+        details: Some(serde_json::json!({ "gated_by": "plan_mode" })),
+    })
 }
 
 // ── Shared limits & helpers ─────────────────────────────────────────────
@@ -59,7 +104,6 @@ const MAX_LS_ENTRIES: usize = 500;
 const MAX_GREP_MATCHES: usize = 100;
 const MAX_GREP_BYTES: usize = 256_000;
 const MAX_GREP_LINE_CHARS: usize = 1000;
-const MAX_FIND_RESULTS: usize = 1000;
 const MAX_BASH_OUTPUT_BYTES: usize = 256_000;
 const DEFAULT_BASH_TIMEOUT_SECS: u64 = 120;
 const MAX_BASH_TIMEOUT_SECS: u64 = 600;
@@ -201,14 +245,28 @@ impl Tool for ReadTool {
         let path = args["path"].as_str().unwrap_or("").to_string();
         let full_path = resolve_path(&self.cwd, &path);
 
+        // Check if the file is non-text (PDF, image, notebook) or the user
+        // explicitly requested the enhanced reader via the `pages` param.
+        let has_pages_arg = args["pages"].as_str().map(|s| !s.is_empty()).unwrap_or(false);
+        let needs_enhanced = has_pages_arg || {
+            full_path.extension().and_then(|e| e.to_str()).map(|e| {
+                matches!(e.to_lowercase().as_str(), "pdf" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ipynb")
+            }).unwrap_or(false)
+        };
+
+        if needs_enhanced {
+            // Delegate to ReadFileTool which handles PDFs, images, and notebooks.
+            let enhanced = crate::coding_agent::tools_enh::ReadFileTool::new(self.cwd.clone());
+            return enhanced.execute(args, _cwd).await;
+        }
+
+        // Plain text path.
         match tokio::fs::read_to_string(&full_path).await {
             Ok(content) => {
                 let offset = args["offset"].as_u64().unwrap_or(0) as usize;
                 let limit = args["limit"].as_u64().unwrap_or(0) as usize;
 
                 let lines: Vec<&str> = content.lines().collect();
-                // `offset` is documented as 1-indexed; saturating_sub(1) maps
-                // offset=1 -> index 0, offset=0/absent -> index 0 as well.
                 let start = offset.saturating_sub(1).min(lines.len());
                 let requested_end = if limit > 0 { start + limit } else { lines.len() };
                 let end = requested_end.min(lines.len());
@@ -269,6 +327,7 @@ impl Tool for WriteTool {
     }
 
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
+        if let Some(gated) = plan_mode_gate("write") { return gated; }
         let path = args["path"].as_str().unwrap_or("").to_string();
         let content = args["content"].as_str().unwrap_or("").to_string();
         let full_path = resolve_path(&self.cwd, &path);
@@ -353,6 +412,7 @@ impl Tool for EditTool {
     }
 
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
+        if let Some(gated) = plan_mode_gate("edit") { return gated; }
         let path = args["path"].as_str().unwrap_or("").to_string();
         let old_string = args["old_string"].as_str().unwrap_or("");
         let new_string = args["new_string"].as_str().unwrap_or("");
@@ -489,6 +549,7 @@ impl Tool for BashTool {
     }
 
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
+        if let Some(gated) = plan_mode_gate("bash") { return gated; }
         let command = args["command"].as_str().unwrap_or("").to_string();
         if let Some(reason) = super::sandbox::check_command(&command) {
             return ToolResult { content: reason.to_string(), is_error: true, details: None };
@@ -607,6 +668,13 @@ impl Tool for LsTool {
 
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let path = args["path"].as_str().unwrap_or(".").to_string();
+
+        // If depth is specified, use the enhanced hierarchical listing (ListDirTool).
+        if args.get("depth").is_some() {
+            let enhanced = crate::coding_agent::tools_enh::ListDirTool::new(self.cwd.clone());
+            return enhanced.execute(args, _cwd).await;
+        }
+
         let full_path = resolve_path(&self.cwd, &path);
 
         let result = tokio::task::spawn_blocking(move || -> Result<(Vec<String>, usize), String> {
@@ -945,80 +1013,3 @@ impl Tool for CodeSearchTool {
     }
 }
 
-// ── Find ─────────────────────────────────────────────────────────────────
-
-pub struct FindTool {
-    cwd: String,
-}
-
-impl FindTool {
-    pub fn new(cwd: String) -> Self {
-        Self { cwd }
-    }
-}
-
-#[async_trait]
-impl Tool for FindTool {
-    fn name(&self) -> &str {
-        "find"
-    }
-
-    fn description(&self) -> &str {
-        "Find files matching a name pattern."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "pattern": { "type": "string", "description": "Filename pattern (supports * and ? wildcards)" },
-                "path": { "type": "string", "description": "Directory to search in" }
-            },
-            "required": ["pattern"]
-        })
-    }
-
-    async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        let pattern = args["pattern"].as_str().unwrap_or("").to_string();
-        let path = args["path"].as_str().unwrap_or(".").to_string();
-        let search_path = resolve_path(&self.cwd, &path);
-
-        let matcher = glob_to_regex(&pattern);
-
-        let result = tokio::task::spawn_blocking(move || -> (Vec<String>, usize) {
-            let mut found = Vec::new();
-            let mut total = 0usize;
-            walk_files(&search_path, usize::MAX, |file_path| {
-                let name = file_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                if matcher.is_match(&name) {
-                    total += 1;
-                    if found.len() < MAX_FIND_RESULTS {
-                        found.push(file_path.display().to_string());
-                    }
-                }
-                total < MAX_FIND_RESULTS * 4 // hard stop well past the display limit
-            });
-            (found, total)
-        })
-        .await;
-
-        match result {
-            Ok((mut lines, total)) => {
-                let truncated = total > lines.len();
-                if truncated {
-                    lines.push(format!("... {} more results (limit {})", total - lines.len(), MAX_FIND_RESULTS));
-                }
-                ToolResult {
-                    content: lines.join("\n"),
-                    is_error: false,
-                    details: Some(json!({ "pattern": pattern, "path": path, "count": total, "truncated": truncated })),
-                }
-            }
-            Err(e) => ToolResult {
-                content: format!("Internal error running find: {}", e),
-                is_error: true,
-                details: None,
-            },
-        }
-    }
-}

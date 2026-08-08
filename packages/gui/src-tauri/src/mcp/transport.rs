@@ -21,6 +21,10 @@ enum Inner {
         url: String,
         headers: HashMap<String, String>,
         client: reqwest::Client,
+        /// Servers may assign a session id on `initialize` (`Mcp-Session-Id`
+        /// response header) that must be echoed on every subsequent request —
+        /// part of the "Streamable HTTP" transport in the 2025-03-26 spec.
+        session_id: Mutex<Option<String>>,
     },
 }
 
@@ -56,7 +60,7 @@ impl McpConnection {
                     .timeout(std::time::Duration::from_secs(30))
                     .build()
                     .map_err(|e| e.to_string())?;
-                Inner::Http { url: url.clone(), headers: headers.clone(), client }
+                Inner::Http { url: url.clone(), headers: headers.clone(), client, session_id: Mutex::new(None) }
             }
         };
         let conn = Self { inner, next_id: AtomicI64::new(1) };
@@ -97,17 +101,39 @@ impl McpConnection {
                     }
                 }
             }
-            Inner::Http { url, headers, client } => {
-                let mut req = client.post(url).json(&message).header("Content-Type", "application/json");
+            Inner::Http { url, headers, client, session_id } => {
+                // The 2025-03-26 "Streamable HTTP" transport requires the
+                // client to accept both shapes a server may reply with: a
+                // plain JSON body, or a single `text/event-stream` SSE event
+                // carrying the JSON-RPC response. Omitting either from
+                // Accept gets a 406 from spec-compliant servers (this is the
+                // exact failure real servers like mcp.deepwiki.com produce).
+                let mut req = client
+                    .post(url)
+                    .json(&message)
+                    .header("Accept", "application/json, text/event-stream");
                 for (k, v) in headers {
                     req = req.header(k, v);
                 }
+                if let Some(sid) = session_id.lock().await.clone() {
+                    req = req.header("Mcp-Session-Id", sid);
+                }
                 let resp = req.send().await.map_err(|e| format!("{method}: request failed: {e}"))?;
                 let status = resp.status();
-                let body: Value = resp.json().await.map_err(|e| format!("{method}: bad response body: {e}"))?;
-                if !status.is_success() {
-                    return Err(format!("{method}: HTTP {status}: {body}"));
+                if let Some(sid) = resp.headers().get("mcp-session-id").and_then(|v| v.to_str().ok()) {
+                    *session_id.lock().await = Some(sid.to_string());
                 }
+                let content_type = resp
+                    .headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                let text = resp.text().await.map_err(|e| format!("{method}: failed to read response body: {e}"))?;
+                if !status.is_success() {
+                    return Err(format!("{method}: HTTP {status}: {text}"));
+                }
+                let body = parse_mcp_body(&content_type, &text).map_err(|e| format!("{method}: {e}"))?;
                 extract_result(body)
             }
         }
@@ -121,12 +147,25 @@ impl McpConnection {
                 line.push('\n');
                 stdin.lock().await.write_all(line.as_bytes()).await.map_err(|e| e.to_string())
             }
-            Inner::Http { url, headers, client } => {
-                let mut req = client.post(url).json(&message);
+            Inner::Http { url, headers, client, session_id } => {
+                let mut req = client
+                    .post(url)
+                    .json(&message)
+                    .header("Accept", "application/json, text/event-stream");
                 for (k, v) in headers {
                     req = req.header(k, v);
                 }
-                req.send().await.map_err(|e| e.to_string())?;
+                if let Some(sid) = session_id.lock().await.clone() {
+                    req = req.header("Mcp-Session-Id", sid);
+                }
+                let resp = req.send().await.map_err(|e| e.to_string())?;
+                // A notification gets a bare 202 Accepted with no body per
+                // spec — never try to parse a response body here.
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(format!("HTTP {status}: {text}"));
+                }
                 Ok(())
             }
         }
@@ -164,6 +203,40 @@ impl McpConnection {
         if let Inner::Stdio { child, .. } = &self.inner {
             let _ = child.lock().await.kill().await;
         }
+    }
+}
+
+/// Parse a Streamable-HTTP response body, which may be plain JSON or a
+/// single SSE `data:` event carrying the JSON-RPC message — servers are
+/// free to pick either shape for a unary request/response exchange.
+fn parse_mcp_body(content_type: &str, text: &str) -> Result<Value, String> {
+    if content_type.contains("text/event-stream") {
+        parse_sse_json(text).ok_or_else(|| "no parseable data event in SSE response".to_string())
+    } else {
+        serde_json::from_str(text)
+            .map_err(|e| format!("bad response body: {e} (content-type: {content_type:?}, body: {text:?})"))
+    }
+}
+
+/// Extract the first complete JSON payload from an SSE event stream's
+/// `data:` lines. Multiple `data:` lines within one event are joined with
+/// `\n` per the SSE spec before parsing.
+fn parse_sse_json(text: &str) -> Option<Value> {
+    let mut data_lines: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("data:") {
+            data_lines.push(rest.trim_start());
+        } else if line.trim().is_empty() && !data_lines.is_empty() {
+            if let Ok(v) = serde_json::from_str::<Value>(&data_lines.join("\n")) {
+                return Some(v);
+            }
+            data_lines.clear();
+        }
+    }
+    if data_lines.is_empty() {
+        None
+    } else {
+        serde_json::from_str::<Value>(&data_lines.join("\n")).ok()
     }
 }
 

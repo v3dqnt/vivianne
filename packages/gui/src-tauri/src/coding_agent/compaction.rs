@@ -3,18 +3,7 @@
 //! Summarizes older conversation entries to keep context window usage
 //! within model limits.
 
-use crate::coding_agent::types::*;
 use crate::agent::types::AgentMessage;
-
-/// Result of a compaction operation.
-#[derive(Debug, Clone)]
-pub struct CompactionResult {
-    pub summary: String,
-    pub first_kept_entry_id: String,
-    pub tokens_before: u32,
-    pub tokens_after: u32,
-    pub entries_removed: u32,
-}
 
 /// Settings controlling when and how compaction occurs.
 pub struct CompactionConfig {
@@ -53,21 +42,43 @@ fn extract_text_from_content(content: &[crate::agent::types::MessageContent]) ->
         .join(" ")
 }
 
+/// Character length of a message's real textual surface — text, thinking,
+/// tool-call name+arguments, tool-result content/details/error. Deliberately
+/// NOT `format!("{:?}", ...)`: debug-formatting a whole `AgentMessage` prints
+/// every field name, enum variant name, and escaped-quote wrapper along with
+/// the actual content, which can be several times the length of what a model
+/// actually sees as tokens — inflating compaction thresholds so badly they
+/// fire on a fraction of the configured budget.
+pub(crate) fn message_char_len(msg: &AgentMessage) -> usize {
+    fn content_len(content: &[crate::agent::types::MessageContent]) -> usize {
+        use crate::agent::types::MessageContent;
+        content.iter().map(|c| match c {
+            MessageContent::Text { text } => text.len(),
+            MessageContent::Thinking { thinking } => thinking.len(),
+            MessageContent::Image { .. } => 0, // images aren't text tokens; not this estimate's job
+            MessageContent::ToolCall(tc) => tc.name.len() + tc.arguments.to_string().len(),
+            MessageContent::ToolResult(tr) => content_len(&tr.content) + tr.details.as_ref().map(|d| d.to_string().len()).unwrap_or(0),
+        }).sum()
+    }
+    match msg {
+        AgentMessage::User { content, .. } => content_len(content),
+        AgentMessage::Assistant { content, error_message, .. } => {
+            content_len(content) + error_message.as_ref().map(|e| e.len()).unwrap_or(0)
+        }
+        AgentMessage::ToolResult { content, details, arguments, .. } => {
+            content_len(content)
+                + details.as_ref().map(|d| d.to_string().len()).unwrap_or(0)
+                + arguments.as_ref().map(|a| a.to_string().len()).unwrap_or(0)
+        }
+        AgentMessage::Custom { payload, .. } => payload.to_string().len(),
+    }
+}
+
 /// Calculate total tokens for a slice of messages.
 pub fn calculate_context_tokens(messages: &[AgentMessage]) -> u32 {
     messages.iter()
-        .map(|msg| estimate_tokens(&format!("{:?}", msg)))
+        .map(|msg| (message_char_len(msg) as f32 / 4.0).ceil() as u32)
         .sum()
-}
-
-/// Determine if compaction is needed based on context size.
-pub fn should_compact(messages: &[AgentMessage], config: &CompactionConfig) -> bool {
-    if !config.enabled || messages.len() < config.min_messages as usize {
-        return false;
-    }
-
-    let tokens = calculate_context_tokens(messages);
-    tokens > config.threshold_tokens
 }
 
 /// Suggest a cut point in the message list for compaction.
@@ -83,7 +94,7 @@ pub fn find_cut_point(messages: &[AgentMessage], config: &CompactionConfig) -> u
 
     // Walk backwards from the most recent messages
     for (i, msg) in messages.iter().enumerate().rev() {
-        total_tokens += estimate_tokens(&format!("{:?}", msg));
+        total_tokens += (message_char_len(msg) as f32 / 4.0).ceil() as u32;
         if total_tokens > threshold / 2 {
             // Keep everything from this point forward
             return i;
@@ -93,111 +104,12 @@ pub fn find_cut_point(messages: &[AgentMessage], config: &CompactionConfig) -> u
     0
 }
 
-/// Helper to count user messages
-fn is_user(msg: &AgentMessage) -> bool {
-    matches!(msg, AgentMessage::User { .. })
-}
-
-/// Helper to count assistant messages
-fn is_assistant(msg: &AgentMessage) -> bool {
-    matches!(msg, AgentMessage::Assistant { .. })
-}
-
-/// Helper to count tool messages
-fn is_tool(msg: &AgentMessage) -> bool {
-    matches!(msg, AgentMessage::ToolResult { .. })
-}
-
-/// Generate a summary of a conversation branch.
-pub fn generate_summary(messages: &[AgentMessage]) -> String {
-    // In a real implementation, this would call an LLM.
-    // For now, generate a simple summary based on message roles.
-    let mut user_count = 0;
-    let mut assistant_count = 0;
-    let mut tool_count = 0;
-
-    for msg in messages {
-        if is_user(msg) { user_count += 1; }
-        else if is_assistant(msg) { assistant_count += 1; }
-        else if is_tool(msg) { tool_count += 1; }
-    }
-
-    let mut summary_parts = Vec::new();
-    summary_parts.push(format!(
-        "Conversation summary: {} user messages, {} assistant responses, {} tool calls.",
-        user_count, assistant_count, tool_count
-    ));
-
-    // Include first user message as topic hint
-    if let Some(AgentMessage::User { content, .. }) = messages.iter().find(|m| is_user(m)) {
-        let text = extract_text_from_content(content);
-        let preview = if text.len() > 100 {
-            format!("{:.100}...", text)
-        } else {
-            text
-        };
-        summary_parts.push(format!("Topic: {}", preview));
-    }
-
-    summary_parts.join("\n")
-}
-
-/// Compact a set of messages by summarizing older entries.
-pub fn compact(
-    messages: &mut Vec<AgentMessage>,
-    config: &CompactionConfig,
-) -> Option<CompactionResult> {
-    if !should_compact(messages, config) {
-        return None;
-    }
-
-    let cut_point = find_cut_point(messages, config);
-    if cut_point == 0 || cut_point >= messages.len() {
-        return None;
-    }
-
-    let tokens_before = calculate_context_tokens(messages);
-
-    // Extract messages to compact
-    let to_compact: Vec<AgentMessage> = messages.drain(..cut_point).collect();
-    let summary = generate_summary(&to_compact);
-
-    // Get current timestamp
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    // Insert a summary message as a system-like custom message
-    let _summary_content = crate::agent::types::MessageContent::Text {
-        text: format!("Previous conversation summary:\n{}", summary),
-    };
-    let summary_msg = AgentMessage::Custom {
-        kind: "system".to_string(),
-        payload: serde_json::json!({ "summary": summary }),
-        timestamp,
-    };
-
-    // The summary message replaces the compacted messages
-    messages.insert(0, summary_msg);
-
-    let tokens_after = calculate_context_tokens(messages);
-
-    Some(CompactionResult {
-        summary,
-        first_kept_entry_id: String::new(), // Would need actual entry IDs
-        tokens_before,
-        tokens_after,
-        entries_removed: cut_point as u32,
-    })
-}
-
 const MAX_MERMAID_NODES: usize = 40;
 
 /// Deterministic per-tool-call label: same argument-key mapping as
 /// `loop_core.rs::build_turn_memory_summary` (path for write/edit/apply_patch,
 /// command for bash/powershell), generalized with a first-string-argument
-/// fallback so every other tool (code_search's query, delegate's task,
+/// fallback so every other tool (code_search's query, task's description,
 /// generate_image's prompt, ...) gets a sensible label for free.
 fn tool_call_descriptor(tc: &crate::agent::types::ToolCall) -> String {
     let detail = match tc.name.as_str() {
@@ -280,6 +192,84 @@ pub fn generate_mermaid_summary(messages: &[AgentMessage]) -> String {
         out.push_str(&format!("\nTopic: {t}\n"));
     }
     out.push_str("</compacted_history>");
+    out
+}
+
+const LLM_SUMMARY_SYSTEM_PROMPT: &str = "You are compacting an AI coding agent's conversation history to save context space. Summarize the segment of the transcript below into exactly six sections, each on its own line starting with the section name in bold markdown: **Goal**, **Constraints**, **Progress** (list Done / In Progress / Blocked items), **Key Decisions**, **Next Steps**, **Relevant Files**. Be concise but preserve concrete facts (file paths, function names, specific values) — the agent continuing this conversation will only see your summary, not the original messages. Do not add commentary outside the six sections.";
+
+/// LLM-authored structured compaction summary (Goal/Constraints/Progress/
+/// Decisions/Next-Steps/Relevant-Files) — a semantic alternative to
+/// `generate_mermaid_summary`'s purely structural message-flow diagram.
+/// Bounded to 25s; callers should fall back to `generate_mermaid_summary` on
+/// `None` (timeout, provider error, or empty response) so compaction never
+/// silently produces no summary at all.
+pub async fn generate_llm_summary(
+    app: &tauri::AppHandle,
+    model: &crate::agent::types::ModelRef,
+    messages: &[AgentMessage],
+) -> Option<String> {
+    let transcript = render_transcript_for_summary(messages);
+    if transcript.trim().is_empty() {
+        return None;
+    }
+    let call = crate::ai::completion::complete_text(app, model, LLM_SUMMARY_SYSTEM_PROMPT, &transcript);
+    match tokio::time::timeout(std::time::Duration::from_secs(25), call).await {
+        Ok(Ok(response)) if !response.trim().is_empty() => {
+            Some(format!("<compacted_history>\n{}\n</compacted_history>", response.trim()))
+        }
+        Ok(Ok(_)) => {
+            log::warn!("[compaction] LLM summary call returned an empty response, falling back to Mermaid");
+            None
+        }
+        Ok(Err(e)) => {
+            log::warn!("[compaction] LLM summary call failed, falling back to Mermaid: {e}");
+            None
+        }
+        Err(_) => {
+            log::warn!("[compaction] LLM summary call timed out after 25s, falling back to Mermaid");
+            None
+        }
+    }
+}
+
+/// Render a segment of messages into a plain-text transcript suitable for a
+/// one-shot summarization prompt — role-prefixed lines, tool calls/results
+/// collapsed to their name + a short preview (full tool output would blow
+/// the summarization call's own context for no benefit; the point of
+/// compaction is to shed exactly that bulk).
+fn render_transcript_for_summary(messages: &[AgentMessage]) -> String {
+    use crate::agent::types::MessageContent;
+    let mut out = String::new();
+    for msg in messages {
+        match msg {
+            AgentMessage::User { content, .. } => {
+                let text = extract_text_from_content(content);
+                if !text.trim().is_empty() {
+                    out.push_str(&format!("User: {}\n", text.trim()));
+                }
+            }
+            AgentMessage::Assistant { content, .. } => {
+                for c in content {
+                    match c {
+                        MessageContent::Text { text } if !text.trim().is_empty() => {
+                            out.push_str(&format!("Assistant: {}\n", text.trim()));
+                        }
+                        MessageContent::ToolCall(tc) => {
+                            out.push_str(&format!("Assistant called tool: {}\n", tool_call_descriptor(tc)));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            AgentMessage::ToolResult { tool_name, content, is_error, .. } => {
+                let text = extract_text_from_content(content);
+                let preview: String = text.trim().chars().take(300).collect();
+                let status = if is_error.unwrap_or(false) { "FAILED" } else { "ok" };
+                out.push_str(&format!("Tool result ({tool_name}, {status}): {preview}\n"));
+            }
+            AgentMessage::Custom { .. } => {}
+        }
+    }
     out
 }
 
@@ -440,6 +430,7 @@ mod mermaid_tests {
             details: None,
             is_error: Some(is_error),
             timestamp: 0,
+            arguments: None,
         }
     }
 
@@ -494,4 +485,61 @@ mod mermaid_tests {
         assert!(!summary.contains("```mermaid"));
     }
 
+}
+
+#[cfg(test)]
+mod llm_summary_transcript_tests {
+    use super::*;
+    use crate::agent::types::{MessageContent, ToolCall};
+
+    #[test]
+    fn renders_user_assistant_and_tool_result_lines() {
+        let messages = vec![
+            AgentMessage::User { content: vec![MessageContent::Text { text: "Fix the bug".into() }], timestamp: 0 },
+            AgentMessage::Assistant {
+                content: vec![
+                    MessageContent::Text { text: "Looking into it.".into() },
+                    MessageContent::ToolCall(ToolCall { id: "t1".into(), name: "read".into(), arguments: serde_json::json!({ "path": "a.rs" }) }),
+                ],
+                stop_reason: "tool_use".into(),
+                error_message: None,
+                timestamp: 0,
+            },
+            AgentMessage::ToolResult {
+                tool_call_id: "t1".into(),
+                tool_name: "read".into(),
+                content: vec![MessageContent::Text { text: "fn main() {}".into() }],
+                details: None,
+                is_error: Some(false),
+                timestamp: 0,
+                arguments: None,
+            },
+        ];
+        let transcript = render_transcript_for_summary(&messages);
+        assert!(transcript.contains("User: Fix the bug"));
+        assert!(transcript.contains("Assistant: Looking into it."));
+        assert!(transcript.contains("Assistant called tool: read: a.rs"));
+        assert!(transcript.contains("Tool result (read, ok): fn main() {}"));
+    }
+
+    #[test]
+    fn marks_failed_tool_results() {
+        let messages = vec![AgentMessage::ToolResult {
+            tool_call_id: "t1".into(),
+            tool_name: "bash".into(),
+            content: vec![MessageContent::Text { text: "error: exit 1".into() }],
+            details: None,
+            is_error: Some(true),
+            timestamp: 0,
+            arguments: None,
+        }];
+        let transcript = render_transcript_for_summary(&messages);
+        assert!(transcript.contains("FAILED"));
+    }
+
+    #[test]
+    fn empty_segment_yields_empty_transcript() {
+        let messages: Vec<AgentMessage> = vec![];
+        assert!(render_transcript_for_summary(&messages).trim().is_empty());
+    }
 }

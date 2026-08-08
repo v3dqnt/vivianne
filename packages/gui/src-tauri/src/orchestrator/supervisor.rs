@@ -8,16 +8,22 @@ use crate::orchestrator::ipc_protocol::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 /// Live resources for a running instance.
 type SubscriberFn = Box<dyn Fn(&serde_json::Value) + Send + Sync>;
 
+#[allow(dead_code)]
 struct LiveInstance {
     record: InstanceRecord,
     rpc_handle: Option<Arc<RpcHandle>>,
     subscribers: Vec<SubscriberFn>,
+    /// The real, independent agent backing this instance — its own message
+    /// history, model, and tool access scoped to `record.cwd`. Wrapped so RPC
+    /// calls can run a full turn without holding the outer `live_instances`
+    /// lock for the LLM round-trip.
+    agent: Arc<Mutex<crate::agent::Agent>>,
 }
 
 /// Handle for an active RPC stream.
@@ -29,19 +35,32 @@ pub struct RpcHandle {
 pub struct Supervisor {
     storage: Arc<Mutex<InstanceStorage>>,
     live_instances: Arc<Mutex<HashMap<String, LiveInstance>>>,
+    /// Needed to actually run a turn (`Agent::prompt` streams progress events
+    /// through a Tauri emitter) and to drive the abort/steer flags each
+    /// spawned instance owns independently of the primary agent's.
+    app: tauri::AppHandle,
 }
 
 impl Supervisor {
     /// Create a new supervisor.
-    pub fn new(storage: InstanceStorage) -> Self {
+    pub fn new(storage: InstanceStorage, app: tauri::AppHandle) -> Self {
         Self {
             storage: Arc::new(Mutex::new(storage)),
             live_instances: Arc::new(Mutex::new(HashMap::new())),
+            app,
         }
     }
 
-    /// Spawn a new instance.
-    pub async fn spawn_instance(&self, cwd: &str, label: Option<String>) -> InstanceRecord {
+    /// Spawn a new instance, optionally seeded with a starting model (falls
+    /// back to the same default `Agent::new()` uses). Each instance gets its
+    /// own `Agent` — independent message history, filesystem root, and tool
+    /// execution — so multiple subagents can run genuinely in parallel.
+    pub async fn spawn_instance(
+        &self,
+        cwd: &str,
+        label: Option<String>,
+        model: Option<crate::agent::types::ModelRef>,
+    ) -> InstanceRecord {
         let id = Uuid::new_v4().to_string();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -66,25 +85,47 @@ impl Supervisor {
         // Persist
         self.storage.lock().await.upsert(record.clone());
 
-        // Track live instance
+        // Track live instance with its own real agent, scoped to `cwd`.
+        let agent = crate::agent::Agent::new_with_cwd_and_model(cwd.to_string(), model);
         let live = LiveInstance {
             record: record.clone(),
             rpc_handle: None,
             subscribers: Vec::new(),
+            agent: Arc::new(Mutex::new(agent)),
         };
         self.live_instances.lock().await.insert(id, live);
 
         record
     }
 
-    /// List all instances.
-    pub async fn list_instances(&self) -> Vec<InstanceRecord> {
-        self.storage.lock().await.list()
+    /// List all instances, enriched with live model/message-count info for
+    /// instances that still have a running agent in memory (persisted-only
+    /// records from a previous app run report `None`/`0` for those fields).
+    pub async fn list_instances(&self) -> Vec<InstanceSummary> {
+        let records = self.storage.lock().await.list();
+        let live = self.live_instances.lock().await;
+        let mut summaries = Vec::with_capacity(records.len());
+        for record in records {
+            summaries.push(self.enrich(record, &live).await);
+        }
+        summaries
     }
 
-    /// Get a specific instance.
-    pub async fn get_instance(&self, id: &str) -> Option<InstanceRecord> {
-        self.storage.lock().await.get(id).cloned()
+    /// Get a specific instance, enriched the same way `list_instances` is.
+    pub async fn get_instance(&self, id: &str) -> Option<InstanceSummary> {
+        let record = self.storage.lock().await.get(id).cloned()?;
+        let live = self.live_instances.lock().await;
+        Some(self.enrich(record, &live).await)
+    }
+
+    async fn enrich(&self, record: InstanceRecord, live: &HashMap<String, LiveInstance>) -> InstanceSummary {
+        let mut summary: InstanceSummary = record.clone().into();
+        if let Some(instance) = live.get(&record.id) {
+            let agent = instance.agent.lock().await;
+            summary.model_id = Some(agent.state.model().await.id);
+            summary.message_count = agent.state.messages().await.len();
+        }
+        summary
     }
 
     /// Stop an instance.
@@ -105,29 +146,83 @@ impl Supervisor {
         }
     }
 
-    /// Handle an RPC command for an instance.
+    /// Handle an RPC command for an instance. `Prompt` actually runs a full
+    /// turn through the instance's own `Agent` (tools, model call, the whole
+    /// loop) and returns its final answer — this is not a mock.
     pub async fn handle_rpc(&self, instance_id: &str, command: RpcCommand) -> Option<serde_json::Value> {
-        let live = self.live_instances.lock().await;
-        let _instance = live.get(instance_id)?;
+        let agent_handle = {
+            let live = self.live_instances.lock().await;
+            live.get(instance_id)?.agent.clone()
+        };
 
-        // In a real implementation, this would forward the command to the instance.
-        // For now, return a mock response.
         match command {
             RpcCommand::GetState => {
+                let agent = agent_handle.lock().await;
                 Some(serde_json::json!({
                     "success": true,
                     "command": "get_state",
                     "data": {
                         "sessionId": instance_id,
+                        "modelId": agent.state.model().await.id,
+                        "isRunning": agent.is_running(),
+                        "messageCount": agent.state.messages().await.len(),
                     }
                 }))
             }
             RpcCommand::Prompt { text } => {
+                let message = crate::agent::types::AgentMessage::User {
+                    content: vec![crate::agent::types::MessageContent::Text { text }],
+                    timestamp: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                };
+
+                // Drain and discard progress events — the caller gets the
+                // final answer via the RPC response, same contract
+                // `tool_exec::drive_subagent` uses for a spawned subagent.
+                let (tx, mut rx) = crate::agent::events::event_bus();
+                tokio::spawn(async move { while rx.rx.recv().await.is_some() {} });
+                let abort_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let steer_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+                let mut agent = agent_handle.lock().await;
+                let source_tag = format!("orchestrator:{instance_id}");
+                let new_messages = agent.prompt(message, &self.app, &tx, &abort_flag, &steer_flag, &source_tag).await;
+
+                let response_text = new_messages
+                    .iter()
+                    .rev()
+                    .find_map(|m| match m {
+                        crate::agent::types::AgentMessage::Assistant { content, error_message, .. } => {
+                            if let Some(err) = error_message {
+                                Some(format!("Error: {err}"))
+                            } else {
+                                let text: String = content
+                                    .iter()
+                                    .filter_map(|c| match c {
+                                        crate::agent::types::MessageContent::Text { text } => Some(text.as_str()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                Some(text)
+                            }
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "(subagent produced no text response)".to_string());
+
                 Some(serde_json::json!({
                     "success": true,
                     "command": "prompt",
-                    "response": text
+                    "response": response_text
                 }))
+            }
+            RpcCommand::NewSession => {
+                let mut agent = agent_handle.lock().await;
+                agent.reset().await;
+                Some(serde_json::json!({ "success": true, "command": "new_session" }))
             }
             _ => {
                 Some(serde_json::json!({
@@ -157,7 +252,7 @@ impl Supervisor {
     pub async fn handle_request(&self, request: OrchestratorRequest) -> OrchestratorResponse {
         match request {
             OrchestratorRequest::Spawn(req) => {
-                let record = self.spawn_instance(&req.cwd, req.label).await;
+                let record = self.spawn_instance(&req.cwd, req.label, None).await;
                 OrchestratorResponse::SpawnResult(SpawnResponse {
                     ok: true,
                     instance: record.into(),
@@ -165,17 +260,11 @@ impl Supervisor {
             }
             OrchestratorRequest::List(_) => {
                 let instances = self.list_instances().await;
-                OrchestratorResponse::ListResult(ListResponse {
-                    ok: true,
-                    instances: instances.into_iter().map(|r| r.into()).collect(),
-                })
+                OrchestratorResponse::ListResult(ListResponse { ok: true, instances })
             }
             OrchestratorRequest::Status(req) => {
                 match self.get_instance(&req.instance_id).await {
-                    Some(instance) => OrchestratorResponse::StatusResult(StatusResponse {
-                        ok: true,
-                        instance: instance.into(),
-                    }),
+                    Some(instance) => OrchestratorResponse::StatusResult(StatusResponse { ok: true, instance }),
                     None => OrchestratorResponse::Error(ErrorResponse {
                         ok: false,
                         error: format!("Unknown instance: {}", req.instance_id),
@@ -210,10 +299,7 @@ impl Supervisor {
             }
             OrchestratorRequest::RpcStream(req) => {
                 match self.get_instance(&req.instance_id).await {
-                    Some(instance) => OrchestratorResponse::RpcReady(RpcReadyResponse {
-                        ok: true,
-                        instance: instance.into(),
-                    }),
+                    Some(instance) => OrchestratorResponse::RpcReady(RpcReadyResponse { ok: true, instance }),
                     None => OrchestratorResponse::Error(ErrorResponse {
                         ok: false,
                         error: format!("Unknown instance: {}", req.instance_id),

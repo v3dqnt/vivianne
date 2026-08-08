@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 // ============================================================================
 // Core message types (compatibility with ai/types.rs)
@@ -104,9 +103,9 @@ impl Message {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThinkingLevel {
-    #[default]
     Off,
     Minimal,
+    #[default]
     Low,
     Medium,
     High,
@@ -168,11 +167,15 @@ impl PersonaMode {
     pub fn restricted_tools(&self) -> &'static [&'static str] {
         match self {
             PersonaMode::Agent => &[],
-            PersonaMode::Ask => &["write", "edit", "apply_patch", "bash", "powershell", "computer", "delegate"],
-            PersonaMode::Debug => &["write", "edit", "apply_patch", "delegate"],
+            PersonaMode::Ask => &[
+                "write", "edit", "apply_patch", "bash", "powershell", "computer", "task", "connect_mcp_server",
+                "create_automation", "delete_automation", "set_automation_enabled",
+            ],
+            PersonaMode::Debug => &["write", "edit", "apply_patch", "task"],
             PersonaMode::Explore => &[
-                "write", "edit", "apply_patch", "bash", "powershell", "computer", "delegate",
-                "web_fetch", "web_search",
+                "write", "edit", "apply_patch", "bash", "powershell", "computer", "task",
+                "web_fetch", "web_search", "connect_mcp_server",
+                "create_automation", "delete_automation", "set_automation_enabled",
             ],
         }
     }
@@ -308,11 +311,10 @@ pub struct AfterToolCallResult {
 pub struct AgentContext {
     pub system_prompt: String,
     pub messages: Vec<AgentMessage>,
-    /// How many `delegate` tool calls deep this run is. 0 at the top level; a
-    /// delegated sub-task runs with `parent_depth + 1` and has `delegate`
-    /// itself excluded from its own tool list once depth >= 1 — caps
-    /// delegation at a single level (a lightweight in-task subtask, not a
-    /// recursive subagent tree).
+    /// How many `task` tool calls deep this run is. 0 at the top level; a
+    /// spawned subagent runs with `parent_depth + 1` and has `task` itself
+    /// excluded from its own tool list once depth >= 1 — caps subagent
+    /// spawning at a single level, not a recursive subagent tree.
     pub delegate_depth: usize,
 }
 
@@ -382,6 +384,13 @@ pub enum AgentMessage {
         details: Option<serde_json::Value>,
         is_error: Option<bool>,
         timestamp: u64,
+        /// The tool call's original request arguments (path, old_string,
+        /// new_string, content, etc.) — persisted here rather than only
+        /// carried transiently through the live ToolExecutionStart event,
+        /// so the frontend can still reconstruct diffs/args after a
+        /// reload, a session restore, or reopening a past session.
+        #[serde(default)]
+        arguments: Option<serde_json::Value>,
     },
     #[serde(rename_all = "camelCase")]
     Custom {

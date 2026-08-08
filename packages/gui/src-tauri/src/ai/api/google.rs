@@ -74,6 +74,9 @@ fn build_request_body(
 ) -> Value {
     let contents = convert_messages(model_id, model_provider, model_api, context);
 
+    let mut body = serde_json::Map::new();
+    body.insert("contents".to_string(), json!(contents));
+
     let mut config = serde_json::Map::new();
 
     if let Some(temp) = options.temperature {
@@ -83,7 +86,10 @@ fn build_request_body(
         config.insert("maxOutputTokens".to_string(), json!(max));
     }
     if let Some(ref sp) = context.system_prompt {
-        config.insert("systemInstruction".to_string(), json!(sp));
+        body.insert(
+            "systemInstruction".to_string(),
+            json!({ "parts": [{ "text": sp }] }),
+        );
     }
 
     // Tools
@@ -95,12 +101,12 @@ fn build_request_body(
         }
     });
     if let Some(tools) = tools_json {
-        config.insert("tools".to_string(), tools);
+        body.insert("tools".to_string(), tools);
 
         // Tool choice config
         if let Some(ref tc) = options.tool_choice {
             let mode = map_tool_choice(tc);
-            config.insert(
+            body.insert(
                 "toolConfig".to_string(),
                 json!({ "functionCallingConfig": { "mode": mode } }),
             );
@@ -140,10 +146,9 @@ fn build_request_body(
         }
     }
 
-    json!({
-        "contents": contents,
-        "generationConfig": config
-    })
+    body.insert("generationConfig".to_string(), Value::Object(config));
+
+    Value::Object(body)
 }
 
 // ── SSE helpers ───────────────────────────────────────────────────────────────
@@ -257,6 +262,7 @@ pub async fn stream(
                 delta: String::new(),
                 done: true,
                 message: Some(error_msg),
+                is_thinking: false,
             },
         );
     }
@@ -389,6 +395,7 @@ async fn stream_inner(
             delta: String::new(),
             done: true,
             message: Some(output),
+            is_thinking: false,
         },
     );
 
@@ -464,6 +471,17 @@ fn process_chunk(
                             *ct = thinking.clone();
                             *cts = thinking_signature.clone();
                         }
+                        // Emit token event for thinking deltas
+                        let _ = app.emit(
+                            "ai-stream-token",
+                            StreamTokenEvent {
+                                stream_id: stream_id.to_string(),
+                                delta: text.to_string(),
+                                done: false,
+                                message: None,
+                                is_thinking: true,
+                            },
+                        );
                     }
                     Some(CurrentBlock::Text { text: t, text_signature, content_index }) => {
                         t.push_str(text);
@@ -480,6 +498,7 @@ fn process_chunk(
                                 delta: text.to_string(),
                                 done: false,
                                 message: None,
+                                is_thinking: false,
                             },
                         );
                     }
@@ -573,7 +592,7 @@ fn update_usage(output: &mut AssistantMessage, meta: &Value) {
 
 // ── URL encoding helper (no external dep needed) ──────────────────────────────
 
-fn urlencoding_encode(input: &str) -> String {
+pub(crate) fn urlencoding_encode(input: &str) -> String {
     let mut encoded = String::new();
     for byte in input.bytes() {
         match byte {

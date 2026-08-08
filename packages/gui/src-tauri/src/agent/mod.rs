@@ -8,32 +8,40 @@
 /// - `loop_core` — core agent loop logic (orchestrates LLM calls, tool execution)
 /// - `tool_exec` — tool call execution
 /// - `agent` — high-level Agent struct with lifecycle management
-/// - `proxy` — proxy stream function for server-routed LLM calls
 
 pub mod types;
 pub mod state;
 pub mod events;
 pub mod loop_core;
 pub mod tool_exec;
+mod tool_schemas;
 pub mod agent;
-pub mod proxy;
 pub mod commands;
-pub mod harness;
 pub mod memory;
+pub mod memory_rerank;
 pub mod memory_store;
+pub mod memory_graph;
 pub mod rrf;
 pub mod paths;
 pub mod usage_store;
+pub mod directive;
+pub mod project_instructions;
+pub mod projects;
+pub mod notifications;
+pub mod llama_manager;
 
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
 // Re-exports for convenience
 // ============================================================================
+//
+// Only `Agent` is re-exported flat — it's the one type external callers
+// (`orchestrator::supervisor`) actually reach for as `crate::agent::Agent`.
+// `types`/`state`/`events` are not: every real caller already qualifies
+// through its submodule (`agent::types::AgentMessage`, etc.), so a blanket
+// glob re-export here would just be an unused second path to the same types.
 
-pub use types::*;
-pub use state::*;
-pub use events::*;
 pub use agent::Agent;
 
 // ============================================================================

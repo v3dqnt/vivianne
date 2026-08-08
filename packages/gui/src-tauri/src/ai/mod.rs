@@ -9,5 +9,7 @@ pub mod api;
 pub mod model_discovery;
 pub mod provider_registry;
 pub mod embedding;
+pub mod local_onnx;
 pub mod completion;
 pub mod keychain_store;
+pub mod local_registry;

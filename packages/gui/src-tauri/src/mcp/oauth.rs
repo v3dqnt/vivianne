@@ -151,6 +151,7 @@ pub async fn authorize(server_name: &str, resource_url: &str, client_id: &str, a
     Ok(tokens)
 }
 
+#[allow(deprecated)]
 fn open_in_browser(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
     use tauri_plugin_shell::ShellExt;
     app.shell().open(url, None).map_err(|e| format!("failed to open browser: {e}"))

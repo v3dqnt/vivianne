@@ -15,7 +15,7 @@
 //! wakeup-channel/reschedule dance. Upgrade path: precise sleep_until + a
 //! change-notify channel if sub-minute accuracy ever matters.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use cron::Schedule;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -56,7 +56,17 @@ fn next_run_after(cron: &str, after: DateTime<Utc>) -> Option<u64> {
         _ => cron.trim().to_string(),
     };
     let schedule = Schedule::from_str(&normalized).ok()?;
-    schedule.after(&after).next().map(|dt| dt.timestamp_millis() as u64)
+    // Cron fields mean wall-clock time on the user's machine ("11" in "0 11 *
+    // * *" is 11am local, per how the agent/user actually write these — e.g.
+    // "schedule in morning 11am") — not 11:00 UTC. Doing the schedule math
+    // directly against a UTC `after` silently reinterprets every cron in UTC,
+    // which is wrong by exactly the local UTC offset (this is the "asked for
+    // 11am, got 4:30pm" bug in IST/UTC+5:30). Convert to local for the cron
+    // math, then back to UTC for storage — `next_run` stays an absolute
+    // epoch timestamp either way, comparable against `Utc::now()` elsewhere.
+    let after_local = after.with_timezone(&Local);
+    let next_local = schedule.after(&after_local).next()?;
+    Some(next_local.with_timezone(&Utc).timestamp_millis() as u64)
 }
 
 /// Returns `true` if `cron` parses — used to reject bad expressions at create/update.

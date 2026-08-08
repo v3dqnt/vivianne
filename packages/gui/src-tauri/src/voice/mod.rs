@@ -12,13 +12,27 @@ use std::sync::Arc;
 
 use tauri::Manager;
 use tokio::sync::Mutex;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
 
 /// A single loaded model, keyed by the model id it was built from so switching
 /// models in settings rebuilds the context.
 struct LoadedModel {
     id: String,
-    ctx: Arc<WhisperContext>,
+    /// ONE reusable decode state, not one per transcription.
+    /// `whisper_init_state` allocates ~190MB of buffers (kv self/cross/pad +
+    /// conv/encode/cross/decode compute buffers) every time it runs. Wake-word
+    /// listening transcribes every few hundred ms, so rebuilding that per call
+    /// was constant, pointless churn — clearly visible as a repeating wall of
+    /// `whisper_init_state` log lines the whole time voice mode is on.
+    ///
+    /// Reuse is whisper.cpp's intended pattern (`whisper_full_with_state`
+    /// against a persistent state), and `set_no_context(true)` in
+    /// `cmd_whisper_transcribe` already stops any context carrying between
+    /// utterances. `WhisperState` owns its context through an `Arc` and is
+    /// `Send + Sync`, so holding it in this global is sound; the `Mutex`
+    /// serializes decodes, which is what we want anyway since each one is
+    /// CPU-saturating.
+    state: Arc<std::sync::Mutex<WhisperState>>,
 }
 
 lazy_static::lazy_static! {
@@ -79,12 +93,12 @@ async fn ensure_model_file(app: &tauri::AppHandle, id: &str) -> Result<PathBuf, 
     Ok(path)
 }
 
-async fn get_or_load(app: &tauri::AppHandle, id: &str) -> Result<Arc<WhisperContext>, String> {
+async fn get_or_load(app: &tauri::AppHandle, id: &str) -> Result<Arc<std::sync::Mutex<WhisperState>>, String> {
     {
         let guard = MODEL.lock().await;
         if let Some(m) = guard.as_ref() {
             if m.id == id {
-                return Ok(m.ctx.clone());
+                return Ok(m.state.clone());
             }
         }
     }
@@ -103,10 +117,16 @@ async fn get_or_load(app: &tauri::AppHandle, id: &str) -> Result<Arc<WhisperCont
     .await
     .map_err(|e| format!("join: {e}"))?
     .map_err(|e| format!("load whisper model: {e}"))?;
-    let ctx = Arc::new(ctx);
+    // Build the decode state once, here, on the blocking pool — this is the
+    // ~190MB allocation, so it must not run on an async worker thread.
+    let state = tokio::task::spawn_blocking(move || ctx.create_state())
+        .await
+        .map_err(|e| format!("join: {e}"))?
+        .map_err(|e| format!("create whisper state: {e}"))?;
+    let state = Arc::new(std::sync::Mutex::new(state));
     let mut guard = MODEL.lock().await;
-    *guard = Some(LoadedModel { id: id.to_string(), ctx: ctx.clone() });
-    Ok(ctx)
+    *guard = Some(LoadedModel { id: id.to_string(), state: state.clone() });
+    Ok(state)
 }
 
 /// Preload (download + build) the model without transcribing. The frontend
@@ -130,12 +150,16 @@ pub async fn cmd_whisper_transcribe(
         return Ok(String::new());
     }
     let id = model.unwrap_or_else(|| "tiny.en".to_string());
-    let ctx = get_or_load(&app, &id).await?;
+    let state_handle = get_or_load(&app, &id).await?;
     let lang = language.unwrap_or_else(|| "en".to_string());
 
     // whisper inference is CPU-heavy and blocking — run it on a blocking thread.
     let text = tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let mut state = ctx.create_state().map_err(|e| format!("create state: {e}"))?;
+        // Reuses the one long-lived state (see `LoadedModel::state`) rather
+        // than allocating a fresh ~190MB one on every call.
+        let mut state = state_handle
+            .lock()
+            .map_err(|e| format!("whisper state lock poisoned: {e}"))?;
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_language(Some(lang.as_str()));
         params.set_translate(false);

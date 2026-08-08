@@ -4,7 +4,6 @@
 
 use async_trait::async_trait;
 use serde_json::json;
-use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -109,6 +108,7 @@ impl Tool for PowerShellTool {
         })
     }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
+        if let Some(gated) = super::tool_exec::plan_mode_gate("powershell") { return gated; }
         let command = args["command"].as_str().unwrap_or("").to_string();
         if command.trim().is_empty() { return err("'command' is required"); }
         if let Some(reason) = super::sandbox::check_command(&command) {
@@ -183,6 +183,7 @@ impl Tool for NotebookEditTool {
         })
     }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
+        if let Some(gated) = super::tool_exec::plan_mode_gate("notebook_edit") { return gated; }
         let nb_path = args["notebook_path"].as_str().unwrap_or("");
         if nb_path.is_empty() { return err("'notebook_path' is required"); }
         if !nb_path.ends_with(".ipynb") { return err("File must be a Jupyter notebook (.ipynb)"); }
@@ -378,6 +379,18 @@ impl Tool for WebSearchTool {
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let query = args["query"].as_str().unwrap_or("").trim().to_string();
         if query.len() < 2 { return err("'query' must be at least 2 characters"); }
+
+        // Prefer a real browser search (camoufox-browser) when it's running —
+        // far more resistant to being blocked than a plain HTML scrape. Falls
+        // through to the DuckDuckGo scraper below on any failure (not
+        // running, network error, empty result), so search still works with
+        // zero extra setup for anyone who hasn't installed camoufox-browser.
+        if crate::camoufox::health().await {
+            if let Ok(text) = crate::camoufox::search(&query).await {
+                return ok(text);
+            }
+        }
+
         let client = match reqwest::Client::builder()
             // A real browser UA is required — DuckDuckGo serves a 202 challenge
             // page (zero results) to bot-looking user agents.
@@ -388,10 +401,10 @@ impl Tool for WebSearchTool {
             Ok(c) => c,
             Err(e) => return err(format!("http client error: {e}")),
         };
-        // DuckDuckGo's HTML endpoint now requires a POST form submission; a GET
-        // query string returns HTTP 202 with no results.
+        // Use DuckDuckGo Lite endpoint which is extremely stable, fast, and
+        // doesn't block bots with HTTP 202 challenge pages.
         let resp = client
-            .post("https://html.duckduckgo.com/html/")
+            .post("https://lite.duckduckgo.com/lite/")
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(format!("q={}", percent_encode(&query)))
             .send()
@@ -406,8 +419,8 @@ impl Tool for WebSearchTool {
             Err(e) => return err(format!("search request failed: {e}")),
         };
 
-        // Parse result anchors: <a ... class="result__a" href="...">Title</a>
-        let re = match regex::Regex::new(r#"(?s)<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#) {
+        // Parse result anchors in DDG Lite: <a rel="nofollow" href="..." class='result-link'>Title</a>
+        let re = match regex::Regex::new(r#"(?s)<a[^>]*href="([^"]+)"[^>]*class=['"]result-link['"][^>]*>(.*?)</a>"#) {
             Ok(r) => r,
             Err(e) => return err(format!("regex error: {e}")),
         };

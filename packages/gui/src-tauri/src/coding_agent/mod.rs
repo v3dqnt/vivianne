@@ -1,40 +1,30 @@
-/// Coding Agent module — Rust rewrite of `packages/coding-agent/src/core/`
-///
-/// This is the top-level module that re-exports types and core
-/// functionality for the coding agent, which wraps the lower-level
-/// agent/ai modules with session management, tool definitions,
-/// compaction, and extension support.
+//! Coding Agent module — shared tool implementations + grok-parity surface
+//! (subagent orchestration, plan mode, ask-user, memory tools, OpenCode-style
+//! shortcuts, streaming executors) used by both the main `agent::` loop and
+//! the orchestrator's spawned instances.
+//!
+//! Nothing here is re-exported at the module root — every external reference
+//! already goes through its specific submodule (`coding_agent::tool_exec::X`,
+//! `coding_agent::compaction::Y`, ...), so there is exactly one path to reach
+//! any type, not two.
 
-pub mod types;
-pub mod session_manager;
 pub mod tool_exec;
 pub mod computer;
 pub mod tools_ext;
 pub mod apply_patch;
 pub mod repo_tools;
 pub mod compaction;
-pub mod settings;
-pub mod trust;
-pub mod messages;
-pub mod session;
-pub mod orchestrator_bridge;
-pub mod bash_executor;
-pub mod exec;
-pub mod system_prompt;
 pub mod skills;
 pub mod commands;
 pub mod sandbox;
 
-pub use types::*;
-pub use session_manager::*;
-pub use tool_exec::*;
-pub use compaction::*;
-pub use settings::*;
-pub use trust::*;
-pub use messages::*;
-pub use session::*;
-pub use bash_executor::*;
-pub use exec::*;
-pub use system_prompt::*;
-pub use skills::*;
-pub use commands::*;
+// Grok-parity feature set — subagent orchestration, plan mode, ask-user,
+// enriched read/list, memory tools, OpenCode-style shortcuts, streaming
+// executors.
+pub mod orchestration;
+pub mod memory_tools;
+pub mod tools_enh;
+pub mod opencode;
+pub mod streaming;
+pub mod context_shaping;
+pub mod ocr;

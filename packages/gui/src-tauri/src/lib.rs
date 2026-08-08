@@ -9,13 +9,16 @@ use crate::agent::commands::AppState;
 
 // New modules
 pub mod coding_agent;
-use crate::coding_agent::commands::CodingAgentState;
 pub mod orchestrator;
 pub mod lsp;
 pub mod mcp;
+pub mod camoufox;
+pub mod docker_installer;
 pub mod voice;
 pub mod automation;
+pub mod terminal;
 use crate::automation::AutomationStore;
+use crate::agent::llama_manager::LlamaManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -25,6 +28,7 @@ pub fn run() {
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(tauri_plugin_process::init())
+    .plugin(tauri_plugin_notification::init())
     .plugin(
       tauri_plugin_global_shortcut::Builder::new()
         .with_handler(|app, _shortcut, event| {
@@ -51,14 +55,19 @@ pub fn run() {
       crate::agent::commands::cmd_agent_continue,
       crate::agent::commands::cmd_agent_reset,
       crate::agent::commands::cmd_agent_abort,
+      crate::agent::commands::cmd_agent_steer,
       crate::agent::commands::cmd_agent_steering_queue,
       crate::agent::commands::cmd_agent_follow_up_queue,
       crate::agent::commands::cmd_agent_clear_queues,
+      crate::agent::commands::cmd_agent_get_queues,
+      crate::agent::commands::cmd_agent_remove_queued,
       crate::agent::commands::cmd_agent_messages,
       crate::agent::commands::cmd_agent_set_model,
       crate::agent::commands::cmd_agent_set_thinking_level,
       crate::agent::commands::cmd_agent_set_persona_mode,
       crate::agent::commands::cmd_agent_set_compaction_config,
+      crate::agent::commands::cmd_agent_get_compaction_config,
+      crate::agent::commands::cmd_compact_now,
       crate::agent::commands::cmd_agent_get_workspace,
       crate::agent::commands::cmd_agent_set_workspace,
       crate::agent::commands::cmd_create_workspace_folder,
@@ -69,18 +78,42 @@ pub fn run() {
       crate::agent::commands::cmd_get_models_config,
       crate::agent::commands::cmd_save_models_config,
       crate::agent::commands::cmd_get_settings,
+      crate::agent::commands::cmd_register_local_endpoint,
+      crate::agent::commands::cmd_unregister_local_endpoint,
+      crate::agent::commands::cmd_list_local_endpoints,
+      crate::agent::llama_manager::cmd_llama_start,
+      crate::agent::llama_manager::cmd_llama_stop,
+      crate::agent::llama_manager::cmd_llama_status,
+      crate::agent::llama_manager::cmd_llama_list,
+      crate::agent::llama_manager::cmd_llama_register,
+      crate::agent::llama_manager::cmd_llama_unregister,
       crate::agent::commands::cmd_save_settings,
       crate::agent::commands::cmd_get_sessions,
+      crate::agent::commands::cmd_get_active_session_id,
+      crate::agent::projects::cmd_list_projects,
+      crate::agent::projects::cmd_create_project,
+      crate::agent::projects::cmd_rename_project,
+      crate::agent::projects::cmd_delete_project,
+      crate::agent::projects::cmd_get_session_project_map,
+      crate::agent::projects::cmd_assign_session_project,
+      crate::agent::commands::cmd_delete_session,
+      crate::agent::commands::cmd_write_text_file,
       crate::agent::commands::cmd_load_session,
       crate::agent::commands::cmd_save_current_session,
       crate::agent::commands::cmd_rename_session,
+      crate::agent::commands::cmd_agent_revert_to_index,
       crate::agent::commands::cmd_get_usage_history,
+      crate::agent::commands::cmd_session_cost,
+      crate::agent::commands::cmd_list_dir_tree,
+      crate::agent::commands::cmd_read_file_content,
+      crate::agent::notifications::cmd_test_notification,
       crate::agent::commands::cmd_fork_session,
       crate::agent::commands::cmd_clone_session,
       crate::agent::commands::cmd_list_skills,
       crate::agent::commands::cmd_save_skill_file,
       crate::agent::commands::cmd_agent_respond_permission,
       crate::agent::commands::cmd_agent_answer_question,
+      crate::agent::commands::cmd_agent_respond_confirmation,
       crate::agent::commands::cmd_memory_status,
       crate::agent::commands::cmd_memory_enable,
       crate::agent::commands::cmd_memory_disable,
@@ -95,7 +128,19 @@ pub fn run() {
       crate::agent::commands::cmd_mcp_list_servers,
       crate::agent::commands::cmd_mcp_list_tools,
       crate::agent::commands::cmd_mcp_authorize,
+      crate::agent::commands::cmd_web_preview_navigate,
+      crate::agent::commands::cmd_web_preview_back,
+      crate::agent::commands::cmd_web_preview_forward,
+      crate::agent::commands::cmd_web_preview_refresh,
+      crate::agent::commands::cmd_check_docker_status,
+      crate::agent::commands::cmd_install_docker,
+      crate::agent::commands::cmd_terminal_list_shells,
+      crate::agent::commands::cmd_terminal_spawn,
+      crate::agent::commands::cmd_terminal_write,
+      crate::agent::commands::cmd_terminal_resize,
+      crate::agent::commands::cmd_terminal_close,
       crate::agent::commands::cmd_lsp_diagnostics,
+      crate::agent::commands::cmd_git_current_branch,
       crate::agent::commands::cmd_get_project_dir,
       crate::agent::commands::cmd_set_project_dir,
       // Orchestrator commands
@@ -105,14 +150,13 @@ pub fn run() {
       crate::orchestrator::commands::cmd_orch_stop,
       crate::orchestrator::commands::cmd_orch_rpc,
       crate::orchestrator::commands::cmd_orch_rpc_stream,
-      // Coding agent commands
-      crate::coding_agent::commands::cmd_coding_session_create,
-      crate::coding_agent::commands::cmd_coding_prompt,
-      crate::coding_agent::commands::cmd_coding_get_state,
-      crate::coding_agent::commands::cmd_coding_abort,
-      crate::coding_agent::commands::cmd_coding_steer,
-      crate::coding_agent::commands::cmd_coding_follow_up,
-      crate::coding_agent::commands::cmd_coding_clear_queues,
+      // Grok-parity coding-agent commands (subagents, plan mode, ask-user)
+      crate::coding_agent::commands::cmd_coding_answer_question,
+      crate::coding_agent::commands::cmd_coding_list_subagents,
+      crate::coding_agent::commands::cmd_coding_kill_subagent,
+      crate::coding_agent::commands::cmd_coding_plan_mode,
+      crate::coding_agent::commands::cmd_coding_set_plan_mode,
+      crate::coding_agent::commands::cmd_coding_register_stream_channel,
       crate::coding_agent::computer::cmd_capture_screen,
       crate::voice::cmd_whisper_preload,
       crate::voice::cmd_whisper_transcribe,
@@ -171,22 +215,126 @@ pub fn run() {
       let app_state = Arc::new(AppState::default());
       app.manage(app_state);
 
-      // Initialize coding agent state
-      let coding_agent_state = Arc::new(tokio::sync::Mutex::new(CodingAgentState::default()));
-      app.manage(coding_agent_state);
+      // Initialize local endpoint registry
+      app.manage(crate::ai::local_registry::new_registry());
+
+      // Initialize llama-server process manager
+      app.manage(Arc::new(LlamaManager::new()));
+
+// Grok-parity: install the ask_user_question emitter so tools can
+      // surface a choice UI to the frontend. The frontend listens for the
+      // `coding_ask_user_question` event and calls
+      // `cmd_coding_answer_question` when the user picks options.
+      let emit_handle = app.handle().clone();
+      crate::coding_agent::orchestration::install_question_emitter(std::sync::Arc::new(
+        move |payload| {
+          let _ = emit_handle.emit("coding_ask_user_question", payload);
+        },
+      ));
+
+      // Grok-parity: streaming_bash / streaming_powershell push live output
+      // over a Tauri `Channel` (registered by the frontend via
+      // `cmd_coding_register_stream_channel`), not a global `emit()` — see
+      // that command's doc comment for why.
 
       // Initialize orchestrator supervisor
       let orch_storage_path = app.path().app_data_dir().ok().map(|dir| dir.join("instances.json"));
       let orch_storage = crate::orchestrator::storage::InstanceStorage::new(
         orch_storage_path.unwrap_or_default()
       );
-      let supervisor = crate::orchestrator::supervisor::Supervisor::new(orch_storage);
+      let supervisor = crate::orchestrator::supervisor::Supervisor::new(orch_storage, app.handle().clone());
       let supervisor = std::sync::Arc::new(tokio::sync::Mutex::new(supervisor));
       app.manage(supervisor);
 
       // Automation store + background scheduler (emits `automation_fired`).
       app.manage(Arc::new(AutomationStore::new()));
       crate::automation::spawn_scheduler(app.handle().clone());
+
+      // PTY-backed terminal sessions (one per open tab).
+      app.manage(Arc::new(crate::terminal::TerminalRegistry::new()));
+
+      // Reconnect every MCP server persisted from the previous session.
+      // Spawned rather than blocking startup on `block_on` — a slow or
+      // unreachable server (a stdio command that never initializes, a
+      // remote HTTP server that's down) shouldn't delay the whole app
+      // launching; each reconnect attempt just quietly fails on its own.
+      tauri::async_runtime::spawn(async move {
+        let configs = crate::mcp::load_persisted_configs().await;
+        if !configs.is_empty() {
+          crate::mcp::restore_servers(configs).await;
+        }
+      });
+
+      // Pre-warm camoufox-browser in the background — npm installs it into
+      // `~/.viv/camoufox/` if it's not already there, so the first web
+      // preview/search doesn't have to wait for a cold npm install.
+      tauri::async_runtime::spawn(async move {
+        crate::camoufox::prewarm().await;
+      });
+
+      // Auto-start llama-server instances with autoStart=true from settings.
+      let app_clone = app.handle().clone();
+      tauri::async_runtime::spawn(async move {
+        // Read settings to find llama endpoints with autoStart
+        let settings_path = crate::agent::paths::viv_agent_dir()
+          .ok()
+          .map(|p| p.join("settings.json"));
+        let endpoints = if let Some(path) = settings_path {
+          if path.exists() {
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            let settings: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
+            settings
+              .get("localEndpoints")
+              .and_then(|v| v.as_array())
+              .map(|arr| {
+                arr.iter()
+                  .filter(|ep| {
+                    ep.get("kind")
+                      .and_then(|k| k.as_str())
+                      == Some("llama")
+                  })
+                  .filter_map(|ep| {
+                    let config = ep.get("config")?;
+                    let auto_start = config.get("autoStart")?.as_bool().unwrap_or(false);
+                    if !auto_start { return None; }
+                    Some((
+                      config.get("id")?.as_str()?.to_string(),
+                      config.get("name")?.as_str()?.to_string(),
+                      config.get("modelPath")?.as_str()?.to_string(),
+                      config.get("port")?.as_u64()? as u16,
+                      config.get("ngl")?.as_u64()? as u32,
+                      config.get("ctxSize")?.as_u64()? as u32,
+                    ))
+                  })
+                  .collect::<Vec<_>>()
+              })
+              .unwrap_or_default()
+          } else {
+            Vec::new()
+          }
+        } else {
+          Vec::new()
+        };
+
+        // Register and start each auto-start endpoint
+        for (id, name, model_path, port, ngl, ctx_size) in endpoints {
+          log::info!("[llama] auto-starting '{}' ({}:{})", name, model_path, port);
+          let manager = app_clone.state::<Arc<LlamaManager>>();
+          manager.register(crate::agent::llama_manager::LlamaProcessConfig {
+            id: id.clone(),
+            name: name.clone(),
+            model_path: model_path.clone(),
+            port,
+            ngl,
+            ctx_size,
+            auto_start: true,
+          });
+          match manager.start(&id, &app_clone).await {
+            Ok(status) => log::info!("[llama] '{}' auto-started: {:?}", name, status),
+            Err(e) => log::warn!("[llama] failed to auto-start '{}': {}", name, e),
+          }
+        }
+      });
 
       // Register the default global voice-wake shortcut (Ctrl+Shift+V). The
       // handler above broadcasts a "voice-wake" event that VoiceMode listens for.

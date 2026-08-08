@@ -1,0 +1,7 @@
+/* Utilities only — no preflight. MUI's `CssBaseline` (wired in `theme.ts`)
+   is the app's one reset; a second reset from Tailwind's preflight would
+   just be redundant at best and fight it at worst. Theming (color, spacing,
+   radius) still lives in `theme.ts` — Tailwind here is for one-off layout
+   utilities (flex/grid/gap/spacing), not a second component system. */
+@import 'tailwindcss/theme.css';
+@import 'tailwindcss/utilities.css';

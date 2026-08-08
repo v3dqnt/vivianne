@@ -66,7 +66,11 @@ pub async fn complete_text(app: &AppHandle, model: &ModelRef, system_prompt: &st
     let client = reqwest::Client::new();
 
     match spec.api_kind {
-        ApiKind::OpenAiChat | ApiKind::MistralChat => {
+        // Direct OpenAI still fully supports the legacy Chat Completions
+        // endpoint — one-shot, tool-free, streaming-free background
+        // completions (memory extraction) have no need for the Responses
+        // API's extra surface, so both kinds share this simple path.
+        ApiKind::OpenAiChat | ApiKind::OpenAiResponses | ApiKind::MistralChat => {
             complete_openai_compatible(&client, &base_url, &api_key, &model.id, system_prompt, user_prompt).await
         }
         ApiKind::AnthropicMessages => complete_anthropic(&client, &base_url, &api_key, &model.id, system_prompt, user_prompt).await,
@@ -93,7 +97,7 @@ async fn complete_openai_compatible(
             { "role": "user", "content": user_prompt },
         ],
         "stream": false,
-        "max_tokens": 2048,
+        "max_completion_tokens": 2048,
     });
     let resp = client
         .post(format!("{}/chat/completions", base_url.trim_end_matches('/')))

@@ -92,7 +92,6 @@ pub fn get_overflow_patterns() -> Vec<String> {
 // ============================================================================
 
 const CHARS_PER_TOKEN: usize = 4;
-const ESTIMATED_IMAGE_CHARS: usize = 4800;
 
 #[derive(Debug, Clone)]
 pub struct ContextUsageEstimate {
@@ -105,17 +104,12 @@ pub struct ContextUsageEstimate {
     /// Index of the message providing usage, or None
     pub last_usage_index: Option<usize>,
 }
-
 pub fn calculate_context_tokens(usage: &Usage) -> u32 {
     if usage.total_tokens > 0 {
         usage.total_tokens
     } else {
         usage.input + usage.output + usage.cache_read + usage.cache_write
     }
-}
-
-fn safe_json_stringify(value: &serde_json::Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "[unserializable]".to_string())
 }
 
 pub fn estimate_text_tokens(text: &str) -> u32 {

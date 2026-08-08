@@ -290,6 +290,8 @@ pub struct CompletionTokensDetails {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponsesRequest {
     pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
     pub input: Vec<ResponsesInputItem>,
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

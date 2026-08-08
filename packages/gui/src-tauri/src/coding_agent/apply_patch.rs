@@ -184,6 +184,7 @@ impl Tool for ApplyPatchTool {
         })
     }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
+        if let Some(gated) = super::tool_exec::plan_mode_gate("apply_patch") { return gated; }
         let patch_text = args["patchText"].as_str().unwrap_or("");
         if patch_text.trim().is_empty() {
             return ToolResult { content: "Error: patchText is required".to_string(), is_error: true, details: None };
@@ -194,6 +195,20 @@ impl Tool for ApplyPatchTool {
             Err(e) => return ToolResult { content: format!("Error: apply_patch verification failed: {e}"), is_error: true, details: None },
         };
 
+        // ── Phase 1: plan every write, touching nothing ────────────────────
+        // `writes[i]` is a file's intended FINAL state (`Some` = write this
+        // content, `None` = delete), and `undo[i]` is that same path's
+        // ORIGINAL state, pushed in lockstep so index `i` lines up in both.
+        //
+        // Previously each hunk was written the moment it was processed, and
+        // the first failure `return`ed on the spot — so a five-file patch
+        // whose third hunk had stale context left the first two already
+        // modified on disk: a silently half-applied patch that the model then
+        // had to untangle. Validating the whole patch before writing anything
+        // makes the common failure (context mismatch) change nothing at all,
+        // and the rollback below covers the rarer mid-commit I/O failure.
+        let mut writes: Vec<(PathBuf, Option<String>)> = Vec::new();
+        let mut undo: Vec<(PathBuf, Option<String>)> = Vec::new();
         let mut summary_lines = Vec::new();
         let mut changed_files = Vec::new();
 
@@ -201,21 +216,20 @@ impl Tool for ApplyPatchTool {
             let target: PathBuf = resolve_path(&self.cwd, &hunk.path);
             match &hunk.kind {
                 HunkKind::Add { content } => {
-                    if let Some(parent) = target.parent() {
-                        if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                            return ToolResult { content: format!("Error: failed to create directories for {}: {e}", hunk.path), is_error: true, details: None };
-                        }
-                    }
-                    if let Err(e) = tokio::fs::write(&target, content).await {
-                        return ToolResult { content: format!("Error: failed to write {}: {e}", hunk.path), is_error: true, details: None };
-                    }
+                    // `Add` over an existing path is an overwrite — snapshot
+                    // it so rollback restores rather than deletes.
+                    undo.push((target.clone(), tokio::fs::read_to_string(&target).await.ok()));
+                    writes.push((target, Some(content.clone())));
                     summary_lines.push(format!("A {}", hunk.path));
                     changed_files.push(hunk.path.clone());
                 }
                 HunkKind::Delete => {
-                    if let Err(e) = tokio::fs::remove_file(&target).await {
-                        return ToolResult { content: format!("Error: failed to delete {}: {e}", hunk.path), is_error: true, details: None };
-                    }
+                    let original = match tokio::fs::read_to_string(&target).await {
+                        Ok(s) => s,
+                        Err(e) => return ToolResult { content: format!("Error: failed to read {} to delete: {e}", hunk.path), is_error: true, details: None },
+                    };
+                    undo.push((target.clone(), Some(original)));
+                    writes.push((target, None));
                     summary_lines.push(format!("D {}", hunk.path));
                 }
                 HunkKind::Update { move_to, chunks } => {
@@ -227,7 +241,7 @@ impl Tool for ApplyPatchTool {
                     let mut lines: Vec<String> = original.lines().map(String::from).collect();
                     for chunk in chunks {
                         if let Err(e) = apply_chunk(&mut lines, &chunk.before, &chunk.after) {
-                            return ToolResult { content: format!("Error: apply_patch verification failed for {}: {e}", hunk.path), is_error: true, details: None };
+                            return ToolResult { content: format!("Error: apply_patch verification failed for {}: {e} (no files were modified)", hunk.path), is_error: true, details: None };
                         }
                     }
                     let mut new_content = lines.join("\n");
@@ -239,16 +253,12 @@ impl Tool for ApplyPatchTool {
                         Some(new_path) => resolve_path(&self.cwd, new_path),
                         None => target.clone(),
                     };
-                    if let Some(parent) = dest.parent() {
-                        let _ = tokio::fs::create_dir_all(parent).await;
-                    }
-                    if let Err(e) = tokio::fs::write(&dest, &new_content).await {
-                        return ToolResult { content: format!("Error: failed to write {}: {e}", hunk.path), is_error: true, details: None };
-                    }
+                    undo.push((dest.clone(), tokio::fs::read_to_string(&dest).await.ok()));
+                    writes.push((dest, Some(new_content)));
                     if let Some(new_path) = move_to {
-                        if let Err(e) = tokio::fs::remove_file(&target).await {
-                            return ToolResult { content: format!("Error: moved content to {new_path} but failed to remove original {}: {e}", hunk.path), is_error: true, details: None };
-                        }
+                        // A rename is "write the new path, then drop the old".
+                        undo.push((target.clone(), Some(original)));
+                        writes.push((target, None));
                         summary_lines.push(format!("M {} -> {}", hunk.path, new_path));
                         changed_files.push(new_path.clone());
                     } else {
@@ -256,6 +266,36 @@ impl Tool for ApplyPatchTool {
                         changed_files.push(hunk.path.clone());
                     }
                 }
+            }
+        }
+
+        // ── Phase 2: commit, restoring everything if any step fails ────────
+        async fn put(path: &PathBuf, content: &Option<String>) -> Result<(), String> {
+            match content {
+                Some(text) => {
+                    if let Some(parent) = path.parent() {
+                        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+                    }
+                    tokio::fs::write(path, text).await.map_err(|e| e.to_string())
+                }
+                None => tokio::fs::remove_file(path).await.map_err(|e| e.to_string()),
+            }
+        }
+
+        for (i, (path, content)) in writes.iter().enumerate() {
+            if let Err(e) = put(path, content).await {
+                // Restore every path touched so far (including this one, which
+                // may be partially written), newest first. Best-effort: a
+                // restore that itself fails can't be recovered from here, and
+                // reporting the original cause is more useful than masking it.
+                for (undo_path, original) in undo.iter().take(i + 1).rev() {
+                    let _ = put(undo_path, original).await;
+                }
+                return ToolResult {
+                    content: format!("Error: failed to write {} — rolled back, no changes applied ({e})", path.display()),
+                    is_error: true,
+                    details: None,
+                };
             }
         }
 
@@ -275,5 +315,81 @@ impl Tool for ApplyPatchTool {
             is_error: false,
             details: Some(json!({ "files": changed_files })),
         }
+    }
+}
+
+#[cfg(test)]
+mod atomicity_tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("viv_apply_patch_{name}_{}", uuid::Uuid::new_v4()))
+    }
+
+    /// The bug this guards: hunks used to be written one at a time, returning
+    /// on the first failure — so an earlier file stayed modified on disk even
+    /// though the patch as a whole was rejected.
+    #[tokio::test]
+    async fn a_later_bad_hunk_leaves_earlier_files_untouched() {
+        let dir = temp_dir("partial");
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("first.txt");
+        let second = dir.join("second.txt");
+        std::fs::write(&first, "original first\n").unwrap();
+        std::fs::write(&second, "original second\n").unwrap();
+
+        // Hunk 1 applies cleanly; hunk 2's context line does not exist.
+        let patch = "\
+*** Begin Patch
+*** Update File: first.txt
+@@
+-original first
++rewritten first
+*** Update File: second.txt
+@@
+-context that is not in the file
++never applied
+*** End Patch";
+
+        let tool = ApplyPatchTool::new(dir.to_string_lossy().to_string());
+        let result = tool.execute(&json!({ "patchText": patch }), ".").await;
+
+        assert!(result.is_error, "a hunk with stale context must fail the whole patch");
+        assert_eq!(
+            std::fs::read_to_string(&first).unwrap(),
+            "original first\n",
+            "the first file must be left untouched when a later hunk fails"
+        );
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "original second\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The all-good path still has to actually write every hunk.
+    #[tokio::test]
+    async fn a_fully_valid_patch_applies_every_hunk() {
+        let dir = temp_dir("success");
+        std::fs::create_dir_all(&dir).unwrap();
+        let existing = dir.join("existing.txt");
+        std::fs::write(&existing, "before\n").unwrap();
+
+        let patch = "\
+*** Begin Patch
+*** Update File: existing.txt
+@@
+-before
++after
+*** Add File: created.txt
++brand new
+*** End Patch";
+
+        let tool = ApplyPatchTool::new(dir.to_string_lossy().to_string());
+        let result = tool.execute(&json!({ "patchText": patch }), ".").await;
+
+        assert!(!result.is_error, "valid patch should apply: {}", result.content);
+        assert_eq!(std::fs::read_to_string(&existing).unwrap(), "after\n");
+        assert_eq!(std::fs::read_to_string(dir.join("created.txt")).unwrap(), "brand new\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

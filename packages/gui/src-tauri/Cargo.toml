@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.0"
+version = "1.5.0"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -31,6 +31,8 @@ tauri-plugin-dialog = "2"
 # after an update installs.
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# Desktop "turn complete" notifications (Settings -> Notifications).
+tauri-plugin-notification = "2"
 reqwest = { version = "0.13.3", features = ["json", "stream"] }
 tokio = { version = "1.0", features = ["full"] }
 futures = "0.3.32"
@@ -71,3 +73,13 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # i.e. keys appear to save but never persist. Each feature is cfg-gated to its
 # own OS, so enabling all three is the standard cross-platform setup.
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
+portable-pty = "0.9.0"
+# Local ONNX inference for text embeddings (all-MiniLM-L6-v2). Replaces the
+# ~200ms OpenAI API round trip with ~3ms local CPU inference, zero API key
+# requirement, and offline operation. tract-onnx is the Rust-native ONNX
+# runtime (no Python, no system deps beyond the Microsoft Visual C++
+# redistributable on Windows). The tokenizers crate is HuggingFace's Rust
+# WordPiece tokenizer bundled from source.
+tract-onnx = "0.21"
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
+ndarray = "0.16"

@@ -6,7 +6,7 @@
 use regex::Regex;
 use serde_json::{json, Value};
 
-use crate::ai::types::{Context, Message, MessageContent, ToolCall};
+use crate::ai::types::{Context, MessageContent};
 
 // ── Thinking / thought-signature helpers ─────────────────────────────────────
 

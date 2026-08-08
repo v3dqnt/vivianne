@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::ai::types::{AssistantMessage, Context, MessageContent, StreamOptions, StreamTokenEvent, ToolCall, Usage};
+use crate::ai::types::{AssistantMessage, Context, MessageContent, StreamTokenEvent, ToolCall, Usage};
 use tauri::{AppHandle, Emitter};
 const DEFAULT_AZURE_API_VERSION: &str = "v1";
 
@@ -284,6 +284,7 @@ pub async fn stream_azure_openai(
                     delta: String::new(),
                     done: true,
                     message: Some(msg),
+                    is_thinking: false,
                 },
             );
         };
@@ -401,6 +402,22 @@ pub async fn stream_azure_openai(
                                 delta: delta.to_string(),
                                 done: false,
                                 message: None,
+                                is_thinking: false,
+                            },
+                        );
+                    }
+                }
+                "response.reasoning_summary_text.delta" => {
+                    let delta = event["delta"].as_str().unwrap_or("");
+                    if !delta.is_empty() {
+                        let _ = app.emit(
+                            "ai-stream-token",
+                            StreamTokenEvent {
+                                stream_id: stream_id.clone(),
+                                delta: delta.to_string(),
+                                done: false,
+                                message: None,
+                                is_thinking: true,
                             },
                         );
                     }

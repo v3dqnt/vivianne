@@ -1,136 +1,125 @@
-//! Coding Agent Commands — Tauri command bindings for the coding agent.
+//! Coding Agent Commands — Tauri command bindings that bridge the tool-side
+//! registries (subagents, plan mode, ask-user-question, streaming output) and
+//! the GUI. The frontend calls them to:
+//!   * resolve a pending `ask_user_question` after the user picks options
+//!   * inspect / cancel background subagents launched by the `task` tool
+//!   * inspect / toggle plan mode + read the current plan text
+//!   * register the live-output channel for streaming shell tools
 //!
-//! Provides invoke handlers for the frontend to create sessions,
-//! send prompts, and manage agent state.
+//! Per-tool approval (the "ask before this runs" gate) lives in
+//! `agent::tool_exec`'s `bypassMode`/`GATED_TOOLS` check, not here — an
+//! earlier, separate `PermissionManager` in this module was never consulted
+//! by any tool-execution path and has been removed rather than wired up,
+//! since a working gate already exists.
 
-use crate::agent::types::AgentMessage;
-use crate::coding_agent::session::{AgentSession, AgentState};
-use crate::coding_agent::session_manager::SessionManager;
-use crate::coding_agent::settings::SettingsManager;
-use std::sync::Arc;
-use tauri::State;
-use tokio::sync::Mutex;
+use crate::coding_agent::orchestration::{
+    KillTaskTool, PlanModeState, QuestionRegistry, SubagentRegistry, SubagentStatus,
+};
+use crate::coding_agent::tool_exec::Tool as _;
 
-/// Application state for the coding agent.
-/// Manages a single active session.
-pub struct CodingAgentState {
-    pub session: Option<Arc<Mutex<AgentSession>>>,
+/// Called by the GUI after the user picks options in an ask_user_question
+/// prompt. `selections` is the list of chosen labels (or a single freeform
+/// string if the user typed one).
+#[tauri::command]
+pub async fn cmd_coding_answer_question(
+    id: String,
+    selections: Vec<String>,
+) -> Result<bool, String> {
+    Ok(QuestionRegistry::global().resolve(&id, selections))
 }
 
-impl Default for CodingAgentState {
-    fn default() -> Self {
-        Self { session: None }
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentSummary {
+    pub id: String,
+    pub subagent_type: String,
+    pub description: String,
+    pub prompt: String,
+    pub cwd: String,
+    pub status: String,
+    pub started_at_epoch_ms: u64,
+    pub elapsed_ms: u64,
+    pub turns: u32,
+    pub tool_calls: u32,
+    pub output: Option<String>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn cmd_coding_list_subagents() -> Result<Vec<SubagentSummary>, String> {
+    let mut out = Vec::new();
+    for arc in SubagentRegistry::global().all() {
+        let g = arc.lock().unwrap();
+        let (status, output, error, turns, tool_calls) = match &g.status {
+            SubagentStatus::Initializing => ("initializing".to_string(), None, None, 0, 0),
+            SubagentStatus::Running { turns, tool_calls } => ("running".to_string(), None, None, *turns, *tool_calls),
+            SubagentStatus::Completed { output, tool_calls, turns } => {
+                ("completed".to_string(), Some(output.clone()), None, *turns, *tool_calls)
+            }
+            SubagentStatus::Failed { error } => ("failed".to_string(), None, Some(error.clone()), 0, 0),
+            SubagentStatus::Cancelled { reason } => ("cancelled".to_string(), None, reason.clone(), 0, 0),
+        };
+        out.push(SubagentSummary {
+            id: g.id.clone(),
+            subagent_type: g.subagent_type.clone(),
+            description: g.description.clone(),
+            prompt: g.prompt.clone(),
+            cwd: g.cwd.clone(),
+            status,
+            started_at_epoch_ms: g.started_at_epoch_ms,
+            elapsed_ms: g.started_at.elapsed().as_millis() as u64,
+            turns,
+            tool_calls,
+            output,
+            error,
+        });
     }
+    // Newest first — matches how a user scanning for "what just started" expects the list ordered.
+    out.sort_by(|a, b| b.started_at_epoch_ms.cmp(&a.started_at_epoch_ms));
+    Ok(out)
 }
 
-/// Create a new coding agent session.
 #[tauri::command]
-pub async fn cmd_coding_session_create(
-    cwd: String,
-    state: State<'_, Arc<Mutex<CodingAgentState>>>,
-) -> Result<String, String> {
-    let session = AgentSession::new(cwd);
-    let session_id = "coding-session".to_string();
-
-    let mut app_state = state.inner().lock().await;
-    app_state.session = Some(Arc::new(Mutex::new(session)));
-
-    Ok(session_id)
+pub async fn cmd_coding_kill_subagent(id: String) -> Result<String, String> {
+    let tool = KillTaskTool::new();
+    let args = serde_json::json!({ "task_ids": [id] });
+    let res = tool.execute(&args, ".").await;
+    Ok(res.content)
 }
 
-/// Send a prompt to the coding agent.
-#[tauri::command]
-pub async fn cmd_coding_prompt(
-    text: String,
-    state: State<'_, Arc<Mutex<CodingAgentState>>>,
-) -> Result<Vec<AgentMessage>, String> {
-    let app_state = state.inner().lock().await;
-
-    if let Some(ref session_arc) = app_state.session {
-        let mut session = session_arc.lock().await;
-        session.prompt(&text).await
-    } else {
-        Err("No active session. Create one first.".to_string())
-    }
+#[derive(serde::Serialize)]
+pub struct PlanModeInfo {
+    pub active: bool,
+    pub plan: Option<String>,
 }
 
-/// Get the current state of the coding agent.
 #[tauri::command]
-pub async fn cmd_coding_get_state(
-    state: State<'_, Arc<Mutex<CodingAgentState>>>,
-) -> Result<AgentState, String> {
-    let app_state = state.inner().lock().await;
-
-    if let Some(ref session_arc) = app_state.session {
-        let session = session_arc.lock().await;
-        // Clone the state for serialization
-        Ok(session.state().clone())
-    } else {
-        Err("No active session.".to_string())
-    }
+pub async fn cmd_coding_plan_mode() -> Result<PlanModeInfo, String> {
+    let s = PlanModeState::global();
+    Ok(PlanModeInfo { active: s.is_active(), plan: s.current_plan() })
 }
 
-/// Abort the current coding agent operation.
+/// GUI escape hatch: force plan mode on/off from outside the model loop.
+/// Used by a "Plan Mode" toggle in the app chrome so the user can also drive
+/// the switch (grok exposes the same affordance in its UI).
 #[tauri::command]
-pub async fn cmd_coding_abort(
-    state: State<'_, Arc<Mutex<CodingAgentState>>>,
+pub async fn cmd_coding_set_plan_mode(active: bool, plan: Option<String>) -> Result<bool, String> {
+    let s = PlanModeState::global();
+    if active { s.enter(plan); } else { s.exit(); }
+    Ok(s.is_active())
+}
+
+/// Register the frontend's live-output channel. Call once (e.g. at app
+/// startup or when the coding view mounts) with a fresh `Channel` —
+/// `streaming_bash` / `streaming_powershell` push batched output lines to it
+/// as the command runs. Uses a Tauri `Channel` rather than a global `emit()`:
+/// Tauri's own docs say the event system "is not designed for low latency or
+/// high throughput situations," and list child-process output as a
+/// canonical Channel use case.
+#[tauri::command]
+pub async fn cmd_coding_register_stream_channel(
+    channel: tauri::ipc::Channel<crate::coding_agent::streaming::StreamBatch>,
 ) -> Result<(), String> {
-    let app_state = state.inner().lock().await;
-
-    if let Some(ref session_arc) = app_state.session {
-        let mut session = session_arc.lock().await;
-        session.abort();
-        Ok(())
-    } else {
-        Err("No active session.".to_string())
-    }
-}
-
-/// Steer the agent with a message while it's running.
-#[tauri::command]
-pub async fn cmd_coding_steer(
-    text: String,
-    state: State<'_, Arc<Mutex<CodingAgentState>>>,
-) -> Result<(), String> {
-    let app_state = state.inner().lock().await;
-
-    if let Some(ref session_arc) = app_state.session {
-        let mut session = session_arc.lock().await;
-        session.steer(&text);
-        Ok(())
-    } else {
-        Err("No active session.".to_string())
-    }
-}
-
-/// Queue a follow-up message.
-#[tauri::command]
-pub async fn cmd_coding_follow_up(
-    text: String,
-    state: State<'_, Arc<Mutex<CodingAgentState>>>,
-) -> Result<(), String> {
-    let app_state = state.inner().lock().await;
-
-    if let Some(ref session_arc) = app_state.session {
-        let mut session = session_arc.lock().await;
-        session.follow_up(&text);
-        Ok(())
-    } else {
-        Err("No active session.".to_string())
-    }
-}
-
-/// Clear all queued messages.
-#[tauri::command]
-pub async fn cmd_coding_clear_queues(
-    state: State<'_, Arc<Mutex<CodingAgentState>>>,
-) -> Result<(Vec<String>, Vec<String>), String> {
-    let app_state = state.inner().lock().await;
-
-    if let Some(ref session_arc) = app_state.session {
-        let mut session = session_arc.lock().await;
-        Ok(session.clear_queues())
-    } else {
-        Err("No active session.".to_string())
-    }
+    crate::coding_agent::streaming::set_stream_channel(channel);
+    Ok(())
 }

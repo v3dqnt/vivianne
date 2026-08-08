@@ -16,11 +16,10 @@ use futures::StreamExt;
 use reqwest::Client;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc;
 
 use crate::ai::api::openai_prompt_cache::clamp_openai_prompt_cache_key;
 use crate::ai::api::openai_shared::{
-    has_header, map_stop_reason, parse_sse_data, resolve_api_key, ChatChoice, ChatCompletionChunk,
+    map_stop_reason, parse_sse_data, resolve_api_key, ChatCompletionChunk,
     ChatCompletionRequest, ChatMessage, ChatMessageContent, ChatTool, ChatToolCall,
     ChatToolDefinition, ContentPart, ImageUrl, StreamOptions as StreamOptsBody,
 };
@@ -28,7 +27,7 @@ use crate::ai::api::transform_messages::{transform_messages, TransformOptions};
 use crate::ai::types::{
     AssistantMessage, Context, CostBreakdown, MessageContent, StreamTokenEvent, ToolCall, Usage,
 };
-use crate::ai::utils::{format_provider_error, normalize_provider_error};
+use crate::ai::utils::{format_provider_error, normalize_provider_error, strip_leaked_tool_call_json};
 
 // ─── Options ────────────────────────────────────────────────────────────────
 
@@ -278,8 +277,8 @@ fn build_request_body(
         messages,
         stream: true,
         stream_options: Some(StreamOptsBody { include_usage: true }),
-        max_tokens: options.max_tokens,
-        max_completion_tokens: None,
+        max_tokens: None,
+        max_completion_tokens: options.max_tokens,
         temperature: options.temperature,
         tools,
         tool_choice: options.tool_choice.as_ref().and_then(|tc| {
@@ -335,12 +334,19 @@ fn parse_usage_from_chunk(usage: &crate::ai::api::openai_shared::CompletionUsage
 
 /// Holds in-progress tool call accumulators keyed by stream index.
 #[derive(Default)]
+#[allow(dead_code)]
 struct StreamState {
     text: String,
-    /// Accumulated reasoning-channel text, used as a fallback when a model
-    /// streams its answer via `reasoning`/`reasoning_content` and leaves the
-    /// normal `content` field empty.
+    /// Accumulated reasoning-channel text. Streamed live to the frontend as
+    /// thinking deltas, and also used as a fallback answer when a model
+    /// streams its whole reply via `reasoning`/`reasoning_content` and
+    /// leaves the normal `content` field empty.
     reasoning: String,
+    /// Splits `<think>` tags out of the plain `content` stream — the
+    /// convention many reasoning-model deployments on this wire format use
+    /// (NVIDIA NIM, self-hosted vLLM/Ollama, etc.) instead of the
+    /// `reasoning_content` extension above. See `ThinkTagParser`.
+    think_parser: crate::ai::utils::ThinkTagParser,
     text_started: bool,
     /// partial_args per tool-call stream index
     tool_partial_args: HashMap<u32, String>,
@@ -374,6 +380,7 @@ pub async fn stream_chat_completions(
             delta: String::new(),
             done: true,
             message: Some(err_msg.clone()),
+            is_thinking: false,
         };
         let _ = app.emit("ai-stream-token", &event);
         err_msg
@@ -569,6 +576,7 @@ pub async fn stream_chat_completions(
         delta: String::new(),
         done: true,
         message: Some(output.clone()),
+        is_thinking: false,
     };
     let _ = app.emit("ai-stream-token", &event);
 
@@ -611,27 +619,38 @@ fn process_chunk(
         None => return,
     };
 
-    // Text delta
+    // Text delta — routed through ThinkTagParser first so a deployment that
+    // emits raw `<think>...</think>` chain-of-thought inline (rather than
+    // via the reasoning_content/reasoning fields below) gets it classified
+    // and streamed to the thinking UI instead of leaking into the visible
+    // answer as literal tag text.
     if let Some(ref content) = delta.content {
         if !content.is_empty() {
-            state.text.push_str(content);
-            let event = StreamTokenEvent {
-                stream_id: stream_id.to_string(),
-                delta: content.clone(),
-                done: false,
-                message: None,
-            };
-            let _ = app.emit("ai-stream-token", &event);
+            for (is_thinking, text) in state.think_parser.feed(content) {
+                if is_thinking {
+                    state.reasoning.push_str(&text);
+                } else {
+                    state.text.push_str(&text);
+                }
+                let event = StreamTokenEvent {
+                    stream_id: stream_id.to_string(),
+                    delta: text,
+                    done: false,
+                    message: None,
+                    is_thinking,
+                };
+                let _ = app.emit("ai-stream-token", &event);
+            }
         }
     }
 
     // Reasoning / thinking delta (non-standard fields). Some models (e.g. certain
     // OpenRouter coder/reasoning models) stream their entire answer through a
     // reasoning field and leave `content` empty, which otherwise renders as a
-    // blank reply. Buffer it silently — it's surfaced only as a fallback in
-    // `finalize_output` if the model never produced real content, never as a
-    // live chunk, since callers (chat UI, voice TTS) treat every emitted chunk
-    // as the visible/spoken answer and can't tell reasoning text apart from it.
+    // blank reply. Streamed live as a thinking chunk (is_thinking: true) so
+    // callers can render it distinctly from the visible/spoken answer, and
+    // also buffered so `finalize_output` can use it as a fallback answer if
+    // the model never produced real content.
     let reasoning_delta = delta
         .reasoning_content
         .as_deref()
@@ -640,6 +659,14 @@ fn process_chunk(
     if let Some(rtext) = reasoning_delta {
         if !rtext.is_empty() {
             state.reasoning.push_str(rtext);
+            let event = StreamTokenEvent {
+                stream_id: stream_id.to_string(),
+                delta: rtext.to_string(),
+                done: false,
+                message: None,
+                is_thinking: true,
+            };
+            let _ = app.emit("ai-stream-token", &event);
         }
     }
 
@@ -691,8 +718,18 @@ fn process_chunk(
 }
 
 fn finalize_output(output: &mut AssistantMessage, state: &StreamState) {
-    // Prefer real content; fall back to reasoning text if the model produced no
-    // normal content (pure-reasoning streams would otherwise be a blank reply).
+    // If the model produced real content, keep the reasoning text as its own
+    // Thinking block (matches the Anthropic/Google shape) instead of
+    // discarding it. Only fall back to using it as the answer text itself
+    // when there was no real content at all (pure-reasoning streams would
+    // otherwise be a blank reply).
+    if !state.text.is_empty() && !state.reasoning.is_empty() {
+        output.content.push(MessageContent::Thinking {
+            thinking: state.reasoning.clone(),
+            thinking_signature: None,
+            redacted: false,
+        });
+    }
     let final_text = if !state.text.is_empty() {
         state.text.clone()
     } else if !state.reasoning.is_empty() {
@@ -700,6 +737,10 @@ fn finalize_output(output: &mut AssistantMessage, state: &StreamState) {
     } else {
         String::new()
     };
+    // Some weaker-tool-calling models (seen via NVIDIA NIM's DeepSeek hosts)
+    // narrate a tool call in plain text instead of only emitting a real
+    // tool_calls delta — strip the leaked JSON so it never reaches the UI.
+    let final_text = strip_leaked_tool_call_json(&final_text);
     if !final_text.is_empty() {
         output.content.push(MessageContent::Text { text: final_text });
     }

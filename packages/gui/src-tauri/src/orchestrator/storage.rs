@@ -2,10 +2,10 @@
 //!
 //! Manages persistence of instance records.
 
-use crate::orchestrator::types::{InstanceRecord, InstanceStatus};
+use crate::orchestrator::types::InstanceRecord;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Storage backend for instance records.
 pub struct InstanceStorage {

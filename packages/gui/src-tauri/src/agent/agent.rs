@@ -20,36 +20,40 @@ pub struct Agent {
     pub(crate) steering_queue: Arc<RwLock<Vec<AgentMessage>>>,
     pub(crate) follow_up_queue: Arc<RwLock<Vec<AgentMessage>>>,
     running: bool,
-    pub harness: crate::agent::harness::AgentHarness,
 }
 
 impl Agent {
     pub fn new() -> Self {
-        let fs = Box::new(crate::agent::harness::env::LocalFileSystem::new(".".to_string()));
-        let shell = Box::new(crate::agent::harness::env::LocalShell);
+        Self::new_with_cwd_and_model(".".to_string(), None)
+    }
+
+    /// Construct an agent scoped to an arbitrary working directory, optionally
+    /// seeded with a specific model (falls back to the same placeholder
+    /// default `new()` uses when `model` is `None`).
+    ///
+    /// Used by the orchestrator to give each spawned instance its own
+    /// workspace folder (so its file tools resolve against `cwd`, not the
+    /// process cwd) instead of every instance sharing the process cwd `"."`.
+    pub fn new_with_cwd_and_model(cwd: String, model: Option<crate::agent::types::ModelRef>) -> Self {
+        let model = model.unwrap_or_else(|| crate::agent::types::ModelRef {
+            id: "gpt-4".to_string(),
+            name: "GPT-4".to_string(),
+            api: "openai-chat".to_string(),
+            provider: "openai".to_string(),
+            base_url: None,
+            reasoning: false,
+            max_tokens: 8192,
+            context_window: 128_000,
+        });
+        let workspace_folders = if cwd == "." { Vec::new() } else { vec![cwd] };
         Self {
-            state: AgentState::new(),
+            state: AgentState::with_model_and_workspace(model.clone(), workspace_folders),
             steering_mode: QueueMode::OneAtATime,
             follow_up_mode: QueueMode::OneAtATime,
             tool_execution_mode: ToolExecutionMode::Parallel,
             steering_queue: Arc::new(RwLock::new(Vec::new())),
             follow_up_queue: Arc::new(RwLock::new(Vec::new())),
             running: false,
-            harness: crate::agent::harness::AgentHarness::new(
-                fs,
-                shell,
-                ".".to_string(),
-                crate::agent::types::ModelRef {
-                    id: "gpt-4".to_string(),
-                    name: "GPT-4".to_string(),
-                    api: "openai-chat".to_string(),
-                    provider: "openai".to_string(),
-                    base_url: None,
-                    reasoning: false,
-                    max_tokens: 8192,
-                    context_window: 128_000,
-                },
-            ),
         }
     }
 
@@ -72,6 +76,8 @@ impl Agent {
         app: &tauri::AppHandle,
         emit: &EventSender,
         abort_flag: &Arc<std::sync::atomic::AtomicBool>,
+        steer_flag: &Arc<std::sync::atomic::AtomicBool>,
+        source_tag: &str,
     ) -> Vec<AgentMessage> {
         self.running = true;
         let mut context = AgentContext {
@@ -81,7 +87,7 @@ impl Agent {
         };
         let queues = self.queue_handles();
 
-        let new_messages = run_agent_loop_with_prompts(vec![message], app, &mut context, &self.state, emit, &queues, abort_flag).await;
+        let new_messages = run_agent_loop_with_prompts(vec![message], app, &mut context, &self.state, emit, &queues, abort_flag, steer_flag, source_tag).await;
 
         self.running = false;
         new_messages
@@ -92,6 +98,8 @@ impl Agent {
         app: &tauri::AppHandle,
         emit: &EventSender,
         abort_flag: &Arc<std::sync::atomic::AtomicBool>,
+        steer_flag: &Arc<std::sync::atomic::AtomicBool>,
+        source_tag: &str,
     ) -> Vec<AgentMessage> {
         self.running = true;
         let mut context = AgentContext {
@@ -102,7 +110,7 @@ impl Agent {
         let mut new_messages = Vec::new();
         let queues = self.queue_handles();
 
-        run_agent_loop_continue(&mut context, app, &mut new_messages, &self.state, emit, &queues, abort_flag).await;
+        run_agent_loop_continue(&mut context, app, &mut new_messages, &self.state, emit, &queues, abort_flag, steer_flag, source_tag).await;
 
         self.running = false;
         new_messages

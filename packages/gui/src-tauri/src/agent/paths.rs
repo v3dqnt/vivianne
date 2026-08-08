@@ -44,6 +44,14 @@ pub fn viv_skills_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// `~/.viv/camoufox` — persistent camoufox-browser install (npm-installed once,
+/// never via npx). Survives npm cache clears and app reinstallations.
+pub fn viv_camoufox_dir() -> Result<PathBuf, String> {
+    let dir = viv_home()?.join("camoufox");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create camoufox directory: {e}"))?;
+    Ok(dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

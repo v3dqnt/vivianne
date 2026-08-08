@@ -14,12 +14,23 @@
     "core:window:allow-maximize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
+    "core:window:allow-start-dragging",
     "core:window:allow-is-maximized",
     "core:window:allow-set-always-on-top",
     "core:window:allow-set-focus",
     "core:window:allow-set-position",
     "core:window:allow-set-size",
-    "core:webview:allow-create-webview-window",
+    {
+      "identifier": "core:webview:allow-create-webview-window",
+      "allow": [
+        {
+          "url": "http://localhost/*"
+        },
+        {
+          "url": "https://*.vivianne.app/*"
+        }
+      ]
+    },
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered",
@@ -39,6 +50,7 @@
     },
     "updater:default",
     "process:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "notification:default"
   ]
 }
