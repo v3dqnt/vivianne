@@ -75,3 +75,7 @@ hrm-model/
 # Agent runtime state: per-machine, and its memory store holds notes derived
 # from real conversations. Never belongs in the repo.
 packages/gui/src-tauri/.vivianne/
+
+# Rendered trailer output — regenerated, not source
+packages/trailer/out.mp4
+packages/trailer/out/
