@@ -827,3 +827,650 @@ pub async fn cmd_list_available_models(
 ) -> Result<Vec<crate::ai::model_discovery::DiscoveredModel>, String> {
     Ok(crate::ai::model_discovery::discover_all(&state).await)
 }
+
+// ============================================================================
+// Credential pools — same-provider key rotation (formerly credential_pool.rs,
+// merged in here since "the primary key" above and "extra pool keys" below
+// are the same underlying concept — one provider, a list of usable keys —
+// artificially split across two files/modules). Ported from Hermes Agent's
+// `credential_pool.py`/`runtime_provider.py` design: a second working key
+// for the same provider is tried before ever falling back to a *different*
+// provider, since that's usually all a rate limit or an exhausted trial key
+// actually needs.
+//
+// Two independent stores, deliberately: the single "primary" key above
+// (OS keychain or file, via `AuthState`) is untouched by this section — a
+// user who never adds a second key sees zero behavior change. *Additional*
+// pool keys go through their own secrets store (same keychain-or-file
+// backend selection as `AuthState`, so the security posture matches).
+// Runtime state (cooldowns, request counts, rotation strategy) is never
+// sensitive, so it always lives in one small JSON file regardless of which
+// secrets backend is active — no reason to put counters behind the OS
+// keychain.
+// ============================================================================
+
+use rand::seq::SliceRandom;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RotationStrategy {
+    /// Keep using the first healthy candidate until it cools down, then
+    /// move to the next. The default — matches "just add a backup key."
+    #[default]
+    FillFirst,
+    /// Prefer whichever candidate was used longest ago.
+    RoundRobin,
+    /// Prefer whichever candidate has the lowest total request count.
+    LeastUsed,
+    /// Shuffle the healthy candidates each time.
+    Random,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialStatus {
+    #[default]
+    Ok,
+    /// Looked like a transient/provider-wide error (rate limit, 5xx).
+    Retryable,
+    /// Looked like this key specifically is out of quota/billing.
+    QuotaOrBilling,
+    /// Failed in a way that didn't match a known shape (bad/revoked key, etc).
+    Other,
+}
+
+impl From<super::utils::CredentialErrorClass> for CredentialStatus {
+    fn from(class: super::utils::CredentialErrorClass) -> Self {
+        match class {
+            super::utils::CredentialErrorClass::Retryable => CredentialStatus::Retryable,
+            super::utils::CredentialErrorClass::QuotaOrBilling => CredentialStatus::QuotaOrBilling,
+            super::utils::CredentialErrorClass::Other => CredentialStatus::Other,
+        }
+    }
+}
+
+/// One extra key in a provider's pool. The primary key (from `AuthState`)
+/// is never represented as one of these — it's folded in synthetically at
+/// read time, see `CredentialPool::candidates`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PooledCredential {
+    pub id: String,
+    pub label: String,
+    pub api_key: String,
+    pub added_at: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialRuntimeState {
+    pub request_count: u64,
+    pub cooldown_until: Option<u64>,
+    pub last_used_at: Option<u64>,
+    pub last_status: CredentialStatus,
+}
+
+/// A ready-to-use candidate, resolved and ordered — what `loop_core.rs`
+/// actually consumes. Never includes cooling-down entries.
+#[derive(Debug, Clone)]
+pub struct PoolCandidate {
+    pub id: String,
+    pub label: String,
+    pub api_key: String,
+}
+
+/// Read-only view for the Settings UI — never carries the raw key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PoolEntryInfo {
+    pub id: String,
+    pub label: String,
+    /// "primary" (the existing single-key slot) or "pool" (added here).
+    pub source: String,
+    pub status: CredentialStatus,
+    pub request_count: u64,
+    pub cooldown_until: Option<u64>,
+    pub last_used_at: Option<u64>,
+    pub in_cooldown: bool,
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+const RATE_LIMIT_COOLDOWN_MS: u64 = 60 * 60 * 1000; // 1h — matches Hermes' 429 cooldown
+const QUOTA_COOLDOWN_MS: u64 = 24 * 60 * 60 * 1000; // 24h — matches Hermes' 402 cooldown
+const OTHER_COOLDOWN_MS: u64 = 60 * 60 * 1000; // 1h — unclassified failure, be conservative but not as harsh as a confirmed quota error
+
+fn cooldown_for(status: CredentialStatus) -> Option<u64> {
+    match status {
+        CredentialStatus::Ok => None,
+        CredentialStatus::Retryable => Some(RATE_LIMIT_COOLDOWN_MS),
+        CredentialStatus::QuotaOrBilling => Some(QUOTA_COOLDOWN_MS),
+        CredentialStatus::Other => Some(OTHER_COOLDOWN_MS),
+    }
+}
+
+// ── Secrets store — the actual extra API keys ───────────────────────────────
+
+#[async_trait]
+pub trait PoolSecretsStore: Send + Sync {
+    async fn list(&self, provider_id: &str) -> Result<Vec<PooledCredential>, String>;
+    async fn add(&self, provider_id: &str, label: String, api_key: String) -> Result<PooledCredential, String>;
+    async fn remove(&self, provider_id: &str, credential_id: &str) -> Result<(), String>;
+}
+
+/// OS keychain backend — one entry per provider (`pool:<provider_id>`),
+/// storing the whole `Vec<PooledCredential>` as one JSON blob. Same
+/// synchronous-`keyring`-in-`spawn_blocking` pattern as
+/// `keychain_store::KeychainCredentialStore`.
+pub struct KeychainPoolSecrets {
+    locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+impl KeychainPoolSecrets {
+    pub fn new() -> Self {
+        Self { locks: Mutex::new(HashMap::new()) }
+    }
+
+    async fn get_or_create_lock(&self, provider_id: &str) -> Arc<Mutex<()>> {
+        let mut map = self.locks.lock().await;
+        map.entry(provider_id.to_string()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
+    }
+
+    fn entry_name(provider_id: &str) -> String {
+        format!("pool:{provider_id}")
+    }
+
+    fn read_sync(provider_id: &str) -> Result<Vec<PooledCredential>, String> {
+        let entry = keyring::Entry::new("vivianne", &Self::entry_name(provider_id)).map_err(|e| format!("keyring entry error: {e}"))?;
+        match entry.get_password() {
+            Ok(json) => serde_json::from_str(&json).map_err(|e| format!("failed to parse stored key pool: {e}")),
+            Err(keyring::Error::NoEntry) => Ok(Vec::new()),
+            Err(e) => Err(format!("keyring read error: {e}")),
+        }
+    }
+
+    fn write_sync(provider_id: &str, entries: &[PooledCredential]) -> Result<(), String> {
+        let entry = keyring::Entry::new("vivianne", &Self::entry_name(provider_id)).map_err(|e| format!("keyring entry error: {e}"))?;
+        if entries.is_empty() {
+            return match entry.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(e) => Err(format!("keyring delete error: {e}")),
+            };
+        }
+        let json = serde_json::to_string(entries).map_err(|e| format!("failed to serialize key pool: {e}"))?;
+        entry.set_password(&json).map_err(|e| format!("keyring write error: {e}"))
+    }
+}
+
+#[async_trait]
+impl PoolSecretsStore for KeychainPoolSecrets {
+    async fn list(&self, provider_id: &str) -> Result<Vec<PooledCredential>, String> {
+        let provider_id = provider_id.to_string();
+        tokio::task::spawn_blocking(move || Self::read_sync(&provider_id)).await.map_err(|e| format!("keyring task panicked: {e}"))?
+    }
+
+    async fn add(&self, provider_id: &str, label: String, api_key: String) -> Result<PooledCredential, String> {
+        let lock = self.get_or_create_lock(provider_id).await;
+        let _guard = lock.lock().await;
+        let mut entries = self.list(provider_id).await?;
+        let entry = PooledCredential {
+            id: uuid_like_id(),
+            label,
+            api_key,
+            added_at: now_ms(),
+        };
+        entries.push(entry.clone());
+        let provider_id_owned = provider_id.to_string();
+        tokio::task::spawn_blocking(move || Self::write_sync(&provider_id_owned, &entries))
+            .await
+            .map_err(|e| format!("keyring task panicked: {e}"))??;
+        Ok(entry)
+    }
+
+    async fn remove(&self, provider_id: &str, credential_id: &str) -> Result<(), String> {
+        let lock = self.get_or_create_lock(provider_id).await;
+        let _guard = lock.lock().await;
+        let mut entries = self.list(provider_id).await?;
+        entries.retain(|e| e.id != credential_id);
+        let provider_id_owned = provider_id.to_string();
+        tokio::task::spawn_blocking(move || Self::write_sync(&provider_id_owned, &entries))
+            .await
+            .map_err(|e| format!("keyring task panicked: {e}"))??;
+        Ok(())
+    }
+}
+
+/// Plaintext file fallback — mirrors `auth::FileBackedCredentialStore`,
+/// used only when the OS keychain isn't reachable (same condition
+/// `AuthState` already checks in `lib.rs`).
+pub struct FilePoolSecrets {
+    path: std::path::PathBuf,
+    cache: Mutex<HashMap<String, Vec<PooledCredential>>>,
+}
+
+impl FilePoolSecrets {
+    pub async fn new(path: impl Into<std::path::PathBuf>) -> Result<Self, String> {
+        let path = path.into();
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| format!("failed to create pool secrets dir: {e}"))?;
+        }
+        let cache = if path.exists() {
+            let contents = tokio::fs::read_to_string(&path).await.map_err(|e| format!("failed to read pool secrets: {e}"))?;
+            if contents.trim().is_empty() { HashMap::new() } else { serde_json::from_str(&contents).map_err(|e| format!("failed to parse pool secrets: {e}"))? }
+        } else {
+            HashMap::new()
+        };
+        Ok(Self { path, cache: Mutex::new(cache) })
+    }
+
+    async fn persist(&self, cache: &HashMap<String, Vec<PooledCredential>>) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(cache).map_err(|e| e.to_string())?;
+        tokio::fs::write(&self.path, json).await.map_err(|e| e.to_string())
+    }
+}
+
+#[async_trait]
+impl PoolSecretsStore for FilePoolSecrets {
+    async fn list(&self, provider_id: &str) -> Result<Vec<PooledCredential>, String> {
+        let cache = self.cache.lock().await;
+        Ok(cache.get(provider_id).cloned().unwrap_or_default())
+    }
+
+    async fn add(&self, provider_id: &str, label: String, api_key: String) -> Result<PooledCredential, String> {
+        let mut cache = self.cache.lock().await;
+        let entry = PooledCredential { id: uuid_like_id(), label, api_key, added_at: now_ms() };
+        cache.entry(provider_id.to_string()).or_default().push(entry.clone());
+        self.persist(&cache).await?;
+        Ok(entry)
+    }
+
+    async fn remove(&self, provider_id: &str, credential_id: &str) -> Result<(), String> {
+        let mut cache = self.cache.lock().await;
+        if let Some(list) = cache.get_mut(provider_id) {
+            list.retain(|e| e.id != credential_id);
+        }
+        self.persist(&cache).await?;
+        Ok(())
+    }
+}
+
+/// Last-resort in-memory fallback if even the temp-dir file store can't be
+/// created — matches `InMemoryCredentialStore`'s role for `AuthState` above.
+/// Extra pool keys just won't survive a restart; better than failing app
+/// startup over a secondary feature.
+#[derive(Default)]
+pub struct InMemoryPoolSecrets {
+    entries: Mutex<HashMap<String, Vec<PooledCredential>>>,
+}
+
+impl InMemoryPoolSecrets {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl PoolSecretsStore for InMemoryPoolSecrets {
+    async fn list(&self, provider_id: &str) -> Result<Vec<PooledCredential>, String> {
+        Ok(self.entries.lock().await.get(provider_id).cloned().unwrap_or_default())
+    }
+
+    async fn add(&self, provider_id: &str, label: String, api_key: String) -> Result<PooledCredential, String> {
+        let entry = PooledCredential { id: uuid_like_id(), label, api_key, added_at: now_ms() };
+        self.entries.lock().await.entry(provider_id.to_string()).or_default().push(entry.clone());
+        Ok(entry)
+    }
+
+    async fn remove(&self, provider_id: &str, credential_id: &str) -> Result<(), String> {
+        if let Some(list) = self.entries.lock().await.get_mut(provider_id) {
+            list.retain(|e| e.id != credential_id);
+        }
+        Ok(())
+    }
+}
+
+fn uuid_like_id() -> String {
+    // No uuid crate dependency needed for an internal, non-cryptographic id —
+    // timestamp + a random suffix is unique enough for "one user's local pool."
+    use rand::Rng;
+    format!("{:x}-{:x}", now_ms(), rand::rng().random::<u32>())
+}
+
+// ── Runtime state store — cooldowns, request counts, rotation strategy ──────
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct RuntimeFile {
+    #[serde(default)]
+    strategies: HashMap<String, RotationStrategy>,
+    /// provider_id -> credential_id -> state
+    #[serde(default)]
+    state: HashMap<String, HashMap<String, CredentialRuntimeState>>,
+}
+
+pub struct PoolRuntimeStore {
+    path: std::path::PathBuf,
+    inner: Mutex<RuntimeFile>,
+}
+
+impl PoolRuntimeStore {
+    pub async fn new(path: impl Into<std::path::PathBuf>) -> Self {
+        let path = path.into();
+        let inner = match tokio::fs::read_to_string(&path).await {
+            Ok(contents) if !contents.trim().is_empty() => serde_json::from_str(&contents).unwrap_or_default(),
+            _ => RuntimeFile::default(),
+        };
+        Self { path, inner: Mutex::new(inner) }
+    }
+
+    async fn persist(&self, file: &RuntimeFile) {
+        if let Some(parent) = self.path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        if let Ok(json) = serde_json::to_string_pretty(file) {
+            let _ = tokio::fs::write(&self.path, json).await;
+        }
+    }
+
+    pub async fn strategy(&self, provider_id: &str) -> RotationStrategy {
+        self.inner.lock().await.strategies.get(provider_id).copied().unwrap_or_default()
+    }
+
+    pub async fn set_strategy(&self, provider_id: &str, strategy: RotationStrategy) {
+        let mut file = self.inner.lock().await;
+        file.strategies.insert(provider_id.to_string(), strategy);
+        self.persist(&file).await;
+    }
+
+    pub async fn state_of(&self, provider_id: &str, credential_id: &str) -> CredentialRuntimeState {
+        self.inner.lock().await.state.get(provider_id).and_then(|m| m.get(credential_id)).cloned().unwrap_or_default()
+    }
+
+    pub async fn mark_result(&self, provider_id: &str, credential_id: &str, status: CredentialStatus) {
+        let mut file = self.inner.lock().await;
+        let entry = file.state.entry(provider_id.to_string()).or_default().entry(credential_id.to_string()).or_default();
+        entry.request_count += 1;
+        entry.last_used_at = Some(now_ms());
+        entry.last_status = status;
+        entry.cooldown_until = cooldown_for(status).map(|d| now_ms() + d);
+        self.persist(&file).await;
+    }
+
+    pub async fn reset_cooldowns(&self, provider_id: &str) {
+        let mut file = self.inner.lock().await;
+        if let Some(states) = file.state.get_mut(provider_id) {
+            for s in states.values_mut() {
+                s.cooldown_until = None;
+            }
+        }
+        self.persist(&file).await;
+    }
+
+    /// Remove any leftover runtime state for a deleted credential — doesn't
+    /// error if there was none (removing a key that never failed).
+    pub async fn forget(&self, provider_id: &str, credential_id: &str) {
+        let mut file = self.inner.lock().await;
+        if let Some(states) = file.state.get_mut(provider_id) {
+            states.remove(credential_id);
+        }
+        self.persist(&file).await;
+    }
+}
+
+// ── The pool facade ──────────────────────────────────────────────────────────
+
+pub struct CredentialPool {
+    pub secrets: Arc<dyn PoolSecretsStore>,
+    pub runtime: Arc<PoolRuntimeStore>,
+}
+
+impl CredentialPool {
+    /// Resolve the ordered, cooldown-filtered candidate list for a provider.
+    /// `primary` is the existing single "primary" key (label, api_key), if
+    /// any — resolved by the caller via the pre-existing `resolve_api_key`
+    /// path, since that already knows about env-var fallback, the
+    /// nvidia/nvidia-nim sibling alias, and the "local" dummy-key case.
+    pub async fn candidates(&self, provider_id: &str, primary: Option<(String, String)>) -> Vec<PoolCandidate> {
+        let mut all: Vec<(PoolCandidate, CredentialRuntimeState)> = Vec::new();
+
+        if let Some((label, api_key)) = primary {
+            let state = self.runtime.state_of(provider_id, "primary").await;
+            all.push((PoolCandidate { id: "primary".to_string(), label, api_key }, state));
+        }
+
+        for cred in self.secrets.list(provider_id).await.unwrap_or_default() {
+            let state = self.runtime.state_of(provider_id, &cred.id).await;
+            all.push((PoolCandidate { id: cred.id, label: cred.label, api_key: cred.api_key }, state));
+        }
+
+        let now = now_ms();
+        all.retain(|(_, state)| !matches!(state.cooldown_until, Some(t) if t > now));
+
+        match self.runtime.strategy(provider_id).await {
+            RotationStrategy::FillFirst => {}
+            RotationStrategy::RoundRobin => {
+                all.sort_by_key(|(_, s)| s.last_used_at.unwrap_or(0));
+            }
+            RotationStrategy::LeastUsed => {
+                all.sort_by_key(|(_, s)| s.request_count);
+            }
+            RotationStrategy::Random => {
+                all.shuffle(&mut rand::rng());
+            }
+        }
+
+        all.into_iter().map(|(c, _)| c).collect()
+    }
+
+    pub async fn mark_result(&self, provider_id: &str, credential_id: &str, status: CredentialStatus) {
+        self.runtime.mark_result(provider_id, credential_id, status).await;
+    }
+
+    /// Full listing for the Settings UI, including the primary key (if any)
+    /// as a synthetic first entry.
+    pub async fn list_for_ui(&self, provider_id: &str, primary_label: Option<String>) -> Vec<PoolEntryInfo> {
+        let now = now_ms();
+        let mut out = Vec::new();
+
+        if let Some(label) = primary_label {
+            let state = self.runtime.state_of(provider_id, "primary").await;
+            out.push(PoolEntryInfo {
+                id: "primary".to_string(),
+                label,
+                source: "primary".to_string(),
+                status: state.last_status,
+                request_count: state.request_count,
+                cooldown_until: state.cooldown_until,
+                last_used_at: state.last_used_at,
+                in_cooldown: matches!(state.cooldown_until, Some(t) if t > now),
+            });
+        }
+
+        for cred in self.secrets.list(provider_id).await.unwrap_or_default() {
+            let state = self.runtime.state_of(provider_id, &cred.id).await;
+            out.push(PoolEntryInfo {
+                id: cred.id,
+                label: cred.label,
+                source: "pool".to_string(),
+                status: state.last_status,
+                request_count: state.request_count,
+                cooldown_until: state.cooldown_until,
+                last_used_at: state.last_used_at,
+                in_cooldown: matches!(state.cooldown_until, Some(t) if t > now),
+            });
+        }
+
+        out
+    }
+}
+
+// ── Tauri commands (credential pool) ─────────────────────────────────────────
+
+#[tauri::command]
+pub async fn cmd_pool_list(
+    provider_id: String,
+    pool: State<'_, Arc<CredentialPool>>,
+    auth: State<'_, Arc<AuthState>>,
+) -> Result<Vec<PoolEntryInfo>, String> {
+    let primary_label = auth
+        .store
+        .read(&provider_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|c| c.as_api_key().cloned())
+        .and_then(|k| k.key)
+        .filter(|k| !k.trim().is_empty())
+        .map(|_| "Primary key".to_string());
+    Ok(pool.list_for_ui(&provider_id, primary_label).await)
+}
+
+#[tauri::command]
+pub async fn cmd_pool_add(
+    provider_id: String,
+    label: String,
+    api_key: String,
+    pool: State<'_, Arc<CredentialPool>>,
+) -> Result<PoolEntryInfo, String> {
+    let label = if label.trim().is_empty() { format!("Key {}", now_ms() % 10000) } else { label };
+    let cred = pool.secrets.add(&provider_id, label, api_key).await?;
+    Ok(PoolEntryInfo {
+        id: cred.id,
+        label: cred.label,
+        source: "pool".to_string(),
+        status: CredentialStatus::Ok,
+        request_count: 0,
+        cooldown_until: None,
+        last_used_at: None,
+        in_cooldown: false,
+    })
+}
+
+#[tauri::command]
+pub async fn cmd_pool_remove(
+    provider_id: String,
+    credential_id: String,
+    pool: State<'_, Arc<CredentialPool>>,
+) -> Result<(), String> {
+    pool.secrets.remove(&provider_id, &credential_id).await?;
+    pool.runtime.forget(&provider_id, &credential_id).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cmd_pool_set_strategy(
+    provider_id: String,
+    strategy: RotationStrategy,
+    pool: State<'_, Arc<CredentialPool>>,
+) -> Result<(), String> {
+    pool.runtime.set_strategy(&provider_id, strategy).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cmd_pool_get_strategy(
+    provider_id: String,
+    pool: State<'_, Arc<CredentialPool>>,
+) -> Result<RotationStrategy, String> {
+    Ok(pool.runtime.strategy(&provider_id).await)
+}
+
+#[tauri::command]
+pub async fn cmd_pool_reset_cooldowns(
+    provider_id: String,
+    pool: State<'_, Arc<CredentialPool>>,
+) -> Result<(), String> {
+    pool.runtime.reset_cooldowns(&provider_id).await;
+    Ok(())
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::*;
+
+    async fn test_pool() -> CredentialPool {
+        let runtime_path = std::env::temp_dir().join(format!("viv_pool_test_{}.json", uuid_like_id()));
+        CredentialPool {
+            secrets: Arc::new(InMemoryPoolSecrets::new()),
+            runtime: Arc::new(PoolRuntimeStore::new(runtime_path).await),
+        }
+    }
+
+    #[tokio::test]
+    async fn single_primary_key_is_the_only_candidate() {
+        let pool = test_pool().await;
+        let candidates = pool.candidates("openai", Some(("Primary key".to_string(), "sk-abc".to_string()))).await;
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].id, "primary");
+        assert_eq!(candidates[0].api_key, "sk-abc");
+    }
+
+    #[tokio::test]
+    async fn no_primary_and_no_pool_keys_yields_no_candidates() {
+        let pool = test_pool().await;
+        let candidates = pool.candidates("openai", None).await;
+        assert!(candidates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fill_first_keeps_primary_before_pool_keys() {
+        let pool = test_pool().await;
+        pool.secrets.add("openai", "Backup".to_string(), "sk-backup".to_string()).await.unwrap();
+        let candidates = pool.candidates("openai", Some(("Primary key".to_string(), "sk-primary".to_string()))).await;
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].id, "primary");
+        assert_eq!(candidates[1].label, "Backup");
+    }
+
+    #[tokio::test]
+    async fn a_cooling_down_key_is_excluded_from_candidates() {
+        let pool = test_pool().await;
+        let cred = pool.secrets.add("openai", "Backup".to_string(), "sk-backup".to_string()).await.unwrap();
+        pool.mark_result("openai", &cred.id, CredentialStatus::QuotaOrBilling).await;
+
+        let candidates = pool.candidates("openai", Some(("Primary key".to_string(), "sk-primary".to_string()))).await;
+        assert_eq!(candidates.len(), 1, "the quota-exceeded key must be filtered out while cooling down");
+        assert_eq!(candidates[0].id, "primary");
+    }
+
+    #[tokio::test]
+    async fn a_successful_result_clears_a_prior_cooldown() {
+        let pool = test_pool().await;
+        let cred = pool.secrets.add("openai", "Backup".to_string(), "sk-backup".to_string()).await.unwrap();
+        pool.mark_result("openai", &cred.id, CredentialStatus::Retryable).await;
+        assert_eq!(pool.candidates("openai", None).await.len(), 0, "rate-limited key should be cooling down");
+
+        pool.mark_result("openai", &cred.id, CredentialStatus::Ok).await;
+        let candidates = pool.candidates("openai", None).await;
+        assert_eq!(candidates.len(), 1, "a subsequent Ok result must clear the cooldown");
+    }
+
+    #[tokio::test]
+    async fn least_used_strategy_orders_by_request_count() {
+        let pool = test_pool().await;
+        pool.runtime.set_strategy("openai", RotationStrategy::LeastUsed).await;
+        let heavily_used = pool.secrets.add("openai", "Heavily used".to_string(), "sk-1".to_string()).await.unwrap();
+        let barely_used = pool.secrets.add("openai", "Barely used".to_string(), "sk-2".to_string()).await.unwrap();
+
+        for _ in 0..5 {
+            pool.mark_result("openai", &heavily_used.id, CredentialStatus::Ok).await;
+        }
+        pool.mark_result("openai", &barely_used.id, CredentialStatus::Ok).await;
+
+        let candidates = pool.candidates("openai", None).await;
+        assert_eq!(candidates[0].label, "Barely used", "the less-used key should sort first");
+    }
+
+    #[test]
+    fn cooldown_duration_matches_error_severity() {
+        assert_eq!(cooldown_for(CredentialStatus::Ok), None);
+        assert_eq!(cooldown_for(CredentialStatus::Retryable), Some(RATE_LIMIT_COOLDOWN_MS));
+        assert_eq!(cooldown_for(CredentialStatus::QuotaOrBilling), Some(QUOTA_COOLDOWN_MS));
+        assert_eq!(cooldown_for(CredentialStatus::Other), Some(OTHER_COOLDOWN_MS));
+        assert!(QUOTA_COOLDOWN_MS > RATE_LIMIT_COOLDOWN_MS, "a confirmed quota/billing error should cool down longer than a generic one");
+    }
+}

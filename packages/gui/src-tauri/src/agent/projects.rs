@@ -17,6 +17,14 @@ pub struct Project {
     pub id: String,
     pub name: String,
     pub created_at: String,
+    /// Workspace folder this project maps to. `#[serde(default)]` — projects
+    /// created before projects had a folder keep working with `None`.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Accent color id for the sidebar project rail (see `PROJECT_COLORS` on
+    /// the frontend). `None` = pick one from the id hash.
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -53,7 +61,7 @@ pub async fn cmd_list_projects() -> Result<Vec<Project>, String> {
 }
 
 #[tauri::command]
-pub async fn cmd_create_project(name: String) -> Result<Project, String> {
+pub async fn cmd_create_project(name: String, path: Option<String>, color: Option<String>) -> Result<Project, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("Project name must not be empty".to_string());
@@ -69,14 +77,19 @@ pub async fn cmd_create_project(name: String) -> Result<Project, String> {
         ),
         name: name.to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
+        path,
+        color,
     };
     data.projects.push(project.clone());
     save(&data)?;
     Ok(project)
 }
 
+/// Update a project's name and, when provided, its folder/color. `None` for
+/// `path`/`color` leaves the stored value alone rather than clearing it —
+/// callers that only rename shouldn't have to resend the rest.
 #[tauri::command]
-pub async fn cmd_rename_project(id: String, name: String) -> Result<(), String> {
+pub async fn cmd_update_project(id: String, name: String, path: Option<String>, color: Option<String>) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("Project name must not be empty".to_string());
@@ -86,6 +99,12 @@ pub async fn cmd_rename_project(id: String, name: String) -> Result<(), String> 
         return Err("Project not found".to_string());
     };
     project.name = name.to_string();
+    if path.is_some() {
+        project.path = path;
+    }
+    if color.is_some() {
+        project.color = color;
+    }
     save(&data)
 }
 
@@ -97,6 +116,48 @@ pub async fn cmd_delete_project(id: String) -> Result<(), String> {
     data.projects.retain(|p| p.id != id);
     data.assignments.retain(|_, project_id| project_id != &id);
     save(&data)
+}
+
+/// Open a project folder in the OS file manager, or in a terminal already
+/// `cd`'d into it. `target` is `"explorer"` or `"terminal"`.
+///
+/// Uses `current_dir` + a new-console spawn rather than building a
+/// `Set-Location '<path>'` command string: a path containing a quote or `$`
+/// would break (or inject into) that string, and the OS-level working
+/// directory needs no escaping at all.
+#[tauri::command]
+pub async fn cmd_open_external(path: String, target: String) -> Result<(), String> {
+    if !std::path::Path::new(&path).is_dir() {
+        return Err(format!("Not a folder: {path}"));
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        let result = if target == "terminal" {
+            std::process::Command::new("powershell")
+                .arg("-NoExit")
+                .current_dir(&path)
+                .creation_flags(CREATE_NEW_CONSOLE)
+                .spawn()
+                .map(|_| ())
+        } else {
+            std::process::Command::new("explorer").arg(&path).spawn().map(|_| ())
+        };
+        return result.map_err(|e| format!("Failed to open {target}: {e}"));
+    }
+
+    #[cfg(not(windows))]
+    {
+        let program = if target == "terminal" { "x-terminal-emulator" } else if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        std::process::Command::new(program)
+            .arg(if target == "terminal" { "." } else { path.as_str() })
+            .current_dir(&path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("Failed to open {target}: {e}"))
+    }
 }
 
 /// Returns the full session_id -> project_id map — merged into the session

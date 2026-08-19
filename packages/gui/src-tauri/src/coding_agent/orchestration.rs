@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::tool_exec::{Tool, ToolResult};
+use crate::agent::types::AgentMessage;
 
 // ── Subagent registry ───────────────────────────────────────────────────────
 
@@ -54,6 +55,12 @@ pub struct SubagentHandle {
     pub cancelled: bool,
     /// Waiters blocked on `wait_tasks` — notified when status flips terminal.
     pub notify: Arc<tokio::sync::Notify>,
+    /// This subagent's own transcript, for the GUI's read-only view. Updated
+    /// live as each of its own messages completes (see `drive_subagent`'s
+    /// event loop) — a running subagent's transcript-so-far is inspectable,
+    /// not just a finished one's. In-memory only, same process-scoped
+    /// lifetime as the rest of this registry (no disk persistence).
+    pub messages: Mutex<Vec<AgentMessage>>,
 }
 
 /// Process-wide registry of subagents. In-process only — no cross-window,

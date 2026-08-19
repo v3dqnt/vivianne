@@ -51,6 +51,28 @@ pub struct ProviderSpec {
 /// stores/looks up the credential. This table only adds the *routing* half.
 pub fn provider_spec(provider: &str) -> Option<ProviderSpec> {
     use ApiKind::*;
+
+    // User-defined providers (Settings → Providers → Custom providers): the
+    // wire format the user picked is baked directly into the id itself as
+    // `custom:<apiFormat>:<uuid>`, since this function is a pure string match
+    // with no access to the custom-provider list in settings.json — encoding
+    // it in the id avoids needing to thread app state through here. The
+    // `<apiFormat>` segment matches gui-next's `CustomApiFormat` values
+    // exactly (`customProviderStore.ts` generates ids this way), which are
+    // already the same camelCase names as `ApiKind`'s wire-format identity.
+    if let Some(rest) = provider.strip_prefix("custom:") {
+        let api_kind = match rest.split(':').next().unwrap_or("") {
+            "anthropicMessages" => AnthropicMessages,
+            "openAiChat" => OpenAiChat,
+            "openAiResponses" => OpenAiResponses,
+            "googleGenerative" => GoogleGenerative,
+            _ => return None,
+        };
+        // No default: always resource-specific, must come from the custom
+        // provider's own configured base URL (same requirement as Azure/Bedrock).
+        return Some(ProviderSpec { default_base_url: None, api_kind });
+    }
+
     Some(match provider {
         "anthropic" => ProviderSpec { default_base_url: Some("https://api.anthropic.com"), api_kind: AnthropicMessages },
         "openai" => ProviderSpec { default_base_url: Some("https://api.openai.com/v1"), api_kind: OpenAiResponses },
@@ -133,6 +155,16 @@ mod tests {
     #[test]
     fn unknown_provider_returns_none_not_a_guess() {
         assert!(provider_spec("totally-made-up-provider").is_none());
+    }
+
+    #[test]
+    fn custom_provider_id_encodes_its_own_api_kind() {
+        assert_eq!(provider_spec("custom:anthropicMessages:abc-123").unwrap().api_kind, ApiKind::AnthropicMessages);
+        assert_eq!(provider_spec("custom:openAiChat:abc-123").unwrap().api_kind, ApiKind::OpenAiChat);
+        assert_eq!(provider_spec("custom:openAiResponses:abc-123").unwrap().api_kind, ApiKind::OpenAiResponses);
+        assert_eq!(provider_spec("custom:googleGenerative:abc-123").unwrap().api_kind, ApiKind::GoogleGenerative);
+        assert!(provider_spec("custom:openAiChat:abc-123").unwrap().default_base_url.is_none());
+        assert!(provider_spec("custom:not-a-real-format:abc-123").is_none());
     }
 
     #[test]

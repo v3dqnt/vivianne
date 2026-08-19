@@ -14,6 +14,26 @@ use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 use tokio::process::Child;
 
+/// Which local inference server backend an endpoint runs. Both speak GGUF
+/// and both end up exposing an OpenAI-compatible `/v1` API, so everything
+/// downstream of process management (model routing, chat dispatch) is
+/// engine-agnostic — only the spawn command and health-check path differ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LocalEngine {
+    LlamaCpp,
+    MistralRs,
+}
+
+impl Default for LocalEngine {
+    /// Existing persisted `settings.json` entries predate this field —
+    /// `#[serde(default)]` on `LlamaProcessConfig::engine` falls back to
+    /// this so they keep working as llama.cpp endpoints exactly as before.
+    fn default() -> Self {
+        LocalEngine::LlamaCpp
+    }
+}
+
 /// Mirrors the frontend's `LlamaEndpointConfig` fields relevant to process
 /// management — created from the Tauri command parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +51,8 @@ pub struct LlamaProcessConfig {
     pub ctx_size: u32,
     /// Whether to auto-start on app launch.
     pub auto_start: bool,
+    #[serde(default)]
+    pub engine: LocalEngine,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -94,21 +116,62 @@ impl LlamaManager {
             existing.config.clone()
         };
 
-        // Build the llama-server command
-        let binary = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
+        // Build the server command — both engines take a GGUF file and expose
+        // an OpenAI-compatible /v1 API, but the binary name, flag spellings,
+        // and subcommand shape differ.
+        let (binary, install_hint): (&str, &str) = match config.engine {
+            LocalEngine::LlamaCpp => (
+                if cfg!(windows) { "llama-server.exe" } else { "llama-server" },
+                "Make sure 'llama-server' is installed and available on your PATH. Download from https://github.com/ggml-org/llama.cpp",
+            ),
+            LocalEngine::MistralRs => (
+                if cfg!(windows) { "mistralrs.exe" } else { "mistralrs" },
+                "Make sure 'mistralrs' is installed and available on your PATH. Install from https://github.com/EricLBuehler/mistral.rs",
+            ),
+        };
 
         let mut cmd = tokio::process::Command::new(binary);
 
-        cmd.args([
-            "-m", &config.model_path,
-            "--port", &config.port.to_string(),
-            "--ctx-size", &config.ctx_size.to_string(),
-            "-ngl", &config.ngl.to_string(),
-            "--host", "127.0.0.1",
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null());
+        match config.engine {
+            LocalEngine::LlamaCpp => {
+                cmd.args([
+                    "-m", &config.model_path,
+                    "--port", &config.port.to_string(),
+                    "--ctx-size", &config.ctx_size.to_string(),
+                    "-ngl", &config.ngl.to_string(),
+                    "--host", "127.0.0.1",
+                    // Without this, llama-server ignores the GGUF's embedded
+                    // chat template and falls back to a plain completion
+                    // format: the model still sees the `tools` schema in the
+                    // prompt and tries to answer with one, but the reply
+                    // comes back as markdown-fenced JSON in `content` with
+                    // `finish_reason: "stop"` — never a real `tool_calls`
+                    // field — so Vivianne's agent loop can't act on it and
+                    // the model is left unable to actually use anything.
+                    "--jinja",
+                ]);
+            }
+            LocalEngine::MistralRs => {
+                cmd.args([
+                    "serve",
+                    "-f", &config.model_path,
+                    "-p", &config.port.to_string(),
+                    "--host", "127.0.0.1",
+                    "--max-seq-len", &config.ctx_size.to_string(),
+                ]);
+                // 0 = let mistral.rs auto-select CPU/GPU on its own; a
+                // nonzero value pins that many layers to the first device,
+                // matching llama.cpp's `-ngl` semantic closely enough to
+                // reuse the same UI field.
+                if config.ngl > 0 {
+                    cmd.args(["-n", &format!("0:{}", config.ngl)]);
+                }
+            }
+        }
+
+        cmd.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .stdin(std::process::Stdio::null());
 
         #[cfg(windows)]
         {
@@ -119,10 +182,7 @@ impl LlamaManager {
         let child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
-                let err_msg = format!(
-                    "Failed to launch llama-server: {e}. Make sure 'llama-server' is installed \
-                     and available on your PATH. Download from https://github.com/ggml-org/llama.cpp"
-                );
+                let err_msg = format!("Failed to launch {binary}: {e}. {install_hint}");
                 let mut map = self.instances.lock().expect("llama manager lock");
                 if let Some(inst) = map.get_mut(id) {
                     inst.status = LlamaStatus::Crashed(err_msg.clone());
@@ -147,8 +207,12 @@ impl LlamaManager {
         let app_clone = app.clone();
         let id_clone = id.to_string();
         let port = config.port;
+        let engine = config.engine;
         tokio::spawn(async move {
-            let health_url = format!("http://127.0.0.1:{port}/v1/models");
+            let health_url = match engine {
+                LocalEngine::LlamaCpp => format!("http://127.0.0.1:{port}/v1/models"),
+                LocalEngine::MistralRs => format!("http://127.0.0.1:{port}/health"),
+            };
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(5))
                 .build()
@@ -178,11 +242,10 @@ impl LlamaManager {
                     if ready {
                         inst.status = LlamaStatus::Running;
                     } else if inst.status == LlamaStatus::Starting {
-                        inst.status = LlamaStatus::Crashed(
-                            "llama-server started but didn't become ready within 30s — \
-                             check that the model file is valid and llama-server can load it."
-                                .to_string(),
-                        );
+                        inst.status = LlamaStatus::Crashed(format!(
+                            "{binary} started but didn't become ready within 30s — \
+                             check that the model file is valid and {binary} can load it."
+                        ));
                     }
                 }
             }
@@ -211,9 +274,7 @@ impl LlamaManager {
                                     let mut map = manager.instances.lock().expect("llama manager lock");
                                     if let Some(inst) = map.get_mut(&id_clone) {
                                         if inst.status == LlamaStatus::Running {
-                                            inst.status = LlamaStatus::Crashed(
-                                                "llama-server process exited unexpectedly".to_string(),
-                                            );
+                                            inst.status = LlamaStatus::Crashed(format!("{binary} process exited unexpectedly"));
                                         }
                                     }
                                 }
@@ -310,6 +371,7 @@ impl LlamaManager {
                     "ngl": i.config.ngl,
                     "ctxSize": i.config.ctx_size,
                     "autoStart": i.config.auto_start,
+                    "engine": i.config.engine,
                     "status": i.status,
                 })
             })
@@ -383,6 +445,12 @@ pub async fn cmd_llama_register(
     ngl: u32,
     ctx_size: u32,
     auto_start: bool,
+    // `Option` (not a bare `LocalEngine` with `#[serde(default)]`) — the
+    // codebase's other tauri::command params only ever use `#[serde(default)]`
+    // on struct fields, not command parameters directly, so this is the
+    // confirmed-working way to keep old frontend calls (pre-dating this
+    // field) from breaking on a missing `engine` key in the invoke payload.
+    engine: Option<LocalEngine>,
     manager: tauri::State<'_, Arc<LlamaManager>>,
 ) -> Result<(), String> {
     let config = LlamaProcessConfig {
@@ -393,6 +461,7 @@ pub async fn cmd_llama_register(
         ngl,
         ctx_size,
         auto_start,
+        engine: engine.unwrap_or_default(),
     };
     manager.register(config);
     Ok(())

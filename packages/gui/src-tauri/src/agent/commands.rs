@@ -44,6 +44,44 @@ impl Default for AppState {
     }
 }
 
+/// Resolves a chat-thread pane's own independent `AppState` by frontend
+/// thread id, so multiple panes (opened via drag-to-dock) can each run a
+/// genuinely concurrent turn instead of sharing one global agent.
+///
+/// The empty-string thread id always resolves to `primary` — the exact same
+/// `Arc<AppState>` that's separately `app.manage()`d for every other command
+/// in this file (model/thinking-level/workspace/queue/etc., none of which are
+/// thread-aware yet). That keeps the default single-thread experience
+/// byte-for-byte unchanged: every existing frontend call site that doesn't
+/// pass a `sessionId` (i.e. all of them, today) keeps hitting `primary`.
+/// Only a real, non-empty thread id — used exclusively by newly-opened
+/// secondary panes — gets routed to its own entry in `extra`.
+pub struct AgentRegistry {
+    primary: Arc<AppState>,
+    extra: tokio::sync::Mutex<std::collections::HashMap<String, Arc<AppState>>>,
+}
+
+impl AgentRegistry {
+    pub fn new(primary: Arc<AppState>) -> Self {
+        Self {
+            primary,
+            extra: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    pub async fn resolve(&self, thread_id: Option<&str>) -> Arc<AppState> {
+        match thread_id {
+            None | Some("") => self.primary.clone(),
+            Some(id) => {
+                let mut map = self.extra.lock().await;
+                map.entry(id.to_string())
+                    .or_insert_with(|| Arc::new(AppState::default()))
+                    .clone()
+            }
+        }
+    }
+}
+
 /// A single image attached to a user prompt (frontend sends base64 + MIME type).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ImageInput {
@@ -93,17 +131,28 @@ async fn main_source_tag(state: &AppState) -> String {
 pub async fn cmd_agent_prompt(
     text: String,
     images: Option<Vec<ImageInput>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
     app: tauri::AppHandle,
-    state: State<'_, Arc<AppState>>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<Vec<AgentMessage>, String> {
     use tauri::Emitter;
+    let state = registry.resolve(threadId.as_deref()).await;
     let mut agent = state.agent.lock().await;
     let (tx, mut rx) = crate::agent::events::event_bus();
 
+    // Every event this turn gets tagged with the thread it belongs to, so a
+    // frontend with multiple open panes routes each event to the right
+    // one instead of assuming a single global stream. The default/primary
+    // pane sends no `threadId`, so its events carry `thread_id: ""` — the
+    // same sentinel `AgentRegistry::resolve` treats as "primary".
+    let emit_thread_id = threadId.clone().unwrap_or_default();
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.rx.recv().await {
-            let _ = app_clone.emit("agent_event", event);
+            let _ = app_clone.emit(
+                "agent_event",
+                serde_json::json!({ "threadId": emit_thread_id, "event": event }),
+            );
         }
     });
 
@@ -134,6 +183,7 @@ pub async fn cmd_agent_prompt(
             mode_section,
             &text,
             Some(&auth),
+            true,
         ).await;
 
         let prompt = if base.is_empty() {
@@ -175,7 +225,7 @@ pub async fn cmd_agent_prompt(
     let _new_messages = agent.prompt(message, &app, &tx, &state.abort_flag, &state.steer_flag, &source_tag).await;
     drop(agent);
 
-    let _ = cmd_save_current_session(None, state.clone()).await;
+    let _ = save_current_session_impl(None, &state).await;
     Ok(Vec::new())
 }
 
@@ -192,7 +242,7 @@ pub async fn cmd_agent_continue(
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.rx.recv().await {
-            let _ = app_clone.emit("agent_event", event);
+            let _ = app_clone.emit("agent_event", serde_json::json!({ "threadId": "", "event": event }));
         }
     });
 
@@ -244,7 +294,11 @@ pub async fn cmd_agent_steer(
 
 /// Reset the agent state.
 #[tauri::command]
-pub async fn cmd_agent_reset(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+pub async fn cmd_agent_reset(
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let mut agent = state.agent.lock().await;
     agent.reset().await;
     let mut active_id = state.session_id.lock().await;
@@ -334,7 +388,11 @@ pub async fn cmd_agent_remove_queued(
 
 /// Get agent messages.
 #[tauri::command]
-pub async fn cmd_agent_messages(state: State<'_, Arc<AppState>>) -> Result<Vec<AgentMessage>, String> {
+pub async fn cmd_agent_messages(
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<Vec<AgentMessage>, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let agent = state.agent.lock().await;
     Ok(agent.state.messages().await)
 }
@@ -846,6 +904,17 @@ pub async fn cmd_save_settings(settings: serde_json::Value) -> Result<(), String
     Ok(())
 }
 
+/// List every built-in tool the agent actually has, by name/description —
+/// reads the same schema list sent to the model (`static_tool_definitions`),
+/// so the Settings UI can never drift from what the agent can really call.
+#[tauri::command]
+pub fn cmd_list_tool_names() -> Vec<serde_json::Value> {
+    crate::agent::tool_schemas::static_tool_definitions()
+        .into_iter()
+        .map(|t| serde_json::json!({ "name": t["name"], "description": t["description"] }))
+        .collect()
+}
+
 /// List skills discovered across the given directories (plus the default
 /// `~/.viv/skills` directory). Reads real SKILL.md/*.md frontmatter via
 /// `coding_agent::skills::load_skills_from_dir` — this is the same loader the
@@ -914,6 +983,110 @@ pub async fn cmd_save_skill_file(name: String, content: String) -> Result<String
 
     std::fs::write(&file_path, final_content).map_err(|e| format!("Failed to write skill: {}", e))?;
     Ok(file_path.to_string_lossy().to_string())
+}
+
+/// List every playbook currently in `~/.viv/playbooks` — same data the
+/// model's tool list is built from (`coding_agent::playbooks::load_playbooks`),
+/// so what Settings shows is exactly what's live.
+#[tauri::command]
+pub async fn cmd_list_playbooks() -> Result<Vec<crate::coding_agent::playbooks::PlaybookDef>, String> {
+    Ok(crate::coding_agent::playbooks::load_playbooks())
+}
+
+/// The two hardcoded profiles (general-purpose, Explore) plus every custom
+/// one saved in `~/.viv/subagents` — same data `execute_task_tool` resolves
+/// `subagent_type` against, so Settings never drifts from what a `task`
+/// call actually gets.
+#[tauri::command]
+pub async fn cmd_list_subagent_profiles() -> Result<serde_json::Value, String> {
+    let dir = crate::agent::paths::viv_subagents_dir()?;
+    let custom = crate::coding_agent::subagent_profiles::load_profiles_from_dir(&dir.to_string_lossy());
+    let builtin = crate::coding_agent::subagent_profiles::builtin_profiles();
+    Ok(serde_json::json!({ "builtin": builtin, "custom": custom }))
+}
+
+/// Create or update a custom subagent profile. `original_id` is the
+/// profile's filename stem before this save (so a rename — a new `name`
+/// slugifying to a different filename — removes the stale old file instead
+/// of leaving a duplicate); omit/empty for a brand-new profile.
+#[tauri::command]
+pub async fn cmd_save_subagent_profile(
+    original_id: Option<String>,
+    name: String,
+    color: Option<String>,
+    model: Option<crate::coding_agent::subagent_profiles::SubagentModelOverride>,
+    description: String,
+    allowed_tools: Option<Vec<String>>,
+    system_prompt: String,
+    inject_agents_md: bool,
+) -> Result<String, String> {
+    let dir = crate::agent::paths::viv_subagents_dir()?;
+    let profile = crate::coding_agent::subagent_profiles::SubagentProfile {
+        id: String::new(),
+        name,
+        color,
+        model,
+        description,
+        allowed_tools,
+        system_prompt,
+        inject_agents_md,
+        builtin: false,
+    };
+    crate::coding_agent::subagent_profiles::save_profile(&dir.to_string_lossy(), &profile, original_id.as_deref())
+}
+
+#[tauri::command]
+pub async fn cmd_delete_subagent_profile(id: String) -> Result<(), String> {
+    let dir = crate::agent::paths::viv_subagents_dir()?;
+    crate::coding_agent::subagent_profiles::delete_profile(&dir.to_string_lossy(), &id)
+}
+
+/// Add a playbook from an already-written JSON file (e.g. picked via a
+/// native file dialog): validate it parses as a `PlaybookDef`, copy it into
+/// `~/.viv/playbooks/<name>.json`, and invalidate the tool-defs cache so the
+/// model sees it on its very next turn — no restart.
+#[tauri::command]
+pub async fn cmd_add_playbook_file(path: String) -> Result<String, String> {
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read {path}: {e}"))?;
+    let def: crate::coding_agent::playbooks::PlaybookDef =
+        serde_json::from_str(&content).map_err(|e| format!("Not a valid playbook: {e}"))?;
+    if def.name.trim().is_empty() || def.command.trim().is_empty() {
+        return Err("Playbook needs a non-empty 'name' and 'command'.".to_string());
+    }
+
+    let stem: String = def
+        .name
+        .trim()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    let dest = crate::coding_agent::playbooks::playbooks_dir()?.join(format!("{stem}.json"));
+    std::fs::write(&dest, &content).map_err(|e| format!("Failed to write playbook: {e}"))?;
+    crate::agent::tool_exec::invalidate_tool_defs_cache();
+    Ok(def.name)
+}
+
+/// Remove a playbook by name (matches its `name` field, not the filename).
+#[tauri::command]
+pub async fn cmd_remove_playbook(name: String) -> Result<bool, String> {
+    let dir = crate::coding_agent::playbooks::playbooks_dir()?;
+    let Ok(entries) = std::fs::read_dir(&dir) else { return Ok(false) };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(def) = serde_json::from_str::<crate::coding_agent::playbooks::PlaybookDef>(&content) {
+                if def.name == name {
+                    std::fs::remove_file(&path).map_err(|e| format!("Failed to remove playbook: {e}"))?;
+                    crate::agent::tool_exec::invalidate_tool_defs_cache();
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Full daily-aggregated real token/cost usage history, for the Settings →
@@ -1158,8 +1331,10 @@ pub async fn cmd_write_text_file(path: String, content: String) -> Result<(), St
 #[tauri::command]
 pub async fn cmd_load_session(
     id: String,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let dir = get_session_dir()?;
     let path = dir.join(format!("{}.json", id));
     if !path.exists() {
@@ -1190,6 +1365,15 @@ pub async fn cmd_save_current_session(
     name: Option<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
+    save_current_session_impl(name, &state).await
+}
+
+/// Shared body for `cmd_save_current_session` — takes a plain `&Arc<AppState>`
+/// (rather than the `State<'_, ...>` Tauri-command extractor) so callers that
+/// already resolved a specific thread's `AppState` via `AgentRegistry` (like
+/// `cmd_agent_prompt`'s post-turn autosave) save *that* thread's transcript,
+/// not whichever state happens to be the singleton default.
+async fn save_current_session_impl(name: Option<String>, state: &Arc<AppState>) -> Result<String, String> {
     let agent = state.agent.lock().await;
     let messages = agent.state.messages().await;
     if messages.is_empty() {
@@ -1240,6 +1424,72 @@ pub async fn cmd_save_current_session(
 
     let json = serde_json::to_string_pretty(&session)
         .map_err(|e| format!("Failed to serialize session: {}", e))?;
+    write_session_file_atomic(&path, &json)?;
+    Ok(s_id)
+}
+
+/// Start a new thread and persist it immediately, returning its id.
+///
+/// `save_current_session_impl` bails on an empty transcript, so a thread
+/// created by `cmd_agent_reset` alone doesn't exist anywhere until its first
+/// turn finishes — which left "New session" looking like it did nothing (no
+/// row in the sidebar, and no id to assign to a project). This writes the
+/// empty session up front instead.
+///
+/// The `"New chat"` name is a placeholder: the next autosave re-derives the
+/// name from the first user message, so it renames itself as soon as the
+/// thread is actually used.
+#[tauri::command]
+pub async fn cmd_new_session(
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<String, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+
+    // Already sitting on an untouched new thread? Reuse it. Without this,
+    // every click writes another empty session file — clicking the button a
+    // few times (as anyone does when it looks like nothing happened) leaves
+    // a pile of identical dead "New chat" threads behind.
+    {
+        let agent = state.agent.lock().await;
+        if agent.state.messages().await.is_empty() {
+            if let Some(existing) = state.session_id.lock().await.clone() {
+                return Ok(existing);
+            }
+        }
+    }
+
+    {
+        let mut agent = state.agent.lock().await;
+        agent.reset().await;
+    }
+
+    let s_id = format!(
+        "session_{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()
+    );
+    *state.session_id.lock().await = Some(s_id.clone());
+
+    let (workspace_folders, access_mode) = {
+        let agent = state.agent.lock().await;
+        let folders = agent.state.workspace_folders().await;
+        let mode = match agent.state.access_mode().await {
+            crate::agent::state::WorkspaceAccessMode::ReadOnly => Some("readOnly".to_string()),
+            crate::agent::state::WorkspaceAccessMode::Full => Some("full".to_string()),
+        };
+        (folders, mode)
+    };
+
+    let session = SessionInfo {
+        id: s_id.clone(),
+        name: "New chat".to_string(),
+        messages: Vec::new(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        workspace_folders,
+        access_mode,
+    };
+    let path = get_session_dir()?.join(format!("{}.json", s_id));
+    let json = serde_json::to_string_pretty(&session).map_err(|e| format!("Failed to serialize session: {}", e))?;
     write_session_file_atomic(&path, &json)?;
     Ok(s_id)
 }
@@ -1534,6 +1784,13 @@ pub async fn cmd_install_docker(app: tauri::AppHandle) -> Result<String, String>
 // ============================================================================
 
 #[tauri::command]
+pub async fn cmd_terminal_list_sessions(
+    registry: State<'_, std::sync::Arc<crate::terminal::TerminalRegistry>>,
+) -> Result<Vec<crate::terminal::TerminalSessionInfo>, String> {
+    Ok(registry.list())
+}
+
+#[tauri::command]
 pub async fn cmd_terminal_list_shells() -> Result<Vec<crate::terminal::ShellOption>, String> {
     Ok(crate::terminal::available_shells())
 }
@@ -1604,5 +1861,309 @@ pub async fn cmd_git_current_branch(path: String) -> Result<Option<String>, Stri
     }
     let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(if branch.is_empty() { None } else { Some(branch) })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRemote {
+    /// Raw `origin` URL as configured (ssh or https form).
+    pub url: String,
+    /// `owner/repo`, parsed out when this is a GitHub remote.
+    pub github_repo: Option<String>,
+    /// Browser-openable `https://github.com/owner/repo`, when applicable.
+    pub github_url: Option<String>,
+}
+
+/// Detect the `origin` remote for a workspace folder and, when it points at
+/// GitHub, parse out `owner/repo`. Handles both SSH (`git@github.com:o/r.git`)
+/// and HTTPS (`https://github.com/o/r.git`) forms. `None` when the folder
+/// isn't a repo or has no origin — not an error, same as the other git
+/// commands here.
+#[tauri::command]
+pub async fn cmd_git_remote(path: String) -> Result<Option<GitRemote>, String> {
+    let output = tokio::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if url.is_empty() {
+        return Ok(None);
+    }
+    let github_repo = parse_github_repo(&url);
+    let github_url = github_repo.as_ref().map(|r| format!("https://github.com/{r}"));
+    Ok(Some(GitRemote { url, github_repo, github_url }))
+}
+
+fn parse_github_repo(url: &str) -> Option<String> {
+    let rest = if let Some(r) = url.strip_prefix("git@github.com:") {
+        r
+    } else if let Some(r) = url.strip_prefix("https://github.com/") {
+        r
+    } else if let Some(r) = url.strip_prefix("ssh://git@github.com/") {
+        r
+    } else {
+        return None;
+    };
+    let rest = rest.strip_suffix(".git").unwrap_or(rest).trim_end_matches('/');
+    let mut parts = rest.split('/');
+    let owner = parts.next()?.trim();
+    let repo = parts.next()?.trim();
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommit {
+    pub hash: String,
+    pub author: String,
+    pub date: String,
+    pub message: String,
+}
+
+/// Recent commit log for a workspace folder — read-only, same "not a repo"
+/// tolerance as `cmd_git_current_branch` (empty list, not an error).
+#[tauri::command]
+pub async fn cmd_git_log(path: String, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
+    let limit = limit.unwrap_or(50).clamp(1, 500);
+    let output = tokio::process::Command::new("git")
+        .args(["log", &format!("-n{limit}"), "--date=iso-strict", "--pretty=format:%H%x1f%an%x1f%ad%x1f%s"])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let commits = text
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(4, '\u{1f}');
+            Some(GitCommit {
+                hash: parts.next()?.to_string(),
+                author: parts.next()?.to_string(),
+                date: parts.next()?.to_string(),
+                message: parts.next().unwrap_or("").to_string(),
+            })
+        })
+        .collect();
+    Ok(commits)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranch {
+    pub name: String,
+    pub is_current: bool,
+    pub is_remote: bool,
+}
+
+/// Local + remote-tracking branches for a workspace folder.
+#[tauri::command]
+pub async fn cmd_git_branches(path: String) -> Result<Vec<GitBranch>, String> {
+    let output = tokio::process::Command::new("git")
+        .args(["branch", "-a", "--format=%(HEAD)%09%(refname:short)"])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let branches = text
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(2, '\t');
+            let head_marker = parts.next()?;
+            let name = parts.next()?.to_string();
+            if name.contains("HEAD ->") {
+                return None; // the "remotes/origin/HEAD -> origin/main" pointer, not a real branch
+            }
+            Some(GitBranch {
+                is_current: head_marker == "*",
+                is_remote: name.starts_with("remotes/"),
+                name,
+            })
+        })
+        .collect();
+    Ok(branches)
+}
+
+/// Switch to an existing local (or remote-tracking) branch. Unlike the
+/// read-only commands above, a failure here (uncommitted changes that would
+/// be overwritten, unknown branch) is real and surfaced verbatim — the
+/// caller needs git's actual message, not a silently empty result.
+#[tauri::command]
+pub async fn cmd_git_checkout_branch(path: String, branch: String) -> Result<(), String> {
+    let output = tokio::process::Command::new("git")
+        .args(["checkout", &branch])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(())
+}
+
+/// Create a new branch off the current HEAD and switch to it (`git checkout -b`).
+#[tauri::command]
+pub async fn cmd_git_create_branch(path: String, name: String) -> Result<(), String> {
+    let output = tokio::process::Command::new("git")
+        .args(["checkout", "-b", &name])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatusEntry {
+    pub path: String,
+    /// Raw two-char porcelain status code (e.g. " M", "??", "A ").
+    pub status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitFileChange {
+    pub path: String,
+    pub added: u32,
+    pub removed: u32,
+    /// Porcelain status code for this file, or `"??"` for untracked.
+    pub status: String,
+    pub staged: bool,
+}
+
+/// Per-file added/removed line counts for the Review panel.
+///
+/// `--numstat` covers tracked changes only, so untracked files are counted
+/// separately by reading them — otherwise a brand-new file shows up in the
+/// status list with a meaningless `+0 -0` next to it.
+#[tauri::command]
+pub async fn cmd_git_diff_stat(path: String, staged: bool) -> Result<Vec<GitFileChange>, String> {
+    let mut args = vec!["diff", "--numstat"];
+    if staged {
+        args.push("--cached");
+    }
+    let output = tokio::process::Command::new("git")
+        .args(&args)
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut changes: Vec<GitFileChange> = text
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split('\t');
+            let added = parts.next()?;
+            let removed = parts.next()?;
+            let file = parts.next()?;
+            Some(GitFileChange {
+                path: file.to_string(),
+                // "-" means binary — report as 0 rather than failing the row.
+                added: added.parse().unwrap_or(0),
+                removed: removed.parse().unwrap_or(0),
+                status: "M".to_string(),
+                staged,
+            })
+        })
+        .collect();
+
+    if !staged {
+        let untracked = tokio::process::Command::new("git")
+            .args(["ls-files", "--others", "--exclude-standard"])
+            .current_dir(&path)
+            .output()
+            .await
+            .map_err(|e| format!("failed to run git: {e}"))?;
+        if untracked.status.success() {
+            let root = std::path::Path::new(&path);
+            for file in String::from_utf8_lossy(&untracked.stdout).lines().filter(|l| !l.trim().is_empty()) {
+                let added = std::fs::read_to_string(root.join(file)).map(|c| c.lines().count() as u32).unwrap_or(0);
+                changes.push(GitFileChange { path: file.to_string(), added, removed: 0, status: "??".to_string(), staged: false });
+            }
+        }
+    }
+
+    changes.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(changes)
+}
+
+/// Unified diff for one file. Untracked files have no diff to show, so their
+/// full contents are synthesized as an all-additions patch instead of
+/// returning nothing.
+#[tauri::command]
+pub async fn cmd_git_diff_file(path: String, file: String, staged: bool) -> Result<String, String> {
+    let mut args = vec!["diff"];
+    if staged {
+        args.push("--cached");
+    }
+    args.push("--");
+    args.push(&file);
+    let output = tokio::process::Command::new("git")
+        .args(&args)
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    let diff = String::from_utf8_lossy(&output.stdout).to_string();
+    if !diff.trim().is_empty() {
+        return Ok(diff);
+    }
+
+    let full = std::path::Path::new(&path).join(&file);
+    match std::fs::read_to_string(&full) {
+        Ok(content) => {
+            let count = content.lines().count();
+            let body: String = content.lines().map(|l| format!("+{l}\n")).collect();
+            Ok(format!("--- /dev/null\n+++ b/{file}\n@@ -0,0 +1,{count} @@\n{body}"))
+        }
+        Err(_) => Ok(String::new()),
+    }
+}
+
+/// Working-tree status (dirty files) for a workspace folder.
+#[tauri::command]
+pub async fn cmd_git_status(path: String) -> Result<Vec<GitStatusEntry>, String> {
+    let output = tokio::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let entries = text
+        .lines()
+        .filter(|l| l.len() > 3)
+        .map(|line| GitStatusEntry {
+            status: line[..2].to_string(),
+            path: line[3..].trim().to_string(),
+        })
+        .collect();
+    Ok(entries)
 }
 

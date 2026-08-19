@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Sora";
+  src: url("../public/fonts/Sora-Variable.ttf") format("truetype-variations");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Sora";
+  src: url("../public/fonts/Sora-VariableItalic.ttf") format("truetype-variations");
+  font-weight: 100 800;
+  font-style: italic;
+  font-display: block;
+}
+
+:root {
+  --canvas: #f7f4ed; /* Warm Cream background */
+  --canvas-warm: #fcfbf8; /* Elevated Off-White core background */
+  --ink: #1c1c1c; /* Charcoal text/headings */
+  --ink-strong: rgba(28, 28, 28, 0.83);
+  --body: #5f5f5d; /* Muted gray body text */
+  --mute: rgba(28, 28, 28, 0.4);
+  --hairline: #ecead4; /* Soft warm-cream borders */
+  --hairline-strong: rgba(28, 28, 28, 0.4);
+  --surface-soft: rgba(28, 28, 28, 0.04);
+  --surface-subtle: rgba(28, 28, 28, 0.03);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Sora", ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}

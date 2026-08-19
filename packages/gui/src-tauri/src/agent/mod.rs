@@ -25,10 +25,12 @@ pub mod rrf;
 pub mod paths;
 pub mod usage_store;
 pub mod directive;
+pub mod personas;
 pub mod project_instructions;
 pub mod projects;
 pub mod notifications;
 pub mod llama_manager;
+pub mod dev_server_manager;
 
 use serde::{Deserialize, Serialize};
 

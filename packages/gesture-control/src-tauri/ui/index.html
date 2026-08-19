@@ -1,0 +1,116 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Gesture Control</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #111; color: #eee; margin: 0; padding: 16px; }
+  h1 { font-size: 15px; margin: 0 0 12px; }
+  section { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #333; }
+  label { display: block; font-size: 12px; margin: 8px 0 2px; color: #aaa; }
+  input[type="range"] { width: 100%; }
+  button { background: #2563eb; color: #fff; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  button.stop { background: #dc2626; }
+  #status { font-size: 12px; color: #9ca3af; margin-top: 6px; }
+  .row { display: flex; align-items: center; justify-content: space-between; }
+  .val { font-variant-numeric: tabular-nums; font-size: 11px; color: #9ca3af; }
+</style>
+</head>
+<body>
+  <h1>Gesture Control</h1>
+
+  <section>
+    <div class="row">
+      <button id="toggleBtn">Start Tracking</button>
+      <span id="status">stopped</span>
+    </div>
+  </section>
+
+  <section>
+    <div class="row"><label for="minCutoff">Smoothing: min cutoff (Hz)</label><span class="val" id="minCutoffVal">1.0</span></div>
+    <input type="range" id="minCutoff" min="0.1" max="5" step="0.1" value="1.0" />
+
+    <div class="row"><label for="beta">Smoothing: beta (speed coefficient)</label><span class="val" id="betaVal">0.007</span></div>
+    <input type="range" id="beta" min="0" max="0.05" step="0.001" value="0.007" />
+
+    <div class="row"><label for="minConf">Min detection confidence</label><span class="val" id="minConfVal">0.7</span></div>
+    <input type="range" id="minConf" min="0.3" max="0.95" step="0.05" value="0.7" />
+  </section>
+
+  <section>
+    <div class="row">
+      <label for="debug" style="margin:0;">Debug camera preview (console log)</label>
+      <input type="checkbox" id="debug" />
+    </div>
+  </section>
+
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const { listen } = window.__TAURI__.event;
+
+    const toggleBtn = document.getElementById("toggleBtn");
+    const statusEl = document.getElementById("status");
+    const minCutoff = document.getElementById("minCutoff");
+    const beta = document.getElementById("beta");
+    const minConf = document.getElementById("minConf");
+    const debugToggle = document.getElementById("debug");
+    const minCutoffVal = document.getElementById("minCutoffVal");
+    const betaVal = document.getElementById("betaVal");
+    const minConfVal = document.getElementById("minConfVal");
+
+    let running = false;
+
+    function currentConfig() {
+      return {
+        pinchCloseDistance: 0.045,
+        pinchOpenDistance: 0.07,
+        pinchMinHoldMs: 60,
+        rotationDeadzoneDegPerSec: 25.0,
+        rotationSensitivity: 0.01,
+        rotationMaxDegPerSec: 360.0,
+        swipeMinVelocity: 0.9,
+        swipeMinDistance: 0.18,
+        swipeCooldownMs: 700,
+        openPalmHoldMs: 800,
+        fingerExtendedRatio: 1.6,
+        pointerActiveMargin: 0.2,
+        smoothingWindow: 5,
+        smoothingMinCutoff: parseFloat(minCutoff.value),
+        smoothingBeta: parseFloat(beta.value),
+        smoothingDerivativeCutoff: 1.0,
+        minDetectionConfidence: parseFloat(minConf.value),
+        handLostFrames: 6,
+      };
+    }
+
+    async function refreshStatus() {
+      running = await invoke("cmd_gesture_status");
+      toggleBtn.textContent = running ? "Stop Tracking" : "Start Tracking";
+      toggleBtn.className = running ? "stop" : "";
+      statusEl.textContent = running ? "tracking" : "stopped";
+    }
+
+    toggleBtn.addEventListener("click", async () => {
+      if (running) {
+        await invoke("cmd_gesture_stop");
+      } else {
+        await invoke("cmd_gesture_start", { config: currentConfig(), debug: debugToggle.checked });
+      }
+      await refreshStatus();
+    });
+
+    debugToggle.addEventListener("change", () => {
+      invoke("cmd_gesture_set_debug", { debug: debugToggle.checked });
+    });
+
+    for (const [input, out] of [[minCutoff, minCutoffVal], [beta, betaVal], [minConf, minConfVal]]) {
+      input.addEventListener("input", () => (out.textContent = input.value));
+    }
+
+    listen("gesture_debug_frame", (e) => console.log("gesture debug frame", e.payload));
+    listen("gesture_sidecar_log", (e) => console.log("[sidecar]", e.payload));
+
+    refreshStatus();
+  </script>
+</body>
+</html>

@@ -144,6 +144,13 @@ pub async fn get_agent_tool_definitions() -> Vec<serde_json::Value> {
 
     // Slow path: rebuild the full definition list
     let mut defs = static_tool_definitions();
+    for def in crate::coding_agent::playbooks::load_playbooks() {
+        defs.push(serde_json::json!({
+            "name": def.name,
+            "description": def.description,
+            "parameters": def.parameters,
+        }));
+    }
     for (server, tool) in crate::mcp::list_all_tools().await {
         defs.push(serde_json::json!({
             "name": format!("mcp__{server}__{}", tool.name),
@@ -237,6 +244,20 @@ pub async fn execute_tool_calls(
         for t in WORKSPACE_MUTATING_TOOLS {
             if !disabled_tools.iter().any(|d| d == t) {
                 disabled_tools.push(t.to_string());
+            }
+        }
+    }
+    // Fourth restriction source: a subagent profile's tool allowlist (see
+    // `coding_agent::subagent_profiles`). Unlike the three above, this is an
+    // ALLOWlist, not a denylist — everything NOT named gets disabled. `None`
+    // (the default for the main agent, and for a subagent whose profile
+    // didn't specify one) means no restriction from this source at all.
+    if let Some(allowed) = state.subagent_allowed_tools().await {
+        for def in crate::agent::tool_schemas::static_tool_definitions() {
+            if let Some(name) = def.get("name").and_then(|v| v.as_str()) {
+                if !allowed.iter().any(|a| a == name) && !disabled_tools.iter().any(|d| d == name) {
+                    disabled_tools.push(name.to_string());
+                }
             }
         }
     }
@@ -909,6 +930,22 @@ async fn execute_task_tool(
     }
     let subagent_type = args.get("subagent_type").and_then(|v| v.as_str()).unwrap_or("general-purpose").to_string();
     let run_in_background = args.get("run_in_background").and_then(|v| v.as_bool()).unwrap_or(true);
+    let persona = args.get("persona").and_then(|v| v.as_str()).and_then(crate::agent::personas::find);
+
+    // A saved subagent profile (custom markdown file, checked first so a
+    // user can deliberately shadow a built-in name; falling back to the two
+    // hardcoded built-ins) matching `subagent_type` — `None` for any other
+    // free-text label, which keeps every pre-existing (unrestricted,
+    // parent-model) subagent call behaving exactly as before profiles
+    // existed.
+    let profile = crate::agent::paths::viv_subagents_dir()
+        .ok()
+        .and_then(|dir| {
+            crate::coding_agent::subagent_profiles::load_profiles_from_dir(&dir.to_string_lossy())
+                .into_iter()
+                .find(|p| p.name == subagent_type)
+        })
+        .or_else(|| crate::coding_agent::subagent_profiles::find_builtin(&subagent_type));
 
     let id = uuid::Uuid::new_v4().to_string();
     let handle = SubagentHandle {
@@ -923,23 +960,50 @@ async fn execute_task_tool(
         status: SubagentStatus::Running { turns: 0, tool_calls: 0 },
         cancelled: false,
         notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+        messages: std::sync::Mutex::new(Vec::new()),
     };
     let arc = SubagentRegistry::global().register(handle);
 
     let sub_state = AgentState::new();
-    sub_state.set_model(parent_state.model().await).await;
+    match profile.as_ref().and_then(|p| p.model.as_ref()) {
+        // A profile's model override wins; a profile with no override, or no
+        // profile at all, keeps inheriting the parent's currently selected
+        // model — the exact behavior every subagent had before profiles existed.
+        Some(m) => {
+            sub_state
+                .set_model(crate::agent::types::ModelRef {
+                    id: m.id.clone(),
+                    name: m.name.clone(),
+                    api: m.api.clone(),
+                    provider: m.provider.clone(),
+                    base_url: m.base_url.clone(),
+                    reasoning: false,
+                    max_tokens: m.max_tokens,
+                    context_window: m.context_window,
+                })
+                .await;
+        }
+        None => sub_state.set_model(parent_state.model().await).await,
+    }
+    sub_state.set_subagent_allowed_tools(profile.as_ref().and_then(|p| p.allowed_tools.clone())).await;
     sub_state.set_thinking_level(parent_state.thinking_level().await).await;
     sub_state.set_workspace(parent_state.workspace_folders().await, parent_state.access_mode().await).await;
-    let role_framing = format!(
+    let mut role_framing = format!(
         "You are a focused sub-agent handling one delegated task for a parent agent: {description}. \
          Complete the task, then give a concise final answer summarizing what you found or did — that answer \
          is the ONLY thing the parent sees, so make it self-contained and useful on its own."
     );
+    if let Some(p) = &profile {
+        if !p.system_prompt.trim().is_empty() {
+            role_framing = format!("{role_framing}\n\n# Role: {}\n\n{}", p.name, p.system_prompt);
+        }
+    }
+    let inject_agents_md = profile.as_ref().map(|p| p.inject_agents_md).unwrap_or(true);
     let auth = app.state::<std::sync::Arc<crate::ai::auth::AuthState>>().inner().clone();
-    let sub_system_prompt = format!(
-        "{role_framing}\n\n{}",
-        crate::agent::directive::assemble_capability_blocks(parent_state, None, &prompt, Some(&auth)).await
-    );
+    let persona_section = persona.map(|p| p.prompt_section);
+    let capability_blocks =
+        crate::agent::directive::assemble_capability_blocks(parent_state, persona_section, &prompt, Some(&auth), inject_agents_md).await;
+    let sub_system_prompt = format!("{role_framing}\n\n{capability_blocks}");
     let source_tag = subagent_source_tag(app, "task").await;
 
     if run_in_background {
@@ -967,7 +1031,7 @@ async fn execute_task_tool(
                 }
             };
             let (output, tool_calls, turns) =
-                rt.block_on(drive_subagent(app, sub_state, sub_system_prompt, prompt, depth + 1, source_tag));
+                rt.block_on(drive_subagent(app, sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc_bg));
             let mut g = arc_bg.lock().unwrap();
             if !g.cancelled {
                 g.status = SubagentStatus::Completed { output, tool_calls, turns };
@@ -987,7 +1051,8 @@ async fn execute_task_tool(
         };
     }
 
-    let (output, tool_calls, turns) = drive_subagent(app.clone(), sub_state, sub_system_prompt, prompt, depth + 1, source_tag).await;
+    let (output, tool_calls, turns) =
+        drive_subagent(app.clone(), sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc).await;
     {
         let mut g = arc.lock().unwrap();
         g.status = SubagentStatus::Completed { output: output.clone(), tool_calls, turns };
@@ -1006,9 +1071,15 @@ async fn execute_task_tool(
 
 /// Run a subagent's full turn loop to completion (a fresh, scoped
 /// `run_agent_loop_with_prompts` call) and return `(final_answer, tool_calls,
-/// turns)`. The child's own progress events are drained and discarded — only
-/// the final answer surfaces, whether this runs inline (blocking `task`) or
-/// inside a `tokio::spawn` (background `task`).
+/// turns)`. Each completed message (`MessageEnd`) is pushed live into
+/// `handle`'s own `messages` field as it lands, so a running subagent's
+/// transcript-so-far is inspectable via `cmd_coding_get_subagent_messages` —
+/// not just a finished one's; the authoritative full transcript (including
+/// tool-result messages, which arrive via a separate event stream not
+/// mirrored here) is written into the same field once this function returns,
+/// after the event-drain task has been joined — not from the caller — so
+/// there's no window where a late-arriving live event could re-append on top
+/// of the final write.
 async fn drive_subagent(
     app: tauri::AppHandle,
     sub_state: AgentState,
@@ -1016,6 +1087,7 @@ async fn drive_subagent(
     prompt: String,
     child_depth: usize,
     source_tag: String,
+    handle: &std::sync::Arc<std::sync::Mutex<crate::coding_agent::orchestration::SubagentHandle>>,
 ) -> (String, u32, u32) {
     let mut sub_context = AgentContext {
         system_prompt: sub_system_prompt.clone(),
@@ -1038,7 +1110,14 @@ async fn drive_subagent(
     let steer_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let (tx, mut rx) = crate::agent::events::event_bus();
-    tokio::spawn(async move { while rx.rx.recv().await.is_some() {} });
+    let handle_for_events = handle.clone();
+    let drain_task = tokio::spawn(async move {
+        while let Some(event) = rx.rx.recv().await {
+            if let crate::agent::events::AgentEvent::MessageEnd { message } = event {
+                handle_for_events.lock().unwrap().messages.lock().unwrap().push(message);
+            }
+        }
+    });
 
     let sub_messages = Box::pin(crate::agent::loop_core::run_agent_loop_with_prompts(
         vec![message],
@@ -1052,6 +1131,13 @@ async fn drive_subagent(
         &source_tag,
     ))
     .await;
+    // Close the channel and let the drain task finish processing whatever's
+    // still buffered before writing the authoritative final transcript below
+    // — otherwise a late live-pushed message could land after (and duplicate
+    // on top of) that write.
+    drop(tx);
+    let _ = drain_task.await;
+    *handle.lock().unwrap().messages.lock().unwrap() = sub_messages.clone();
 
     let turns = sub_messages.iter().filter(|m| matches!(m, AgentMessage::Assistant { .. })).count() as u32;
     let tool_calls = sub_messages.iter().filter(|m| matches!(m, AgentMessage::ToolResult { .. })).count() as u32;
@@ -1129,7 +1215,8 @@ async fn execute_connect_mcp_server_tool(args: &serde_json::Value) -> AgentToolR
         other => return text_err(format!("Error: 'transport' must be \"stdio\" or \"http\", got {other:?}.")),
     };
 
-    let config = crate::mcp::McpServerConfig { name: name.to_string(), transport };
+    let timeout_ms = args.get("timeout_ms").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let config = crate::mcp::McpServerConfig { name: name.to_string(), transport, timeout_ms };
     match crate::mcp::add_server(config).await {
         Ok(tools) => {
             // MCP tools changed — invalidate the tool definitions cache so

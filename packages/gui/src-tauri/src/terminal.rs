@@ -34,6 +34,19 @@ struct PtySession {
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
     child: Arc<StdMutex<Box<dyn Child + Send + Sync>>>,
+    shell_id: String,
+    cwd: String,
+    started_at_epoch_ms: u64,
+}
+
+/// One live terminal session, for the Background Tasks panel's list.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSessionInfo {
+    pub tab_id: String,
+    pub shell_id: String,
+    pub cwd: String,
+    pub started_at_epoch_ms: u64,
 }
 
 /// Process-wide registry of live terminal tabs, keyed by frontend-chosen
@@ -47,6 +60,24 @@ pub struct TerminalRegistry {
 impl TerminalRegistry {
     pub fn new() -> Self {
         Self { sessions: StdMutex::new(HashMap::new()) }
+    }
+
+    /// Every live session, newest first — what the Background Tasks panel lists.
+    pub fn list(&self) -> Vec<TerminalSessionInfo> {
+        let mut out: Vec<TerminalSessionInfo> = self
+            .sessions
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(tab_id, s)| TerminalSessionInfo {
+                tab_id: tab_id.clone(),
+                shell_id: s.shell_id.clone(),
+                cwd: s.cwd.clone(),
+                started_at_epoch_ms: s.started_at_epoch_ms,
+            })
+            .collect();
+        out.sort_by(|a, b| b.started_at_epoch_ms.cmp(&a.started_at_epoch_ms));
+        out
     }
 }
 
@@ -112,6 +143,8 @@ pub fn spawn(
         .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| format!("failed to open pty: {e}"))?;
 
+    let shell_id_for_info = shell_id.clone();
+    let cwd_for_info = cwd.clone();
     let cmd = build_command(&shell_id, &cwd);
     let child = pair
         .slave
@@ -177,7 +210,21 @@ pub fn spawn(
         });
     }
 
-    registry.sessions.lock().unwrap().insert(tab_id, PtySession { writer, master: pair.master, child });
+    let started_at_epoch_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    registry.sessions.lock().unwrap().insert(
+        tab_id,
+        PtySession {
+            writer,
+            master: pair.master,
+            child,
+            shell_id: shell_id_for_info,
+            cwd: cwd_for_info,
+            started_at_epoch_ms,
+        },
+    );
     Ok(())
 }
 

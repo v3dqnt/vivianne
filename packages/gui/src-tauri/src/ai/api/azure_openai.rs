@@ -82,7 +82,7 @@ fn build_default_base_url(resource_name: &str) -> String {
     format!("https://{}.openai.azure.com/openai/v1", resource_name)
 }
 
-fn resolve_azure_config(
+pub fn resolve_azure_config(
     model_base_url: Option<&str>,
     options: &AzureOpenAIOptions,
 ) -> Result<(String, String), String> {
@@ -117,7 +117,7 @@ fn resolve_azure_config(
     Ok((normalize_azure_base_url(&resolved), api_version))
 }
 
-fn resolve_deployment_name(model_id: &str, options: &AzureOpenAIOptions) -> String {
+pub fn resolve_deployment_name(model_id: &str, options: &AzureOpenAIOptions) -> String {
     if let Some(ref name) = options.azure_deployment_name {
         if !name.is_empty() {
             return name.clone();

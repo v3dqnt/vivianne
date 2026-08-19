@@ -212,71 +212,6 @@ pub fn format_skills_catalog(skills: &[Skill]) -> String {
     lines.join("\n")
 }
 
-/// Skills that look relevant to the current prompt by embedding similarity,
-/// for skills not already covered by an explicit `@mention` — the catalog
-/// today only lists name+description and relies on the model noticing
-/// relevance and calling `read_skill` itself; this proactively surfaces the
-/// full body of strong semantic matches instead of depending on that. Returns
-/// `[]` (never an error) when no embedding backend is available, so callers
-/// can treat this purely as an optional boost, not a required step.
-pub async fn semantically_relevant_skills(
-    auth: Option<&std::sync::Arc<crate::ai::auth::AuthState>>,
-    prompt: &str,
-    skills: &[Skill],
-    exclude_names: &[String],
-) -> Vec<Skill> {
-    const MAX_RESULTS: usize = 3;
-    const MIN_SIMILARITY: f32 = 0.35;
-
-    let Some(auth) = auth else { return Vec::new() };
-    let prompt = prompt.trim();
-    if prompt.is_empty() || skills.is_empty() {
-        return Vec::new();
-    }
-
-    let candidates: Vec<&Skill> = skills
-        .iter()
-        .filter(|s| !s.disable_model_invocation && !exclude_names.iter().any(|n| n.eq_ignore_ascii_case(&s.name)))
-        .collect();
-    if candidates.is_empty() {
-        return Vec::new();
-    }
-
-    let mut texts = vec![prompt.to_string()];
-    texts.extend(candidates.iter().map(|s| format!("{}: {}", s.name, s.description)));
-
-    let Ok(Some(embeddings)) = crate::ai::embedding::embed_texts(auth, &texts).await else {
-        return Vec::new();
-    };
-    if embeddings.len() != texts.len() {
-        return Vec::new();
-    }
-
-    let prompt_vec = &embeddings[0];
-    let mut scored: Vec<(f32, &Skill)> = candidates
-        .into_iter()
-        .zip(embeddings[1..].iter())
-        .map(|(skill, vec)| (cosine_similarity(prompt_vec, vec), skill))
-        .filter(|(score, _)| *score >= MIN_SIMILARITY)
-        .collect();
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    scored.truncate(MAX_RESULTS);
-    scored.into_iter().map(|(_, s)| s.clone()).collect()
-}
-
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
-        return 0.0;
-    }
-    dot / (norm_a * norm_b)
-}
-
 /// Which of `skills` the user explicitly `@mentioned` in their prompt text
 /// (e.g. `@code-review`), case-insensitive, de-duplicated, in first-mention
 /// order. An explicit mention is a deliberate user action, so it's allowed to
@@ -387,25 +322,4 @@ mod tests {
         assert_eq!(found.len(), 1, "an explicit user @mention should still resolve even for disable_model_invocation skills");
     }
 
-    #[tokio::test]
-    async fn semantic_relevance_no_ops_without_auth() {
-        // Must never panic or block on network/model access when there's no
-        // AuthState to embed with — this is the "no embedding backend
-        // available" path every caller relies on being a safe no-op.
-        let skills = vec![test_skill("pdf-editing", "Fill and edit PDF forms.", false)];
-        let found = semantically_relevant_skills(None, "please edit this pdf", &skills, &[]).await;
-        assert!(found.is_empty());
-    }
-
-    #[tokio::test]
-    async fn semantic_relevance_empty_prompt_short_circuits() {
-        let skills = vec![test_skill("pdf-editing", "Fill and edit PDF forms.", false)];
-        // A real AuthState with no credentials configured resolves the same
-        // way as None for embedding purposes (embed_texts returns Ok(None)),
-        // but the empty-prompt check should short-circuit before even
-        // reaching that, which this exercises with a live-shaped auth value.
-        let auth = std::sync::Arc::new(crate::ai::auth::AuthState::new());
-        let found = semantically_relevant_skills(Some(&auth), "   ", &skills, &[]).await;
-        assert!(found.is_empty());
-    }
 }

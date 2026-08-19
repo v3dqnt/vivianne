@@ -9,6 +9,11 @@ use tokio::sync::mpsc;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum AgentEvent {
+    /// Project memory was silently folded into this turn's system prompt —
+    /// purely informational (the injection itself already happened by the
+    /// time this fires), so the frontend can show a "recalled N memories"
+    /// signal instead of the injection being invisible.
+    MemoryInjected { entry_count: usize },
     /// Agent lifecycle start
     AgentStart,
     /// Agent lifecycle end — includes stats and cost so the frontend can
@@ -140,6 +145,16 @@ pub enum AgentEvent {
         from_model: String,
         to_provider: String,
         to_model: String,
+        reason: String,
+    },
+    /// A pooled key for this provider failed and the turn is being retried
+    /// against the next key in the same provider's pool — same-provider
+    /// rotation, tried before ever falling back to a different provider
+    /// (`ModelFallback`). Transient, same clearing rule as `RetryStatus`.
+    CredentialRotated {
+        provider: String,
+        from_label: String,
+        to_label: String,
         reason: String,
     },
 }

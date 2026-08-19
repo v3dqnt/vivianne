@@ -108,11 +108,17 @@ When a diagram explains something more clearly than prose — a flow, architectu
 /// and spawned subagents (`tool_exec::execute_task_tool`) — `mode_section`
 /// is `None` for subagents (persona mode doesn't apply to a one-shot
 /// subagent task).
+/// Returns the assembled prompt plus, if project memory was injected this
+/// turn, how many entries it contained (`None` when memory is off/empty) —
+/// callers that care (the main agent) use it to surface a "recalled N
+/// memories" signal; subagents ignore it, matching `mode_section: None`
+/// already being subagent-only framing.
 pub(crate) async fn assemble_capability_blocks(
     state: &AgentState,
     mode_section: Option<&str>,
     mention_scan_text: &str,
-    auth: Option<&std::sync::Arc<crate::ai::auth::AuthState>>,
+    _auth: Option<&std::sync::Arc<crate::ai::auth::AuthState>>,
+    include_project_instructions: bool,
 ) -> String {
     let mut prompt = format!("<vivianne_directive>\n{}\n</vivianne_directive>", BASE_DIRECTIVE);
 
@@ -120,37 +126,30 @@ pub(crate) async fn assemble_capability_blocks(
         prompt = format!("{prompt}\n\n<vivianne_mode>\n{}\n</vivianne_mode>", mode_section);
     }
 
-    let all_skills = crate::agent::tool_exec::load_all_configured_skills().await;
-    let catalog = crate::coding_agent::skills::format_skills_catalog(&all_skills);
-    if !catalog.is_empty() {
-        prompt = format!("{prompt}\n\n{catalog}");
-    }
-    let mentioned = crate::coding_agent::skills::skills_mentioned_in(mention_scan_text, &all_skills);
-    let mentioned_names: Vec<String> = mentioned.iter().map(|s| s.name.clone()).collect();
-    if !mentioned.is_empty() {
-        let mentioned_owned: Vec<_> = mentioned.into_iter().cloned().collect();
-        let block = crate::coding_agent::skills::format_skills_for_prompt(&mentioned_owned);
-        prompt = format!(
-            "{prompt}\n\n<vivianne_mentioned_skills>\nThe user @mentioned these skills directly — use their full instructions below for this turn.{block}</vivianne_mentioned_skills>"
-        );
-    }
-
-    // Proactive semantic boost: skills the catalog above lists but nobody
-    // explicitly mentioned, surfaced automatically when they're a strong
-    // match for what's being asked instead of relying on the model to
-    // notice and call read_skill itself. No-ops (returns []) without an
-    // embedding backend available.
-    let relevant = crate::coding_agent::skills::semantically_relevant_skills(
-        auth,
-        mention_scan_text,
-        &all_skills,
-        &mentioned_names,
-    ).await;
-    if !relevant.is_empty() {
-        let block = crate::coding_agent::skills::format_skills_for_prompt(&relevant);
-        prompt = format!(
-            "{prompt}\n\n<vivianne_relevant_skills>\nThese look relevant to what you're doing (auto-detected by semantic similarity to your task, not explicitly requested) — check whether they apply before defaulting to general-purpose tools.{block}</vivianne_relevant_skills>"
-        );
+    // Skills are strictly opt-in: only what the user explicitly `@mentions`
+    // is loaded, and nothing touches disk when the message has no mention at
+    // all.
+    //
+    // What used to be here: a catalog of every registered skill's
+    // name + description, injected on every single turn, plus a "semantic
+    // boost" pass that embedded the prompt against all of them to guess
+    // which were relevant. Against a real skills directory (279 here) the
+    // catalog measured ~70KB — about 17.5k tokens of the ~24k system prompt
+    // — and the boost meant ~280 embeddings over the network before the
+    // user's own message was even echoed to the UI. Together they were the
+    // reason a sent message took ~a minute to appear, why small-context
+    // models (gpt-4 at 8k) failed outright, and why tool calling degraded:
+    // the real tools sat behind a wall of skill descriptions.
+    if mention_scan_text.contains('@') {
+        let all_skills = crate::agent::tool_exec::load_all_configured_skills().await;
+        let mentioned = crate::coding_agent::skills::skills_mentioned_in(mention_scan_text, &all_skills);
+        if !mentioned.is_empty() {
+            let mentioned_owned: Vec<_> = mentioned.into_iter().cloned().collect();
+            let block = crate::coding_agent::skills::format_skills_for_prompt(&mentioned_owned);
+            prompt = format!(
+                "{prompt}\n\n<vivianne_mentioned_skills>\nThe user @mentioned these skills directly — use their full instructions below for this turn.{block}</vivianne_mentioned_skills>"
+            );
+        }
     }
 
     let workspace_folders = state.workspace_folders().await;
@@ -164,14 +163,16 @@ pub(crate) async fn assemble_capability_blocks(
         prompt = format!("{prompt}\n\n{}", lines.join("\n"));
     }
 
-    if let Some(instructions_block) = crate::agent::project_instructions::load(&workspace_folders).await {
-        prompt = format!("{prompt}\n\n{instructions_block}");
+    if include_project_instructions {
+        if let Some(instructions_block) = crate::agent::project_instructions::load(&workspace_folders).await {
+            prompt = format!("{prompt}\n\n{instructions_block}");
+        }
     }
 
-    if let Some(memory_block) = crate::agent::memory::context(&crate::agent::commands::memory_root()).await {
-        prompt = format!("{prompt}\n\n{memory_block}");
-    }
-
+    // Project memory is pulled on demand through the `recall` tool rather
+    // than dumped into every turn — it was an 8KB (~2k token) block on every
+    // message regardless of whether the conversation had anything to do with
+    // what was remembered.
     prompt
 }
 
@@ -186,7 +187,7 @@ mod tests {
         let state = AgentState::new();
         state.set_workspace(vec![dir.to_string_lossy().to_string()], crate::agent::state::WorkspaceAccessMode::Full).await;
 
-        let prompt = assemble_capability_blocks(&state, None, "", None).await;
+        let prompt = assemble_capability_blocks(&state, None, "", None, true).await;
 
         assert!(prompt.contains("<vivianne_directive>"));
         assert!(prompt.contains(BASE_DIRECTIVE));
@@ -200,7 +201,7 @@ mod tests {
     #[tokio::test]
     async fn includes_mode_block_when_provided() {
         let state = AgentState::new();
-        let prompt = assemble_capability_blocks(&state, Some("# Mode: Ask\nTest mode text."), "", None).await;
+        let prompt = assemble_capability_blocks(&state, Some("# Mode: Ask\nTest mode text."), "", None, true).await;
 
         assert!(prompt.contains("<vivianne_mode>"));
         assert!(prompt.contains("Test mode text."));
@@ -214,7 +215,7 @@ mod tests {
         let state = AgentState::new();
         state.set_workspace(vec![dir.to_string_lossy().to_string()], crate::agent::state::WorkspaceAccessMode::Full).await;
 
-        let prompt = assemble_capability_blocks(&state, Some("mode text"), "", None).await;
+        let prompt = assemble_capability_blocks(&state, Some("mode text"), "", None, true).await;
 
         let directive_pos = prompt.find("<vivianne_directive>").unwrap();
         let mode_pos = prompt.find("<vivianne_mode>").unwrap();

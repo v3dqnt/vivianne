@@ -211,6 +211,11 @@ impl Tool for ApplyPatchTool {
         let mut undo: Vec<(PathBuf, Option<String>)> = Vec::new();
         let mut summary_lines = Vec::new();
         let mut changed_files = Vec::new();
+        // Per-file before/after content, one entry per hunk — cheap to keep
+        // since `original`/`new_content` are already in memory for the
+        // rollback snapshot above; this is what lets the frontend render a
+        // real diff instead of just a changed-files list.
+        let mut files_diff: Vec<serde_json::Value> = Vec::new();
 
         for hunk in &hunks {
             let target: PathBuf = resolve_path(&self.cwd, &hunk.path);
@@ -222,15 +227,17 @@ impl Tool for ApplyPatchTool {
                     writes.push((target, Some(content.clone())));
                     summary_lines.push(format!("A {}", hunk.path));
                     changed_files.push(hunk.path.clone());
+                    files_diff.push(json!({ "path": hunk.path, "before": null, "after": content }));
                 }
                 HunkKind::Delete => {
                     let original = match tokio::fs::read_to_string(&target).await {
                         Ok(s) => s,
                         Err(e) => return ToolResult { content: format!("Error: failed to read {} to delete: {e}", hunk.path), is_error: true, details: None },
                     };
-                    undo.push((target.clone(), Some(original)));
+                    undo.push((target.clone(), Some(original.clone())));
                     writes.push((target, None));
                     summary_lines.push(format!("D {}", hunk.path));
+                    files_diff.push(json!({ "path": hunk.path, "before": original, "after": null }));
                 }
                 HunkKind::Update { move_to, chunks } => {
                     let original = match tokio::fs::read_to_string(&target).await {
@@ -254,16 +261,18 @@ impl Tool for ApplyPatchTool {
                         None => target.clone(),
                     };
                     undo.push((dest.clone(), tokio::fs::read_to_string(&dest).await.ok()));
-                    writes.push((dest, Some(new_content)));
+                    writes.push((dest, Some(new_content.clone())));
                     if let Some(new_path) = move_to {
                         // A rename is "write the new path, then drop the old".
-                        undo.push((target.clone(), Some(original)));
+                        undo.push((target.clone(), Some(original.clone())));
                         writes.push((target, None));
                         summary_lines.push(format!("M {} -> {}", hunk.path, new_path));
                         changed_files.push(new_path.clone());
+                        files_diff.push(json!({ "path": new_path, "before": original, "after": new_content }));
                     } else {
                         summary_lines.push(format!("M {}", hunk.path));
                         changed_files.push(hunk.path.clone());
+                        files_diff.push(json!({ "path": hunk.path, "before": original, "after": new_content }));
                     }
                 }
             }
@@ -313,7 +322,7 @@ impl Tool for ApplyPatchTool {
         ToolResult {
             content: text,
             is_error: false,
-            details: Some(json!({ "files": changed_files })),
+            details: Some(json!({ "files": changed_files, "filesDiff": files_diff })),
         }
     }
 }

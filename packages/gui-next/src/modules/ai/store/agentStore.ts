@@ -1,7 +1,71 @@
-import { create } from 'zustand'
+import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { call, on } from '../../../ipc'
-import type { AgentEvent, AgentMessage, ImageAttachment, MessageContent } from '../lib/types'
+import type { AgentEvent, AgentMessage, ImageAttachment, MessageContent, QuestionSpec } from '../lib/types'
 import { useModelStore } from './modelStore'
+import { usePlanModeStore } from './planModeStore'
+import { useSubagentStore } from './subagentStore'
+import { useWebPreviewStore } from './webPreviewStore'
+
+/** Wall-clock start of the current streaming assistant message — set on
+ * `message_start`, consumed on `message_end` to compute tokens/sec. Plain
+ * module state rather than store state since no component ever reads it
+ * directly, only the derived `tokensPerSec` stamped onto the message.
+ * Keyed by thread id since multiple threads can stream concurrently. */
+const streamStartedAt = new Map<string, number>()
+
+/** Tool names whose start/end also drives a side-panel store, so agentStore
+ * (the one place already subscribed to every tool event) can just forward
+ * instead of every panel needing its own duplicate listener. */
+const PLAN_MODE_TOOLS = new Set(['enter_plan_mode', 'exit_plan_mode'])
+
+export interface PendingPermission {
+  requestId: string
+  toolCallId: string
+  toolName: string
+  args: unknown
+  reason: string | null
+}
+
+export interface PendingQuestion {
+  requestId: string
+  toolCallId: string
+  questions: QuestionSpec[]
+}
+
+export interface PendingConfirmation {
+  requestId: string
+  toolCallId: string
+  message: string
+  dangerLevel: string
+}
+
+export interface RetryStatus {
+  attempt: number
+  maxAttempts: number
+  reason: string
+}
+
+/** Mirror of `agent::commands::QueueSnapshot` — steering is "next up",
+ * follow-up runs after the current turn. Both hold full `AgentMessage`s. */
+export interface QueuedMessages {
+  steering: AgentMessage[]
+  followUp: AgentMessage[]
+}
+
+export interface ModelFallback {
+  fromProvider: string
+  fromModel: string
+  toProvider: string
+  toModel: string
+  reason: string
+}
+
+export interface CredentialRotated {
+  provider: string
+  fromLabel: string
+  toLabel: string
+  reason: string
+}
 
 /**
  * Owns exactly one thing: the live chat transcript and whether a turn is
@@ -23,163 +87,453 @@ interface AgentStoreState {
   initialized: boolean
   /** True while a manual compaction is folding history into a summary. */
   compacting: boolean
+  /** A gated tool call is paused waiting on approve/deny. */
+  pendingPermission: PendingPermission | null
+  /** The `question` tool is paused waiting on 1-4 multiple-choice answers. */
+  pendingQuestion: PendingQuestion | null
+  /** The `confirm_action` tool is paused waiting on a yes/no. */
+  pendingConfirmation: PendingConfirmation | null
+  /** Transient — clears itself on the next agent event. */
+  retryStatus: RetryStatus | null
+  /** Sticky for the rest of the turn once set. */
+  modelFallback: ModelFallback | null
+  /** Transient — clears itself on the next agent event, same rule as `retryStatus`. */
+  credentialRotated: CredentialRotated | null
+  /** True while the `computer` tool is mid-execution — the agent has control of the screen. */
+  computerUseActive: boolean
+  /** How many memory entries were silently folded into the current turn's
+   * prompt, or null once the turn ends — the per-turn injection is
+   * deliberately invisible to the model (it's told not to narrate reading
+   * memory), so this is the only signal the user gets that it happened. */
+  memoryRecalled: number | null
+  /** What's sitting in the backend steering + follow-up queues. */
+  queuedMessages: QueuedMessages
   init: () => Promise<void>
   sendMessage: (text: string, images?: ImageAttachment[]) => Promise<void>
   /** Fold older history into a summary. Returns how many messages were folded (0 = nothing to compact). */
   compactNow: () => Promise<number>
+  respondPermission: (approved: boolean) => Promise<void>
+  answerQuestion: (answers: string[][]) => Promise<void>
+  respondConfirmation: (approved: boolean) => Promise<void>
+  /** Re-read the steering/follow-up queues from the backend. */
+  refreshQueues: () => Promise<void>
+  /** Drop one queued item. `queue` is "steering" or "followUp" (wire-safe). */
+  removeQueued: (queue: 'steering' | 'followUp', index: number) => Promise<void>
+  /** Empty both queues. */
+  clearQueues: () => Promise<void>
+  /** Queue a message to run after the current turn finishes. */
+  queueFollowUp: (text: string) => Promise<void>
+  /** Interrupt the running turn and redirect it with this message now. */
+  steer: (text: string) => Promise<void>
+  /** Stop the current turn (end the task). */
+  abort: () => Promise<void>
+  /** Revert the transcript to a message index (checkpoint). */
+  revertToIndex: (index: number) => Promise<void>
 }
 
-export const useAgentStore = create<AgentStoreState>((set, get) => ({
-  messages: [],
-  isBusy: false,
-  streamingIndex: null,
-  initialized: false,
-  compacting: false,
+/** Only these four backend commands are thread-scoped today (see
+ * `AgentRegistry` in `agent/commands.rs`) — everything else (abort, steer,
+ * queues, revert, compaction, permission responses) still only ever touches
+ * the backend's single primary `AppState`. Calling them from a secondary
+ * thread's store would silently act on the WRONG thread, so those actions
+ * are gated to primary-only below instead of quietly misrouting — a real,
+ * disclosed gap to close in a follow-up, not a silent correctness bug. */
+const PRIMARY_THREAD_ID = ''
 
-  init: async () => {
-    if (get().initialized) return
-    set({ initialized: true })
+function isPrimary(threadId: string): boolean {
+  return threadId === PRIMARY_THREAD_ID
+}
 
-    await on<AgentEvent>('agent_event', (event) => {
-      switch (event.type) {
-        case 'message_start': {
-          set((s) => ({
-            messages: [...s.messages, event.payload.message],
-            streamingIndex: s.messages.length,
-          }))
-          break
+/** Wraps `agent_event`'s payload — every emit from the backend now carries
+ * which thread it belongs to (`AgentRegistry::resolve`'s sentinel: empty
+ * string = primary), so a listener can ignore events meant for other panes. */
+interface ThreadScopedEvent {
+  threadId: string
+  event: AgentEvent
+}
+
+export function createAgentStore(threadId: string): UseBoundStore<StoreApi<AgentStoreState>> {
+  return create<AgentStoreState>((set, get) => ({
+    messages: [],
+    isBusy: false,
+    streamingIndex: null,
+    initialized: false,
+    compacting: false,
+    pendingPermission: null,
+    pendingQuestion: null,
+    pendingConfirmation: null,
+    retryStatus: null,
+    modelFallback: null,
+    credentialRotated: null,
+    computerUseActive: false,
+    memoryRecalled: null,
+    queuedMessages: { steering: [], followUp: [] },
+
+    init: async () => {
+      if (get().initialized) return
+      set({ initialized: true })
+
+      await on<ThreadScopedEvent>('agent_event', ({ threadId: eventThreadId, event }) => {
+        if (eventThreadId !== threadId) return
+        // `retryStatus` is explicitly transient — clear it on anything except
+        // another retry tick, so a resolved retry doesn't linger forever.
+        if (event.type !== 'retry_status') {
+          set((s) => (s.retryStatus ? { retryStatus: null } : s))
         }
-        case 'message_update': {
-          set((s) => {
-            if (s.streamingIndex === null) return s
-            const messages = [...s.messages]
-            const current = messages[s.streamingIndex]
-            if (!current || current.type !== 'assistant') return s
-            // Each update carries a single-block delta message tagged with
-            // its own kind (thinking vs text) — NOT the full accumulated
-            // message. Merge into whichever running block matches that kind
-            // and keep the other block (if any) untouched, so reasoning
-            // streams live instead of only appearing once the final message
-            // lands (the two kinds were previously being mashed into one
-            // text block regardless of which the delta actually was).
-            const delta = event.payload.message.content[0]
-            if (!delta) return s
-            const prevText = current.content.find((c): c is Extract<MessageContent, { type: 'text' }> => c.type === 'text')
-            const prevThinking = current.content.find(
-              (c): c is Extract<MessageContent, { type: 'thinking' }> => c.type === 'thinking',
-            )
-            let content: MessageContent[]
-            if (delta.type === 'thinking') {
-              const thinking: MessageContent = { type: 'thinking', thinking: (prevThinking?.thinking ?? '') + delta.thinking }
-              content = prevText ? [thinking, prevText] : [thinking]
-            } else if (delta.type === 'text') {
-              const text: MessageContent = { type: 'text', text: (prevText?.text ?? '') + delta.text }
-              content = prevThinking ? [prevThinking, text] : [text]
-            } else {
-              return s
-            }
-            messages[s.streamingIndex] = { ...current, content }
-            return { messages }
-          })
-          break
+        if (event.type !== 'credential_rotated') {
+          set((s) => (s.credentialRotated ? { credentialRotated: null } : s))
         }
-        case 'message_end': {
-          set((s) => {
-            if (s.streamingIndex === null) return s
-            const messages = [...s.messages]
-            messages[s.streamingIndex] = event.payload.message
-            return { messages, streamingIndex: null }
-          })
-          break
-        }
-        case 'agent_end': {
-          set({ isBusy: false, streamingIndex: null })
-          void useModelStore.getState().refreshStats()
-          break
-        }
-        case 'tool_execution_start': {
-          // Insert a pending placeholder immediately so the tool card shows
-          // a spinner while it runs, instead of only appearing once the
-          // (possibly slow) tool finishes. `tool_execution_end` below
-          // replaces this same entry in place, matched by toolCallId.
-          set((s) => ({
-            messages: [
-              ...s.messages,
-              {
-                type: 'toolResult',
-                toolCallId: event.payload.tool_call_id,
-                toolName: event.payload.tool_name,
-                content: [],
-                details: null,
-                isError: null,
-                timestamp: Date.now(),
-                arguments: event.payload.args as Record<string, unknown> | undefined,
+        switch (event.type) {
+          case 'memory_injected': {
+            set({ memoryRecalled: event.payload.entry_count })
+            break
+          }
+          case 'message_start': {
+            streamStartedAt.set(threadId, Date.now())
+            set((s) => ({
+              messages: [...s.messages, event.payload.message],
+              streamingIndex: s.messages.length,
+            }))
+            break
+          }
+          case 'message_update': {
+            set((s) => {
+              if (s.streamingIndex === null) return s
+              const messages = [...s.messages]
+              const current = messages[s.streamingIndex]
+              if (!current || current.type !== 'assistant') return s
+              // Each update carries a single-block delta message tagged with
+              // its own kind (thinking vs text) — NOT the full accumulated
+              // message. Merge into whichever running block matches that kind
+              // and keep the other block (if any) untouched, so reasoning
+              // streams live instead of only appearing once the final message
+              // lands (the two kinds were previously being mashed into one
+              // text block regardless of which the delta actually was).
+              const delta = event.payload.message.content[0]
+              if (!delta) return s
+              const prevText = current.content.find((c): c is Extract<MessageContent, { type: 'text' }> => c.type === 'text')
+              const prevThinking = current.content.find(
+                (c): c is Extract<MessageContent, { type: 'thinking' }> => c.type === 'thinking',
+              )
+              let content: MessageContent[]
+              if (delta.type === 'thinking') {
+                const thinking: MessageContent = { type: 'thinking', thinking: (prevThinking?.thinking ?? '') + delta.thinking }
+                content = prevText ? [thinking, prevText] : [thinking]
+              } else if (delta.type === 'text') {
+                const text: MessageContent = { type: 'text', text: (prevText?.text ?? '') + delta.text }
+                content = prevThinking ? [prevThinking, text] : [text]
+              } else {
+                return s
+              }
+              messages[s.streamingIndex] = { ...current, content }
+              return { messages }
+            })
+            break
+          }
+          case 'message_end': {
+            set((s) => {
+              if (s.streamingIndex === null) return s
+              const messages = [...s.messages]
+              let message = event.payload.message
+              const startedAt = streamStartedAt.get(threadId)
+              if (message.type === 'assistant' && message.usage && startedAt) {
+                const elapsedSec = (Date.now() - startedAt) / 1000
+                if (elapsedSec > 0 && message.usage.output > 0) {
+                  message = { ...message, tokensPerSec: message.usage.output / elapsedSec }
+                }
+              }
+              streamStartedAt.delete(threadId)
+              messages[s.streamingIndex] = message
+              return { messages, streamingIndex: null }
+            })
+            break
+          }
+          case 'agent_end': {
+            set({ isBusy: false, streamingIndex: null, memoryRecalled: null })
+            if (isPrimary(threadId)) void useModelStore.getState().refreshStats()
+            break
+          }
+          case 'tool_execution_start': {
+            if (event.payload.tool_name === 'computer') set({ computerUseActive: true })
+            if (isPrimary(threadId) && event.payload.tool_name === 'task') void useSubagentStore.getState().refresh()
+            // Insert a pending placeholder immediately so the tool card shows
+            // a spinner while it runs, instead of only appearing once the
+            // (possibly slow) tool finishes. `tool_execution_end` below
+            // replaces this same entry in place, matched by toolCallId.
+            set((s) => ({
+              messages: [
+                ...s.messages,
+                {
+                  type: 'toolResult',
+                  toolCallId: event.payload.tool_call_id,
+                  toolName: event.payload.tool_name,
+                  content: [],
+                  details: null,
+                  isError: null,
+                  timestamp: Date.now(),
+                  arguments: event.payload.args as Record<string, unknown> | undefined,
+                },
+              ],
+            }))
+            break
+          }
+          case 'tool_execution_end': {
+            if (event.payload.tool_name === 'computer') set({ computerUseActive: false })
+            if (isPrimary(threadId) && PLAN_MODE_TOOLS.has(event.payload.tool_name)) void usePlanModeStore.getState().refresh()
+            if (isPrimary(threadId) && event.payload.tool_name === 'task') void useSubagentStore.getState().refresh()
+            set((s) => {
+              const idx = s.messages.findIndex(
+                (m) => m.type === 'toolResult' && m.toolCallId === event.payload.tool_call_id,
+              )
+              if (idx === -1) return s
+              const messages = [...s.messages]
+              const prev = messages[idx]
+              if (prev.type !== 'toolResult') return s
+              messages[idx] = {
+                ...prev,
+                content: event.payload.result.content,
+                details: event.payload.result.details,
+                isError: event.payload.is_error,
+              }
+              return { messages }
+            })
+            break
+          }
+          case 'permission_asked': {
+            const p = event.payload
+            set({
+              pendingPermission: {
+                requestId: p.request_id,
+                toolCallId: p.tool_call_id,
+                toolName: p.tool_name,
+                args: p.args,
+                reason: p.reason,
               },
-            ],
-          }))
-          break
-        }
-        case 'tool_execution_end': {
-          set((s) => {
-            const idx = s.messages.findIndex(
-              (m) => m.type === 'toolResult' && m.toolCallId === event.payload.tool_call_id,
+            })
+            break
+          }
+          case 'permission_resolved': {
+            set((s) => (s.pendingPermission?.requestId === event.payload.request_id ? { pendingPermission: null } : s))
+            break
+          }
+          case 'question_asked': {
+            const p = event.payload
+            set({ pendingQuestion: { requestId: p.request_id, toolCallId: p.tool_call_id, questions: p.questions } })
+            break
+          }
+          case 'question_resolved': {
+            set((s) => (s.pendingQuestion?.requestId === event.payload.request_id ? { pendingQuestion: null } : s))
+            break
+          }
+          case 'confirmation_asked': {
+            const p = event.payload
+            set({
+              pendingConfirmation: {
+                requestId: p.request_id,
+                toolCallId: p.tool_call_id,
+                message: p.message,
+                dangerLevel: p.danger_level,
+              },
+            })
+            break
+          }
+          case 'confirmation_resolved': {
+            set((s) =>
+              s.pendingConfirmation?.requestId === event.payload.request_id ? { pendingConfirmation: null } : s,
             )
-            if (idx === -1) return s
-            const messages = [...s.messages]
-            const prev = messages[idx]
-            if (prev.type !== 'toolResult') return s
-            messages[idx] = {
-              ...prev,
-              content: event.payload.result.content,
-              details: event.payload.result.details,
-              isError: event.payload.is_error,
-            }
-            return { messages }
-          })
-          break
+            break
+          }
+          case 'retry_status': {
+            const p = event.payload
+            set({ retryStatus: { attempt: p.attempt, maxAttempts: p.max_attempts, reason: p.reason } })
+            break
+          }
+          case 'model_fallback': {
+            const p = event.payload
+            set({
+              modelFallback: {
+                fromProvider: p.from_provider,
+                fromModel: p.from_model,
+                toProvider: p.to_provider,
+                toModel: p.to_model,
+                reason: p.reason,
+              },
+            })
+            break
+          }
+          case 'credential_rotated': {
+            const p = event.payload
+            set({
+              credentialRotated: { provider: p.provider, fromLabel: p.from_label, toLabel: p.to_label, reason: p.reason },
+            })
+            break
+          }
+          case 'web_preview_requested': {
+            if (!isPrimary(threadId)) break
+            const p = event.payload
+            useWebPreviewStore.getState().requested(p.url, p.screenshot_base64, p.error)
+            break
+          }
+          default:
+            break
         }
-        default:
-          break
+      })
+    },
+
+    sendMessage: async (text: string, images) => {
+      const trimmed = text.trim()
+      if (!trimmed && !images?.length) return
+      // Sending while a turn is already running no longer blocks — the message
+      // goes to the steering queue instead, so typing and submitting mid-task
+      // doesn't end the current run (mirrors the old app's steer-while-busy).
+      // Secondary threads have no steering queue yet (not backend-scoped) —
+      // block instead of silently queuing into the wrong thread.
+      if (get().isBusy) {
+        if (!isPrimary(threadId)) {
+          console.warn('[agent] steering queue is not yet thread-scoped — ignoring send while a secondary thread is busy')
+          return
+        }
+        await call('cmd_agent_steering_queue', { text: trimmed })
+        await get().refreshQueues()
+        return
       }
-    })
-  },
-
-  sendMessage: async (text: string, images) => {
-    const trimmed = text.trim()
-    if ((!trimmed && !images?.length) || get().isBusy) return
-    // No optimistic append here: the backend emits its own `MessageStart`
-    // for the user's own prompt at the top of the turn (`loop_core.rs`
-    // echoes every message in `prompts`, including the user's), so an
-    // optimistic append here duplicated every sent message once that event
-    // landed. `isBusy` alone gives instant composer feedback.
-    set({ isBusy: true })
-    try {
-      await call('cmd_agent_prompt', { text: trimmed, images: images?.length ? images : null })
-    } catch (err) {
-      console.error('[agent] send failed:', err)
+      // No optimistic append here: the backend emits its own `MessageStart`
+      // for the user's own prompt at the top of the turn (`loop_core.rs`
+      // echoes every message in `prompts`, including the user's), so an
+      // optimistic append here duplicated every sent message once that event
+      // landed. `isBusy` alone gives instant composer feedback.
+      set({ isBusy: true })
+      try {
+        await call('cmd_agent_prompt', { text: trimmed, images: images?.length ? images : null, threadId })
+      } catch (err) {
+        console.error('[agent] send failed:', err)
+        set({ isBusy: false })
+      }
+      // `isBusy` also clears from the `agent_end` event above — this is a
+      // safety net so a dropped event can never leave the composer stuck
+      // (the exact class of bug fixed in the old app's equivalent path).
       set({ isBusy: false })
-    }
-    // `isBusy` also clears from the `agent_end` event above — this is a
-    // safety net so a dropped event can never leave the composer stuck
-    // (the exact class of bug fixed in the old app's equivalent path).
-    set({ isBusy: false })
-  },
+    },
 
-  compactNow: async () => {
-    if (get().compacting || get().isBusy) return 0
-    set({ compacting: true })
-    try {
-      const folded = (await call<number>('cmd_compact_now')) ?? 0
-      // Compaction rewrites the transcript server-side (drains the folded
-      // messages, inserts one summary in their place) but emits no event, so
-      // the local copy has to be re-fetched rather than patched — and the
-      // context gauge has to be re-read since shrinking it is the whole point.
-      const messages = await call<AgentMessage[]>('cmd_agent_messages')
+    refreshQueues: async () => {
+      if (!isPrimary(threadId)) return
+      // Old frontend read camelCase `followUp`; Rust serializes `follow_up`
+      // unless the struct renames. Read both defensively rather than guessing.
+      const snap = await call<{ steering?: AgentMessage[]; followUp?: AgentMessage[]; follow_up?: AgentMessage[] }>('cmd_agent_get_queues')
+      if (!snap) return
+      set({ queuedMessages: { steering: snap.steering ?? [], followUp: snap.followUp ?? snap.follow_up ?? [] } })
+    },
+
+    removeQueued: async (queue, index) => {
+      if (!isPrimary(threadId)) return
+      // Backend accepts "steering" and either "followUp"/"follow_up" — the
+      // old app used "followUp", kept here for wire compatibility.
+      const wireQueue = queue === 'steering' ? 'steering' : 'followUp'
+      await call('cmd_agent_remove_queued', { queue: wireQueue, index })
+      await get().refreshQueues()
+    },
+
+    clearQueues: async () => {
+      if (!isPrimary(threadId)) return
+      await call('cmd_agent_clear_queues')
+      set({ queuedMessages: { steering: [], followUp: [] } })
+    },
+
+    queueFollowUp: async (text) => {
+      if (!isPrimary(threadId)) return
+      const trimmed = text.trim()
+      if (!trimmed) return
+      await call('cmd_agent_follow_up_queue', { text: trimmed })
+      await get().refreshQueues()
+    },
+
+    steer: async (text) => {
+      if (!isPrimary(threadId)) {
+        console.warn('[agent] steer is not yet thread-scoped — ignoring on a secondary thread')
+        return
+      }
+      const trimmed = text.trim()
+      if (!trimmed) return
+      set({ isBusy: true })
+      try {
+        await call('cmd_agent_steer', { text: trimmed })
+      } catch (err) {
+        console.error('[agent] steer failed:', err)
+        set({ isBusy: false })
+      }
+    },
+
+    abort: async () => {
+      if (!isPrimary(threadId)) {
+        console.warn('[agent] abort is not yet thread-scoped — ignoring on a secondary thread')
+        return
+      }
+      try {
+        await call('cmd_agent_abort')
+      } catch (err) {
+        console.error('[agent] abort failed:', err)
+      }
+      set({ isBusy: false })
+    },
+
+    revertToIndex: async (index) => {
+      if (!isPrimary(threadId)) return
+      await call('cmd_agent_revert_to_index', { index })
+      const messages = await call<AgentMessage[]>('cmd_agent_messages', { threadId })
       set({ messages: messages ?? [], streamingIndex: null })
-      await useModelStore.getState().refreshStats()
-      return folded
-    } finally {
-      set({ compacting: false })
-    }
-  },
-}))
+    },
+
+    compactNow: async () => {
+      if (!isPrimary(threadId)) return 0
+      if (get().compacting || get().isBusy) return 0
+      set({ compacting: true })
+      try {
+        const folded = (await call<number>('cmd_compact_now')) ?? 0
+        // Compaction rewrites the transcript server-side (drains the folded
+        // messages, inserts one summary in their place) but emits no event, so
+        // the local copy has to be re-fetched rather than patched — and the
+        // context gauge has to be re-read since shrinking it is the whole point.
+        const messages = await call<AgentMessage[]>('cmd_agent_messages', { threadId })
+        set({ messages: messages ?? [], streamingIndex: null })
+        await useModelStore.getState().refreshStats()
+        return folded
+      } finally {
+        set({ compacting: false })
+      }
+    },
+
+    // Cleared optimistically here for instant UI feedback rather than waiting
+    // on the `*_resolved` event round-trip; that event still fires and is a
+    // harmless no-op against the already-cleared state (or the real clear, if
+    // the request was resolved from elsewhere — e.g. bypass mode toggled on).
+    respondPermission: async (approved) => {
+      if (!isPrimary(threadId)) return
+      const p = get().pendingPermission
+      if (!p) return
+      set({ pendingPermission: null })
+      await call('cmd_agent_respond_permission', { requestId: p.requestId, approved })
+    },
+
+    answerQuestion: async (answers) => {
+      if (!isPrimary(threadId)) return
+      const p = get().pendingQuestion
+      if (!p) return
+      set({ pendingQuestion: null })
+      await call('cmd_agent_answer_question', { requestId: p.requestId, answers })
+    },
+
+    respondConfirmation: async (approved) => {
+      if (!isPrimary(threadId)) return
+      const p = get().pendingConfirmation
+      if (!p) return
+      set({ pendingConfirmation: null })
+      await call('cmd_agent_respond_confirmation', { requestId: p.requestId, approved })
+    },
+  }))
+}
+
+/** The default/primary chat thread — unchanged name and shape, so every
+ * existing `useAgentStore(s => ...)` call site keeps working exactly as
+ * before. Secondary threads (opened via drag-to-dock) get their own instance
+ * from `threadRegistry.ts` instead of sharing this one. */
+export const useAgentStore = createAgentStore(PRIMARY_THREAD_ID)

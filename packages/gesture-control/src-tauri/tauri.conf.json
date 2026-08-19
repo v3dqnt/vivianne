@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Gesture Control",
+  "version": "0.1.0",
+  "identifier": "com.vivianne.gesture-control",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "settings",
+        "title": "Gesture Control Settings",
+        "url": "index.html",
+        "width": 420,
+        "height": 520,
+        "resizable": true,
+        "visible": false,
+        "skipTaskbar": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "resources/gesture/hand_tracker.py": "gesture/hand_tracker.py"
+    }
+  }
+}

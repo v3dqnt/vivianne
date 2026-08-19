@@ -454,17 +454,45 @@ pub fn is_retryable_assistant_error(stop_reason: Option<&str>, error_message: Op
     if stop_reason != Some("error") {
         return false;
     }
-    
+
     let err_msg = match error_message {
         Some(msg) => msg,
         None => return false,
     };
-    
+
     if non_retryable_provider_limit_error_pattern().is_match(err_msg) {
         return false;
     }
-    
+
     retryable_provider_error_pattern().is_match(err_msg)
+}
+
+/// Coarse classification of a failed provider call, for the credential pool
+/// to decide how long to cool down the key that just failed. Reuses the
+/// same two regexes `is_retryable_assistant_error` already runs — one
+/// classifier, not two drifting copies of "what does a quota error look
+/// like."
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialErrorClass {
+    /// Looks like a transient/provider-wide issue (rate limit, 5xx, network
+    /// blip) rather than something specific to this one key.
+    Retryable,
+    /// Looks like this specific key is out of quota/billing — a longer
+    /// cooldown makes sense than a generic retryable error.
+    QuotaOrBilling,
+    /// Doesn't match either known shape (e.g. an invalid/revoked key error) —
+    /// still worth rotating away from, just without strong signal on why.
+    Other,
+}
+
+pub fn classify_provider_error(error_message: &str) -> CredentialErrorClass {
+    if non_retryable_provider_limit_error_pattern().is_match(error_message) {
+        CredentialErrorClass::QuotaOrBilling
+    } else if retryable_provider_error_pattern().is_match(error_message) {
+        CredentialErrorClass::Retryable
+    } else {
+        CredentialErrorClass::Other
+    }
 }
 
 // --- event-stream.rs translation ---

@@ -63,7 +63,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 /// Resolve credential value: check provided env override, then real env vars.
-fn get_env_value(key: &str, env_override: Option<&HashMap<String, String>>) -> Option<String> {
+pub fn get_env_value(key: &str, env_override: Option<&HashMap<String, String>>) -> Option<String> {
     if let Some(env) = env_override {
         if let Some(val) = env.get(key) {
             if !val.is_empty() {
@@ -81,7 +81,7 @@ pub struct AwsCredentials {
     pub session_token: Option<String>,
 }
 
-fn resolve_credentials(env: Option<&HashMap<String, String>>) -> Option<AwsCredentials> {
+pub fn resolve_credentials(env: Option<&HashMap<String, String>>) -> Option<AwsCredentials> {
     let access_key = get_env_value("AWS_ACCESS_KEY_ID", env)?;
     let secret_key = get_env_value("AWS_SECRET_ACCESS_KEY", env)?;
     let session_token = get_env_value("AWS_SESSION_TOKEN", env);
@@ -92,7 +92,7 @@ fn resolve_credentials(env: Option<&HashMap<String, String>>) -> Option<AwsCrede
     })
 }
 
-fn resolve_region(env: Option<&HashMap<String, String>>) -> String {
+pub fn resolve_region(env: Option<&HashMap<String, String>>) -> String {
     get_env_value("AWS_REGION", env)
         .or_else(|| get_env_value("AWS_DEFAULT_REGION", env))
         .unwrap_or_else(|| "us-east-1".to_string())
@@ -240,7 +240,7 @@ struct BedrockConverseRequest {
 }
 
 /// Build request body for the Bedrock converse-stream API
-fn build_converse_request(context: &Context, options: &BedrockOptions) -> Value {
+pub fn build_converse_request(context: &Context, options: &BedrockOptions) -> Value {
     let messages = build_messages(context);
     let system = context
         .system_prompt
@@ -757,7 +757,7 @@ fn map_stop_reason(reason: &str) -> &str {
     }
 }
 
-fn urlencoding_encode(s: &str) -> String {
+pub fn urlencoding_encode(s: &str) -> String {
     s.chars()
         .flat_map(|c| {
             if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {

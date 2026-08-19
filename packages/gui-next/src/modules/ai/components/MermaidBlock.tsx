@@ -1,13 +1,26 @@
 import { useEffect, useId, useState } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
-import mermaid from 'mermaid'
+import type { default as Mermaid } from 'mermaid'
 
+// `mermaid` is 1MB+ and was previously a static top-level import, so every
+// launch paid for it even in a session with zero diagrams. Dynamic-imported
+// and cached at module scope — fetched once, on first actual mermaid block,
+// shared across every `MermaidBlock` instance after that.
 let configured = false
-function ensureConfigured() {
-  if (configured) return
-  mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' })
-  configured = true
+let mermaidModulePromise: Promise<typeof Mermaid> | null = null
+function loadMermaid(): Promise<typeof Mermaid> {
+  if (!mermaidModulePromise) {
+    mermaidModulePromise = import('mermaid').then((mod) => {
+      const instance = mod.default
+      if (!configured) {
+        instance.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' })
+        configured = true
+      }
+      return instance
+    })
+  }
+  return mermaidModulePromise
 }
 
 export function MermaidBlock({ code }: { code: string }) {
@@ -16,23 +29,23 @@ export function MermaidBlock({ code }: { code: string }) {
   const [error, setError] = useState(false)
 
   useEffect(() => {
-    ensureConfigured()
     let cancelled = false
     // Debounced for the same reason as CodeBlock's shiki call: a diagram
     // fence still streaming in token-by-token is rarely valid mermaid syntax
     // yet, so re-parsing every chunk would just spam parse errors.
     const timer = setTimeout(() => {
-      mermaid
-        .parse(code, { suppressErrors: true })
-        .then((ok) => {
-          if (!ok || cancelled) return
-          return mermaid.render(`mermaid-${id}`, code).then(({ svg: rendered }) => {
-            if (!cancelled) {
-              setSvg(rendered)
-              setError(false)
-            }
-          })
-        })
+      loadMermaid()
+        .then((mermaid) =>
+          mermaid.parse(code, { suppressErrors: true }).then((ok) => {
+            if (!ok || cancelled) return
+            return mermaid.render(`mermaid-${id}`, code).then(({ svg: rendered }) => {
+              if (!cancelled) {
+                setSvg(rendered)
+                setError(false)
+              }
+            })
+          }),
+        )
         .catch(() => {
           if (!cancelled) setError(true)
         })

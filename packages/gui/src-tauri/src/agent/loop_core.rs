@@ -5,7 +5,7 @@ use crate::agent::types::*;
 use crate::ai::types::{Context, StreamTokenEvent, Message, MessageContent as AiMessageContent};
 use crate::ai::auth::{AuthState, Credential};
 use std::sync::Arc;
-use tauri::{Manager, Listener};
+use tauri::{Manager, Listener, Emitter};
 use tokio::sync::RwLock;
 
 /// Options for transforming messages before sending to the LLM.
@@ -291,6 +291,7 @@ pub async fn run_agent_loop_continue(
             stop_reason: "aborted".to_string(),
             error_message: None,
             timestamp: now_ms(),
+            usage: None,
         };
         emit.emit(AgentEvent::MessageStart { message: aborted_msg.clone() });
         emit.emit(AgentEvent::MessageEnd { message: aborted_msg.clone() });
@@ -335,6 +336,7 @@ pub async fn run_agent_loop_continue(
                     stop_reason: "length".to_string(),
                     error_message: None,
                     timestamp: now_ms(),
+                    usage: None,
                 };
                 emit.emit(AgentEvent::MessageStart { message: stop_msg.clone() });
                 emit.emit(AgentEvent::MessageEnd { message: stop_msg.clone() });
@@ -376,16 +378,12 @@ pub async fn run_agent_loop_continue(
         eprintln!("[DEBUG] model.id={:?} model.provider={:?} model.api={:?} max_tokens={}",
             model.id, model.provider, model.api, model.max_tokens);
 
-        // Resolve API key — primary lookup by exact provider name, then
-        // sibling providers, then environment variable. See
-        // `resolve_api_key`'s doc comment for why this stays `.await`-based.
-        let api_key = resolve_api_key(app, &model.provider).await;
-
-        #[cfg(debug_assertions)]
-        eprintln!("[DEBUG] api_key present={}", api_key.is_some());
-        // Deliberately no key-prefix logging here, ever — even a partial API
-        // key printed to stderr is a real leak, not a debugging convenience
-        // worth keeping behind a cfg gate.
+        // Key resolution now happens inside `call_provider_with_pool_rotation`
+        // (via `call_provider_with_fallback`), since a pooled provider needs
+        // to resolve a *candidate list*, not one key, before the first
+        // attempt. Deliberately no key-prefix logging anywhere in that path —
+        // even a partial API key printed to stderr is a real leak, not a
+        // debugging convenience worth keeping behind a cfg gate.
 
         #[cfg(debug_assertions)]
         {
@@ -458,7 +456,6 @@ pub async fn run_agent_loop_continue(
             app,
             &model,
             llm_context,
-            api_key,
             thinking_level,
             emit,
             source_tag,
@@ -487,6 +484,7 @@ pub async fn run_agent_loop_continue(
                     stop_reason: "error".to_string(),
                     error_message: Some(e),
                     timestamp: now_ms(),
+                    usage: None,
                 };
                 emit.emit(AgentEvent::MessageStart { message: error_msg.clone() });
                 emit.emit(AgentEvent::MessageEnd { message: error_msg.clone() });
@@ -575,6 +573,7 @@ pub async fn run_agent_loop_continue(
                 stop_reason: "repetition".to_string(),
                 error_message: None,
                 timestamp: now_ms(),
+                usage: None,
             };
             emit.emit(AgentEvent::MessageStart { message: stop_msg.clone() });
             emit.emit(AgentEvent::MessageEnd { message: stop_msg.clone() });
@@ -923,6 +922,89 @@ async fn read_fallback_model() -> Option<ModelRef> {
     serde_json::from_value(raw.clone()).ok()
 }
 
+/// Wraps `call_provider_with_retry` with same-provider credential-pool
+/// rotation: resolves the ordered candidate key list for `model.provider`
+/// (primary key plus any extra pool keys, minus cooling-down ones — see
+/// `ai::auth::CredentialPool::candidates`) and tries each in
+/// turn on failure, before ever falling back to a *different* provider
+/// (`call_provider_with_fallback`, one layer up). A provider with no pool
+/// configured resolves to exactly one candidate (the primary key), so this
+/// is a no-op wrapper for the common case — identical behavior to calling
+/// `call_provider_with_retry` directly.
+async fn call_provider_with_pool_rotation(
+    app: &tauri::AppHandle,
+    model: &ModelRef,
+    context: Context,
+    thinking_level: ThinkingLevel,
+    emit: &EventSender,
+    source_tag: &str,
+    abort_flag: &Arc<std::sync::atomic::AtomicBool>,
+) -> Result<AgentMessage, String> {
+    let primary_key = resolve_api_key(app, &model.provider).await;
+    #[cfg(debug_assertions)]
+    eprintln!("[DEBUG] primary api_key present={}", primary_key.is_some());
+
+    let pool = app.state::<Arc<crate::ai::auth::CredentialPool>>();
+    let candidates = pool
+        .candidates(&model.provider, primary_key.clone().map(|k| ("Primary key".to_string(), k)))
+        .await;
+
+    let Some((first, rest)) = candidates.split_first() else {
+        // No usable candidate at all (no primary key, no pool, or every
+        // candidate is cooling down) — same as today's "no key" path.
+        return call_provider_with_retry(app, model, context, primary_key, thinking_level, emit, source_tag, abort_flag).await;
+    };
+
+    if rest.is_empty() {
+        // Exactly one candidate — the overwhelmingly common case (no pool
+        // configured beyond the primary key). Skip the rotation machinery
+        // entirely.
+        let result = call_provider_with_retry(app, model, context, Some(first.api_key.clone()), thinking_level, emit, source_tag, abort_flag).await;
+        let succeeded = matches!(&result, Ok(AgentMessage::Assistant { stop_reason, .. }) if stop_reason != "error");
+        pool.mark_result(&model.provider, &first.id, if succeeded { crate::ai::auth::CredentialStatus::Ok } else { crate::ai::auth::CredentialStatus::Other }).await;
+        return result;
+    }
+
+    let mut current = first;
+    let mut remaining = rest;
+    loop {
+        let result = call_provider_with_retry(app, model, context.clone(), Some(current.api_key.clone()), thinking_level.clone(), emit, source_tag, abort_flag).await;
+
+        if abort_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            return result;
+        }
+
+        let succeeded = matches!(&result, Ok(AgentMessage::Assistant { stop_reason, .. }) if stop_reason != "error");
+        if succeeded {
+            pool.mark_result(&model.provider, &current.id, crate::ai::auth::CredentialStatus::Ok).await;
+            return result;
+        }
+
+        let reason = match &result {
+            Ok(AgentMessage::Assistant { error_message, .. }) => error_message.clone().unwrap_or_default(),
+            Err(e) => e.clone(),
+            _ => String::new(),
+        };
+        let status: crate::ai::auth::CredentialStatus = crate::ai::utils::classify_provider_error(&reason).into();
+        pool.mark_result(&model.provider, &current.id, status).await;
+
+        let Some((next, rest2)) = remaining.split_first() else {
+            // Whole pool exhausted — surface the last failure exactly as
+            // `call_provider_with_retry` would have on its own; the caller
+            // (`call_provider_with_fallback`) picks up from here.
+            return result;
+        };
+        emit.emit(AgentEvent::CredentialRotated {
+            provider: model.provider.clone(),
+            from_label: current.label.clone(),
+            to_label: next.label.clone(),
+            reason: crate::ai::utils::truncate_error_text(&reason, 200),
+        });
+        current = next;
+        remaining = rest2;
+    }
+}
+
 /// Wraps `call_provider_with_retry` with a single fallback attempt against
 /// a user-configured fallback model when the primary model's entire retry
 /// budget is exhausted (or its very first attempt was a non-retryable
@@ -940,17 +1022,15 @@ async fn call_provider_with_fallback(
     app: &tauri::AppHandle,
     model: &ModelRef,
     context: Context,
-    api_key: Option<String>,
     thinking_level: ThinkingLevel,
     emit: &EventSender,
     source_tag: &str,
     abort_flag: &Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<AgentMessage, String> {
-    let primary_result = call_provider_with_retry(
+    let primary_result = call_provider_with_pool_rotation(
         app,
         model,
         context.clone(),
-        api_key,
         thinking_level.clone(),
         emit,
         source_tag,
@@ -1007,6 +1087,36 @@ async fn call_provider_with_fallback(
         source_tag,
         abort_flag,
     ).await
+}
+
+/// Emit a terminal error `AssistantMessage` directly on `ai-stream-token`,
+/// bypassing the TS provider layer entirely — used when Rust itself can't
+/// even build a valid `provider_stream_request` (e.g. Bedrock signing
+/// failed), so there's nothing for TS to do with the request anyway.
+fn emit_provider_error(app: &tauri::AppHandle, stream_id: &str, api: &str, provider: &str, model: &str, msg: &str) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let err_msg = crate::ai::types::AssistantMessage {
+        role: "assistant".to_string(),
+        content: Vec::new(),
+        api: api.to_string(),
+        provider: provider.to_string(),
+        model: model.to_string(),
+        usage: crate::ai::types::Usage::default(),
+        stop_reason: "error".to_string(),
+        error_message: Some(msg.to_string()),
+        timestamp: ts,
+        diagnostics: None,
+    };
+    let _ = app.emit("ai-stream-token", crate::ai::types::StreamTokenEvent {
+        stream_id: stream_id.to_string(),
+        delta: String::new(),
+        done: true,
+        message: Some(err_msg),
+        is_thinking: false,
+    });
 }
 
 async fn call_provider_stream_and_await(
@@ -1085,116 +1195,150 @@ async fn call_provider_stream_and_await(
         use crate::ai::provider_registry::ApiKind;
         match spec.api_kind {
             ApiKind::AnthropicMessages => {
-                let options = crate::ai::api::anthropic::AnthropicOptions {
+                // Phase 2: the actual HTTP call + SSE parsing now happens in
+                // TypeScript (packages/gui-next/src/modules/ai/providers/anthropic.ts)
+                // — this just asks the frontend to do it and hands back
+                // control; `ai-stream-token` events land the same way they
+                // always have, so nothing downstream of this changes.
+                let thinking_enabled = !matches!(thinking_level_clone, ThinkingLevel::Off);
+                let thinking_budget_tokens = match thinking_level_clone {
+                    ThinkingLevel::Minimal => 1024,
+                    ThinkingLevel::Low     => 2048,
+                    ThinkingLevel::Medium  => 8192,
+                    ThinkingLevel::High | ThinkingLevel::XHigh => 16384,
+                    ThinkingLevel::Off     => 0,
+                };
+                let req = crate::ai::types::ProviderStreamRequest {
+                    stream_id: stream_id_clone2,
+                    api_kind: "anthropicMessages".to_string(),
+                    base_url: base_url_clone,
+                    model_id: model_clone.id,
+                    provider: model_clone.provider,
                     api_key: api_key_clone,
-                    max_tokens: Some(model_clone.max_tokens ),
-                    temperature: None,
-                    thinking_enabled: Some(!matches!(thinking_level_clone, ThinkingLevel::Off)),
-                    thinking_budget_tokens: Some(match thinking_level_clone {
-                        ThinkingLevel::Minimal => 1024,
-                        ThinkingLevel::Low     => 2048,
-                        ThinkingLevel::Medium  => 8192,
-                        ThinkingLevel::High | ThinkingLevel::XHigh => 16384,
-                        ThinkingLevel::Off     => 0,
-                    }),
+                    max_tokens: model_clone.max_tokens,
+                    context: context_clone,
+                    thinking_enabled,
+                    thinking_budget_tokens,
+                    extra_headers: None,
+                    raw_body: None,
+                };
+                let _ = app_clone.emit("provider_stream_request", req);
+            }
+            ApiKind::OpenAiChat if model_clone.provider == "local" => {
+                // Local llama.cpp traffic stays in Rust, not the TS path
+                // below: `fetch()` from the webview to a plain-HTTP
+                // `127.0.0.1` server is subject to both Tauri's CSP
+                // (`connect-src`) and the browser's CORS policy, and
+                // llama-server's own CORS headers aren't something this app
+                // controls. Rust's `reqwest` has neither restriction, so
+                // routing local models through the pre-migration Rust path
+                // sidesteps the whole class of browser-security-policy
+                // failures instead of trying to configure around them.
+                let options = crate::ai::api::openai_completions::OpenAICompletionsOptions {
+                    max_tokens: Some(model_clone.max_tokens),
+                    api_key: api_key_clone,
                     ..Default::default()
                 };
-                crate::ai::api::anthropic::stream(
+                let _ = crate::ai::api::openai_completions::stream_chat_completions(
                     app_clone,
                     stream_id_clone2,
-                    model_clone.id,
-                    model_clone.provider,
-                    Some(base_url_clone),
+                    &base_url_clone,
+                    &model_clone.id,
+                    &model_clone.provider,
                     context_clone,
                     options,
                 ).await;
             }
             ApiKind::OpenAiChat => {
-                // OpenRouter caps free-tier credit consumption per max_tokens requested
-                // (not per tokens generated), so clamp to 4096 to avoid silent 402 errors.
-                let effective_max_tokens = if model_clone.provider == "openrouter" {
-                    model_clone.max_tokens.min(4096)
-                } else {
-                    model_clone.max_tokens
-                };
-                let options = crate::ai::api::openai_completions::OpenAICompletionsOptions {
+                // Phase 2: the actual HTTP call + SSE parsing now happens in
+                // TypeScript (packages/gui-next/src/modules/ai/providers/openaiChat.ts)
+                // — this just asks the frontend to do it. The OpenRouter
+                // credit-clamp lives in the TS port now too.
+                let req = crate::ai::types::ProviderStreamRequest {
+                    stream_id: stream_id_clone2,
+                    api_kind: "openAiChat".to_string(),
+                    base_url: base_url_clone,
+                    model_id: model_clone.id,
+                    provider: model_clone.provider,
                     api_key: api_key_clone,
-                    max_tokens: Some(effective_max_tokens),
-                    temperature: None,
-                    ..Default::default()
+                    max_tokens: model_clone.max_tokens,
+                    context: context_clone,
+                    thinking_enabled: false,
+                    thinking_budget_tokens: 0,
+                    extra_headers: None,
+                    raw_body: None,
                 };
-                crate::ai::api::openai_completions::stream_chat_completions(
-                    app_clone,
-                    stream_id_clone2,
-                    &base_url_clone,
-                    &model_clone.id,
-                    &model_clone.provider,
-                    context_clone,
-                    options,
-                ).await;
+                let _ = app_clone.emit("provider_stream_request", req);
             }
             ApiKind::OpenAiResponses => {
-                let options = crate::ai::api::openai_responses::OpenAIResponsesOptions {
+                // Phase 2: HTTP call + SSE parsing now in TypeScript
+                // (packages/gui-next/src/modules/ai/providers/openaiResponses.ts).
+                let thinking_enabled = !matches!(thinking_level_clone, ThinkingLevel::Off);
+                let req = crate::ai::types::ProviderStreamRequest {
+                    stream_id: stream_id_clone2,
+                    api_kind: "openAiResponses".to_string(),
+                    base_url: base_url_clone,
+                    model_id: model_clone.id,
+                    provider: model_clone.provider,
                     api_key: api_key_clone,
-                    max_tokens: Some(model_clone.max_tokens),
-                    temperature: None,
-                    reasoning_effort: match thinking_level_clone {
-                        ThinkingLevel::Off => None,
-                        ThinkingLevel::Minimal => Some("minimal".to_string()),
-                        ThinkingLevel::Low => Some("low".to_string()),
-                        ThinkingLevel::Medium => Some("medium".to_string()),
-                        ThinkingLevel::High | ThinkingLevel::XHigh => Some("high".to_string()),
-                    },
-                    ..Default::default()
+                    max_tokens: model_clone.max_tokens,
+                    context: context_clone,
+                    thinking_enabled,
+                    thinking_budget_tokens: 0,
+                    extra_headers: None,
+                    raw_body: None,
                 };
-                crate::ai::api::openai_responses::stream_responses(
-                    app_clone,
-                    stream_id_clone2,
-                    &base_url_clone,
-                    &model_clone.id,
-                    &model_clone.provider,
-                    context_clone,
-                    options,
-                ).await;
+                let _ = app_clone.emit("provider_stream_request", req);
             }
             ApiKind::GoogleGenerative => {
-                let options = crate::ai::api::google::GoogleOptions {
+                // Phase 2: HTTP call + SSE parsing now in TypeScript
+                // (packages/gui-next/src/modules/ai/providers/google.ts).
+                // Matches prior behavior exactly: thinking was never wired
+                // for Google here, so thinking_enabled stays false.
+                let req = crate::ai::types::ProviderStreamRequest {
+                    stream_id: stream_id_clone2,
+                    api_kind: "googleGenerative".to_string(),
+                    base_url: base_url_clone,
+                    model_id: model_clone.id,
+                    provider: model_clone.provider,
                     api_key: api_key_clone,
-                    max_tokens: Some(model_clone.max_tokens),
-                    temperature: None,
-                    ..Default::default()
+                    max_tokens: model_clone.max_tokens,
+                    context: context_clone,
+                    thinking_enabled: false,
+                    thinking_budget_tokens: 0,
+                    extra_headers: None,
+                    raw_body: None,
                 };
-                crate::ai::api::google::stream(
-                    app_clone,
-                    stream_id_clone2,
-                    model_clone.id,
-                    model_clone.provider,
-                    model_clone.api,
-                    model_clone.reasoning,
-                    Some(base_url_clone),
-                    context_clone,
-                    options,
-                ).await;
+                let _ = app_clone.emit("provider_stream_request", req);
             }
             ApiKind::MistralChat => {
-                let options = crate::ai::api::mistral::MistralOptions {
+                // Phase 2: mistral.rs itself just delegated to
+                // openai_completions.rs — the TS dispatcher does the same,
+                // routing 'mistralChat' to the same openaiChat.ts handler.
+                let req = crate::ai::types::ProviderStreamRequest {
+                    stream_id: stream_id_clone2,
+                    api_kind: "mistralChat".to_string(),
+                    base_url: base_url_clone,
+                    model_id: model_clone.id,
+                    provider: model_clone.provider,
                     api_key: api_key_clone,
-                    max_tokens: Some(model_clone.max_tokens),
-                    temperature: None,
-                    ..Default::default()
+                    max_tokens: model_clone.max_tokens,
+                    context: context_clone,
+                    thinking_enabled: false,
+                    thinking_budget_tokens: 0,
+                    extra_headers: None,
+                    raw_body: None,
                 };
-                crate::ai::api::mistral::stream(
-                    app_clone,
-                    stream_id_clone2,
-                    model_clone.id,
-                    model_clone.provider,
-                    Some(base_url_clone),
-                    context_clone,
-                    options,
-                ).await;
+                let _ = app_clone.emit("provider_stream_request", req);
             }
             ApiKind::Bedrock => {
-                let options = crate::ai::api::bedrock::BedrockOptions {
+                // AWS SigV4 signing needs the account's secret key, which
+                // must never reach the webview — Rust resolves credentials,
+                // builds the exact request body, and signs it here, then
+                // hands TS the finished URL/headers/body to send as-is (see
+                // bedrock.ts). Everything below mirrors bedrock.rs's
+                // `stream_bedrock` setup, minus the actual HTTP call.
+                let bedrock_options = crate::ai::api::bedrock::BedrockOptions {
                     max_tokens: Some(model_clone.max_tokens),
                     temperature: None,
                     thinking_enabled: Some(!matches!(thinking_level_clone, ThinkingLevel::Off)),
@@ -1207,29 +1351,116 @@ async fn call_provider_stream_and_await(
                     }),
                     ..Default::default()
                 };
-                crate::ai::api::bedrock::stream_bedrock(
-                    app_clone,
-                    stream_id_clone2,
-                    model_clone.id,
-                    context_clone,
-                    options,
-                ).await;
+                let env = bedrock_options.env.as_ref();
+                let region = crate::ai::api::bedrock::resolve_region(env);
+                let endpoint_url = format!(
+                    "https://bedrock-runtime.{}.amazonaws.com/model/{}/converse-stream",
+                    region,
+                    crate::ai::api::bedrock::urlencoding_encode(&model_clone.id)
+                );
+
+                let body = crate::ai::api::bedrock::build_converse_request(&context_clone, &bedrock_options);
+                let body_bytes = match serde_json::to_vec(&body) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        emit_provider_error(&app_clone, &stream_id_clone2, "bedrock-converse-stream", "bedrock", &model_clone.id, &format!("Failed to serialize request: {e}"));
+                        return;
+                    }
+                };
+
+                let bearer_token = crate::ai::api::bedrock::get_env_value("AWS_BEARER_TOKEN_BEDROCK", env);
+                let mut req_headers = std::collections::HashMap::new();
+                let host = match url::Url::parse(&endpoint_url) {
+                    Ok(parsed) => parsed.host_str().unwrap_or("").to_string(),
+                    Err(e) => {
+                        emit_provider_error(&app_clone, &stream_id_clone2, "bedrock-converse-stream", "bedrock", &model_clone.id, &format!("Invalid Bedrock endpoint URL: {e}"));
+                        return;
+                    }
+                };
+                req_headers.insert("host".to_string(), host);
+
+                if let Some(ref token) = bearer_token {
+                    req_headers.insert("authorization".to_string(), format!("Bearer {token}"));
+                } else {
+                    let creds = match crate::ai::api::bedrock::resolve_credentials(env) {
+                        Some(c) => c,
+                        None => {
+                            emit_provider_error(&app_clone, &stream_id_clone2, "bedrock-converse-stream", "bedrock", &model_clone.id, "AWS credentials not found. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.");
+                            return;
+                        }
+                    };
+                    match crate::ai::api::bedrock::sign_request("POST", &endpoint_url, &region, "bedrock", &body_bytes, &req_headers, &creds) {
+                        Ok(sig_headers) => {
+                            for (k, v) in sig_headers {
+                                req_headers.insert(k, v);
+                            }
+                        }
+                        Err(e) => {
+                            emit_provider_error(&app_clone, &stream_id_clone2, "bedrock-converse-stream", "bedrock", &model_clone.id, &format!("SigV4 signing failed: {e}"));
+                            return;
+                        }
+                    }
+                }
+                req_headers.remove("host"); // fetch() sets Host itself; browsers reject an explicit override
+
+                let raw_body = String::from_utf8_lossy(&body_bytes).to_string();
+                let req = crate::ai::types::ProviderStreamRequest {
+                    stream_id: stream_id_clone2,
+                    api_kind: "bedrock".to_string(),
+                    base_url: endpoint_url,
+                    model_id: model_clone.id,
+                    provider: model_clone.provider,
+                    api_key: None,
+                    max_tokens: model_clone.max_tokens,
+                    context: context_clone,
+                    thinking_enabled: false,
+                    thinking_budget_tokens: 0,
+                    extra_headers: Some(req_headers),
+                    raw_body: Some(raw_body),
+                };
+                let _ = app_clone.emit("provider_stream_request", req);
             }
             ApiKind::AzureOpenAiResponses => {
-                let options = crate::ai::api::azure_openai::AzureOpenAIOptions {
-                    api_key: api_key_clone,
+                // Azure's base URL / API version / deployment name can come
+                // from env vars (AZURE_OPENAI_*), which only Rust's process
+                // env can see — resolve those here, then hand TS a single
+                // fully-built endpoint URL so azureOpenai.ts doesn't need to
+                // know about any of Azure's env-var resolution rules.
+                let azure_options = crate::ai::api::azure_openai::AzureOpenAIOptions {
+                    api_key: api_key_clone.clone(),
                     max_tokens: Some(model_clone.max_tokens),
                     temperature: None,
                     ..Default::default()
                 };
-                crate::ai::api::azure_openai::stream_azure_openai(
-                    app_clone,
-                    stream_id_clone2,
-                    model_clone.id,
-                    Some(base_url_clone),
-                    context_clone,
-                    options,
-                ).await;
+                let resolved = crate::ai::api::azure_openai::resolve_azure_config(
+                    Some(&base_url_clone),
+                    &azure_options,
+                );
+                let (resolved_base_url, api_version) = match resolved {
+                    Ok(v) => v,
+                    Err(e) => {
+                        emit_provider_error(&app_clone, &stream_id_clone2, "azure-openai-responses", "azure-openai-responses", &model_clone.id, &e);
+                        return;
+                    }
+                };
+                let deployment_name = crate::ai::api::azure_openai::resolve_deployment_name(&model_clone.id, &azure_options);
+                let endpoint_url = format!("{}/responses?api-version={}", resolved_base_url, api_version);
+
+                let req = crate::ai::types::ProviderStreamRequest {
+                    stream_id: stream_id_clone2,
+                    api_kind: "azureOpenAiResponses".to_string(),
+                    base_url: endpoint_url,
+                    model_id: deployment_name,
+                    provider: model_clone.provider,
+                    api_key: api_key_clone,
+                    max_tokens: model_clone.max_tokens,
+                    context: context_clone,
+                    thinking_enabled: false,
+                    thinking_budget_tokens: 0,
+                    extra_headers: None,
+                    raw_body: None,
+                };
+                let _ = app_clone.emit("provider_stream_request", req);
             }
         }
     });
@@ -1267,6 +1498,7 @@ async fn call_provider_stream_and_await(
                 stop_reason: String::new(),
                 error_message: None,
                 timestamp: now_ms(),
+                usage: None,
             };
             emit.emit(AgentEvent::MessageUpdate {
                 message: update_message,
@@ -1281,6 +1513,7 @@ async fn call_provider_stream_and_await(
                 stop_reason: String::new(),
                 error_message: None,
                 timestamp: now_ms(),
+                usage: None,
             };
             emit.emit(AgentEvent::MessageUpdate {
                 message: update_message,
@@ -1365,6 +1598,7 @@ async fn call_provider_stream_and_await(
                                 stop_reason: String::new(),
                                 error_message: None,
                                 timestamp: now_ms(),
+                                usage: None,
                             };
                             emit.emit(AgentEvent::MessageStart { message: start_message });
                             streaming_started = true;
@@ -1412,8 +1646,10 @@ async fn call_provider_stream_and_await(
 
     if let Some(msg) = final_message {
         #[cfg(debug_assertions)]
-        eprintln!("[DEBUG] returning OK assistant message, stop_reason={:?}", msg.stop_reason);
+        eprintln!("[DEBUG] returning OK assistant message, stop_reason={:?} error_message={:?}", msg.stop_reason, msg.error_message);
         let usage = msg.usage.clone();
+        #[cfg(debug_assertions)]
+        eprintln!("[DEBUG] usage recorded: input={} output={} total_tokens={} cost={:?}", usage.input, usage.output, usage.total_tokens, usage.cost);
         let source_tag = source_tag.to_string();
         tokio::spawn(async move {
             super::usage_store::record_usage(&usage).await;
@@ -1750,6 +1986,7 @@ fn convert_ai_assistant_message_to_agent(msg: crate::ai::types::AssistantMessage
         stop_reason: msg.stop_reason,
         error_message: msg.error_message,
         timestamp: msg.timestamp,
+        usage: Some(msg.usage),
     }
 }
 

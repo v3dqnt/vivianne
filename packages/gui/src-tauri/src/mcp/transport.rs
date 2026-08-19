@@ -31,6 +31,7 @@ enum Inner {
 pub struct McpConnection {
     inner: Inner,
     next_id: AtomicI64,
+    timeout: std::time::Duration,
 }
 
 fn jsonrpc_request(id: i64, method: &str, params: Value) -> Value {
@@ -39,6 +40,7 @@ fn jsonrpc_request(id: i64, method: &str, params: Value) -> Value {
 
 impl McpConnection {
     pub async fn connect(config: &McpServerConfig) -> Result<Self, String> {
+        let timeout = std::time::Duration::from_millis(config.timeout_ms.unwrap_or(30_000) as u64);
         let inner = match &config.transport {
             McpTransportConfig::Stdio { command, args, env } => {
                 let mut cmd = tokio::process::Command::new(command);
@@ -57,18 +59,18 @@ impl McpConnection {
             }
             McpTransportConfig::Http { url, headers } => {
                 let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
+                    .timeout(timeout)
                     .build()
                     .map_err(|e| e.to_string())?;
                 Inner::Http { url: url.clone(), headers: headers.clone(), client, session_id: Mutex::new(None) }
             }
         };
-        let conn = Self { inner, next_id: AtomicI64::new(1) };
+        let conn = Self { inner, next_id: AtomicI64::new(1), timeout };
 
         conn.request(
             "initialize",
             json!({
-                "protocolVersion": "2025-03-26",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {},
                 "clientInfo": { "name": "vivianne", "version": "0.1.0" }
             }),
@@ -92,7 +94,7 @@ impl McpConnection {
                 let mut line = serde_json::to_string(&message).map_err(|e| e.to_string())?;
                 line.push('\n');
                 stdin.lock().await.write_all(line.as_bytes()).await.map_err(|e| e.to_string())?;
-                match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+                match tokio::time::timeout(self.timeout, rx).await {
                     Ok(Ok(v)) => extract_result(v),
                     Ok(Err(_)) => Err(format!("{method}: response channel closed")),
                     Err(_) => {

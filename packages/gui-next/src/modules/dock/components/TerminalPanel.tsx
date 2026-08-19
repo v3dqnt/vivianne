@@ -1,0 +1,188 @@
+import { useEffect, useRef, useState } from 'react'
+import Box from '@mui/material/Box'
+import Typography from '@mui/material/Typography'
+import { useTheme, alpha } from '@mui/material/styles'
+import { Terminal, type ITheme } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import '@xterm/xterm/css/xterm.css'
+import { call, on } from '../../../ipc'
+import { useWorkspaceStore } from '../../ai/store/workspaceStore'
+
+interface ShellOption {
+  id: string
+  label: string
+}
+
+interface TerminalOutputPayload {
+  tabId: string
+  data: string
+}
+
+interface TerminalExitPayload {
+  tabId: string
+  exitCode: number | null
+}
+
+/** ANSI 16-color set, fixed per mode rather than derived from the palette —
+ * a themed terminal should still show real red/green/etc for command output,
+ * only its chrome (background/foreground/cursor) needs to track the app
+ * theme. Two sets (light/dark) keeps both legible against either background. */
+const ANSI = {
+  dark: {
+    black: '#27272a', red: '#f87171', green: '#4ade80', yellow: '#fbbf24',
+    blue: '#60a5fa', magenta: '#a78bfa', cyan: '#22d3ee', white: '#e4e4e7',
+    brightBlack: '#71717a', brightRed: '#fca5a5', brightGreen: '#86efac', brightYellow: '#fde047',
+    brightBlue: '#93c5fd', brightMagenta: '#c4b5fd', brightCyan: '#67e8f9', brightWhite: '#fafafa',
+  },
+  light: {
+    black: '#3f3f46', red: '#dc2626', green: '#16a34a', yellow: '#ca8a04',
+    blue: '#2563eb', magenta: '#9333ea', cyan: '#0891b2', white: '#3f3f46',
+    brightBlack: '#71717a', brightRed: '#ef4444', brightGreen: '#22c55e', brightYellow: '#eab308',
+    brightBlue: '#3b82f6', brightMagenta: '#a855f7', brightCyan: '#06b6d4', brightWhite: '#18181b',
+  },
+} as const
+
+function terminalTheme(mode: 'light' | 'dark', textPrimary: string, primary: string): ITheme {
+  return {
+    background: 'transparent',
+    foreground: textPrimary,
+    cursor: primary,
+    cursorAccent: mode === 'dark' ? '#0a0a0a' : '#ffffff',
+    selectionBackground: alpha(primary, 0.25),
+    ...ANSI[mode],
+  }
+}
+
+/** One live xterm session bound to a backend PTY. The tab is spawned on
+ * mount (default shell, cwd = primary workspace folder), and all IO flows
+ * through the backend's `cmd_terminal_*` + `terminal-output`/`terminal-exit`
+ * events. Cleanup closes the PTY and unsubscribes listeners. */
+/**
+ * @param attachTabId Attach to an already-running PTY (from the Background
+ *   Tasks list) instead of spawning a fresh one. The backend keeps sessions
+ *   alive independently of this component, so reattaching just means not
+ *   calling spawn — output resumes streaming via the same event listeners.
+ * @param cwd Working directory for a newly-spawned shell. Defaults to the
+ *   active workspace root.
+ */
+export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?: string } = {}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const tabIdRef = useRef<string>(attachTabId ?? `term-${crypto.randomUUID()}`)
+  const termRef = useRef<Terminal | null>(null)
+  const folders = useWorkspaceStore((s) => s.folders)
+  const [status, setStatus] = useState<string | null>(attachTabId ? null : 'Spawning shell…')
+  const theme = useTheme()
+
+  // Live theme updates (mode/palette switch) — xterm supports patching
+  // `.options.theme` on an existing instance, no need to respawn the PTY.
+  useEffect(() => {
+    if (termRef.current) {
+      termRef.current.options.theme = terminalTheme(theme.palette.mode, theme.palette.text.primary, theme.palette.primary.main)
+    }
+  }, [theme.palette.mode, theme.palette.text.primary, theme.palette.primary.main])
+
+  useEffect(() => {
+    const tabId = tabIdRef.current
+    const container = containerRef.current
+    if (!container) return
+
+    const term = new Terminal({
+      cursorBlink: true,
+      cursorStyle: 'bar',
+      fontSize: 12.5,
+      fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+      lineHeight: 1.5,
+      letterSpacing: 0.1,
+      theme: terminalTheme(theme.palette.mode, theme.palette.text.primary, theme.palette.primary.main),
+      allowTransparency: true,
+      scrollback: 5000,
+    })
+    termRef.current = term
+    const fitAddon = new FitAddon()
+    term.loadAddon(fitAddon)
+    term.open(container)
+    fitAddon.fit()
+
+    const ro = new ResizeObserver(() => {
+      try {
+        fitAddon.fit()
+      } catch {
+        // element may be detached
+      }
+    })
+    ro.observe(container)
+
+    term.onData((data) => {
+      void call('cmd_terminal_write', { tabId, data })
+    })
+    term.onResize(({ cols, rows }) => {
+      void call('cmd_terminal_resize', { tabId, rows, cols })
+    })
+
+    let disposed = false
+    let unlistenOutput: (() => void) | null = null
+    let unlistenExit: (() => void) | null = null
+
+    // Synchronous promise chain: each unlisten is stored the moment its
+    // listener resolves, before the next await — so an unmount can never
+    // slip between "listener attached" and "unlisten stored" (the exact
+    // leak class the old app fixed with the same shape).
+    on<TerminalOutputPayload>('terminal-output', (event) => {
+      if (!disposed && event.tabId === tabId) term.write(event.data)
+    }).then((u) => {
+      unlistenOutput = u
+      return on<TerminalExitPayload>('terminal-exit', (event) => {
+        if (!disposed && event.tabId === tabId) {
+          const code = event.exitCode
+          term.write(`\r\n\x1b[90m[Process exited${code !== null ? ` (code ${code})` : ''}]\x1b[0m\r\n`)
+        }
+      })
+    }).then((u) => {
+      unlistenExit = u
+      setStatus(null)
+    })
+
+    // Attaching to an existing session must NOT spawn — the PTY is already
+    // running (possibly started by the agent's own shell tools).
+    if (!attachTabId) {
+      void (async () => {
+        const shells = (await call<ShellOption[]>('cmd_terminal_list_shells')) ?? []
+        const shellId = shells[0]?.id ?? ''
+        const spawnCwd = cwd ?? folders[0] ?? ''
+        await call('cmd_terminal_spawn', { tabId, shellId, cwd: spawnCwd })
+        if (disposed) return
+        setStatus(null)
+      })().catch(() => {
+        if (!disposed) setStatus('Failed to spawn shell')
+      })
+    }
+
+    return () => {
+      disposed = true
+      ro.disconnect()
+      term.dispose()
+      termRef.current = null
+      unlistenOutput?.()
+      unlistenExit?.()
+      // Only kill a PTY this component actually spawned — closing an attached
+      // session on unmount would kill the agent's shell out from under it just
+      // because the user switched dock tabs.
+      if (!attachTabId) void call('cmd_terminal_close', { tabId })
+    }
+    // `folders` and `theme` are intentionally excluded — re-spawning a PTY on
+    // every workspace/theme change would wipe scrollback for no benefit; the
+    // theme effect above patches the live instance instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return (
+    <Box sx={{ position: 'relative', flex: 1, minHeight: 0, px: 1, py: 1 }}>
+      {status && (
+        <Typography variant="caption" color="text.secondary" sx={{ position: 'absolute', top: 8, left: 12, zIndex: 2 }}>
+          {status}
+        </Typography>
+      )}
+      <Box ref={containerRef} sx={{ width: '100%', height: '100%', minHeight: 0, background: 'transparent' }} />
+    </Box>
+  )
+}

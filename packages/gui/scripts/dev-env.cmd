@@ -12,6 +12,17 @@ if not exist "%VSWHERE%" (
 )
 for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSPATH=%%i"
 if not defined VSPATH (
+  if exist "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\Tools\VsDevCmd.bat" (
+    set "VSPATH=C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools"
+  ) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\Common7\Tools\VsDevCmd.bat" (
+    set "VSPATH=C:\Program Files (x86)\Microsoft Visual Studio\2019\Community"
+  ) else if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" (
+    set "VSPATH=C:\Program Files\Microsoft Visual Studio\2022\Community"
+  ) else if exist "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat" (
+    set "VSPATH=C:\Program Files\Microsoft Visual Studio\2022\BuildTools"
+  )
+)
+if not defined VSPATH (
   echo [dev-env] No VS installation with the MSVC C++ toolchain found.
   exit /b 1
 )

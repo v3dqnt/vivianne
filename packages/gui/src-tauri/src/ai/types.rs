@@ -14,7 +14,7 @@ pub enum Role {
 
 // ── Usage tracking ───────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
     pub input: u32,
@@ -25,7 +25,7 @@ pub struct Usage {
     pub cost: Option<CostBreakdown>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct CostBreakdown {
     pub input: f64,
     pub output: f64,
@@ -195,6 +195,41 @@ pub struct StreamTokenEvent {
     /// don't set it are unaffected.
     #[serde(default)]
     pub is_thinking: bool,
+}
+
+// ── Provider stream request (Phase 2: TS-side provider calls) ───────────────
+
+/// Emitted to the frontend to ask it to make the actual provider HTTP call
+/// (see `packages/gui-next/src/modules/ai/providers/`). Rust still resolves
+/// the API key, decides retry/fallback, and consumes the resulting
+/// `ai-stream-token` events exactly as it always has — only the network call
+/// and wire-format parsing move to TS. Only emitted for `apiKind`s the
+/// frontend actually has an implementation for; everything else stays on
+/// the Rust-side `ai::api::*` path unchanged.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderStreamRequest {
+    pub stream_id: String,
+    pub api_kind: String,
+    pub base_url: String,
+    pub model_id: String,
+    pub provider: String,
+    pub api_key: Option<String>,
+    pub max_tokens: u32,
+    pub context: Context,
+    pub thinking_enabled: bool,
+    pub thinking_budget_tokens: u32,
+    /// Pre-built request headers TS should send as-is, used when Rust must
+    /// compute something over the request that only it can (e.g. Bedrock's
+    /// AWS SigV4 signature, which needs the AWS secret key — that key must
+    /// never reach the webview, so Rust signs and hands over the resulting
+    /// headers instead of the credentials themselves).
+    pub extra_headers: Option<std::collections::HashMap<String, String>>,
+    /// Pre-serialized request body TS should send byte-for-byte as-is
+    /// instead of rebuilding it — required whenever `extra_headers` includes
+    /// a signature computed over the body bytes (SigV4), since re-serializing
+    /// in TS could produce different bytes and invalidate the signature.
+    pub raw_body: Option<String>,
 }
 
 // ── Legacy AiMessage (kept for backward compat) ──────────────────────────────

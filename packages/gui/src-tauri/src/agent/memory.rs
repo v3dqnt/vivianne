@@ -287,7 +287,7 @@ async fn write_entries(root: &str, entries: &[MemoryEntry]) -> Result<(), String
 /// ponytail: heuristic, not exhaustive — a secret with no recognizable shape
 /// (e.g. a plain password typed in prose) slips through. Upgrade path: a real
 /// entropy-based secret scanner if leaks show up in practice.
-fn redact_secrets(text: &str) -> String {
+pub(crate) fn redact_secrets(text: &str) -> String {
     use std::sync::OnceLock;
     static PATTERNS: OnceLock<Vec<regex::Regex>> = OnceLock::new();
     let patterns = PATTERNS.get_or_init(|| {
@@ -417,7 +417,11 @@ fn format_entries(entries: &[MemoryEntry]) -> String {
 /// Splitting persona out as its own block mirrors TencentDB's
 /// stable-vs-dynamic separation for prompt-cache friendliness, even though
 /// Vivianne doesn't do explicit cache-key management today.
-pub async fn context(root: &str) -> Option<String> {
+/// Returns the assembled prompt block plus how many memory entries were
+/// folded into it — the count is purely informational, surfaced to the
+/// frontend as a "recalled N memories" chip so the (deliberately silent, per
+/// the injected instruction below) per-turn injection isn't invisible.
+pub async fn context(root: &str) -> Option<(String, usize)> {
     let mut state = read_state(root).await;
     if !state.enabled {
         return None;
@@ -457,7 +461,8 @@ pub async fn context(root: &str) -> Option<String> {
     state.last_injected_at = Some(now_ms());
     let _ = write_state(root, &state).await;
 
-    Some([persona_block, memory_block].into_iter().flatten().collect::<Vec<_>>().join("\n\n"))
+    let block = [persona_block, memory_block].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
+    Some((block, entries.len()))
 }
 
 pub async fn remember(

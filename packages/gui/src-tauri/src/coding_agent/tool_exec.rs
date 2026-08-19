@@ -24,9 +24,12 @@ pub trait Tool: Send + Sync {
     async fn execute(&self, args: &serde_json::Value, cwd: &str) -> ToolResult;
 }
 
-/// Factory for creating the default set of coding tools.
+/// Factory for creating the default set of coding tools. Called fresh on
+/// every `execute_tool_calls` (see that function) rather than built once at
+/// startup — which is what makes playbooks (below) hot-reload for free: a
+/// file added or removed between turns is just picked up on the next call.
 pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
-    vec![
+    let mut tools: Vec<Box<dyn Tool>> = vec![
         // ── Raw file / shell / search tools (unchanged) ────────────────────
         Box::new(ReadTool::new(cwd.clone())),
         Box::new(WriteTool::new(cwd.clone())),
@@ -63,21 +66,19 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         // ── Grok-parity: memory ───────────────────────────────────────────
         Box::new(super::memory_tools::MemoryGetTool::new(cwd.clone())),
         Box::new(super::memory_tools::MemorySearchTool::new(cwd.clone())),
+        Box::new(super::memory_tools::NotesWriteTool::new(cwd.clone())),
         // ── Grok-parity: enriched read/list ───────────────────────────────
         Box::new(super::tools_enh::ReadFileTool::new(cwd.clone())),
         Box::new(super::tools_enh::ListDirTool::new(cwd.clone())),
-        // ── Grok-parity: OpenCode-style aliases ───────────────────────────
-        Box::new(super::opencode::OpenCodeReadTool::new(cwd.clone())),
-        Box::new(super::opencode::OpenCodeWriteTool::new(cwd.clone())),
-        Box::new(super::opencode::OpenCodeEditTool::new(cwd.clone())),
-        Box::new(super::opencode::OpenCodeGlobTool::new(cwd.clone())),
-        Box::new(super::opencode::OpenCodeGrepTool::new(cwd.clone())),
-        Box::new(super::opencode::SkillTool::new(cwd.clone())),
-        Box::new(super::opencode::RichTodoWriteTool::new()),
         // ── Grok-parity: streaming shell ──────────────────────────────────
         Box::new(super::streaming::StreamingBashTool::new(cwd.clone())),
-        Box::new(super::streaming::StreamingPowerShellTool::new(cwd)),
-    ]
+        Box::new(super::streaming::StreamingPowerShellTool::new(cwd.clone())),
+    ];
+    // ── User-defined: playbooks (~/.viv/playbooks/*.json) ──────────────────
+    for def in super::playbooks::load_playbooks() {
+        tools.push(Box::new(super::playbooks::PlaybookTool::new(def, cwd.clone())));
+    }
+    tools
 }
 
 /// Check whether a mutating tool should be refused because plan mode is on.
@@ -778,7 +779,11 @@ impl Tool for GrepTool {
             if search_path.is_file() {
                 grep_one_file(&search_path, &regex, &mut matches, &mut total_matches, &mut output_bytes);
             } else {
-                walk_files(&search_path, usize::MAX, |file_path| {
+                // Capped like `code_search`'s walk — a sparse-match search on
+                // a huge repo previously still touched every file under root
+                // (only the match/byte counters broke out early, not the walk
+                // itself).
+                walk_files(&search_path, MAX_SEARCH_FILES_SCANNED, |file_path| {
                     grep_one_file(file_path, &regex, &mut matches, &mut total_matches, &mut output_bytes);
                     total_matches < MAX_GREP_MATCHES && output_bytes < MAX_GREP_BYTES
                 });

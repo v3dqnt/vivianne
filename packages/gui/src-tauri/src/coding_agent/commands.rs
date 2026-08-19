@@ -79,6 +79,24 @@ pub async fn cmd_coding_list_subagents() -> Result<Vec<SubagentSummary>, String>
     Ok(out)
 }
 
+/// A subagent's own transcript — for the GUI's read-only view. Empty (not an
+/// error) for an unknown id, matching this module's existing "unknown id
+/// degrades quietly" convention (`cmd_coding_kill_subagent` et al.).
+#[tauri::command]
+pub async fn cmd_coding_get_subagent_messages(id: String) -> Result<Vec<crate::agent::types::AgentMessage>, String> {
+    let Some(arc) = SubagentRegistry::global().get(&id) else {
+        return Ok(Vec::new());
+    };
+    // Bind the clone before returning: inlining it into `Ok(...)` makes the
+    // MutexGuard a temporary that outlives `arc`/`g` at end-of-block scope.
+    let messages = {
+        let g = arc.lock().unwrap();
+        let m = g.messages.lock().unwrap().clone();
+        m
+    };
+    Ok(messages)
+}
+
 #[tauri::command]
 pub async fn cmd_coding_kill_subagent(id: String) -> Result<String, String> {
     let tool = KillTaskTool::new();

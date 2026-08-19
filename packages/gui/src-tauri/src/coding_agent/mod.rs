@@ -14,7 +14,9 @@ pub mod tools_ext;
 pub mod apply_patch;
 pub mod repo_tools;
 pub mod compaction;
+pub mod playbooks;
 pub mod skills;
+pub mod subagent_profiles;
 pub mod commands;
 pub mod sandbox;
 
@@ -24,7 +26,6 @@ pub mod sandbox;
 pub mod orchestration;
 pub mod memory_tools;
 pub mod tools_enh;
-pub mod opencode;
 pub mod streaming;
 pub mod context_shaping;
 pub mod ocr;

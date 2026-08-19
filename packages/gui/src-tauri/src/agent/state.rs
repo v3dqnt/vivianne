@@ -54,6 +54,14 @@ struct AgentStateInner {
     /// fall back to process cwd."
     workspace_folders: Vec<String>,
     access_mode: WorkspaceAccessMode,
+    /// A subagent profile's tool allowlist (`Some`), or no restriction
+    /// (`None`, the default — matches every instance's behavior before
+    /// subagent profiles existed). Read by `tool_exec.rs`'s `disabled_tools`
+    /// merge as a fourth restriction source alongside Settings-disabled,
+    /// persona mode, and workspace access mode. Always `None` for the main
+    /// agent's own `AgentState` — only `execute_task_tool` sets it, on the
+    /// freshly-constructed `sub_state` a spawned subagent runs with.
+    subagent_allowed_tools: Option<Vec<String>>,
 }
 
 impl AgentState {
@@ -93,6 +101,7 @@ impl AgentState {
                 image_keep_last_n: 4,
                 workspace_folders: Vec::new(),
                 access_mode: WorkspaceAccessMode::Full,
+                subagent_allowed_tools: None,
             })),
         };
         if !workspace_folders.is_empty() {
@@ -171,6 +180,14 @@ impl AgentState {
 
     pub async fn access_mode(&self) -> WorkspaceAccessMode {
         self.inner.read().await.access_mode
+    }
+
+    pub async fn subagent_allowed_tools(&self) -> Option<Vec<String>> {
+        self.inner.read().await.subagent_allowed_tools.clone()
+    }
+
+    pub async fn set_subagent_allowed_tools(&self, value: Option<Vec<String>>) {
+        self.inner.write().await.subagent_allowed_tools = value;
     }
 
     pub async fn set_system_prompt(&self, value: String) {

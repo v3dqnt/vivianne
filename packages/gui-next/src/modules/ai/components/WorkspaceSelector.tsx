@@ -9,7 +9,7 @@ import IconButton from '@mui/material/IconButton'
 import ButtonBase from '@mui/material/ButtonBase'
 import Divider from '@mui/material/Divider'
 import CircularProgress from '@mui/material/CircularProgress'
-import { FolderLinear, LockLinear, UnlockLinear, TrashLinear, AddLinear, FolderAddLinear } from 'mx-icons'
+import { FolderLinear, LockLinear, UnlockLinear, TrashLinear, AddLinear, FolderAddLinear } from '../../../icons'
 import { useWorkspaceStore } from '../store/workspaceStore'
 
 function folderName(path: string): string {

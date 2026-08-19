@@ -17,6 +17,16 @@ export type MessageContent =
       isError: boolean | null
     }
 
+/** `ai::types::Usage` — `#[serde(rename_all = "camelCase")]`. */
+export interface Usage {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  totalTokens: number
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number } | null
+}
+
 export type AgentMessage =
   | { type: 'user'; content: MessageContent[]; timestamp: number }
   | {
@@ -25,6 +35,11 @@ export type AgentMessage =
       stopReason: string
       errorMessage: string | null
       timestamp: number
+      /** Only present on the final message of a turn — absent on streaming updates and synthetic system messages. */
+      usage?: Usage | null
+      /** Frontend-computed only (not on the wire): `usage.output` divided by
+       * message-start-to-end wall-clock time. Set once, on `message_end`. */
+      tokensPerSec?: number
     }
   | {
       type: 'toolResult'
@@ -43,8 +58,23 @@ export interface AgentToolResult {
   terminate: boolean | null
 }
 
+/** `agent::events::QuestionOption` — `#[serde(rename_all = "camelCase")]`. */
+export interface QuestionOption {
+  label: string
+  description: string
+}
+
+/** `agent::events::QuestionSpec` — `#[serde(rename_all = "camelCase")]`. */
+export interface QuestionSpec {
+  question: string
+  header: string
+  options: QuestionOption[]
+  multiSelect: boolean
+}
+
 /** `#[serde(tag = "type", content = "payload", rename_all = "snake_case")]` */
 export type AgentEvent =
+  | { type: 'memory_injected'; payload: { entry_count: number } }
   | { type: 'agent_start' }
   | { type: 'agent_end'; payload: { messages: AgentMessage[]; stats: unknown; cost: unknown } }
   | { type: 'turn_start' }
@@ -62,6 +92,34 @@ export type AgentEvent =
   | {
       type: 'tool_execution_end'
       payload: { tool_call_id: string; tool_name: string; result: AgentToolResult; is_error: boolean }
+    }
+  | {
+      type: 'permission_asked'
+      payload: { request_id: string; tool_call_id: string; tool_name: string; args: unknown; reason: string | null }
+    }
+  | { type: 'permission_resolved'; payload: { request_id: string; approved: boolean } }
+  | {
+      type: 'question_asked'
+      payload: { request_id: string; tool_call_id: string; questions: QuestionSpec[] }
+    }
+  | { type: 'question_resolved'; payload: { request_id: string } }
+  | {
+      type: 'confirmation_asked'
+      payload: { request_id: string; tool_call_id: string; message: string; danger_level: string }
+    }
+  | { type: 'confirmation_resolved'; payload: { request_id: string; approved: boolean } }
+  | { type: 'retry_status'; payload: { attempt: number; max_attempts: number; delay_ms: number; reason: string } }
+  | {
+      type: 'model_fallback'
+      payload: { from_provider: string; from_model: string; to_provider: string; to_model: string; reason: string }
+    }
+  | {
+      type: 'credential_rotated'
+      payload: { provider: string; from_label: string; to_label: string; reason: string }
+    }
+  | {
+      type: 'web_preview_requested'
+      payload: { url: string; screenshot_base64: string | null; error: string | null }
     }
 
 /** Flatten an assistant/user message's content blocks to plain text for display. */
@@ -131,4 +189,16 @@ export type ThinkingLevel = (typeof THINKING_LEVELS)[number]
 export interface ImageAttachment {
   base64: string
   media_type: string
+}
+
+/**
+ * A file context chip — read client-side via the browser `File` API when
+ * attached, formatted into the outgoing message text by `Composer` (there's
+ * no dedicated wire type for this on the Rust side; it rides along as plain
+ * text the same way image-attachment counts get woven into the prompt).
+ */
+export interface FileAttachment {
+  name: string
+  content: string
+  truncated: boolean
 }

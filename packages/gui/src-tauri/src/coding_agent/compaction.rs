@@ -419,6 +419,7 @@ mod mermaid_tests {
             stop_reason: "tool_use".into(),
             error_message: None,
             timestamp: 0,
+            usage: None,
         }
     }
 
@@ -504,6 +505,7 @@ mod llm_summary_transcript_tests {
                 stop_reason: "tool_use".into(),
                 error_message: None,
                 timestamp: 0,
+                usage: None,
             },
             AgentMessage::ToolResult {
                 tool_call_id: "t1".into(),

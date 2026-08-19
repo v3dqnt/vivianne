@@ -3,17 +3,25 @@ import Box from '@mui/material/Box'
 import Collapse from '@mui/material/Collapse'
 import CircularProgress from '@mui/material/CircularProgress'
 import Typography from '@mui/material/Typography'
-import { CommandLinear, EditLinear, SearchNormalLinear, DocumentTextLinear, CodeLinear, ArrowDownLinear, CheckLinear, DangerLinear } from 'mx-icons'
+import { CommandLinear, EditLinear, SearchNormalLinear, DocumentTextLinear, CodeLinear, ArrowDownLinear, CheckLinear, DangerLinear, ArchiveBookLinear } from '../../../icons'
 import Stack from '@mui/material/Stack'
 import type { AgentMessage } from '../lib/types'
 import { contentToText, contentImages } from '../lib/types'
 import { ImageBlock } from './ImageBlock'
+import { DiffView } from './DiffView'
 
 type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
+
+const MEMORY_TOOLS: Record<string, string> = {
+  memory_get: 'Recalling memory…',
+  memory_search: 'Searching memory…',
+  notes_write: 'Taking a note…',
+}
 
 // Coarse icon-by-name-substring — good enough to visually distinguish the
 // common tool families without a per-tool registry to maintain.
 function iconFor(name: string) {
+  if (name in MEMORY_TOOLS) return ArchiveBookLinear
   const n = name.toLowerCase()
   if (n.includes('bash') || n.includes('shell') || n.includes('command') || n.includes('terminal')) return CommandLinear
   if (n.includes('write') || n.includes('edit') || n.includes('patch')) return EditLinear
@@ -29,6 +37,48 @@ function argSummary(args: Record<string, unknown> | undefined): string | null {
   return String(args[key])
 }
 
+interface FileDiff {
+  path: string
+  before: string | null
+  after: string | null
+}
+
+/** `write`/`edit` carry everything needed to reconstruct a diff in the
+ * persisted `arguments` + `details` fields — no backend change needed for
+ * those two. `apply_patch` needed one small addition (`details.filesDiff`,
+ * added alongside this UI) since it touches multiple files per call and
+ * nothing else captured per-file before/after content. */
+function extractDiffs(message: ToolResultMessage): FileDiff[] {
+  const args = message.arguments
+  const details = message.details as Record<string, unknown> | null
+  switch (message.toolName) {
+    case 'write': {
+      if (!args || typeof args.path !== 'string' || typeof args.content !== 'string') return []
+      const previous = details && typeof details.previous_content === 'string' ? details.previous_content : null
+      return [{ path: args.path, before: previous, after: args.content }]
+    }
+    case 'edit': {
+      if (!args || typeof args.path !== 'string') return []
+      const before = typeof args.old_string === 'string' ? args.old_string : null
+      const after = typeof args.new_string === 'string' ? args.new_string : null
+      if (before === null && after === null) return []
+      return [{ path: args.path, before, after }]
+    }
+    case 'apply_patch': {
+      const raw = details && Array.isArray(details.filesDiff) ? (details.filesDiff as unknown[]) : []
+      return raw
+        .filter((d): d is Record<string, unknown> => !!d && typeof d === 'object')
+        .map((d) => ({
+          path: typeof d.path === 'string' ? d.path : '',
+          before: typeof d.before === 'string' ? d.before : null,
+          after: typeof d.after === 'string' ? d.after : null,
+        }))
+    }
+    default:
+      return []
+  }
+}
+
 export function ToolCallCard({ message }: { message: ToolResultMessage }) {
   const [open, setOpen] = useState(false)
   // `isError` is the wire type's in-flight sentinel: null until the tool
@@ -39,6 +89,11 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
   const summary = argSummary(message.arguments)
   const output = contentToText(message.content).trim()
   const images = contentImages(message.content)
+  // Only a completed, successful call has real before/after content — a
+  // failed `edit` (e.g. old_string not found) changed nothing, so there's
+  // nothing to diff.
+  const diffs = !pending && !isError ? extractDiffs(message) : []
+  const hasBody = !!output || diffs.length > 0
 
   return (
     <Stack spacing={0.5} sx={{ maxWidth: '80%' }}>
@@ -52,22 +107,22 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
       }}
     >
       <Box
-        onClick={() => output && setOpen((v) => !v)}
+        onClick={() => hasBody && setOpen((v) => !v)}
         sx={{
           display: 'flex',
           alignItems: 'center',
           gap: 1,
           px: 1.5,
           py: 0.75,
-          cursor: output ? 'pointer' : 'default',
-          '&:hover': output ? { bgcolor: 'action.hover' } : undefined,
+          cursor: hasBody ? 'pointer' : 'default',
+          '&:hover': hasBody ? { bgcolor: 'action.hover' } : undefined,
         }}
       >
         <Box sx={{ display: 'flex', color: 'text.secondary', flexShrink: 0 }}>
           <Icon size={16} color="currentColor" />
         </Box>
         <Typography variant="caption" sx={{ fontWeight: 600, flexShrink: 0 }}>
-          {message.toolName}
+          {pending && message.toolName in MEMORY_TOOLS ? MEMORY_TOOLS[message.toolName] : message.toolName}
         </Typography>
         {summary && (
           <Typography
@@ -91,7 +146,7 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
             <CheckLinear size={15} color="currentColor" />
           </Box>
         )}
-        {output && (
+        {hasBody && (
           <Box
             sx={{
               display: 'flex',
@@ -104,28 +159,42 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
           </Box>
         )}
       </Box>
-      {output && (
+      {hasBody && (
         <Collapse in={open}>
-          <Box
-            component="pre"
-            sx={{
-              m: 0,
-              px: 1.5,
-              py: 1,
-              borderTop: 1,
-              borderColor: 'divider',
-              bgcolor: 'action.hover',
-              fontFamily: '"JetBrains Mono", ui-monospace, monospace',
-              fontSize: '0.75rem',
-              lineHeight: 1.5,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              maxHeight: 320,
-              overflowY: 'auto',
-            }}
-          >
-            {output}
-          </Box>
+          {diffs.map((d, i) => (
+            <Box key={i}>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: 'block', px: 1.5, pt: 1, borderTop: i === 0 ? 1 : 0, borderColor: 'divider', fontFamily: 'monospace' }}
+              >
+                {d.path}
+              </Typography>
+              <DiffView before={d.before} after={d.after} />
+            </Box>
+          ))}
+          {output && (
+            <Box
+              component="pre"
+              sx={{
+                m: 0,
+                px: 1.5,
+                py: 1,
+                borderTop: 1,
+                borderColor: 'divider',
+                bgcolor: 'action.hover',
+                fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+                fontSize: '0.75rem',
+                lineHeight: 1.5,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                maxHeight: 320,
+                overflowY: 'auto',
+              }}
+            >
+              {output}
+            </Box>
+          )}
         </Collapse>
       )}
     </Box>

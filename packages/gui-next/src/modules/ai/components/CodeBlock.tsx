@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import Box from '@mui/material/Box'
 import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
-import { CopyLinear, CopySuccessLinear } from 'mx-icons'
+import { CopyLinear, CopySuccessLinear } from '../../../icons'
 import { codeToHtml } from 'shiki'
 
 const THEME = 'github-dark-default'
@@ -17,7 +17,7 @@ async function highlight(code: string, lang: string): Promise<string> {
   }
 }
 
-export function CodeBlock({ code, lang }: { code: string; lang: string }) {
+export function CodeBlock({ code, lang, wrap = false }: { code: string; lang: string; wrap?: boolean }) {
   const [html, setHtml] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
@@ -48,11 +48,24 @@ export function CodeBlock({ code, lang }: { code: string; lang: string }) {
       sx={{
         position: 'relative',
         my: 1,
+        // `minWidth: 0` + `maxWidth: '100%'` are what actually let this shrink
+        // inside a flex parent — without them the <pre>'s content width wins
+        // and the whole containing panel grows instead of scrolling.
+        minWidth: 0,
+        maxWidth: '100%',
         borderRadius: 1.5,
         overflow: 'hidden',
         border: 1,
         borderColor: 'divider',
-        '& pre': { m: 0, p: 1.5, overflowX: 'auto', fontSize: '0.8125rem', lineHeight: 1.55 },
+        '& pre': {
+          m: 0,
+          p: 1.5,
+          fontSize: '0.8125rem',
+          lineHeight: 1.55,
+          ...(wrap
+            ? { whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowX: 'hidden' }
+            : { overflowX: 'auto' }),
+        },
         '& code': { fontFamily: '"JetBrains Mono", ui-monospace, monospace' },
       }}
     >

@@ -375,6 +375,13 @@ pub enum AgentMessage {
         stop_reason: String,
         error_message: Option<String>,
         timestamp: u64,
+        /// Token usage for this turn's generation, when known — populated
+        /// only on the final message (streaming updates and synthetic
+        /// system messages like abort/step-limit have none). Lets the
+        /// frontend compute tokens/sec from `output` and its own
+        /// message-start-to-end wall-clock timing.
+        #[serde(default)]
+        usage: Option<crate::ai::types::Usage>,
     },
     #[serde(rename_all = "camelCase")]
     ToolResult {

@@ -6,7 +6,7 @@ import Typography from '@mui/material/Typography'
 import IconButton from '@mui/material/IconButton'
 import CircularProgress from '@mui/material/CircularProgress'
 import Snackbar from '@mui/material/Snackbar'
-import { ArchiveLinear } from 'mx-icons'
+import { ArchiveLinear } from '../../../icons'
 import { useModelStore } from '../store/modelStore'
 import { useAgentStore } from '../store/agentStore'
 
@@ -15,8 +15,13 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
+function formatCost(n: number): string {
+  return n < 0.01 && n > 0 ? '<$0.01' : `$${n.toFixed(2)}`
+}
+
 export function ContextUsageBar() {
   const stats = useModelStore((s) => s.stats)
+  const sessionCost = useModelStore((s) => s.sessionCost)
   const compacting = useAgentStore((s) => s.compacting)
   const isBusy = useAgentStore((s) => s.isBusy)
   const messageCount = useAgentStore((s) => s.messages.length)
@@ -40,7 +45,7 @@ export function ContextUsageBar() {
     <>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 0.5 }}>
         <Tooltip
-          title={`${formatTokens(stats.contextTokens)} / ${formatTokens(stats.contextWindow)} tokens · ${stats.inputTokens} in / ${stats.outputTokens} out this session`}
+          title={`${formatTokens(stats.contextTokens)} / ${formatTokens(stats.contextWindow)} tokens · ${stats.inputTokens} in / ${stats.outputTokens} out this session${sessionCost ? ` · ${formatCost(sessionCost.cost)}` : ''}`}
         >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 90 }}>
             <LinearProgress

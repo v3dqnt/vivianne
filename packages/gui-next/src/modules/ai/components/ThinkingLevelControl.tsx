@@ -4,7 +4,7 @@ import Button from '@mui/material/Button'
 import Popover from '@mui/material/Popover'
 import Slider from '@mui/material/Slider'
 import Typography from '@mui/material/Typography'
-import { Setting2Linear } from 'mx-icons'
+import { Setting2Linear } from '../../../icons'
 import { THINKING_LEVELS } from '../lib/types'
 import { useModelStore } from '../store/modelStore'
 

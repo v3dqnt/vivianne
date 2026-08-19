@@ -66,3 +66,12 @@ nul
 id_rsa
 credentials.json
 .env.*
+
+# Local scratch, experiments and third-party dumps — not part of the app
+.freebuff/
+scratch/
+hrm-model/
+
+# Agent runtime state: per-machine, and its memory store holds notes derived
+# from real conversations. Never belongs in the repo.
+packages/gui/src-tauri/.vivianne/

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
-import { ArrowDownLinear } from 'mx-icons'
+import { ArrowDownLinear } from '../../../icons'
 
 /** Collapsible model-reasoning text (`thinking` content blocks) — muted and auto-expanded while actively streaming so the reasoning is visible live, not just after the fact. */
 export function ReasoningBlock({ text, streaming }: { text: string; streaming?: boolean }) {

@@ -464,6 +464,7 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
                     "description": { "type": "string", "description": "Short (3-5 word) description of the task" },
                     "prompt": { "type": "string", "description": "Self-contained instructions for the subagent — it does not see this conversation" },
                     "subagent_type": { "type": "string", "description": "Label for the subagent's role (default 'general-purpose')", "default": "general-purpose" },
+                    "persona": { "type": "string", "enum": ["security-auditor", "senior-dev", "debugger"], "description": "Optional role framing layered into the subagent's own directive — pick one when the task genuinely calls for that lens (a security review, an architecture-minded implementation, a bug hunt with a fixed reproduce/isolate/fix/verify order). Omit for general-purpose work." },
                     "run_in_background": { "type": "boolean", "description": "If true (default), return a task_id immediately instead of blocking", "default": true }
                 },
                 "required": ["description", "prompt"]

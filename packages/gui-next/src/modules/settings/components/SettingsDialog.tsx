@@ -1,77 +1,191 @@
-import { useState } from 'react'
 import Dialog from '@mui/material/Dialog'
 import Box from '@mui/material/Box'
 import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
 import IconButton from '@mui/material/IconButton'
 import ButtonBase from '@mui/material/ButtonBase'
-import { CloseCircleLinear, KeyLinear } from 'mx-icons'
+import Tooltip from '@mui/material/Tooltip'
+import { useTheme } from '@mui/material/styles'
+import { glassSurface } from '../../../theme'
+import {
+  CloseCircleLinear,
+  KeyLinear,
+  CpuLinear,
+  FlashLinear,
+  Link2Linear,
+  ArchiveBookLinear,
+  ChartLinear,
+  MagicpenLinear,
+  ClockLinear,
+  ColorSwatchLinear,
+  CameraLinear,
+  UserOctagonLinear,
+} from '../../../icons'
 import { ProvidersSection } from './ProvidersSection'
+import { LocalModelsSection } from './LocalModelsSection'
+import { ModsSection } from './ModsSection'
+import { SubagentsSection } from './SubagentsSection'
+import { McpSection } from './McpSection'
+import { MemorySection } from './MemorySection'
+import { UsageSection } from './UsageSection'
+import { SkillsSection } from './SkillsSection'
+import { AutomationsSection } from './AutomationsSection'
+import { ThemesSection } from './ThemesSection'
+import { GestureCalibrationPanel } from '../../gesture/components/GestureCalibrationPanel'
+import { useSettingsUi, type SettingsSection } from '../store/uiStore'
 
-type Section = 'providers'
+interface SectionDef {
+  id: SettingsSection
+  label: string
+  icon: typeof KeyLinear
+}
 
-// More sections (General, Appearance, Memory, MCP) land here as they get a
-// real backend to back them — no placeholder tabs for settings that don't
-// do anything yet.
-const SECTIONS: { id: Section; label: string; icon: typeof KeyLinear }[] = [
-  { id: 'providers', label: 'Providers', icon: KeyLinear },
+/** Groups exist purely as visual breathing room in the sidebar — sections
+ * within a group share no other coupling. */
+const GROUPS: { label: string; items: SectionDef[] }[] = [
+  {
+    label: 'Model',
+    items: [
+      { id: 'providers', label: 'Providers', icon: KeyLinear },
+      { id: 'local', label: 'Local models', icon: CpuLinear },
+    ],
+  },
+  {
+    label: 'Agent',
+    items: [
+      { id: 'mods', label: 'Mods', icon: FlashLinear },
+      { id: 'subagents', label: 'Subagents', icon: UserOctagonLinear },
+      { id: 'mcp', label: 'MCP servers', icon: Link2Linear },
+      { id: 'memory', label: 'Memory', icon: ArchiveBookLinear },
+      { id: 'skills', label: 'Skills', icon: MagicpenLinear },
+      { id: 'automations', label: 'Automations', icon: ClockLinear },
+    ],
+  },
+  {
+    label: 'App',
+    items: [
+      { id: 'usage', label: 'Usage', icon: ChartLinear },
+      { id: 'themes', label: 'Theme', icon: ColorSwatchLinear },
+      { id: 'gestures', label: 'Gestures', icon: CameraLinear },
+    ],
+  },
 ]
 
-export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [section, setSection] = useState<Section>('providers')
+export function SettingsDialog() {
+  const theme = useTheme()
+  const GLASS = glassSurface(theme.palette.mode)
+  const open = useSettingsUi((s) => s.open)
+  const section = useSettingsUi((s) => s.section)
+  const openSettings = useSettingsUi((s) => s.openSettings)
+  const closeSettings = useSettingsUi((s) => s.closeSettings)
+  const activeLabel = GROUPS.flatMap((g) => g.items).find((s) => s.id === section)?.label
 
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={closeSettings}
       maxWidth="md"
       fullWidth
-      slotProps={{ paper: { sx: { height: 560, borderRadius: 4 } } }}
+      slotProps={{
+        paper: { sx: { height: 660, borderRadius: '18px', overflow: 'hidden', backgroundImage: 'none', ...GLASS } },
+        backdrop: { sx: { backdropFilter: 'blur(3px)' } },
+      }}
     >
       <Stack direction="row" sx={{ height: '100%', minHeight: 0 }}>
         <Stack
           sx={{
-            width: 200,
+            width: 220,
             flexShrink: 0,
             borderRight: 1,
             borderColor: 'divider',
-            p: 1.5,
-            gap: 0.5,
+            p: 2,
+            pt: 2.5,
+            gap: 2.25,
+            overflowY: 'auto',
           }}
         >
-          <Typography variant="subtitle2" sx={{ fontWeight: 600, px: 1, mb: 1 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 700, px: 1 }}>
             Settings
           </Typography>
-          {SECTIONS.map((s) => (
-            <ButtonBase
-              key={s.id}
-              onClick={() => setSection(s.id)}
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-                px: 1.5,
-                py: 1,
-                borderRadius: 2,
-                justifyContent: 'flex-start',
-                fontSize: '0.8125rem',
-                bgcolor: section === s.id ? 'action.selected' : 'transparent',
-                color: section === s.id ? 'text.primary' : 'text.secondary',
-                '&:hover': { bgcolor: 'action.hover' },
-              }}
-            >
-              <s.icon size={16} color="currentColor" />
-              {s.label}
-            </ButtonBase>
+          {GROUPS.map((group) => (
+            <Stack key={group.label} sx={{ gap: 0.375 }}>
+              <Typography
+                variant="caption"
+                sx={{ px: 1.5, mb: 0.5, fontWeight: 600, letterSpacing: 0.6, textTransform: 'uppercase', fontSize: '0.625rem', color: 'text.secondary' }}
+              >
+                {group.label}
+              </Typography>
+              {group.items.map((s) => (
+                <ButtonBase
+                  key={s.id}
+                  onClick={() => openSettings(s.id)}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1.25,
+                    px: 1.5,
+                    py: 0.875,
+                    borderRadius: 1.5,
+                    justifyContent: 'flex-start',
+                    fontSize: '0.8125rem',
+                    fontWeight: 500,
+                    bgcolor: section === s.id ? 'action.selected' : 'transparent',
+                    color: section === s.id ? 'text.primary' : 'text.secondary',
+                    transition: 'background-color 0.15s, color 0.15s, transform 0.08s',
+                    '&:hover': { bgcolor: section === s.id ? 'action.selected' : 'action.hover', color: 'text.primary' },
+                    '&:active': { transform: 'scale(0.98)' },
+                  }}
+                >
+                  <s.icon size={15} color="currentColor" />
+                  {s.label}
+                </ButtonBase>
+              ))}
+            </Stack>
           ))}
         </Stack>
 
-        <Box sx={{ flex: 1, minWidth: 0, position: 'relative', overflowY: 'auto', p: 3 }}>
-          <IconButton size="small" onClick={onClose} sx={{ position: 'absolute', top: 12, right: 12 }}>
-            <CloseCircleLinear size={18} color="currentColor" />
-          </IconButton>
-          {section === 'providers' && <ProvidersSection />}
-        </Box>
+        <Stack sx={{ flex: 1, minWidth: 0, height: '100%', minHeight: 0 }}>
+          <Stack
+            direction="row"
+            sx={{ alignItems: 'center', justifyContent: 'space-between', px: 3.5, py: 1.75, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}
+          >
+            <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'text.secondary' }}>
+              {activeLabel}
+            </Typography>
+            <Tooltip title="Close">
+              <IconButton
+                size="small"
+                onClick={closeSettings}
+                sx={{
+                  transition: 'background-color 0.15s, transform 0.08s',
+                  '&:hover': { bgcolor: 'action.hover' },
+                  '&:active': { transform: 'scale(0.92)' },
+                }}
+              >
+                <CloseCircleLinear size={18} color="currentColor" />
+              </IconButton>
+            </Tooltip>
+          </Stack>
+
+          <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 3.5, py: 3 }}>
+            {/* Providers is a master-detail layout (list + form) that wants
+                the full width; every other section is a single settings
+                column, which reads better constrained. */}
+            <Box sx={section === 'providers' ? { height: '100%' } : { maxWidth: 640 }}>
+              {section === 'providers' && <ProvidersSection />}
+              {section === 'local' && <LocalModelsSection />}
+              {section === 'mods' && <ModsSection />}
+              {section === 'subagents' && <SubagentsSection />}
+              {section === 'mcp' && <McpSection />}
+              {section === 'memory' && <MemorySection />}
+              {section === 'usage' && <UsageSection />}
+              {section === 'skills' && <SkillsSection />}
+              {section === 'automations' && <AutomationsSection />}
+              {section === 'themes' && <ThemesSection />}
+              {section === 'gestures' && <GestureCalibrationPanel />}
+            </Box>
+          </Box>
+        </Stack>
       </Stack>
     </Dialog>
   )

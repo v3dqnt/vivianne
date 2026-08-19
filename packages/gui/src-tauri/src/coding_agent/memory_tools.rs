@@ -33,10 +33,10 @@ impl Tool for MemoryGetTool {
 
     async fn execute(&self, _args: &serde_json::Value, _cwd: &str) -> ToolResult {
         match crate::agent::memory::context(&self.cwd).await {
-            Some(ctx) if !ctx.trim().is_empty() => ToolResult {
+            Some((ctx, entry_count)) if !ctx.trim().is_empty() => ToolResult {
                 content: ctx,
                 is_error: false,
-                details: Some(json!({ "source": "memory.context" })),
+                details: Some(json!({ "source": "memory.context", "entry_count": entry_count })),
             },
             _ => ToolResult {
                 content: "Memory has no entries (or is disabled for this workspace).".to_string(),
@@ -121,6 +121,70 @@ impl Tool for MemorySearchTool {
             content: out,
             is_error: false,
             details: Some(json!({ "query": query, "hits": json_hits })),
+        }
+    }
+}
+
+pub struct NotesWriteTool {
+    cwd: String,
+}
+
+impl NotesWriteTool {
+    pub fn new(cwd: String) -> Self { Self { cwd } }
+}
+
+#[async_trait]
+impl Tool for NotesWriteTool {
+    fn name(&self) -> &str { "notes_write" }
+
+    fn description(&self) -> &str {
+        "Append a freeform note to this workspace's `.vivianne/notes.md` scratchpad — for anything worth writing down that isn't a structured memory fact (a running observation, a thing to check later, context for your future self). Unlike `remember`, this is plain prose with no confidence/decay/retrieval scoring; it's just a file you can also read/edit directly."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "text": { "type": "string", "description": "The note to append" }
+            },
+            "required": ["text"]
+        })
+    }
+
+    async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
+        let text = args["text"].as_str().unwrap_or("").trim().to_string();
+        if text.is_empty() {
+            return ToolResult {
+                content: "'text' must not be empty".to_string(),
+                is_error: true,
+                details: None,
+            };
+        }
+        let text = crate::agent::memory::redact_secrets(&text);
+        let path = std::path::Path::new(&self.cwd).join(".vivianne").join("notes.md");
+        let dir = path.parent().map(|p| p.to_path_buf());
+        let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+        let entry = format!("\n## {stamp}\n\n{text}\n");
+        let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            if let Some(dir) = dir {
+                std::fs::create_dir_all(&dir)?;
+            }
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+            file.write_all(entry.as_bytes())
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => ToolResult {
+                content: "Note appended to .vivianne/notes.md".to_string(),
+                is_error: false,
+                details: Some(json!({ "path": ".vivianne/notes.md" })),
+            },
+            _ => ToolResult {
+                content: "Failed to write note".to_string(),
+                is_error: true,
+                details: None,
+            },
         }
     }
 }

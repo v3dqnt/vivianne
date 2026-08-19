@@ -1,9 +1,129 @@
 import { useEffect, useState } from 'react'
 import Box from '@mui/material/Box'
+import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
+import IconButton from '@mui/material/IconButton'
+import Tooltip from '@mui/material/Tooltip'
+import Menu from '@mui/material/Menu'
+import MenuItem from '@mui/material/MenuItem'
 import { hasTauri } from '../ipc'
+import { FolderLinear, CommandSquareLinear, LayerLinear, TaskLinear, MonitorLinear, GlobalLinear, GithubLinear, DocumentTextLinear } from '../icons'
+import { usePanelStore, RIGHT_PANEL_LABELS, type RightPanelKind } from '../modules/dock/store/panelStore'
+import { useProjectsStore } from '../modules/sessions/store/projectsStore'
 
 const TRAFFIC_LIGHT_SIZE = 12
+
+const RIGHT_PANEL_ICONS: Record<RightPanelKind, typeof FolderLinear> = {
+  review: GithubLinear,
+  files: DocumentTextLinear,
+  live: MonitorLinear,
+  browser: GlobalLinear,
+  tasks: TaskLinear,
+}
+
+/** Panel toggles + project shortcuts, right-aligned in the title bar. These
+ * used to be a permanent vertical icon rail pinned to the window's right
+ * edge; moving them here gives that column back to actual content. */
+function TitleBarActions() {
+  const rightOpen = usePanelStore((s) => s.rightOpen)
+  const rightKind = usePanelStore((s) => s.rightKind)
+  const toggleRight = usePanelStore((s) => s.toggleRight)
+  const bottomOpen = usePanelStore((s) => s.bottomOpen)
+  const toggleBottom = usePanelStore((s) => s.toggleBottom)
+  const openExternal = useProjectsStore((s) => s.openExternal)
+  const activeProjectId = useProjectsStore((s) => s.activeProjectId)
+  const projects = useProjectsStore((s) => s.projects)
+  const [panelAnchor, setPanelAnchor] = useState<HTMLElement | null>(null)
+  const [openAnchor, setOpenAnchor] = useState<HTMLElement | null>(null)
+
+  const hasFolder = !!projects.find((p) => p.id === activeProjectId)?.path
+  const noFolderHint = hasFolder ? '' : ' (set a folder on this project first)'
+
+  const iconSx = (active: boolean) => ({
+    width: 26,
+    height: 26,
+    borderRadius: 1.5,
+    color: active ? 'primary.main' : 'text.secondary',
+    bgcolor: active ? 'action.selected' : 'transparent',
+    transition: 'background-color 0.15s, color 0.15s',
+    '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+  })
+
+  return (
+    <Stack direction="row" sx={{ alignItems: 'center', gap: 0.25, flexShrink: 0, pr: 0.5, zIndex: 1 }}>
+      <Tooltip title={`Open project folder${noFolderHint}`}>
+        <span>
+          <IconButton size="small" disabled={!hasFolder} onClick={(e) => setOpenAnchor(e.currentTarget)} sx={iconSx(false)}>
+            <FolderLinear size={14} color="currentColor" />
+          </IconButton>
+        </span>
+      </Tooltip>
+      <Menu anchorEl={openAnchor} open={!!openAnchor} onClose={() => setOpenAnchor(null)}>
+        <MenuItem
+          onClick={() => {
+            void openExternal('explorer')
+            setOpenAnchor(null)
+          }}
+          sx={{ gap: 1, fontSize: '0.8125rem' }}
+        >
+          <FolderLinear size={14} color="currentColor" />
+          Open in File Explorer
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            void openExternal('terminal')
+            setOpenAnchor(null)
+          }}
+          sx={{ gap: 1, fontSize: '0.8125rem' }}
+        >
+          <CommandSquareLinear size={14} color="currentColor" />
+          Open in PowerShell
+        </MenuItem>
+      </Menu>
+
+      <Tooltip title="Terminal panel">
+        <IconButton size="small" onClick={toggleBottom} sx={iconSx(bottomOpen)}>
+          <CommandLinearGlyph />
+        </IconButton>
+      </Tooltip>
+
+      <Tooltip title="Panels">
+        <IconButton size="small" onClick={(e) => setPanelAnchor(e.currentTarget)} sx={iconSx(rightOpen)}>
+          <LayerLinear size={14} color="currentColor" />
+        </IconButton>
+      </Tooltip>
+      <Menu anchorEl={panelAnchor} open={!!panelAnchor} onClose={() => setPanelAnchor(null)}>
+        {(Object.keys(RIGHT_PANEL_LABELS) as RightPanelKind[]).map((kind) => {
+          const Icon = RIGHT_PANEL_ICONS[kind]
+          return (
+            <MenuItem
+              key={kind}
+              selected={rightOpen && rightKind === kind}
+              onClick={() => {
+                toggleRight(kind)
+                setPanelAnchor(null)
+              }}
+              sx={{ gap: 1, fontSize: '0.8125rem' }}
+            >
+              <Icon size={14} color="currentColor" />
+              {RIGHT_PANEL_LABELS[kind]}
+            </MenuItem>
+          )
+        })}
+      </Menu>
+    </Stack>
+  )
+}
+
+/** Terminal glyph — a `>_` prompt, which no icon in the set draws. */
+function CommandLinearGlyph() {
+  return (
+    <Box component="svg" viewBox="0 0 24 24" sx={{ width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }}>
+      <path d="M4 6l5 6-5 6" />
+      <path d="M13 18h7" />
+    </Box>
+  )
+}
 
 /**
  * Custom title bar for the frameless window (`decorations: false` in
@@ -99,8 +219,7 @@ export function TitleBar() {
         </Typography>
       </Box>
 
-      {/* Balances the traffic-light cluster so the centered title is actually centered. */}
-      <Box sx={{ width: 64, flexShrink: 0 }} />
+      <TitleBarActions />
     </Box>
   )
 }

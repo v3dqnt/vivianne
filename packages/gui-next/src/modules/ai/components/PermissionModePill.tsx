@@ -4,7 +4,7 @@ import Typography from '@mui/material/Typography'
 // NOTE: import only icons that mx-icons actually exports at runtime — its
 // bundled `.d.ts` declares many names its `dist/index.js` does not ship, so
 // `tsc` will happily pass on a name that then fails the bundler.
-import { ShieldTickLinear, MessageQuestionLinear } from 'mx-icons'
+import { ShieldTickLinear, MessageQuestionLinear } from '../../../icons'
 import { usePermissionModeStore } from '../store/permissionModeStore'
 
 /** Toggles the same `bypassMode` flag the old app's AUTO/PERM control wrote — auto skips tool-call approval, "Ask for approval" pauses for it. */

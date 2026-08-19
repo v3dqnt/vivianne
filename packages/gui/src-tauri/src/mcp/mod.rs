@@ -36,6 +36,13 @@ pub enum McpTransportConfig {
 pub struct McpServerConfig {
     pub name: String,
     pub transport: McpTransportConfig,
+    /// Request/response timeout in milliseconds — applies uniformly
+    /// regardless of transport kind (`McpConnection::connect` reads this
+    /// once and uses it for both the HTTP client's per-request timeout and
+    /// the stdio JSON-RPC response wait). `None` keeps the prior hardcoded
+    /// default of 30s.
+    #[serde(default)]
+    pub timeout_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
