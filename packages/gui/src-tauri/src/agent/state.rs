@@ -21,6 +21,12 @@ impl Default for WorkspaceAccessMode {
 }
 
 /// Thread-safe mutable agent state using RwLock for concurrent reads/writes.
+///
+/// `Clone` shares the same inner `Arc`, so a handle can be held outside the
+/// `Agent` it belongs to. `AppState` keeps one such handle specifically so
+/// state getters/setters don't have to take the `agent` mutex, which is held
+/// for the entire duration of a run.
+#[derive(Clone)]
 pub struct AgentState {
     inner: Arc<RwLock<AgentStateInner>>,
 }
@@ -95,8 +101,11 @@ impl AgentState {
                 pending_tool_calls: Vec::new(),
                 error_message: None,
                 compaction_enabled: true,
-                reserve_tokens: 16_384,
-                keep_recent_tokens: 20_000,
+                // 0 = derive from the selected model's context window (see
+                // `loop_core::context_budgets`). A non-zero value is an
+                // explicit override set in Settings.
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
                 llm_summary_enabled: true,
                 image_keep_last_n: 4,
                 workspace_folders: Vec::new(),

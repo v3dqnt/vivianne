@@ -437,8 +437,14 @@ mod tests {
 
     #[test]
     fn model_dir_returns_path_under_vivianne() {
+        // Compared component-wise, not as a slash-joined string: on Windows
+        // this path is built with backslashes, so the literal `a/b/c` form
+        // never matched and this test failed on every run there.
         let dir = model_dir().unwrap();
-        assert!(dir.to_string_lossy().contains(".vivianne/models/onnx-minilm"));
+        let parts: Vec<String> = dir.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
+        for expected in [".vivianne", "models", "onnx-minilm"] {
+            assert!(parts.iter().any(|p| p == expected), "expected component {expected:?} in {dir:?}");
+        }
     }
 
     #[test]

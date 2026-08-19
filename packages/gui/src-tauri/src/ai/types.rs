@@ -25,7 +25,16 @@ pub struct Usage {
     pub cost: Option<CostBreakdown>,
 }
 
+/// `rename_all` matters here and its absence was a real bug: `Usage` above is
+/// camelCase, so the webview sends `cacheRead`/`cacheWrite` for this nested
+/// struct too, while serde demanded `cache_read`/`cache_write`. The terminal
+/// `ai-stream-token` (the only one carrying a cost object) therefore failed
+/// to deserialize and was dropped by the listener in
+/// `loop_core::call_provider_stream_and_await`, so every *successful* turn
+/// hung until the 120s idle guard. Error turns were unaffected because
+/// `emptyUsage()` sends `cost: null`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct CostBreakdown {
     pub input: f64,
     pub output: f64,
@@ -75,8 +84,19 @@ pub struct ToolCall {
     pub thought_signature: Option<String>,
 }
 
+/// `rename_all_fields` is load-bearing: on an enum, `rename_all` only
+/// renames the *variants*, so without this the struct-variant fields went
+/// over the wire as snake_case while `providers/types.ts` reads camelCase.
+/// The visible effect was every image being sent to the provider as
+/// `image/jpeg` (`mediaType` was always `undefined`, so the frontend fell
+/// back to a default) — a PNG screenshot from the `computer` tool would be
+/// rejected by Anthropic for not matching its declared media type.
+///
+/// Only this provider-facing enum uses camelCase. `agent::types::MessageContent`
+/// is a separate type whose TS mirror (`modules/ai/lib/types.ts`) genuinely
+/// expects snake_case — do not "fix" that one to match.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum MessageContent {
     Text {
         text: String,
@@ -241,4 +261,57 @@ pub struct AiMessage {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+}
+
+#[cfg(test)]
+mod wire_contract_tests {
+    use super::*;
+
+    /// These pin the JSON field names the webview actually sends and reads
+    /// (`packages/gui-next/src/modules/ai/providers/types.ts`). Both cases
+    /// below shipped broken, silently, because nothing asserted the shape:
+    /// a mismatch here doesn't fail loudly, it just makes an event
+    /// undeserializable or a field read as `undefined`.
+
+    #[test]
+    fn terminal_usage_event_round_trips_from_the_webviews_shape() {
+        // Exactly what `sdkShared.ts` puts on the terminal `ai-stream-token`.
+        // Before `CostBreakdown` was camelCase this failed with
+        // "missing field `cache_read`", the event was dropped, and every
+        // successful turn hung until Rust's 120s idle guard.
+        let from_webview = serde_json::json!({
+            "input": 10, "output": 20, "cacheRead": 1, "cacheWrite": 2, "totalTokens": 33,
+            "cost": { "input": 0.0, "output": 0.0, "cacheRead": 0.0, "cacheWrite": 0.0, "total": 0.0 }
+        });
+        let usage: Usage = serde_json::from_value(from_webview).expect("webview usage payload must deserialize");
+        assert_eq!(usage.total_tokens, 33);
+        assert!(usage.cost.is_some(), "cost must survive the round trip");
+
+        // And a null cost (the error path, `emptyUsage()`) still works.
+        let errored = serde_json::json!({
+            "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0, "cost": null
+        });
+        assert!(serde_json::from_value::<Usage>(errored).is_ok());
+    }
+
+    #[test]
+    fn message_content_fields_are_camel_case_on_the_wire() {
+        // `rename_all` on an enum renames variants only; the fields need
+        // `rename_all_fields`. Without it `mediaType` read as `undefined`
+        // client-side and every image was labelled `image/jpeg`.
+        let img = MessageContent::Image {
+            url: None,
+            base64: Some("abc".into()),
+            media_type: Some("image/png".into()),
+        };
+        let json = serde_json::to_value(&img).unwrap();
+        assert_eq!(json["type"], "image");
+        assert_eq!(json["mediaType"], "image/png", "webview reads `mediaType`, not `media_type`");
+
+        let tr = MessageContent::ToolResult { tool_call_id: "t1".into(), content: vec![], is_error: Some(true) };
+        let json = serde_json::to_value(&tr).unwrap();
+        assert_eq!(json["type"], "toolResult");
+        assert_eq!(json["toolCallId"], "t1");
+        assert_eq!(json["isError"], true);
+    }
 }

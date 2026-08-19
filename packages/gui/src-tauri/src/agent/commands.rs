@@ -9,6 +9,17 @@ use serde::{Deserialize, Serialize};
 /// Global app state shared across commands.
 pub struct AppState {
     pub agent: tokio::sync::Mutex<crate::agent::Agent>,
+    /// The same `AgentState` the `Agent` above holds, cloned out at
+    /// construction (it wraps an `Arc<RwLock<_>>`, so this is a shared
+    /// handle, not a copy).
+    ///
+    /// Exists for the same reason `steering_queue` does: the `agent` mutex is
+    /// held for the whole duration of a run, so any command that took it just
+    /// to read or set a field froze until the turn finished — model,
+    /// thinking level, persona, workspace, compaction settings and the
+    /// message list were all unreachable mid-turn, and a turn parked on an
+    /// unanswered permission prompt held it for up to 900s.
+    pub agent_state: crate::agent::state::AgentState,
     pub session_id: tokio::sync::Mutex<Option<String>>,
     /// Cloned out of `Agent` at construction time so steering/follow-up
     /// commands can push messages without waiting on `agent`'s mutex, which
@@ -33,8 +44,10 @@ impl Default for AppState {
         let agent = crate::agent::Agent::new();
         let steering_queue = agent.steering_queue.clone();
         let follow_up_queue = agent.follow_up_queue.clone();
+        let agent_state = agent.state.clone();
         Self {
             agent: tokio::sync::Mutex::new(agent),
+            agent_state,
             session_id: tokio::sync::Mutex::new(None),
             steering_queue,
             follow_up_queue,
@@ -393,8 +406,7 @@ pub async fn cmd_agent_messages(
     registry: State<'_, AgentRegistry>,
 ) -> Result<Vec<AgentMessage>, String> {
     let state = registry.resolve(threadId.as_deref()).await;
-    let agent = state.agent.lock().await;
-    Ok(agent.state.messages().await)
+    Ok(state.agent_state.messages().await)
 }
 
 fn now_ms() -> u64 {
@@ -511,7 +523,6 @@ pub async fn cmd_agent_set_thinking_level(
     level: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    let agent = state.agent.lock().await;
     let level_enum = match level.to_lowercase().as_str() {
         "off" => ThinkingLevel::Off,
         "minimal" => ThinkingLevel::Minimal,
@@ -521,7 +532,7 @@ pub async fn cmd_agent_set_thinking_level(
         "max" | "xhigh" => ThinkingLevel::XHigh,
         _ => ThinkingLevel::Off,
     };
-    agent.state.set_thinking_level(level_enum).await;
+    state.agent_state.set_thinking_level(level_enum).await;
     Ok(())
 }
 
@@ -532,14 +543,13 @@ pub async fn cmd_agent_set_persona_mode(
     mode: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    let agent = state.agent.lock().await;
     let mode_enum = match mode.to_lowercase().as_str() {
         "ask" => PersonaMode::Ask,
         "debug" => PersonaMode::Debug,
         "explore" => PersonaMode::Explore,
         _ => PersonaMode::Agent,
     };
-    agent.state.set_persona_mode(mode_enum).await;
+    state.agent_state.set_persona_mode(mode_enum).await;
     Ok(())
 }
 
@@ -548,9 +558,8 @@ pub async fn cmd_agent_set_persona_mode(
 /// just restored server-side (`cmd_load_session` sets `AgentState` directly).
 #[tauri::command]
 pub async fn cmd_agent_get_workspace(state: State<'_, Arc<AppState>>) -> Result<serde_json::Value, String> {
-    let agent = state.agent.lock().await;
-    let folders = agent.state.workspace_folders().await;
-    let access_mode = match agent.state.access_mode().await {
+    let folders = state.agent_state.workspace_folders().await;
+    let access_mode = match state.agent_state.access_mode().await {
         crate::agent::state::WorkspaceAccessMode::ReadOnly => "readOnly",
         crate::agent::state::WorkspaceAccessMode::Full => "full",
     };
@@ -568,15 +577,14 @@ pub async fn cmd_agent_set_workspace(
     access_mode: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    let agent = state.agent.lock().await;
     let mode = if access_mode == "readOnly" {
         crate::agent::state::WorkspaceAccessMode::ReadOnly
     } else {
         crate::agent::state::WorkspaceAccessMode::Full
     };
 
-    let previous = agent.state.workspace_folders().await;
-    agent.state.set_workspace(folders.clone(), mode).await;
+    let previous = state.agent_state.workspace_folders().await;
+    state.agent_state.set_workspace(folders.clone(), mode).await;
 
     // If this is a real change mid-conversation (not the initial setup of an
     // empty session), push a visible message into the transcript so the
@@ -585,14 +593,14 @@ pub async fn cmd_agent_set_workspace(
     // same bug class already fixed once this session in the compaction
     // work: `Custom` converts to empty content blocks and would silently
     // vanish from the next LLM request).
-    let has_existing_messages = !agent.state.messages().await.is_empty();
+    let has_existing_messages = !state.agent_state.messages().await.is_empty();
     if has_existing_messages && previous != folders {
         let text = if folders.is_empty() {
             "[Workspace changed: no folders configured anymore.]".to_string()
         } else {
             format!("[Workspace changed: now includes {}]", folders.join(", "))
         };
-        agent.state.add_message(AgentMessage::User {
+        state.agent_state.add_message(AgentMessage::User {
             content: vec![MessageContent::Text { text }],
             timestamp: now_ms(),
         }).await;
@@ -645,8 +653,7 @@ pub async fn cmd_agent_set_compaction_config(
     image_keep_last_n: Option<u32>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    let agent = state.agent.lock().await;
-    agent.state.set_compaction_config(
+    state.agent_state.set_compaction_config(
         enabled,
         reserve_tokens,
         keep_recent_tokens,
@@ -662,13 +669,12 @@ pub async fn cmd_agent_set_compaction_config(
 pub async fn cmd_agent_get_compaction_config(
     state: State<'_, Arc<AppState>>,
 ) -> Result<serde_json::Value, String> {
-    let agent = state.agent.lock().await;
     Ok(serde_json::json!({
-        "enabled": agent.state.compaction_enabled().await,
-        "reserveTokens": agent.state.reserve_tokens().await,
-        "keepRecentTokens": agent.state.keep_recent_tokens().await,
-        "llmSummaryEnabled": agent.state.llm_summary_enabled().await,
-        "imageKeepLastN": agent.state.image_keep_last_n().await,
+        "enabled": state.agent_state.compaction_enabled().await,
+        "reserveTokens": state.agent_state.reserve_tokens().await,
+        "keepRecentTokens": state.agent_state.keep_recent_tokens().await,
+        "llmSummaryEnabled": state.agent_state.llm_summary_enabled().await,
+        "imageKeepLastN": state.agent_state.image_keep_last_n().await,
     }))
 }
 
@@ -1246,7 +1252,11 @@ fn get_session_dir() -> Result<PathBuf, String> {
 fn write_session_file_atomic(path: &std::path::Path, json: &str) -> Result<(), String> {
     let tmp_path = path.with_extension("json.tmp");
     std::fs::write(&tmp_path, json).map_err(|e| format!("Failed to save session: {}", e))?;
-    std::fs::rename(&tmp_path, path).map_err(|e| format!("Failed to save session: {}", e))
+    std::fs::rename(&tmp_path, path).map_err(|e| format!("Failed to save session: {}", e))?;
+    // Every session write funnels through here, which makes this the one
+    // place the cached listing can go stale.
+    invalidate_session_list_cache();
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -1266,9 +1276,85 @@ pub struct SessionInfo {
     access_mode: Option<String>,
 }
 
-/// Get a list of all saved sessions.
+/// A saved session without its transcript — what the sidebar actually needs.
+///
+/// `cmd_get_sessions` used to return full `SessionInfo`s: with a real
+/// history (169 sessions, 111MB on disk here) that parsed every message of
+/// every conversation into memory and serialized the lot across the Tauri
+/// IPC boundary, on a command the sidebar re-runs after *every turn*. Serde
+/// ignores unknown fields by default, so omitting `messages` here means the
+/// transcript array is skipped during parsing and never leaves Rust.
+///
+/// Mirrors `packages/gui-next/src/modules/sessions/lib/types.ts`, which
+/// already declared exactly these fields.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SessionMeta {
+    id: String,
+    name: String,
+    created_at: String,
+    #[serde(default)]
+    workspace_folders: Vec<String>,
+    #[serde(default)]
+    access_mode: Option<String>,
+}
+
+/// Cached session listing.
+///
+/// Even returning metadata only, building the list means opening every
+/// session file — 111MB across 132 sessions here, with single conversations
+/// reaching 18MB — and the sidebar re-runs `cmd_get_sessions` after every
+/// turn. The listing can only change when a session file is written or
+/// removed, and every write goes through `write_session_file_atomic`, so
+/// invalidating there (plus the two delete sites) reduces this to one scan
+/// per actual change instead of one per turn.
+static SESSION_LIST_CACHE: std::sync::RwLock<Option<Vec<SessionMeta>>> = std::sync::RwLock::new(None);
+
+fn invalidate_session_list_cache() {
+    if let Ok(mut cache) = SESSION_LIST_CACHE.write() {
+        *cache = None;
+    }
+}
+
+/// Delete saved sessions that contain no messages, returning how many went.
+///
+/// A thread is persisted the moment it's created (so it appears in the
+/// sidebar and can be assigned to a project straight away), which means an
+/// abandoned "New chat" leaves a file behind holding nothing. Called once at
+/// startup, where it's unambiguously safe: no session is active yet, so a
+/// thread the user is part-way through creating cannot be caught by it.
+pub fn prune_empty_sessions() -> usize {
+    let Ok(dir) = get_session_dir() else { return 0 };
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        // Parsed as the full shape on purpose: `messages` must be read to
+        // know it's empty, and only a file that genuinely holds zero
+        // messages is ever removed.
+        let Ok(session) = serde_json::from_str::<SessionInfo>(&content) else { continue };
+        if session.messages.is_empty() && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        invalidate_session_list_cache();
+    }
+    removed
+}
+
+/// Get a list of all saved sessions (metadata only — no transcripts).
 #[tauri::command]
-pub async fn cmd_get_sessions() -> Result<Vec<SessionInfo>, String> {
+pub async fn cmd_get_sessions() -> Result<Vec<SessionMeta>, String> {
+    if let Ok(cache) = SESSION_LIST_CACHE.read() {
+        if let Some(cached) = cache.as_ref() {
+            return Ok(cached.clone());
+        }
+    }
+
     let dir = get_session_dir()?;
     let mut list = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -1276,7 +1362,7 @@ pub async fn cmd_get_sessions() -> Result<Vec<SessionInfo>, String> {
             let path = entry.path();
             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json") {
                 if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Ok(session) = serde_json::from_str::<SessionInfo>(&content) {
+                    if let Ok(session) = serde_json::from_str::<SessionMeta>(&content) {
                         list.push(session);
                     }
                 }
@@ -1284,6 +1370,9 @@ pub async fn cmd_get_sessions() -> Result<Vec<SessionInfo>, String> {
         }
     }
     list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    if let Ok(mut cache) = SESSION_LIST_CACHE.write() {
+        *cache = Some(list.clone());
+    }
     Ok(list)
 }
 
@@ -1307,6 +1396,7 @@ pub async fn cmd_delete_session(
     let path = dir.join(format!("{}.json", id));
     if path.exists() {
         std::fs::remove_file(&path).map_err(|e| format!("Failed to delete session: {}", e))?;
+        invalidate_session_list_cache();
     }
 
     let mut active_id_lock = state.session_id.lock().await;

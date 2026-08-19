@@ -112,6 +112,40 @@ fn track_doom_loop(
 }
 
 #[cfg(test)]
+mod context_budget_tests {
+    use super::context_budgets;
+
+    /// The bug these exist for: with fixed 16k/20k budgets, a small-window
+    /// model made `context_window - reserve` saturate to 0, so every single
+    /// turn tried to compact.
+    #[test]
+    fn small_window_still_leaves_room_to_reply() {
+        for window in [4_096u32, 8_192, 16_384] {
+            let (reserve, keep) = context_budgets(window);
+            assert!(reserve < window.max(8_192), "reserve {reserve} must fit inside window {window}");
+            assert!(keep > 0, "keep_recent must be positive for window {window}");
+            assert!(window.max(8_192).saturating_sub(reserve) > 0, "budget must not saturate to zero at {window}");
+        }
+    }
+
+    #[test]
+    fn large_window_is_not_capped_to_a_small_fixed_budget() {
+        let (reserve, keep) = context_budgets(1_000_000);
+        assert!(reserve <= 32_768, "reserve should stay bounded on huge windows, got {reserve}");
+        // The old fixed 20k keep_recent threw away almost a 1M window.
+        assert!(keep > 400_000, "keep_recent should scale with the window, got {keep}");
+    }
+
+    #[test]
+    fn budgets_grow_monotonically_with_the_window() {
+        let (_, small) = context_budgets(32_000);
+        let (_, medium) = context_budgets(128_000);
+        let (_, large) = context_budgets(200_000);
+        assert!(small < medium && medium < large, "keep_recent must grow with the window");
+    }
+}
+
+#[cfg(test)]
 mod doom_loop_tests {
     use super::track_doom_loop;
 
@@ -672,14 +706,47 @@ pub async fn run_agent_loop_continue(
 /// correctly a no-op) — used by the manual "Compact" button
 /// (`commands::cmd_compact_now`) so a user can compact on demand rather than
 /// waiting for the automatic threshold.
+/// Compaction budgets scaled to the model's own context window, returned as
+/// `(reserve_tokens, keep_recent_tokens)`.
+///
+/// These used to be two fixed constants (16k reserve / 20k keep) sized for a
+/// ~128k model, which broke at both ends: on an 8k model the reserve alone
+/// exceeded the whole window, so `context_window - reserve` saturated to 0
+/// and *every* turn tried to compact; on a 1M model it threw away almost the
+/// entire window for no reason.
+///
+/// `reserve` is headroom held back for the reply plus tool results;
+/// `keep_recent` is how much recent conversation survives a compaction.
+pub(crate) fn context_budgets(context_window: u32) -> (u32, u32) {
+    // A window this small can't host the agent at all; clamp so the maths
+    // below stays sane rather than producing a zero budget.
+    let window = context_window.max(8_192);
+    // A quarter of the window for the response, bounded so huge windows
+    // don't reserve absurd amounts and tiny ones still leave room to reply.
+    let reserve = (window / 4).clamp(2_048, 32_768);
+    // Half of what's left stays as live conversation; the rest is what
+    // compaction is allowed to summarize away.
+    let keep_recent = (window.saturating_sub(reserve) / 2).max(2_048);
+    (reserve, keep_recent)
+}
+
 pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &AgentState, app: &tauri::AppHandle, model: &ModelRef, force: bool) {
     use crate::coding_agent::compaction::{calculate_context_tokens, find_cut_point, generate_llm_summary, generate_mermaid_summary, CompactionConfig};
 
     if !state.compaction_enabled().await {
         return;
     }
-    let reserve_tokens = state.reserve_tokens().await;
-    let keep_recent_tokens = state.keep_recent_tokens().await;
+    // `0` means "scale to the model" (the default). A non-zero stored value
+    // is an explicit user override from Settings and wins.
+    let (auto_reserve, auto_keep) = context_budgets(model.context_window);
+    let reserve_tokens = match state.reserve_tokens().await {
+        0 => auto_reserve,
+        explicit => explicit,
+    };
+    let keep_recent_tokens = match state.keep_recent_tokens().await {
+        0 => auto_keep,
+        explicit => explicit,
+    };
 
     let current_tokens = calculate_context_tokens(&context.messages);
     let budget = model.context_window.saturating_sub(reserve_tokens);
@@ -1164,20 +1231,31 @@ async fn call_provider_stream_and_await(
     let final_tx_holder = Arc::new(tokio::sync::Mutex::new(Some(final_tx)));
     
     let handler_id = app.listen_any("ai-stream-token", move |event| {
-        if let Ok(token_event) = serde_json::from_str::<StreamTokenEvent>(event.payload()) {
-            if token_event.stream_id == stream_id_clone {
-                if token_event.done {
-                    if let Ok(mut final_tx_guard) = final_tx_holder.try_lock() {
-                        if let Some(final_tx) = final_tx_guard.take() {
-                            if let Some(msg) = token_event.message {
-                                let _ = final_tx.send(msg);
-                            }
+        // Never swallow a decode failure. This arm silently discarded any
+        // event whose shape didn't match, which is how a single camelCase
+        // mismatch on `CostBreakdown` turned every successful turn into a
+        // 120s "stream stalled" mystery: the terminal done-event was the
+        // only one carrying that field, so it was the only one dropped.
+        // A named error here turns that class of bug into a one-line fix.
+        let token_event = match serde_json::from_str::<StreamTokenEvent>(event.payload()) {
+            Ok(ev) => ev,
+            Err(e) => {
+                log::error!("[stream] dropped an undecodable ai-stream-token: {e}");
+                return;
+            }
+        };
+        if token_event.stream_id == stream_id_clone {
+            if token_event.done {
+                if let Ok(mut final_tx_guard) = final_tx_holder.try_lock() {
+                    if let Some(final_tx) = final_tx_guard.take() {
+                        if let Some(msg) = token_event.message {
+                            let _ = final_tx.send(msg);
                         }
                     }
-                } else if let Ok(tx_guard) = tx_holder.try_lock() {
-                    if let Some(ref tx) = *tx_guard {
-                        let _ = tx.try_send(token_event);
-                    }
+                }
+            } else if let Ok(tx_guard) = tx_holder.try_lock() {
+                if let Some(ref tx) = *tx_guard {
+                    let _ = tx.try_send(token_event);
                 }
             }
         }

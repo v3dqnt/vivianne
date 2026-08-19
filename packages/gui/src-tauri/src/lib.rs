@@ -206,6 +206,14 @@ pub fn run() {
       crate::automation::cmd_automation_run_now,
     ])
     .setup(|app| {
+      // Abandoned "New chat" threads are persisted on creation, so clear out
+      // any that were never used. Safe here specifically: nothing is active
+      // at startup.
+      let pruned = crate::agent::commands::prune_empty_sessions();
+      if pruned > 0 {
+        log::info!("[sessions] pruned {pruned} empty session(s)");
+      }
+
       // Initialize auth state + credential pool together, in one blocking
       // setup call instead of two sequential ones — both need the same
       // "is the OS keychain reachable" probe (a real blocking syscall, not
