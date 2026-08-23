@@ -30,25 +30,15 @@ impl GlobTool { pub fn new(cwd: String) -> Self { Self { cwd } } }
 #[async_trait]
 impl Tool for GlobTool {
     fn name(&self) -> &str { "glob" }
-    fn description(&self) -> &str {
-        "Find files by name pattern or wildcard (e.g. '**/*.ts', 'src/*.rs'). Returns matching file paths."
-    }
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "pattern": { "type": "string", "description": "Glob pattern to match files against (supports * and ?)" },
-                "path": { "type": "string", "description": "Directory to search in (defaults to the working directory)" }
-            },
-            "required": ["pattern"]
-        })
-    }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let pattern = args["pattern"].as_str().unwrap_or("").to_string();
         if pattern.is_empty() { return err("'pattern' is required"); }
         let path = args["path"].as_str().unwrap_or(".").to_string();
         let root = resolve_path(&self.cwd, &path);
-        let matcher = glob_to_regex(&pattern);
+        let matcher = match glob_to_regex(&pattern) {
+            Ok(r) => r,
+            Err(e) => return err(format!("invalid glob pattern '{pattern}': {e}")),
+        };
         let root_for_rel = root.clone();
 
         let result = tokio::task::spawn_blocking(move || -> (Vec<String>, usize) {
@@ -94,19 +84,6 @@ impl PowerShellTool { pub fn new(cwd: String) -> Self { Self { cwd } } }
 #[async_trait]
 impl Tool for PowerShellTool {
     fn name(&self) -> &str { "powershell" }
-    fn description(&self) -> &str {
-        "Execute a PowerShell command. Preferred on Windows for shell operations (Get-ChildItem, Select-String, etc.)."
-    }
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "command": { "type": "string", "description": "PowerShell command to execute" },
-                "timeout": { "type": "number", "description": "Timeout in seconds (default 120, max 600)" }
-            },
-            "required": ["command"]
-        })
-    }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         if let Some(gated) = super::tool_exec::plan_mode_gate("powershell") { return gated; }
         let command = args["command"].as_str().unwrap_or("").to_string();
@@ -117,44 +94,17 @@ impl Tool for PowerShellTool {
         let timeout_secs = args["timeout"].as_u64().unwrap_or(DEFAULT_PS_TIMEOUT_SECS).min(MAX_PS_TIMEOUT_SECS).max(1);
 
         // `powershell.exe` on Windows, `pwsh` (PowerShell Core) elsewhere.
+        // Always streams live output to the GUI, same as `bash` — see
+        // `streaming::run_streaming`'s doc comment.
         let exe = if cfg!(windows) { "powershell" } else { "pwsh" };
-        let mut cmd = tokio::process::Command::new(exe);
-        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &command])
-            .current_dir(&self.cwd)
-            .kill_on_drop(true)
-            // Least-privilege env: strip API keys/tokens/secrets so a shell
-            // command can't read or exfiltrate provider credentials.
-            .env_clear()
-            .envs(super::sandbox::filtered_env())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
-        let child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => return err(format!("failed to launch {exe}: {e} (is PowerShell installed and on PATH?)")),
-        };
-
-        match tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output()).await {
-            Ok(Ok(output)) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                let is_error = !output.status.success();
-                let combined = match (stdout.is_empty(), stderr.is_empty()) {
-                    (true, true) => "(no output)".to_string(),
-                    (true, false) => stderr,
-                    (false, true) => stdout,
-                    (false, false) => format!("{stdout}\n{stderr}"),
-                };
-                let (result, truncated) = truncate_text(&combined, usize::MAX, MAX_WEB_BYTES);
-                ToolResult {
-                    content: result,
-                    is_error,
-                    details: Some(json!({ "exit_code": output.status.code(), "truncated": truncated })),
-                }
-            }
-            Ok(Err(e)) => err(format!("execution failed: {e}")),
-            Err(_) => err(format!("Command timed out after {timeout_secs}s and was killed")),
-        }
+        super::streaming::run_streaming(
+            "powershell",
+            exe,
+            &["-NoProfile", "-NonInteractive", "-Command", &command],
+            &self.cwd,
+            timeout_secs,
+        )
+        .await
     }
 }
 
@@ -166,22 +116,6 @@ impl NotebookEditTool { pub fn new(cwd: String) -> Self { Self { cwd } } }
 #[async_trait]
 impl Tool for NotebookEditTool {
     fn name(&self) -> &str { "notebook_edit" }
-    fn description(&self) -> &str {
-        "Edit a Jupyter notebook (.ipynb): replace, insert, or delete a cell's source."
-    }
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "notebook_path": { "type": "string", "description": "Path to the .ipynb file" },
-                "cell_id": { "type": "string", "description": "ID (or numeric index) of the cell to edit; for insert, the new cell goes after it" },
-                "new_source": { "type": "string", "description": "New source for the cell" },
-                "cell_type": { "type": "string", "enum": ["code", "markdown"], "description": "Cell type (required for insert)" },
-                "edit_mode": { "type": "string", "enum": ["replace", "insert", "delete"], "description": "Edit mode (default replace)" }
-            },
-            "required": ["notebook_path", "new_source"]
-        })
-    }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         if let Some(gated) = super::tool_exec::plan_mode_gate("notebook_edit") { return gated; }
         let nb_path = args["notebook_path"].as_str().unwrap_or("");
@@ -271,19 +205,6 @@ impl WebFetchTool { pub fn new() -> Self { Self } }
 #[async_trait]
 impl Tool for WebFetchTool {
     fn name(&self) -> &str { "web_fetch" }
-    fn description(&self) -> &str {
-        "Fetch a URL and return its text content (HTML is stripped to readable text). Use for reading web pages and docs."
-    }
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "url": { "type": "string", "description": "The URL to fetch" },
-                "prompt": { "type": "string", "description": "Optional focus for what to extract (noted in the result)" }
-            },
-            "required": ["url"]
-        })
-    }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let url = args["url"].as_str().unwrap_or("").to_string();
         if url.is_empty() { return err("'url' is required"); }
@@ -364,18 +285,6 @@ impl WebSearchTool { pub fn new() -> Self { Self } }
 #[async_trait]
 impl Tool for WebSearchTool {
     fn name(&self) -> &str { "web_search" }
-    fn description(&self) -> &str {
-        "Search the web and return result titles and URLs. Use for finding current information; follow up with web_fetch to read a result."
-    }
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "query": { "type": "string", "description": "The search query" }
-            },
-            "required": ["query"]
-        })
-    }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let query = args["query"].as_str().unwrap_or("").trim().to_string();
         if query.len() < 2 { return err("'query' must be at least 2 characters"); }
@@ -492,18 +401,6 @@ impl SleepTool { pub fn new() -> Self { Self } }
 #[async_trait]
 impl Tool for SleepTool {
     fn name(&self) -> &str { "sleep" }
-    fn description(&self) -> &str {
-        "Pause for a number of seconds (e.g. to wait for a server or process to start). Max 60s."
-    }
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "seconds": { "type": "number", "description": "How many seconds to sleep (max 60)" }
-            },
-            "required": ["seconds"]
-        })
-    }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let secs = args["seconds"].as_f64().unwrap_or(0.0);
         if secs <= 0.0 { return err("'seconds' must be positive"); }
@@ -521,18 +418,6 @@ impl DiagnosticsTool { pub fn new(cwd: String) -> Self { Self { cwd } } }
 #[async_trait]
 impl Tool for DiagnosticsTool {
     fn name(&self) -> &str { "diagnostics" }
-    fn description(&self) -> &str {
-        "Get language-server diagnostics (errors/warnings) for a file. Requires a language server for that file type to be installed and on PATH."
-    }
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Path to the file to check" }
-            },
-            "required": ["path"]
-        })
-    }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let path = args["path"].as_str().unwrap_or("");
         if path.is_empty() { return err("'path' is required"); }
@@ -558,48 +443,57 @@ impl TodoWriteTool { pub fn new() -> Self { Self } }
 #[async_trait]
 impl Tool for TodoWriteTool {
     fn name(&self) -> &str { "todo_write" }
-    fn description(&self) -> &str {
-        "Create and manage a structured task checklist for the current session. Replaces the whole list each call."
-    }
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "todos": {
-                    "type": "array",
-                    "description": "The full updated todo list",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "content": { "type": "string", "description": "What the task is" },
-                            "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] }
-                        },
-                        "required": ["content", "status"]
-                    }
-                }
-            },
-            "required": ["todos"]
-        })
-    }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let todos = match args["todos"].as_array() {
             Some(t) => t.clone(),
             None => return err("'todos' must be an array"),
         };
+
+        // Two invariants worth enforcing at write time rather than leaving to
+        // convention: a duplicated content string is almost always a copy-paste
+        // slip that silently drops a real item, and more than one item
+        // "in_progress" defeats the point of the field (which task is actually
+        // being worked on right now?).
+        let mut seen = std::collections::HashSet::new();
+        let mut in_progress_count = 0usize;
+        for t in &todos {
+            let content = t.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            if !seen.insert(content) {
+                return err(format!("duplicate todo content: {content:?}"));
+            }
+            if t.get("status").and_then(|v| v.as_str()) == Some("in_progress") {
+                in_progress_count += 1;
+            }
+        }
+        if in_progress_count > 1 {
+            return err(format!("{in_progress_count} todos are marked in_progress; at most one may be at a time"));
+        }
+
         if let Ok(mut store) = TODOS.lock() {
             *store = todos.clone();
         }
+        let (mut pending, mut completed) = (0usize, 0usize);
         let mut out = String::from("Todo list updated:\n");
         for t in &todos {
             let status = t.get("status").and_then(|v| v.as_str()).unwrap_or("pending");
             let content = t.get("content").and_then(|v| v.as_str()).unwrap_or("");
             let mark = match status {
-                "completed" => "[x]",
+                "completed" => { completed += 1; "[x]" }
                 "in_progress" => "[~]",
-                _ => "[ ]",
+                _ => { pending += 1; "[ ]" }
             };
             out.push_str(&format!("{mark} {content}\n"));
         }
-        ToolResult { content: out.trim_end().to_string(), is_error: false, details: Some(json!({ "todos": todos })) }
+        out.push_str(&format!(
+            "\n{pending} pending, {in_progress_count} in progress, {completed} completed."
+        ));
+        ToolResult {
+            content: out.trim_end().to_string(),
+            is_error: false,
+            details: Some(json!({
+                "todos": todos,
+                "counts": { "pending": pending, "in_progress": in_progress_count, "completed": completed },
+            })),
+        }
     }
 }

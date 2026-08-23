@@ -79,17 +79,29 @@ pub async fn install(app: &AppHandle) -> Result<String, String> {
     let dest = std::env::temp_dir().join(filename);
 
     emit_progress(app, "Downloading Docker Desktop's installer from docker.com...");
-    download_file(url, &dest).await?;
+    download_file(app, url, &dest).await?;
 
+    crate::optional_components::emit(app, "docker", Some(100), "Launching the installer...");
     emit_progress(app, "Launching the installer...");
-    run_installer(app, &dest).await
+    let result = run_installer(app, &dest).await;
+    match &result {
+        Ok(_) => crate::optional_components::emit(app, "docker", Some(100), "Docker Desktop installed."),
+        Err(e) => crate::optional_components::emit_error(app, "docker", e),
+    }
+    result
 }
 
 fn emit_progress(app: &AppHandle, message: &str) {
     let _ = app.emit("docker-install-progress", message);
+    crate::optional_components::emit(app, "docker", None, message);
 }
 
-async fn download_file(url: &str, dest: &PathBuf) -> Result<(), String> {
+/// Streams the download instead of buffering the whole ~500MB response in
+/// memory (the old `resp.bytes().await` shape), so real byte-counted percent
+/// progress can be reported via `optional_components::emit` as it downloads.
+async fn download_file(app: &AppHandle, url: &str, dest: &PathBuf) -> Result<(), String> {
+    use futures::StreamExt;
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(900))
         .build()
@@ -102,10 +114,25 @@ async fn download_file(url: &str, dest: &PathBuf) -> Result<(), String> {
     if !resp.status().is_success() {
         return Err(format!("Download failed: HTTP {}", resp.status()));
     }
-    let bytes = resp.bytes().await.map_err(|e| format!("Download failed while reading the response: {e}"))?;
-    tokio::fs::write(dest, &bytes)
-        .await
-        .map_err(|e| format!("Failed to save the installer to disk: {e}"))?;
+    let total = resp.content_length();
+    let mut file = tokio::fs::File::create(dest).await.map_err(|e| format!("Failed to create the installer file: {e}"))?;
+    let mut downloaded: u64 = 0;
+    let mut last_reported_percent: u8 = 0;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Download failed while streaming: {e}"))?;
+        downloaded += chunk.len() as u64;
+        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+            .await
+            .map_err(|e| format!("Failed to save the installer to disk: {e}"))?;
+        if let Some(total) = total {
+            let percent = ((downloaded as f64 / total as f64) * 100.0).min(100.0) as u8;
+            if percent >= last_reported_percent + 1 {
+                last_reported_percent = percent;
+                crate::optional_components::emit(app, "docker", Some(percent), &format!("Downloading Docker Desktop's installer... {percent}%"));
+            }
+        }
+    }
     Ok(())
 }
 

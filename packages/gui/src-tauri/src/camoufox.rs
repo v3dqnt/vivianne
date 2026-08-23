@@ -39,6 +39,18 @@ lazy_static::lazy_static! {
     /// than per-agent-session state: simpler, and matches how there's only
     /// ever one web preview panel on screen at a time.
     static ref CURRENT_TAB: Mutex<Option<String>> = Mutex::new(None);
+    /// The URL last navigated to on `CURRENT_TAB` — interaction calls
+    /// (click/type/scroll/press) don't navigate, but still need a URL to
+    /// report when they emit a `WebPreviewRequested`-style panel-refresh
+    /// event alongside their fresh screenshot.
+    static ref CURRENT_URL: Mutex<Option<String>> = Mutex::new(None);
+}
+
+/// The URL of the currently active tab, if any (set by the last successful
+/// `navigate`). Read by the interaction tools in `agent/tool_exec.rs` so
+/// their panel-refresh events have a URL to report.
+pub async fn current_url() -> Option<String> {
+    CURRENT_URL.lock().await.clone()
 }
 
 /// Whether we've already tried installing/launching camoufox-browser this
@@ -63,10 +75,25 @@ fn binary_path() -> Result<PathBuf, String> {
     Ok(install_dir()?.join("node_modules").join(".bin").join("camofox-browser"))
 }
 
+/// Path to the `camoufox-js` CLI (a separate package binary from
+/// `camofox-browser` above) — used only for its `fetch` subcommand, which
+/// downloads the actual ~300MB browser engine with progress output.
+fn camoufox_js_path() -> Result<PathBuf, String> {
+    Ok(install_dir()?.join("node_modules").join(".bin").join("camoufox-js"))
+}
+
 /// Check whether camoufox-browser is already installed in our persistent
 /// directory by verifying the binary entrypoint exists.
 fn is_installed() -> bool {
     binary_path().ok().map_or(false, |p| p.exists())
+}
+
+/// Same check, for `optional_components::status` to report — this only
+/// confirms the npm package is installed, not that the (separately
+/// downloaded) browser engine binary itself is present; `fetch_with_progress`
+/// is idempotent either way (`camoufox-js fetch` no-ops if already cached).
+pub fn package_installed() -> bool {
+    is_installed()
 }
 
 /// Install camoufox-browser into `~/.viv/camoufox/` via `npm install --ignore-scripts`.
@@ -368,6 +395,7 @@ pub async fn navigate(url: &str) -> Result<NavigateResult, String> {
     };
     *guard = Some(tab_id.clone());
     drop(guard);
+    *CURRENT_URL.lock().await = Some(url.to_string());
 
     let screenshot_base64 = take_screenshot(&tab_id).await.ok();
     Ok(NavigateResult { tab_id, screenshot_base64, title_hint: None })
@@ -399,6 +427,103 @@ pub async fn forward() -> Result<NavigateResult, String> {
 
 pub async fn refresh() -> Result<NavigateResult, String> {
     history_action("refresh").await
+}
+
+// ── Interaction (click / type / press / scroll) ────────────────────────────
+
+async fn current_tab() -> Result<String, String> {
+    CURRENT_TAB.lock().await.clone().ok_or_else(|| "Error: no active browser tab — navigate somewhere first.".to_string())
+}
+
+/// POST to `/tabs/{tab_id}/{path}` with `body`, then return a fresh
+/// screenshot — same "act, then re-screenshot" shape as `history_action`, so
+/// every interaction tool keeps the (to-be-merged) preview panel current.
+async fn interact(tab_id: &str, path: &str, body: Value) -> Result<NavigateResult, String> {
+    let base = base_url().await;
+    let resp = client()
+        .post(format!("{base}/tabs/{tab_id}/{path}"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| not_running_err(&base, e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("camoufox-browser: {path} returned HTTP {status}: {text}"));
+    }
+    let screenshot_base64 = take_screenshot(tab_id).await.ok();
+    Ok(NavigateResult { tab_id: tab_id.to_string(), screenshot_base64, title_hint: None })
+}
+
+/// Accessibility-tree snapshot of the current tab, with element refs (`e1`,
+/// `e2`, ...) that `click`/`type` target — the same endpoint `search()`
+/// already consumes internally, exposed directly so a caller can read the
+/// page before deciding what to click.
+pub async fn snapshot() -> Result<String, String> {
+    let tab_id = current_tab().await?;
+    let base = base_url().await;
+    let resp = client()
+        .get(format!("{base}/tabs/{tab_id}/snapshot?userId={USER_ID}"))
+        .send()
+        .await
+        .map_err(|e| not_running_err(&base, e))?;
+    if !resp.status().is_success() {
+        return Err(format!("camoufox-browser: snapshot returned HTTP {}", resp.status()));
+    }
+    let val: Value = resp.json().await.map_err(|e| format!("camoufox-browser: bad snapshot response: {e}"))?;
+    val.get("snapshot")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| "camoufox-browser: snapshot response had no 'snapshot' field".to_string())
+}
+
+/// Click the element with accessibility ref `r` (from `snapshot`).
+pub async fn click(r: &str) -> Result<NavigateResult, String> {
+    let tab_id = current_tab().await?;
+    interact(&tab_id, "click", json!({ "userId": USER_ID, "ref": r })).await
+}
+
+/// Fill `text` into the element with accessibility ref `r`; `submit` presses
+/// Enter afterward (e.g. to submit a search box).
+pub async fn type_text(r: &str, text: &str, submit: bool) -> Result<NavigateResult, String> {
+    let tab_id = current_tab().await?;
+    interact(&tab_id, "type", json!({ "userId": USER_ID, "ref": r, "text": text, "mode": "fill", "submit": submit })).await
+}
+
+/// Press a single key or combo (e.g. `"Enter"`, `"Control+A"`) at whatever
+/// currently has focus.
+pub async fn press_key(key: &str) -> Result<NavigateResult, String> {
+    let tab_id = current_tab().await?;
+    interact(&tab_id, "press", json!({ "userId": USER_ID, "key": key })).await
+}
+
+/// Scroll the page. `direction` is `up`/`down`/`left`/`right`, `amount` is
+/// pixels (camoufox-browser defaults this to 500 when omitted).
+pub async fn scroll(direction: &str, amount: i64) -> Result<NavigateResult, String> {
+    let tab_id = current_tab().await?;
+    interact(&tab_id, "scroll", json!({ "userId": USER_ID, "direction": direction, "amount": amount })).await
+}
+
+/// Evaluate arbitrary JS in the page context and return its result. The only
+/// way to read console output or network/performance timing — there's no
+/// dedicated route for either, so `browser_read_console`/`browser_read_network`
+/// (in `agent/tool_exec.rs`) are built on top of this.
+pub async fn evaluate(expression: &str) -> Result<Value, String> {
+    let tab_id = current_tab().await?;
+    let base = base_url().await;
+    let resp = client()
+        .post(format!("{base}/tabs/{tab_id}/evaluate"))
+        .json(&json!({ "userId": USER_ID, "expression": expression }))
+        .send()
+        .await
+        .map_err(|e| not_running_err(&base, e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("camoufox-browser: evaluate returned HTTP {status}: {text}"));
+    }
+    let body: Value = resp.json().await.map_err(|e| format!("camoufox-browser: bad evaluate response: {e}"))?;
+    body.get("result").cloned().ok_or_else(|| "camoufox-browser: evaluate response had no 'result' field".to_string())
 }
 
 /// Run a search via Camoufox's `@google_search` macro and extract result
@@ -457,4 +582,80 @@ pub async fn prewarm() {
         Ok(()) => log::info!("[camoufox] pre-install complete"),
         Err(e) => log::warn!("[camoufox] background pre-install failed (will retry on first use): {e}"),
     }
+}
+
+// ── Explicit fetch-with-progress (optional-components download flow) ──────
+
+/// Download the actual Camoufox browser engine (~300MB) with real progress,
+/// for the "download now" path from the optional-components prompt/Settings
+/// — distinct from the silent lazy-download `navigate()` falls back to for
+/// anyone who skips that prompt and just uses a browser tool directly.
+/// Idempotent: `camoufox-js fetch` no-ops (near-instantly) if the engine is
+/// already cached.
+pub async fn fetch_with_progress(app: &tauri::AppHandle) -> Result<(), String> {
+    if !is_installed() {
+        crate::optional_components::emit(app, "camoufox", None, "Installing camoufox-browser...");
+        install().await?;
+    }
+    let bin = camoufox_js_path()?;
+    if !bin.exists() {
+        let err = format!("camoufox-js binary not found at {}", bin.display());
+        crate::optional_components::emit_error(app, "camoufox", &err);
+        return Err(err);
+    }
+    crate::optional_components::emit(app, "camoufox", None, "Downloading the Camoufox browser engine...");
+
+    let dir = install_dir()?;
+    let mut cmd = tokio::process::Command::new("node");
+    cmd.arg(&bin)
+        .arg("fetch")
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| format!("Couldn't launch `camoufox-js fetch`: {e}"))?;
+    let stdout = child.stdout.take().ok_or_else(|| "camoufox-js fetch: no stdout pipe".to_string())?;
+
+    let app_for_progress = app.clone();
+    let progress_task = tokio::spawn(async move {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        // camoufox-js's own downloader (`webdl` in its pkgman.js) drives a
+        // `cli-progress` bar formatted as "... [{bar}] {percentage}% | ETA:
+        // ... | {value}/{total}" — this is the only source of real progress,
+        // so it's parsed directly from piped stdout rather than reimplemented.
+        let percent_re = regex::Regex::new(r"(\d+(?:\.\d+)?)\s*%").expect("static regex");
+        let mut lines = BufReader::new(stdout).lines();
+        let mut last_percent: u8 = 0;
+        while let Ok(Some(line)) = lines.next_line().await {
+            let Some(cap) = percent_re.captures(&line) else { continue };
+            let Ok(pct) = cap[1].parse::<f64>() else { continue };
+            let pct = pct.clamp(0.0, 100.0) as u8;
+            if pct >= last_percent {
+                last_percent = pct;
+                crate::optional_components::emit(
+                    &app_for_progress,
+                    "camoufox",
+                    Some(pct),
+                    &format!("Downloading the Camoufox browser engine... {pct}%"),
+                );
+            }
+        }
+    });
+
+    let status = child.wait().await.map_err(|e| format!("camoufox-js fetch failed to run: {e}"))?;
+    let _ = progress_task.await;
+
+    if !status.success() {
+        let err = format!("camoufox-js fetch exited with status {status}");
+        crate::optional_components::emit_error(app, "camoufox", &err);
+        return Err(err);
+    }
+    crate::optional_components::emit(app, "camoufox", Some(100), "Camoufox is ready.");
+    Ok(())
 }

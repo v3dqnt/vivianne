@@ -118,6 +118,16 @@ pub enum AgentEvent {
         screenshot_base64: Option<String>,
         error: Option<String>,
     },
+    /// The `set_panel` tool wants a GUI panel opened or closed, so the model
+    /// can actually show the user what it's doing (e.g. open Review while it
+    /// works through a diff) instead of only ever reacting to clicks. Purely
+    /// advisory to the frontend, same as `WebPreviewRequested` — the tool
+    /// call itself always succeeds regardless of whether anything's actually
+    /// listening.
+    PanelFocusRequested {
+        panel: String,
+        action: String,
+    },
     /// A provider call failed with a transient/retryable error and is being
     /// retried after a backoff delay. Transient by design — the frontend
     /// should show this as a subtle "Retrying (2/4)…" indicator that clears

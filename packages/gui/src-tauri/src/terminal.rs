@@ -30,6 +30,9 @@ struct TerminalExitEvent {
     exit_code: Option<i32>,
 }
 
+/// How much output a model-driven session retains between `read()` calls.
+const OUTPUT_BUFFER_CAP_BYTES: usize = 256 * 1024;
+
 struct PtySession {
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
@@ -37,6 +40,16 @@ struct PtySession {
     shell_id: String,
     cwd: String,
     started_at_epoch_ms: u64,
+    /// Output accumulated since the last `read()`. `read()` fully drains it
+    /// rather than tracking a cursor, so the cap's front-truncation has no
+    /// stale offset to invalidate.
+    ///
+    /// `None` for a GUI-opened tab: those render from the live
+    /// `terminal-output` event and nothing ever reads this back, so retaining
+    /// (and repeatedly compacting) hundreds of KB for them is pure waste on
+    /// the output pump's hot path. Only `terminal_open` — the model-facing
+    /// tool, which has no way to subscribe to events — asks for a buffer.
+    output: Option<Arc<StdMutex<String>>>,
 }
 
 /// One live terminal session, for the Background Tasks panel's list.
@@ -108,7 +121,7 @@ pub fn available_shells() -> Vec<ShellOption> {
     shells
 }
 
-fn build_command(shell_id: &str, cwd: &str) -> CommandBuilder {
+fn build_command(shell_id: &str, cwd: &str, strip_secrets: bool) -> CommandBuilder {
     let mut cmd = if shell_id == "powershell" {
         CommandBuilder::new("powershell.exe")
     } else if shell_id == "cmd" {
@@ -127,17 +140,34 @@ fn build_command(shell_id: &str, cwd: &str) -> CommandBuilder {
     if !cwd.is_empty() {
         cmd.cwd(cwd);
     }
+    // A shell the *model* opened gets the same least-privilege environment
+    // `bash`/`powershell`/playbooks already run under, so it can't read back
+    // provider API keys those paths deliberately strip. A shell the *user*
+    // opened is their own terminal and keeps their real environment — the
+    // whole point of it is to be the shell they'd have gotten anyway.
+    if strip_secrets {
+        cmd.env_clear();
+        for (k, v) in crate::coding_agent::sandbox::filtered_env() {
+            cmd.env(k, v);
+        }
+    }
     cmd
 }
 
 /// Spawn a new shell process for `tab_id` and start streaming its output.
+///
+/// `agent_owned` marks a session the model opened rather than the user: it
+/// gets a secret-stripped environment and a retained output buffer (the model
+/// polls `read()`; the GUI instead renders the live `terminal-output` event).
 pub fn spawn(
     app: AppHandle,
     registry: &TerminalRegistry,
     tab_id: String,
     shell_id: String,
     cwd: String,
+    agent_owned: bool,
 ) -> Result<(), String> {
+    let retain_output = agent_owned;
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
@@ -145,7 +175,7 @@ pub fn spawn(
 
     let shell_id_for_info = shell_id.clone();
     let cwd_for_info = cwd.clone();
-    let cmd = build_command(&shell_id, &cwd);
+    let cmd = build_command(&shell_id, &cwd, agent_owned);
     let child = pair
         .slave
         .spawn_command(cmd)
@@ -165,14 +195,20 @@ pub fn spawn(
         .map_err(|e| format!("failed to open pty writer: {e}"))?;
 
     let child = Arc::new(StdMutex::new(child));
+    let output: Option<Arc<StdMutex<String>>> =
+        retain_output.then(|| Arc::new(StdMutex::new(String::new())));
 
     // Output pump — reads raw bytes (not necessarily valid UTF-8 boundaries
     // per chunk) and forwards them to the frontend's xterm.js instance,
     // which parses ANSI escapes itself; lossy UTF-8 conversion is fine here
-    // since terminal output is overwhelmingly ASCII/UTF-8 already.
+    // since terminal output is overwhelmingly ASCII/UTF-8 already. Also
+    // appends to the session's retained buffer, when it has one, so a
+    // `terminal_read` tool call can see it — the event alone only reaches a
+    // subscribed frontend.
     {
         let tab_id = tab_id.clone();
         let app = app.clone();
+        let output = output.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
@@ -180,6 +216,21 @@ pub fn spawn(
                     Ok(0) => break,
                     Ok(n) => {
                         let data = String::from_utf8_lossy(&buf[..n]).into_owned();
+                        if let Some(output) = &output {
+                            let mut out = output.lock().unwrap();
+                            out.push_str(&data);
+                            // Compact only once the buffer has grown a whole
+                            // cap past the limit, then drop back to it.
+                            // Trimming on every overflowing chunk instead
+                            // memmoves the full retained buffer per ~8KB read
+                            // — a ~32x write amplification on a path that
+                            // sees every byte a build prints.
+                            if out.len() > OUTPUT_BUFFER_CAP_BYTES * 2 {
+                                let mut cut = out.len() - OUTPUT_BUFFER_CAP_BYTES;
+                                while cut < out.len() && !out.is_char_boundary(cut) { cut += 1; }
+                                out.drain(..cut);
+                            }
+                        }
                         let _ = app.emit("terminal-output", TerminalOutputEvent { tab_id: tab_id.clone(), data });
                     }
                     Err(_) => break,
@@ -223,9 +274,30 @@ pub fn spawn(
             shell_id: shell_id_for_info,
             cwd: cwd_for_info,
             started_at_epoch_ms,
+            output,
         },
     );
     Ok(())
+}
+
+/// Drain and return everything written since the last `read()` (or since
+/// spawn, on the first call). Errors for a user-opened tab, which retains no
+/// buffer to drain — only `terminal_open` sessions are readable this way.
+pub fn read(registry: &TerminalRegistry, tab_id: &str) -> Result<String, String> {
+    let sessions = registry.sessions.lock().unwrap();
+    let session = sessions.get(tab_id).ok_or_else(|| format!("no terminal session for tab {tab_id}"))?;
+    let output = session.output.as_ref().ok_or_else(|| {
+        format!("terminal {tab_id} is a user-opened tab and keeps no readable buffer; open your own with terminal_open")
+    })?;
+    let drained = std::mem::take(&mut *output.lock().unwrap());
+    Ok(drained)
+}
+
+/// Send an interrupt (Ctrl-C) to the foreground process without closing the
+/// session — a PTY's line discipline turns byte 0x03 into SIGINT for
+/// whatever currently owns the terminal, the same as a real keypress.
+pub fn interrupt(registry: &TerminalRegistry, tab_id: &str) -> Result<(), String> {
+    write(registry, tab_id, "\x03")
 }
 
 pub fn write(registry: &TerminalRegistry, tab_id: &str, data: &str) -> Result<(), String> {

@@ -169,12 +169,12 @@ impl PersonaMode {
             PersonaMode::Agent => &[],
             PersonaMode::Ask => &[
                 "write", "edit", "apply_patch", "bash", "powershell", "computer", "task", "connect_mcp_server",
-                "create_automation", "delete_automation", "set_automation_enabled",
+                "create_automation", "delete_automation", "set_automation_enabled", "terminal_open", "terminal_send",
             ],
             PersonaMode::Debug => &["write", "edit", "apply_patch", "task"],
             PersonaMode::Explore => &[
                 "write", "edit", "apply_patch", "bash", "powershell", "computer", "task",
-                "web_fetch", "web_search", "connect_mcp_server",
+                "web_fetch", "web_search", "connect_mcp_server", "terminal_open", "terminal_send",
                 "create_automation", "delete_automation", "set_automation_enabled",
             ],
         }
@@ -190,6 +190,44 @@ impl PersonaMode {
             PersonaMode::Explore => "Explore",
         }
     }
+}
+
+// ============================================================================
+// Goal — durable-for-the-live-session objective state
+// ============================================================================
+// Ported from dsh's `goal` package: one long-running objective per session,
+// distinct from the todo checklist (todos are steps; a goal is the point of
+// the steps). Deliberately doesn't include dsh's `goal-round-driver`
+// (auto-continuation that queues a follow-up turn whenever the agent goes
+// idle with an armed goal) — that needs an idle-checkpoint hook Vivianne's
+// loop doesn't have.
+//
+// dsh's version carries an id + revision for compare-and-set updates. There
+// is no second writer here to lose a race with — tool calls that reach
+// `AgentState` run one at a time, and the parallel fast path is read-only
+// tools — so the goal is addressed as "the current goal" and the whole CAS
+// token is dropped, along with the two schema params the model would have
+// had to thread through every update.
+//
+// Not persisted to the session file: nothing reads a goal back yet except
+// `get_goal`, and persisting state no consumer reads is worse than not
+// having it. Cleared with the rest of the session (see `AgentState::clear`).
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GoalPhase {
+    Active,
+    Paused,
+    Blocked,
+    Complete,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Goal {
+    pub objective: String,
+    pub phase: GoalPhase,
+    pub blocked_reason: Option<String>,
 }
 
 // ============================================================================

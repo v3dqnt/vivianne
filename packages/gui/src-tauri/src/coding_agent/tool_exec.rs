@@ -5,7 +5,6 @@
 use async_trait::async_trait;
 use serde_json::json;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 /// Result of executing a tool.
 #[derive(Debug, Clone)]
@@ -16,11 +15,18 @@ pub struct ToolResult {
 }
 
 /// Trait for tool implementations.
+///
+/// Deliberately just `name` + `execute` — this used to also carry
+/// `description()`/`parameters()`, but nothing ever called them: every
+/// schema the model actually sees comes from `agent::tool_schemas::
+/// static_tool_definitions()`. Two copies of every tool's schema, one of
+/// them silently dead, is how they drifted (the dead copy of `bash`
+/// documented a `timeout` param the live one didn't expose at all — the
+/// code honored it either way, the model just couldn't discover it existed).
+/// One schema, one place to keep it accurate.
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
-    fn description(&self) -> &str;
-    fn parameters(&self) -> serde_json::Value;
     async fn execute(&self, args: &serde_json::Value, cwd: &str) -> ToolResult;
 }
 
@@ -57,22 +63,24 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         // `execute_task_tool` before this registry is ever consulted, so a
         // `TaskTool` entry under the same name would only ever be shadowed
         // dead weight (it was — see git history, removed together).
+        //
+        // No separate `wait_tasks` entry: folded into `task_output` (a
+        // `mode` param picks "any" vs "all" wait semantics) — they did the
+        // same job under two names the model had to choose between, and
+        // `wait_tasks` already just delegated to `TaskOutputTool` to render
+        // its result.
+        //
+        // No `ask_user_question` entry: it was a second, never-actually-
+        // wired-up clarifying-question tool (its GUI event had no listener,
+        // so calling it would hang the turn forever waiting on a reply that
+        // could never arrive) that fully duplicated the live, richer
+        // `question` tool already dispatched in `agent/tool_exec.rs`
+        // (`execute_question_tool`, real GUI round-trip). Deleted rather
+        // than wired up, since a working one already exists.
         Box::new(super::orchestration::TaskOutputTool::new()),
-        Box::new(super::orchestration::WaitTasksTool::new()),
         Box::new(super::orchestration::KillTaskTool::new()),
-        Box::new(super::orchestration::AskUserQuestionTool::new()),
         Box::new(super::orchestration::EnterPlanModeTool::new()),
         Box::new(super::orchestration::ExitPlanModeTool::new()),
-        // ── Grok-parity: memory ───────────────────────────────────────────
-        Box::new(super::memory_tools::MemoryGetTool::new(cwd.clone())),
-        Box::new(super::memory_tools::MemorySearchTool::new(cwd.clone())),
-        Box::new(super::memory_tools::NotesWriteTool::new(cwd.clone())),
-        // ── Grok-parity: enriched read/list ───────────────────────────────
-        Box::new(super::tools_enh::ReadFileTool::new(cwd.clone())),
-        Box::new(super::tools_enh::ListDirTool::new(cwd.clone())),
-        // ── Grok-parity: streaming shell ──────────────────────────────────
-        Box::new(super::streaming::StreamingBashTool::new(cwd.clone())),
-        Box::new(super::streaming::StreamingPowerShellTool::new(cwd.clone())),
     ];
     // ── User-defined: playbooks (~/.viv/playbooks/*.json) ──────────────────
     for def in super::playbooks::load_playbooks() {
@@ -99,21 +107,41 @@ pub(crate) fn plan_mode_gate(tool_name: &str) -> Option<ToolResult> {
 
 // ── Shared limits & helpers ─────────────────────────────────────────────
 
-const MAX_READ_LINES: usize = 2000;
-const MAX_READ_BYTES: usize = 50_000;
-const MAX_LS_ENTRIES: usize = 500;
 const MAX_GREP_MATCHES: usize = 100;
 const MAX_GREP_BYTES: usize = 256_000;
 const MAX_GREP_LINE_CHARS: usize = 1000;
-const MAX_BASH_OUTPUT_BYTES: usize = 256_000;
 const DEFAULT_BASH_TIMEOUT_SECS: u64 = 120;
 const MAX_BASH_TIMEOUT_SECS: u64 = 600;
 
-/// Directories that are always skipped during recursive walks (grep/find).
-/// Prevents pathological scans of dependency/build trees.
-const SKIP_DIRS: &[&str] = &[
+/// Directories that are always skipped during recursive walks — shared by
+/// every walker in this module (`walk_files` here, `IgnoreSet::always_skip`
+/// in `tools_enh`, `repo_tools::walk_structure`). These used to be three
+/// separately-maintained lists with three different contents (`.turbo` and
+/// `.cache` were only in one of them), so `grep` and `list_dir` could
+/// genuinely disagree about what exists in the repo. One list now.
+pub(crate) const ALWAYS_SKIP_DIRS: &[&str] = &[
     ".git", "node_modules", "target", "dist", "build", ".next", ".venv", "venv", "__pycache__",
+    ".turbo", ".cache", "vendor",
 ];
+
+/// Parse YAML frontmatter (`---\n...\n---\n`) from markdown content into
+/// `T`, returning `T::default()` and the whole input as the body when
+/// there's no frontmatter fence or the YAML fails to parse. Shared by
+/// `skills.rs` and `subagent_profiles.rs`, which had byte-identical copies
+/// of this regex over two different frontmatter structs.
+pub(crate) fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(content: &str) -> (T, &str) {
+    lazy_static::lazy_static! {
+        static ref FRONTMATTER_RE: regex::Regex = regex::Regex::new(r"(?s)^---\s*\n(.*?)\n---\s*\n(.*)$").unwrap();
+    }
+    if let Some(caps) = FRONTMATTER_RE.captures(content) {
+        let yaml_text = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+        let body = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+        let frontmatter: T = serde_yaml::from_str(yaml_text).unwrap_or_default();
+        (frontmatter, body)
+    } else {
+        (T::default(), content)
+    }
+}
 
 /// Truncate `text` to at most `max_lines` lines AND `max_bytes` bytes (whichever
 /// limit is hit first), UTF-8-safely, appending a notice when truncated.
@@ -156,14 +184,46 @@ pub(crate) fn resolve_path(cwd: &str, path: &str) -> PathBuf {
     Path::new(cwd).join(path)
 }
 
-/// Convert a simple glob (`*`, `?`) into an anchored regex.
-pub(crate) fn glob_to_regex(glob: &str) -> regex::Regex {
+/// Convert a simple glob (`*`, `**`, `?`) into an anchored regex.
+///
+/// `*` matches within one path segment (`[^/]*`); `**` crosses segment
+/// boundaries (`.*`), the usual meaning of "at any depth". Both used to
+/// compile to plain `.*`, so `glob("src/*.rs")` wrongly matched
+/// `src/foo/bar.rs` — a single `*` reaching across a `/` the caller never
+/// asked it to cross. `?` is one non-separator character for the same
+/// reason. Returns `Result` rather than falling back to a permanently
+/// non-matching regex on a compile failure — every character this function
+/// emits into the pattern is already escaped or a fixed, valid snippet, so a
+/// failure isn't expected in practice, but a caller that gets one should see
+/// a real error instead of a search that silently, indistinguishably found
+/// nothing.
+pub(crate) fn glob_to_regex(glob: &str) -> Result<regex::Regex, regex::Error> {
     const REGEX_META: &str = r".+()|[]{}^$\";
     let mut out = String::from("^");
-    for c in glob.chars() {
+    let mut chars = glob.chars().peekable();
+    while let Some(c) = chars.next() {
         match c {
-            '*' => out.push_str(".*"),
-            '?' => out.push('.'),
+            '*' => {
+                if chars.peek() == Some(&'*') {
+                    chars.next();
+                    // `**/` at any depth is the standard idiom for "this
+                    // segment, or any number of segments, or none at all" —
+                    // gitignore and most glob implementations treat it as
+                    // matching zero directories too (`**/foo` also matches a
+                    // root-level `foo`), so the trailing `/` has to be
+                    // optional along with the `.*`, not a separate literal
+                    // that would force at least one path segment to exist.
+                    if chars.peek() == Some(&'/') {
+                        chars.next();
+                        out.push_str("(?:.*/)?");
+                    } else {
+                        out.push_str(".*");
+                    }
+                } else {
+                    out.push_str("[^/]*");
+                }
+            }
+            '?' => out.push_str("[^/]"),
             c if REGEX_META.contains(c) => {
                 out.push('\\');
                 out.push(c);
@@ -172,20 +232,29 @@ pub(crate) fn glob_to_regex(glob: &str) -> regex::Regex {
         }
     }
     out.push('$');
-    regex::Regex::new(&out).unwrap_or_else(|_| regex::Regex::new("$^").unwrap())
+    regex::Regex::new(&out)
 }
 
 /// Recursively collect files under `root`, skipping noisy directories.
 /// Bounded by `limit` to avoid pathological trees; runs synchronously and is
 /// always called from within `spawn_blocking`.
-pub(crate) fn walk_files(root: &Path, limit: usize, mut visit: impl FnMut(&Path) -> bool) {
+///
+/// Returns whether the walk was cut short by `limit` — distinct from `visit`
+/// returning `false` (the caller decided it already has enough, e.g. grep
+/// hit its own match cap) or the tree being exhausted naturally. A caller
+/// that only checked "were there more matches than I displayed" used to miss
+/// this entirely: a search with few or zero matches could still silently
+/// stop at file #4000 of a much larger tree, and nothing distinguished that
+/// from "the whole tree really has no matches" — the model would report a
+/// false negative with full confidence.
+pub(crate) fn walk_files(root: &Path, limit: usize, mut visit: impl FnMut(&Path) -> bool) -> bool {
     let mut stack = vec![root.to_path_buf()];
     let mut visited = 0usize;
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
             if visited >= limit {
-                return;
+                return true;
             }
             let path = entry.path();
             let file_type = match entry.file_type() {
@@ -194,18 +263,19 @@ pub(crate) fn walk_files(root: &Path, limit: usize, mut visit: impl FnMut(&Path)
             };
             if file_type.is_dir() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if SKIP_DIRS.contains(&name.as_str()) {
+                if ALWAYS_SKIP_DIRS.contains(&name.as_str()) {
                     continue;
                 }
                 stack.push(path);
             } else if file_type.is_file() {
                 visited += 1;
                 if !visit(&path) {
-                    return;
+                    return false;
                 }
             }
         }
     }
+    false
 }
 
 // ── Read ─────────────────────────────────────────────────────────────────
@@ -226,71 +296,19 @@ impl Tool for ReadTool {
         "read"
     }
 
-    fn description(&self) -> &str {
-        "Read the contents of a file at the given path."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Path to the file to read" },
-                "offset": { "type": "number", "description": "Start reading at this line (1-indexed)" },
-                "limit": { "type": "number", "description": "Maximum lines to read" }
-            },
-            "required": ["path"]
-        })
-    }
-
-    async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        let path = args["path"].as_str().unwrap_or("").to_string();
-        let full_path = resolve_path(&self.cwd, &path);
-
-        // Check if the file is non-text (PDF, image, notebook) or the user
-        // explicitly requested the enhanced reader via the `pages` param.
-        let has_pages_arg = args["pages"].as_str().map(|s| !s.is_empty()).unwrap_or(false);
-        let needs_enhanced = has_pages_arg || {
-            full_path.extension().and_then(|e| e.to_str()).map(|e| {
-                matches!(e.to_lowercase().as_str(), "pdf" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ipynb")
-            }).unwrap_or(false)
-        };
-
-        if needs_enhanced {
-            // Delegate to ReadFileTool which handles PDFs, images, and notebooks.
-            let enhanced = crate::coding_agent::tools_enh::ReadFileTool::new(self.cwd.clone());
-            return enhanced.execute(args, _cwd).await;
-        }
-
-        // Plain text path.
-        match tokio::fs::read_to_string(&full_path).await {
-            Ok(content) => {
-                let offset = args["offset"].as_u64().unwrap_or(0) as usize;
-                let limit = args["limit"].as_u64().unwrap_or(0) as usize;
-
-                let lines: Vec<&str> = content.lines().collect();
-                let start = offset.saturating_sub(1).min(lines.len());
-                let requested_end = if limit > 0 { start + limit } else { lines.len() };
-                let end = requested_end.min(lines.len());
-
-                let slice = lines[start..end].join("\n");
-                let (result, truncated) = truncate_text(&slice, MAX_READ_LINES, MAX_READ_BYTES);
-
-                ToolResult {
-                    content: result,
-                    is_error: false,
-                    details: Some(json!({
-                        "path": path,
-                        "full_path": full_path.to_string_lossy(),
-                        "truncated": truncated,
-                    })),
-                }
-            }
-            Err(e) => ToolResult {
-                content: format!("Error reading file: {}", e),
-                is_error: true,
-                details: None,
-            },
-        }
+    async fn execute(&self, args: &serde_json::Value, cwd: &str) -> ToolResult {
+        // Always the enhanced reader now: line-numbered text (`cat -n`
+        // style), PDF/image/notebook handling, an is-a-directory check with
+        // a pointer to `ls`. This used to only kick in for a PDF/image/
+        // notebook extension or an explicit `pages` arg, so a plain text
+        // read never got line numbers — while `edit` requires an exact,
+        // unique match and `grep` returns `path:line:text`, leaving the
+        // model to correlate by counting lines by hand. `read_file` was a
+        // separate, better tool the model could never reach; folded in
+        // here under the name it already knows instead of shipping two
+        // readers to choose between.
+        let enhanced = crate::coding_agent::tools_enh::ReadFileTool::new(self.cwd.clone());
+        enhanced.execute(args, cwd).await
     }
 }
 
@@ -310,21 +328,6 @@ impl WriteTool {
 impl Tool for WriteTool {
     fn name(&self) -> &str {
         "write"
-    }
-
-    fn description(&self) -> &str {
-        "Write content to a file at the given path, creating parent directories as needed."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Path to the file to write" },
-                "content": { "type": "string", "description": "Content to write" }
-            },
-            "required": ["path", "content"]
-        })
     }
 
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
@@ -394,22 +397,6 @@ impl EditTool {
 impl Tool for EditTool {
     fn name(&self) -> &str {
         "edit"
-    }
-
-    fn description(&self) -> &str {
-        "Replace text in a file. old_string must match exactly one location in the file."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Path to the file" },
-                "old_string": { "type": "string", "description": "Text to replace; must be unique in the file" },
-                "new_string": { "type": "string", "description": "Replacement text" }
-            },
-            "required": ["path", "old_string", "new_string"]
-        })
     }
 
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
@@ -534,21 +521,6 @@ impl Tool for BashTool {
         "bash"
     }
 
-    fn description(&self) -> &str {
-        "Execute a bash command in the working directory."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "command": { "type": "string", "description": "Bash command to execute" },
-                "timeout": { "type": "number", "description": "Timeout in seconds (default 120, max 600)" }
-            },
-            "required": ["command"]
-        })
-    }
-
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         if let Some(gated) = plan_mode_gate("bash") { return gated; }
         let command = args["command"].as_str().unwrap_or("").to_string();
@@ -561,77 +533,15 @@ impl Tool for BashTool {
             .min(MAX_BASH_TIMEOUT_SECS)
             .max(1);
 
+        // Always streams live output to the GUI (if a channel is registered)
+        // and returns the same labeled, head+tail-truncated, exit-code-bearing
+        // result either way — this used to be a separate `streaming_bash`
+        // tool the model had to choose over plain `bash` to get live output.
         // Prefer a real POSIX shell (git-bash/WSL bash on Windows, /bin/bash
         // elsewhere) since the tool contract and model-generated commands are
         // POSIX syntax; falling back to cmd/powershell would silently
         // misinterpret that syntax rather than fail loudly.
-        let mut cmd = tokio::process::Command::new("bash");
-        cmd.arg("-c").arg(&command).current_dir(&self.cwd).kill_on_drop(true);
-        // Least-privilege env: strip API keys/tokens/secrets so a shell command
-        // can't read or exfiltrate provider credentials even once approved.
-        cmd.env_clear().envs(super::sandbox::filtered_env());
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-
-        let spawn_result = cmd.spawn();
-        let child = match spawn_result {
-            Ok(child) => child,
-            Err(e) => {
-                return ToolResult {
-                    content: format!(
-                        "Error launching bash: {} (no POSIX shell found on PATH — install Git for Windows or WSL)",
-                        e
-                    ),
-                    is_error: true,
-                    details: None,
-                };
-            }
-        };
-
-        let wait_fut = child.wait_with_output();
-        match tokio::time::timeout(Duration::from_secs(timeout_secs), wait_fut).await {
-            Ok(Ok(output)) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                let is_error = !output.status.success();
-
-                let combined = if stdout.is_empty() && stderr.is_empty() {
-                    "(no output)".to_string()
-                } else if stdout.is_empty() {
-                    stderr.clone()
-                } else if stderr.is_empty() {
-                    stdout.clone()
-                } else {
-                    format!("{}\n{}", stdout, stderr)
-                };
-                let (result, truncated) = truncate_text(&combined, usize::MAX, MAX_BASH_OUTPUT_BYTES);
-
-                ToolResult {
-                    content: result,
-                    is_error,
-                    details: Some(json!({
-                        "exit_code": output.status.code(),
-                        "truncated": truncated,
-                    })),
-                }
-            }
-            Ok(Err(e)) => ToolResult {
-                content: format!("Error executing command: {}", e),
-                is_error: true,
-                details: None,
-            },
-            Err(_) => {
-                // Timed out — kill_on_drop(true) ensures dropping `child` here
-                // terminates the process (and, transitively on POSIX, the
-                // process group is not created, so best-effort only for deep
-                // subtrees spawned by the command itself).
-                ToolResult {
-                    content: format!("Command timed out after {} seconds and was killed", timeout_secs),
-                    is_error: true,
-                    details: Some(json!({ "timed_out": true })),
-                }
-            }
-        }
+        super::streaming::run_streaming("bash", "bash", &["-c", &command], &self.cwd, timeout_secs).await
     }
 }
 
@@ -653,72 +563,20 @@ impl Tool for LsTool {
         "ls"
     }
 
-    fn description(&self) -> &str {
-        "List the contents of a directory."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Path to the directory" }
-            },
-            "required": ["path"]
-        })
-    }
-
-    async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        let path = args["path"].as_str().unwrap_or(".").to_string();
-
-        // If depth is specified, use the enhanced hierarchical listing (ListDirTool).
-        if args.get("depth").is_some() {
-            let enhanced = crate::coding_agent::tools_enh::ListDirTool::new(self.cwd.clone());
-            return enhanced.execute(args, _cwd).await;
+    async fn execute(&self, args: &serde_json::Value, cwd: &str) -> ToolResult {
+        // Always the gitignore-aware, budget-honest tree lister now (folded
+        // in from the unreachable `list_dir`). A flat, single-directory `ls`
+        // is just `depth: 1` of the same tree walk — not a different
+        // algorithm — so this isn't behavior-losing: a bare `{"path": "."}`
+        // call still gets exactly its immediate children, now gitignore-aware
+        // and with an honest truncation notice instead of silently dropping
+        // entries past `MAX_LS_ENTRIES`.
+        let mut args = args.clone();
+        if args.get("depth").is_none() {
+            args["depth"] = json!(1);
         }
-
-        let full_path = resolve_path(&self.cwd, &path);
-
-        let result = tokio::task::spawn_blocking(move || -> Result<(Vec<String>, usize), String> {
-            let entries = std::fs::read_dir(&full_path).map_err(|e| e.to_string())?;
-            let mut lines = Vec::new();
-            let mut total = 0usize;
-            for entry in entries.flatten() {
-                total += 1;
-                if lines.len() >= MAX_LS_ENTRIES {
-                    continue;
-                }
-                let name = entry.file_name().to_string_lossy().to_string();
-                let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                let prefix = if is_dir { "d" } else { "-" };
-                lines.push(format!("{} {}", prefix, name));
-            }
-            Ok((lines, total))
-        })
-        .await;
-
-        match result {
-            Ok(Ok((mut lines, total))) => {
-                let truncated = total > lines.len();
-                if truncated {
-                    lines.push(format!("... and {} more entries (limit {})", total - lines.len(), MAX_LS_ENTRIES));
-                }
-                ToolResult {
-                    content: lines.join("\n"),
-                    is_error: false,
-                    details: Some(json!({ "path": path, "count": total, "truncated": truncated })),
-                }
-            }
-            Ok(Err(e)) => ToolResult {
-                content: format!("Error listing directory: {}", e),
-                is_error: true,
-                details: None,
-            },
-            Err(e) => ToolResult {
-                content: format!("Internal error listing directory: {}", e),
-                is_error: true,
-                details: None,
-            },
-        }
+        let enhanced = crate::coding_agent::tools_enh::ListDirTool::new(self.cwd.clone());
+        enhanced.execute(&args, cwd).await
     }
 }
 
@@ -740,21 +598,6 @@ impl Tool for GrepTool {
         "grep"
     }
 
-    fn description(&self) -> &str {
-        "Search for a regex pattern in files."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "pattern": { "type": "string", "description": "Regex pattern to search for" },
-                "path": { "type": "string", "description": "Directory or file to search in" }
-            },
-            "required": ["pattern"]
-        })
-    }
-
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let pattern = args["pattern"].as_str().unwrap_or("").to_string();
         let path = args["path"].as_str().unwrap_or(".").to_string();
@@ -771,10 +614,11 @@ impl Tool for GrepTool {
             }
         };
 
-        let result = tokio::task::spawn_blocking(move || -> (Vec<String>, usize) {
+        let result = tokio::task::spawn_blocking(move || -> (Vec<String>, usize, bool) {
             let mut matches = Vec::new();
             let mut total_matches = 0usize;
             let mut output_bytes = 0usize;
+            let mut scan_capped = false;
 
             if search_path.is_file() {
                 grep_one_file(&search_path, &regex, &mut matches, &mut total_matches, &mut output_bytes);
@@ -783,25 +627,35 @@ impl Tool for GrepTool {
                 // a huge repo previously still touched every file under root
                 // (only the match/byte counters broke out early, not the walk
                 // itself).
-                walk_files(&search_path, MAX_SEARCH_FILES_SCANNED, |file_path| {
+                scan_capped = walk_files(&search_path, MAX_SEARCH_FILES_SCANNED, |file_path| {
                     grep_one_file(file_path, &regex, &mut matches, &mut total_matches, &mut output_bytes);
                     total_matches < MAX_GREP_MATCHES && output_bytes < MAX_GREP_BYTES
                 });
             }
-            (matches, total_matches)
+            (matches, total_matches, scan_capped)
         })
         .await;
 
         match result {
-            Ok((mut lines, total)) => {
+            Ok((mut lines, total, scan_capped)) => {
                 let truncated = total > lines.len();
                 if truncated {
                     lines.push(format!("... {} more matches (limit {})", total - lines.len(), MAX_GREP_MATCHES));
                 }
+                if scan_capped {
+                    // Never let a partial scan look exhaustive: this is what
+                    // used to make the model confidently report "X isn't used
+                    // anywhere" after silently stopping at file #4000 of a
+                    // much larger tree.
+                    lines.push(format!(
+                        "\n[WARNING: scan stopped after {MAX_SEARCH_FILES_SCANNED} files — results are PARTIAL, \
+                         not exhaustive. Narrow `path` and retry to search the rest of the tree.]"
+                    ));
+                }
                 ToolResult {
                     content: lines.join("\n"),
                     is_error: false,
-                    details: Some(json!({ "pattern": pattern, "path": path, "matches": total, "truncated": truncated })),
+                    details: Some(json!({ "pattern": pattern, "path": path, "matches": total, "truncated": truncated, "scan_capped": scan_capped })),
                 }
             }
             Err(e) => ToolResult {
@@ -895,21 +749,6 @@ impl Tool for CodeSearchTool {
         "code_search"
     }
 
-    fn description(&self) -> &str {
-        "Search the codebase by meaning/relevance rather than exact text — good for loose or conceptual queries (\"where do we handle authentication\", \"rate limiting logic\") where you don't know the exact string to grep for. Ranks files by relevance and returns the best-matching snippet from each. For an exact known string or regex, use grep instead."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "query": { "type": "string", "description": "Natural-language or keyword description of what you're looking for" },
-                "path": { "type": "string", "description": "Directory to search in (default: whole workspace)" }
-            },
-            "required": ["query"]
-        })
-    }
-
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let query = args["query"].as_str().unwrap_or("").to_string();
         let path = args["path"].as_str().unwrap_or(".").to_string();
@@ -924,10 +763,10 @@ impl Tool for CodeSearchTool {
             };
         }
 
-        let result = tokio::task::spawn_blocking(move || -> Vec<(f64, String, String)> {
+        let result = tokio::task::spawn_blocking(move || -> (Vec<(f64, String, String)>, bool) {
             let mut scored: Vec<(f64, String, String)> = Vec::new();
 
-            walk_files(&search_root, MAX_SEARCH_FILES_SCANNED, |file_path| {
+            let scan_capped = walk_files(&search_root, MAX_SEARCH_FILES_SCANNED, |file_path| {
                 let has_ext = file_path
                     .extension()
                     .and_then(|e| e.to_str())
@@ -981,13 +820,13 @@ impl Tool for CodeSearchTool {
 
             scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
             scored.truncate(MAX_SEARCH_RESULTS);
-            scored
+            (scored, scan_capped)
         })
         .await;
 
         match result {
-            Ok(hits) if !hits.is_empty() => {
-                let body = hits
+            Ok((hits, scan_capped)) if !hits.is_empty() => {
+                let mut body = hits
                     .iter()
                     .map(|(score, path, snippet)| {
                         if snippet.is_empty() {
@@ -998,16 +837,30 @@ impl Tool for CodeSearchTool {
                     })
                     .collect::<Vec<_>>()
                     .join("\n\n");
+                if scan_capped {
+                    body.push_str(&format!(
+                        "\n\n[WARNING: scan stopped after {MAX_SEARCH_FILES_SCANNED} files — results are PARTIAL, \
+                         not exhaustive. Narrow `path` and retry to search the rest of the tree.]"
+                    ));
+                }
                 ToolResult {
                     content: body,
                     is_error: false,
-                    details: Some(json!({ "query": query, "results": hits.len() })),
+                    details: Some(json!({ "query": query, "results": hits.len(), "scan_capped": scan_capped })),
                 }
             }
-            Ok(_) => ToolResult {
-                content: format!("No relevant files found for: {}", query),
+            Ok((_, scan_capped)) => ToolResult {
+                content: if scan_capped {
+                    format!(
+                        "No relevant files found for: {query}\n\n\
+                         [WARNING: scan stopped after {MAX_SEARCH_FILES_SCANNED} files — this is a PARTIAL result, \
+                         not proof the term is absent. Narrow `path` and retry to search the rest of the tree.]"
+                    )
+                } else {
+                    format!("No relevant files found for: {}", query)
+                },
                 is_error: false,
-                details: None,
+                details: Some(json!({ "scan_capped": scan_capped })),
             },
             Err(e) => ToolResult {
                 content: format!("Internal error running code_search: {}", e),
@@ -1015,6 +868,41 @@ impl Tool for CodeSearchTool {
                 details: None,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod glob_to_regex_tests {
+    use super::*;
+
+    #[test]
+    fn single_star_does_not_cross_a_path_separator() {
+        let re = glob_to_regex("src/*.rs").unwrap();
+        assert!(re.is_match("src/foo.rs"));
+        assert!(!re.is_match("src/nested/foo.rs"), "a single * must not reach across a /");
+    }
+
+    #[test]
+    fn double_star_crosses_path_separators() {
+        let re = glob_to_regex("**/*.ts").unwrap();
+        assert!(re.is_match("foo.ts"));
+        assert!(re.is_match("src/nested/deep/foo.ts"));
+    }
+
+    #[test]
+    fn question_mark_matches_one_non_separator_char() {
+        let re = glob_to_regex("a?.txt").unwrap();
+        assert!(re.is_match("ab.txt"));
+        assert!(!re.is_match("a/.txt"), "? must not match a path separator");
+    }
+
+    #[test]
+    fn double_star_slash_also_matches_zero_directories() {
+        // `**/*.ts` is the standard idiom for "at any depth, including the
+        // root" — it must match a root-level file too, not just ones nested
+        // under at least one directory.
+        let re = glob_to_regex("**/*.ts").unwrap();
+        assert!(re.is_match("foo.ts"));
     }
 }
 

@@ -4,12 +4,12 @@
 //!
 //! Architecture: `gesture::sidecar::GestureSidecar` runs the same
 //! landmarks → smoothing → classification pipeline as `packages/gui`
-//! (copied in as-is; see `gesture/mod.rs`), emitting `gesture_event` Tauri
-//! events exactly like the original. The one thing that's different here is
-//! what listens to that stream: instead of a frontend DOM handler, `main.rs`
-//! wires an internal listener straight to `os_control::OsController`, which
-//! turns each event into a real `enigo` mouse/keyboard action against
-//! whatever window currently has OS focus.
+//! (copied in as-is; see `gesture/mod.rs`), but its reader loop applies each
+//! classified event straight to `os_control::OsController`, which turns it
+//! into a real `enigo` mouse/keyboard action against whatever window
+//! currently has OS focus. Deliberately NOT routed via the Tauri event bus:
+//! the bus is writable from the webview, so a bridge there would let
+//! renderer-side code synthesize trusted OS input.
 
 pub mod gesture;
 pub mod os_control;
@@ -18,10 +18,9 @@ use std::sync::Arc;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Listener, Manager, WindowEvent};
+use tauri::{AppHandle, Manager, WindowEvent};
 
 use gesture::commands::{cmd_gesture_set_debug, cmd_gesture_start, cmd_gesture_status, cmd_gesture_stop};
-use gesture::events::GestureEvent;
 use gesture::sidecar::{resolve_script_path, GestureSidecar};
 use os_control::OsController;
 
@@ -37,8 +36,9 @@ async fn cmd_toggle_tracking(app: AppHandle, sidecar: tauri::State<'_, Arc<Gestu
         Ok(false)
     } else {
         let script = resolve_script_path(&app)?;
+        let os = app.state::<Arc<OsController>>().inner().clone();
         sidecar
-            .start(app.clone(), script, 0, gesture::config::GestureConfig::default(), false)
+            .start(app.clone(), os, script, 0, gesture::config::GestureConfig::default(), false)
             .await?;
         Ok(true)
     }
@@ -68,26 +68,20 @@ pub fn run() {
         ])
         .setup(|app| {
             // OS controller: one Enigo handle for the process lifetime,
-            // shared via managed state so the gesture-event listener below
-            // can reach it.
+            // shared via managed state so the sidecar can be handed it at
+            // start time (settings button / tray toggle).
             let os_controller = Arc::new(OsController::new().map_err(|e| {
                 log::error!("[gesture-control] failed to initialize OS input controller: {e}");
                 e
             })?);
             app.manage(os_controller.clone());
 
-            // Bridge: every `gesture_event` the sidecar emits also gets
-            // applied as real OS input. This is the one piece that
-            // distinguishes this app from `packages/gui`'s DOM-scoped
-            // gesture module — everything upstream of this listener is the
-            // unmodified pipeline.
-            let controller_for_listener = os_controller.clone();
-            app.listen("gesture_event", move |event| {
-                match serde_json::from_str::<GestureEvent>(event.payload()) {
-                    Ok(gesture_event) => controller_for_listener.apply(&gesture_event),
-                    Err(e) => log::warn!("[gesture-control] malformed gesture_event payload: {e}"),
-                }
-            });
+            // NOTE: gesture events are applied to OS input directly by the
+            // sidecar reader loop (`run_reader_loop` receives the managed
+            // OsController at `start()`), NOT via a Tauri event-bus bridge —
+            // the bus is writable from the webview, so routing OS input
+            // through it would let renderer-side code synthesize real mouse
+            // events.
 
             // Tray icon: start/stop toggle + quit. No visible main window by
             // default — this is a background utility, the settings window
@@ -116,7 +110,8 @@ pub fn run() {
                                     match resolve_script_path(&app) {
                                         Ok(script) => {
                                             let cfg = gesture::config::GestureConfig::default();
-                                            if let Err(e) = sidecar.start(app.clone(), script, 0, cfg, false).await {
+                                            let os = app.state::<Arc<OsController>>().inner().clone();
+                                            if let Err(e) = sidecar.start(app.clone(), os, script, 0, cfg, false).await {
                                                 log::error!("[gesture-control] failed to start tracking: {e}");
                                             }
                                         }

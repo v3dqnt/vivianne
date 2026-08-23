@@ -1,22 +1,18 @@
-//! Streaming tool wrapper — ports the streaming surface grok exposes on its
-//! bash / read_file tools onto Vivianne's `Tool` trait without breaking the
-//! existing non-streaming contract.
+//! Live output transport — ports the streaming surface grok exposes on its
+//! bash tool onto Vivianne's `bash`/`powershell`, without a separate tool
+//! name to choose between.
 //!
 //! Grok's runtime exposes streaming as a first-class capability on the `Tool`
 //! trait; every tool declares `is_streaming` and can push line-by-line output
 //! back to the caller before the final result. Vivianne's `Tool::execute`
-//! returns a single `ToolResult` value, so we retro-fit streaming without
-//! touching the trait:
-//!
-//! 1. `StreamingTool` = an optional side-channel emitter registered per
-//!    session. `StreamSink` receives lines as they arrive.
-//! 2. `StreamingBashTool` / `StreamingPowerShellTool` = drop-in replacements
-//!    for the batch versions in `tool_exec` that use `AsyncRead::lines()` on
-//!    child stdout/stderr and push each line to the sink before returning.
-//! 3. Old batch tools stay in place: unaware callers keep working; the
-//!    session layer installs a sink when it wants live output.
+//! returns a single `ToolResult` value, so this retro-fits streaming without
+//! touching the trait: `run_streaming` is the shared executor `BashTool` and
+//! `PowerShellTool` both call, pushing lines to the GUI over a `Channel` as
+//! the child process runs, then returning the same final `ToolResult` a
+//! batch run would have. There used to be a second `streaming_bash`/
+//! `streaming_powershell` tool pair the model had to choose to get live
+//! output — now every run streams, so that choice doesn't exist.
 
-use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::json;
 use std::process::Stdio;
@@ -25,7 +21,7 @@ use std::time::Duration;
 use tauri::ipc::Channel;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use super::tool_exec::{truncate_text, Tool, ToolResult};
+use super::tool_exec::ToolResult;
 
 // ── Live output transport ───────────────────────────────────────────────────
 //
@@ -76,11 +72,9 @@ fn send_batch(tool: &str, lines: Vec<StreamLine>) {
     }
 }
 
-// ── streaming_bash ─────────────────────────────────────────────────────────
+// ── shared streaming executor ───────────────────────────────────────────────
 
 const MAX_STREAM_BYTES: usize = 256_000;
-const DEFAULT_TIMEOUT_SECS: u64 = 120;
-const MAX_TIMEOUT_SECS: u64 = 600;
 /// Flush the pending-line buffer at least this often, so output still reads
 /// as "live" even during a quiet lull between bursts.
 const BATCH_INTERVAL_MS: u64 = 40;
@@ -88,84 +82,11 @@ const BATCH_INTERVAL_MS: u64 = 40;
 /// so a very chatty command doesn't grow the buffer unbounded between ticks.
 const BATCH_MAX_LINES: usize = 50;
 
-pub struct StreamingBashTool { cwd: String }
-impl StreamingBashTool { pub fn new(cwd: String) -> Self { Self { cwd } } }
-
-#[async_trait]
-impl Tool for StreamingBashTool {
-    fn name(&self) -> &str { "streaming_bash" }
-
-    fn description(&self) -> &str {
-        "Same as `bash` but streams stdout/stderr line-by-line to the GUI as the command runs, instead of buffering until completion. Use for long-running builds/tests where you want the model to see progress and the user to see live output. Returns the full captured output at the end."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "command": { "type": "string", "description": "Bash command to execute" },
-                "timeout": { "type": "number", "description": "Timeout in seconds (default 120, max 600)" }
-            },
-            "required": ["command"]
-        })
-    }
-
-    async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        if let Some(gated) = super::tool_exec::plan_mode_gate("streaming_bash") { return gated; }
-        let command = args["command"].as_str().unwrap_or("").to_string();
-        if let Some(reason) = super::sandbox::check_command(&command) {
-            return ToolResult { content: reason.to_string(), is_error: true, details: None };
-        }
-        let timeout_secs = args["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS).min(MAX_TIMEOUT_SECS).max(1);
-        run_streaming("streaming_bash", "bash", &["-c", &command], &self.cwd, timeout_secs).await
-    }
-}
-
-pub struct StreamingPowerShellTool { cwd: String }
-impl StreamingPowerShellTool { pub fn new(cwd: String) -> Self { Self { cwd } } }
-
-#[async_trait]
-impl Tool for StreamingPowerShellTool {
-    fn name(&self) -> &str { "streaming_powershell" }
-
-    fn description(&self) -> &str {
-        "Same as `powershell` but streams stdout/stderr line-by-line to the GUI as the command runs. Use for long-running Windows commands where live progress matters."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "command": { "type": "string" },
-                "timeout": { "type": "number", "description": "Timeout in seconds (default 120, max 600)" }
-            },
-            "required": ["command"]
-        })
-    }
-
-    async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        if let Some(gated) = super::tool_exec::plan_mode_gate("streaming_powershell") { return gated; }
-        let command = args["command"].as_str().unwrap_or("").to_string();
-        if command.trim().is_empty() {
-            return ToolResult { content: "'command' is required".to_string(), is_error: true, details: None };
-        }
-        if let Some(reason) = super::sandbox::check_command(&command) {
-            return ToolResult { content: reason.to_string(), is_error: true, details: None };
-        }
-        let timeout_secs = args["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS).min(MAX_TIMEOUT_SECS).max(1);
-        let exe = if cfg!(windows) { "powershell" } else { "pwsh" };
-        run_streaming(
-            "streaming_powershell",
-            exe,
-            &["-NoProfile", "-NonInteractive", "-Command", &command],
-            &self.cwd,
-            timeout_secs,
-        )
-        .await
-    }
-}
-
-async fn run_streaming(
+/// Run `exe args...` in `cwd`, streaming stdout/stderr line-by-line to the
+/// GUI (if a channel is registered) as it runs, then returning the same
+/// labeled, head+tail-truncated, exit-code-bearing `ToolResult` shape
+/// `bash`/`powershell` return non-streaming. Shared by both — see module doc.
+pub(crate) async fn run_streaming(
     tool: &'static str,
     exe: &str,
     args: &[&str],
@@ -247,19 +168,39 @@ async fn run_streaming(
         _ => None,
     };
     let is_error = status.map(|s| !s.success()).unwrap_or(true);
-    let combined = if all_stdout.is_empty() && all_stderr.is_empty() {
-        "(no output)".to_string()
-    } else if all_stderr.is_empty() {
-        all_stdout.clone()
-    } else if all_stdout.is_empty() {
-        all_stderr.clone()
-    } else {
-        format!("{all_stdout}\n{all_stderr}")
-    };
-    let (result, truncated) = truncate_text(&combined, usize::MAX, MAX_STREAM_BYTES);
+    let exit_code = status.and_then(|s| s.code());
+
+    // Labeled and head+tail truncated (not head-only): a build/test failure
+    // puts its summary at the END of the output, which head-only truncation
+    // cut off first. Same shape the non-streaming path uses — one output
+    // contract regardless of which path ran.
+    let mut combined = String::new();
+    if !all_stdout.is_empty() {
+        combined.push_str("[stdout]\n");
+        combined.push_str(&all_stdout);
+    }
+    if !all_stderr.is_empty() {
+        if !combined.is_empty() { combined.push('\n'); }
+        combined.push_str("[stderr]\n");
+        combined.push_str(&all_stderr);
+    }
+    let truncated = combined.len() > MAX_STREAM_BYTES;
+    if truncated {
+        // The spilling variant: this output exists nowhere else (it's
+        // truncated before it ever becomes a persisted message), unlike
+        // `prune_aging_tool_results`'s callers, whose original is already on
+        // disk in the session file.
+        combined = super::context_shaping::spill_and_trim_middle_bytes(&combined, MAX_STREAM_BYTES / 4, 3 * MAX_STREAM_BYTES / 4).await;
+    }
+    let body = if combined.is_empty() { "(no output)".to_string() } else { combined };
+    let content = format!(
+        "{body}\n\n[exit code: {}]",
+        exit_code.map(|c| c.to_string()).unwrap_or_else(|| "unknown (killed by signal)".to_string())
+    );
+
     ToolResult {
-        content: result,
+        content,
         is_error,
-        details: Some(json!({ "streamed": true, "truncated": truncated })),
+        details: Some(json!({ "exit_code": exit_code, "streamed": true, "truncated": truncated })),
     }
 }

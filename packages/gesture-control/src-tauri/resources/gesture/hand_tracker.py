@@ -29,6 +29,7 @@ continues.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -39,6 +40,11 @@ MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
     "hand_landmarker/float16/1/hand_landmarker.task"
 )
+# SHA-256 of hand_landmarker.task as published by Google for float16/1. The
+# model file is parsed by native code, so a tampered or swapped download is a
+# real attack vector (e.g. a TLS-intercepting proxy); pin the digest and fail
+# hard on mismatch instead of feeding arbitrary bytes to MediaPipe.
+MODEL_SHA256 = "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1"
 # Requested capture resolution/fps. Higher resolution gives MediaPipe more
 # pixels to resolve fingertip position from, which measurably reduces
 # landmark jitter for pinch/click precision at the cost of a bit more CPU;
@@ -55,23 +61,45 @@ def eprint(*args):
     print(*args, file=sys.stderr, flush=True)
 
 
+def sha256_of(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 def resolve_model_path(override: str | None) -> str:
     if override:
+        # Explicit user-supplied path: trusted, not integrity-checked.
         return override
     cache_dir = os.path.join(os.path.expanduser("~"), ".viv", "models", "mediapipe")
     os.makedirs(cache_dir, exist_ok=True)
     model_path = os.path.join(cache_dir, "hand_landmarker.task")
-    if not os.path.exists(model_path):
-        eprint(f"Downloading hand_landmarker.task to {model_path} ...")
-        tmp_path = model_path + ".part"
-        try:
-            urllib.request.urlretrieve(MODEL_URL, tmp_path)
-            os.replace(tmp_path, model_path)
-        except Exception as e:  # noqa: BLE001 - genuinely any failure here is fatal for startup
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-            raise RuntimeError(f"Failed to download hand landmarker model: {e}") from e
-        eprint("Model downloaded.")
+
+    # Re-verify the cached copy on every startup: a tampered or truncated
+    # cache must not silently survive across runs.
+    if os.path.exists(model_path):
+        if sha256_of(model_path) == MODEL_SHA256:
+            return model_path
+        eprint(f"Cached model failed SHA-256 verification, re-downloading: {model_path}")
+        os.remove(model_path)
+
+    eprint(f"Downloading hand_landmarker.task to {model_path} ...")
+    tmp_path = model_path + ".part"
+    try:
+        urllib.request.urlretrieve(MODEL_URL, tmp_path)
+        digest = sha256_of(tmp_path)
+        if digest != MODEL_SHA256:
+            raise RuntimeError(
+                f"Model integrity check failed: expected sha256 {MODEL_SHA256}, got {digest}"
+            )
+        os.replace(tmp_path, model_path)
+    except Exception as e:  # noqa: BLE001 - genuinely any failure here is fatal for startup
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise RuntimeError(f"Failed to fetch verified hand landmarker model: {e}") from e
+    eprint("Model downloaded and verified.")
     return model_path
 
 

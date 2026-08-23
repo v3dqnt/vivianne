@@ -66,6 +66,18 @@ pub fn viv_camoufox_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// `~/.viv/agent/spill` — full, untruncated copies of oversized tool output
+/// (see `context_shaping::trim_middle_bytes`). Not session-scoped like dsh's
+/// equivalent — the `Tool` trait has no session id to thread through, and a
+/// flat, globally-unique-named directory gets the actual value (the full
+/// text is still on disk and `read`-able) without a trait-wide signature
+/// change to get there.
+pub fn viv_spill_dir() -> Result<PathBuf, String> {
+    let dir = viv_agent_dir()?.join("spill");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create spill directory: {e}"))?;
+    Ok(dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

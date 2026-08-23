@@ -1,7 +1,7 @@
 //! Coding Agent module — shared tool implementations + grok-parity surface
-//! (subagent orchestration, plan mode, ask-user, memory tools, OpenCode-style
-//! shortcuts, streaming executors) used by both the main `agent::` loop and
-//! the orchestrator's spawned instances.
+//! (subagent orchestration, plan mode, ask-user, OpenCode-style shortcuts,
+//! streaming executors) used by the main `agent::` loop's tool registry
+//! (`tool_exec::create_coding_tools`).
 //!
 //! Nothing here is re-exported at the module root — every external reference
 //! already goes through its specific submodule (`coding_agent::tool_exec::X`,
@@ -24,7 +24,6 @@ pub mod sandbox;
 // enriched read/list, memory tools, OpenCode-style shortcuts, streaming
 // executors.
 pub mod orchestration;
-pub mod memory_tools;
 pub mod tools_enh;
 pub mod streaming;
 pub mod context_shaping;

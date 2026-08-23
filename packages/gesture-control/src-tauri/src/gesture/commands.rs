@@ -12,6 +12,7 @@ use super::sidecar::{resolve_script_path, GestureSidecar};
 pub async fn cmd_gesture_start(
     app: AppHandle,
     sidecar: State<'_, Arc<GestureSidecar>>,
+    os: State<'_, Arc<crate::os_control::OsController>>,
     camera_index: Option<u32>,
     config: Option<GestureConfig>,
     debug: Option<bool>,
@@ -19,7 +20,14 @@ pub async fn cmd_gesture_start(
     let script = resolve_script_path(&app)?;
     let sidecar = sidecar.inner().clone();
     sidecar
-        .start(app, script, camera_index.unwrap_or(0), config.unwrap_or_default(), debug.unwrap_or(false))
+        .start(
+            app,
+            os.inner().clone(),
+            script,
+            camera_index.unwrap_or(0),
+            config.unwrap_or_default(),
+            debug.unwrap_or(false),
+        )
         .await
 }
 

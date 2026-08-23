@@ -81,33 +81,6 @@ impl Tool for ComputerTool {
         "computer"
     }
 
-    fn description(&self) -> &str {
-        "Control the computer: move and click the mouse, type text, press keys, and take screenshots."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": [
-                        "key", "type", "mouse_move", "left_click", "left_click_drag",
-                        "right_click", "middle_click", "double_click", "screenshot", "cursor_position"
-                    ],
-                    "description": "The action to perform."
-                },
-                "coordinate": {
-                    "type": "array",
-                    "items": { "type": "number" },
-                    "description": "X,Y screen coordinates for mouse actions."
-                },
-                "text": { "type": "string", "description": "Text to type, or key combination to press (e.g. 'Control+C')." }
-            },
-            "required": ["action"]
-        })
-    }
-
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let action = match args.get("action").and_then(|v| v.as_str()) {
             Some(a) => a,

@@ -5,6 +5,7 @@ import { useModelStore } from './modelStore'
 import { usePlanModeStore } from './planModeStore'
 import { useSubagentStore } from './subagentStore'
 import { useWebPreviewStore } from './webPreviewStore'
+import { usePanelStore, type RightPanelKind } from '../../dock/store/panelStore'
 
 /** Wall-clock start of the current streaming assistant message — set on
  * `message_start`, consumed on `message_end` to compute tokens/sec. Plain
@@ -372,6 +373,31 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             if (!isPrimary(threadId)) break
             const p = event.payload
             useWebPreviewStore.getState().requested(p.url, p.screenshot_base64, p.error)
+            // Pop the merged Preview panel open in Browser mode so agent-driven
+            // browsing (web_preview, or any browser_* interaction tool) is
+            // actually visible without the user having to go find it.
+            usePanelStore.getState().openRight('preview')
+            usePanelStore.getState().setPreviewMode('browser')
+            break
+          }
+          case 'panel_focus_requested': {
+            if (!isPrimary(threadId)) break
+            const p = event.payload
+            const RIGHT_PANEL_KINDS: RightPanelKind[] = ['review', 'files', 'preview', 'tasks']
+            if (p.panel === 'terminal') {
+              if (p.action === 'open') usePanelStore.getState().openBottom()
+              else usePanelStore.getState().closeBottom()
+            } else if (p.panel === 'preview_dev' || p.panel === 'preview_browser') {
+              if (p.action === 'open') {
+                usePanelStore.getState().openRight('preview')
+                usePanelStore.getState().setPreviewMode(p.panel === 'preview_dev' ? 'dev' : 'browser')
+              } else {
+                usePanelStore.getState().closeRight()
+              }
+            } else if ((RIGHT_PANEL_KINDS as string[]).includes(p.panel)) {
+              if (p.action === 'open') usePanelStore.getState().openRight(p.panel as RightPanelKind)
+              else usePanelStore.getState().closeRight()
+            }
             break
           }
           default:

@@ -7,9 +7,8 @@ import { CloseCircleLinear } from '../../../icons'
 import { ResizeHandle } from '../../../components/ResizeHandle'
 import { usePanelStore, RIGHT_PANEL_LABELS } from '../store/panelStore'
 import { WorkspaceTree } from './WorkspaceTree'
-import { LivePreviewPanel } from './LivePreviewPanel'
+import { PreviewPanel } from './PreviewPanel'
 import { BackgroundTasksPanel } from './BackgroundTasksPanel'
-import { BrowserPanel } from './BrowserPanel'
 import { ReviewPanel } from '../../git/components/ReviewPanel'
 
 const MIN_WIDTH = 300
@@ -48,8 +47,7 @@ export function SidePanel() {
         <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex' }}>
           {kind === 'review' && <ReviewPanel onClose={close} />}
           {kind === 'files' && <WorkspaceTree />}
-          {kind === 'live' && <LivePreviewPanel />}
-          {kind === 'browser' && <BrowserPanel />}
+          {kind === 'preview' && <PreviewPanel />}
           {kind === 'tasks' && <BackgroundTasksPanel />}
         </Box>
       </Stack>

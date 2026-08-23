@@ -7,7 +7,7 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
     vec![
         serde_json::json!({
             "name": "read",
-            "description": "Read the contents of a file. Handles plain text, PDFs (page count + extracted text via 'pages' param), images (format + pixel dimensions + optional OCR), and Jupyter notebooks (.ipynb, cell-by-cell). For text files, pass offset/limit for partial reads. For images, set ocr=true to extract text via Baidu Unlimited-OCR (requires HUGGINGFACE_TOKEN env var).",
+            "description": "Read the contents of a file. Text files are returned line-numbered (like `cat -n`), with the total line count stated so you know whether you saw the whole file or need offset/limit to continue. Handles PDFs (page count + extracted text via 'pages' param) and Jupyter notebooks (.ipynb, cell-by-cell) the same way. Images are shown to you directly (downscaled if oversized) alongside a text summary (format/dimensions) — set ocr=true to also extract any text in the image instead of just seeing it. If the current model can't take image input, an image is OCR'd automatically instead of shown, so you still get any text it contains.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -15,7 +15,7 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
                     "offset": { "type": "number", "description": "Start reading at this line (1-indexed) — text files only" },
                     "limit": { "type": "number", "description": "Maximum lines to read — text files only" },
                     "pages": { "type": "string", "description": "PDF page range, e.g. \"1-5\" or \"3\" — PDF files only" },
-                    "ocr": { "type": "boolean", "description": "If true, run OCR on image files to extract text (requires HUGGINGFACE_TOKEN). Uses Baidu Unlimited-OCR via HF Inference API, with local PaddleOCR fallback." }
+                    "ocr": { "type": "boolean", "description": "If true, also run OCR on image files to extract literal text (requires HUGGINGFACE_TOKEN, with a local RapidOCR fallback)." }
                 },
                 "required": ["path"]
             }
@@ -47,11 +47,12 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
         }),
         serde_json::json!({
             "name": "bash",
-            "description": "Execute a bash command in the workspace.",
+            "description": "Execute a bash command in the workspace. Streams live output to the GUI as it runs. Output is labeled [stdout]/[stderr], the exit code is always appended at the end, and long output is truncated in the middle (kept: start + end) so a build/test failure's summary at the end is never cut off — the omitted middle is saved to a file whose path is in the truncation notice; read or grep it if you need something from the cut section.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "Shell command to execute" }
+                    "command": { "type": "string", "description": "Shell command to execute" },
+                    "timeout": { "type": "number", "description": "Timeout in seconds (default 120, max 600)" }
                 },
                 "required": ["command"]
             }
@@ -156,7 +157,7 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
         }),
         serde_json::json!({
             "name": "powershell",
-            "description": "Execute a PowerShell command. Preferred on Windows for shell operations.",
+            "description": "Execute a PowerShell command. Preferred on Windows for shell operations. Streams live output to the GUI as it runs, same as bash.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -240,7 +241,7 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
         }),
         serde_json::json!({
             "name": "web_preview",
-            "description": "Open a URL, or a local file the browser can render (HTML, PDF, SVG, images), in a live preview panel inside the app — a real screenshot from an actual browser (camoufox-browser), not a sandboxed iframe, so it works even for sites/pages that block being framed. Use web_fetch instead when you just need to read the content as text yourself. Requires camoufox-browser running (npx @askjo/camofox-browser) — if it isn't, this returns a clear error explaining how to start it.",
+            "description": "Open a URL, or a local file the browser can render (HTML, PDF, SVG, images), in a live preview panel inside the app — a real screenshot from an actual browser (camoufox-browser), not a sandboxed iframe, so it works even for sites/pages that block being framed. Use web_fetch instead when you just need to read the content as text yourself. This only navigates and screenshots — for actually interacting with the page (browsing the web hands-on, or exercising a local dev build), use browser_snapshot/browser_click/browser_type/browser_scroll/browser_evaluate after opening it here. Requires camoufox-browser running (npx @askjo/camofox-browser) — if it isn't, this returns a clear error explaining how to start it.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -248,6 +249,78 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
                 },
                 "required": ["url"]
             }
+        }),
+        serde_json::json!({
+            "name": "browser_snapshot",
+            "description": "Get the accessibility tree of the page currently open via web_preview, with element refs (e1, e2, ...) that browser_click/browser_type target. Call this first to see what's on the page and find the ref of the element you want, or after a page change/navigation to refresh refs before the next click/type.",
+            "parameters": { "type": "object", "properties": {} }
+        }),
+        serde_json::json!({
+            "name": "browser_click",
+            "description": "Click the element with accessibility ref `ref` (from browser_snapshot) on the page currently open via web_preview.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ref": { "type": "string", "description": "Element ref from browser_snapshot, e.g. \"e3\"" }
+                },
+                "required": ["ref"]
+            }
+        }),
+        serde_json::json!({
+            "name": "browser_type",
+            "description": "Type text into the element with accessibility ref `ref` (from browser_snapshot) on the page currently open via web_preview.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ref": { "type": "string", "description": "Element ref from browser_snapshot, e.g. \"e5\"" },
+                    "text": { "type": "string", "description": "Text to type into the element" },
+                    "submit": { "type": "boolean", "description": "Press Enter after typing (e.g. to submit a search box)", "default": false }
+                },
+                "required": ["ref", "text"]
+            }
+        }),
+        serde_json::json!({
+            "name": "browser_press_key",
+            "description": "Press a single key or combo (e.g. \"Enter\", \"Escape\", \"Control+A\") at whatever currently has focus on the page open via web_preview.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "Key or combo to press, e.g. \"Enter\" or \"Control+A\"" }
+                },
+                "required": ["key"]
+            }
+        }),
+        serde_json::json!({
+            "name": "browser_scroll",
+            "description": "Scroll the page currently open via web_preview.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "direction": { "type": "string", "enum": ["up", "down", "left", "right"], "default": "down" },
+                    "amount": { "type": "number", "description": "Pixels to scroll (default 500)" }
+                }
+            }
+        }),
+        serde_json::json!({
+            "name": "browser_evaluate",
+            "description": "Run arbitrary JavaScript in the page currently open via web_preview and return the result (must be JSON-serializable). For reading page state, computed values, or anything not covered by a dedicated tool. Prefer browser_read_console/browser_read_network for those specific cases.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expression": { "type": "string", "description": "JavaScript expression to evaluate in the page, e.g. \"document.title\" or \"document.querySelectorAll('a').length\"" }
+                },
+                "required": ["expression"]
+            }
+        }),
+        serde_json::json!({
+            "name": "browser_read_console",
+            "description": "Read console.log/warn/error output from the page currently open via web_preview. Best-effort: installs a capture shim on first call, so it only sees messages logged from that point forward — it cannot retroactively recover console output from before this was called. Draining is destructive (each call returns and clears the buffer since the last read).",
+            "parameters": { "type": "object", "properties": {} }
+        }),
+        serde_json::json!({
+            "name": "browser_read_network",
+            "description": "Read network requests the page currently open via web_preview has made, via the Resource Timing API — URL, type, duration, transfer size for each. Best-effort and passive: no request/response headers or bodies (there's no DevTools protocol access here), and it only sees requests still in the browser's timing buffer (recent ones; a long time or heavy traffic since page load may have evicted earlier entries).",
+            "parameters": { "type": "object", "properties": {} }
         }),
         serde_json::json!({
             "name": "web_search",
@@ -358,7 +431,7 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
         }),
         serde_json::json!({
             "name": "todo_write",
-            "description": "Create and manage a structured task checklist for the session. Replaces the whole list each call.",
+            "description": "Create and manage a structured task checklist for the session. Replaces the whole list each call. At most one item may be 'in_progress' at a time, and content must be unique across items — both are rejected as errors.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -415,6 +488,113 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
             "parameters": { "type": "object", "properties": {} }
         }),
         serde_json::json!({
+            "name": "set_panel",
+            "description": "Open or close a GUI panel, so the user can actually see what you're doing (e.g. open Review while you work through a diff, or the terminal panel while you run a long command) instead of it only ever reacting to clicks. Purely advisory — always succeeds regardless of whether the panel is currently visible on screen.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "panel": { "type": "string", "enum": ["review", "files", "preview_dev", "preview_browser", "tasks", "terminal"], "description": "review = diff/review panel, files = workspace file tree, preview_dev = the Preview panel in dev-server mode, preview_browser = the Preview panel in browser mode (what shows web_preview/browser_* activity), tasks = background subagent tasks, terminal = the bottom terminal panel" },
+                    "action": { "type": "string", "enum": ["open", "close"] }
+                },
+                "required": ["panel", "action"]
+            }
+        }),
+        serde_json::json!({
+            "name": "get_goal",
+            "description": "Get this session's current goal (the durable objective you're working toward), if one is set. Distinct from todo_write's checklist — the goal is the point of the steps, not the steps themselves.",
+            "parameters": { "type": "object", "properties": {} }
+        }),
+        serde_json::json!({
+            "name": "create_goal",
+            "description": "Set this session's goal, replacing any existing one. Use for a task substantial enough that keeping the underlying objective explicit (separate from the moment-to-moment todo checklist) helps you stay on track across many turns — not for quick asks.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "objective": { "type": "string", "description": "What you're trying to accomplish, stated concretely" }
+                },
+                "required": ["objective"]
+            }
+        }),
+        serde_json::json!({
+            "name": "update_goal",
+            "description": "Update the current goal's phase or wording. Fails if no goal is set — call create_goal first.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["edit", "pause", "resume", "complete", "blocked"] },
+                    "objective": { "type": "string", "description": "New wording — action='edit' only" },
+                    "blocked_reason": { "type": "string", "description": "Why it's blocked — action='blocked' only" }
+                },
+                "required": ["action"]
+            }
+        }),
+        serde_json::json!({
+            "name": "list_tools",
+            "description": "List every tool currently registered — built-in, MCP-provided, and playbook-defined — with whether each is enabled or disabled right now. Use this to check what's actually available before assuming a tool exists or is reachable, e.g. after connecting an MCP server or when a call unexpectedly fails as disabled.",
+            "parameters": { "type": "object", "properties": {} }
+        }),
+        serde_json::json!({
+            "name": "terminal_open",
+            "description": "Open a persistent, real shell session (same kind the user's terminal tabs use) and return its id. Unlike bash/powershell, this survives across calls — use it for interactive programs (a REPL, an installer with prompts), or work that needs shell state kept alive between steps (an activated venv, an ssh session, a long dev-server process you'll poll). For a single one-shot command, prefer bash/powershell — they're simpler and don't need cleanup.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "shell_id": { "type": "string", "description": "Which shell to launch (see terminal_list output or omit for the platform default: powershell on Windows, bash elsewhere)" },
+                    "cwd": { "type": "string", "description": "Working directory to start in (default: the workspace root)" }
+                }
+            }
+        }),
+        serde_json::json!({
+            "name": "terminal_send",
+            "description": "Type a line into an open terminal session and press Enter (a trailing newline is added if missing). Doesn't wait for or return output — call terminal_read afterward to see the result.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tab_id": { "type": "string", "description": "Session id returned by terminal_open" },
+                    "data": { "type": "string", "description": "Text to type" }
+                },
+                "required": ["tab_id", "data"]
+            }
+        }),
+        serde_json::json!({
+            "name": "terminal_read",
+            "description": "Read everything a terminal session has printed since the last terminal_read call on it (or since it opened, on the first call). Returns '(no new output since the last read)' if nothing new arrived — that does not mean the command finished; a foreground process can still be running with no new output yet.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tab_id": { "type": "string", "description": "Session id returned by terminal_open" }
+                },
+                "required": ["tab_id"]
+            }
+        }),
+        serde_json::json!({
+            "name": "terminal_signal",
+            "description": "Send Ctrl-C to whatever's running in the foreground of a terminal session, stopping it without closing the session. To end the session entirely, use terminal_close.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tab_id": { "type": "string", "description": "Session id returned by terminal_open" }
+                },
+                "required": ["tab_id"]
+            }
+        }),
+        serde_json::json!({
+            "name": "terminal_close",
+            "description": "Close a terminal session and terminate its shell process. Call this when you're done with a session you opened — it doesn't clean itself up.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tab_id": { "type": "string", "description": "Session id returned by terminal_open" }
+                },
+                "required": ["tab_id"]
+            }
+        }),
+        serde_json::json!({
+            "name": "terminal_list",
+            "description": "List every open terminal session (yours and the user's own terminal tabs), with shell, working directory, and when it was opened.",
+            "parameters": { "type": "object", "properties": {} }
+        }),
+        serde_json::json!({
             "name": "create_automation",
             "description": "Schedule a prompt to be run through the agent automatically on a cron schedule. Creates it enabled. It appears in Settings → Automations, where the user can also see/edit/disable it. Call get_current_time first if the schedule is relative ('every morning at 9', 'in an hour') so the cron expression lines up with the actual current time — and use the `question` tool to ask the user for the schedule/time if they haven't specified one.",
             "parameters": {
@@ -457,40 +637,34 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
         }),
         serde_json::json!({
             "name": "task",
-            "description": "Launch a subagent with a self-contained prompt. By default (run_in_background=true) this returns a task_id immediately — poll or block on it with task_output/wait_tasks — instead of blocking your own turn, and it shows up live in the Background Tasks panel so the user can see it running. Call this once per subagent — spawn multiple concurrently rather than looping serial blocking calls. Set run_in_background=false only for a single one-off subtask where you have nothing else to do until it returns. Single-level depth cap — a subagent spawned by task cannot itself call task again.",
+            "description": "Launch a subagent. By default (run_in_background=true) this returns a task_id immediately — poll or block on it with task_output/wait_tasks — instead of blocking your own turn, and it shows up live in the Background Tasks panel so the user can see it running. Call this once per subagent — spawn multiple concurrently rather than looping serial blocking calls, and keep making progress yourself (other tool calls, or delegating more independent chunks) instead of idling on task_output while one runs. Set run_in_background=false only for a single one-off subtask where you have nothing else to do until it returns. Single-level depth cap — a subagent spawned by task cannot itself call task again. Call list_subagent_profiles first if you're not sure whether a profile with a preset prompt already exists for this — pointing at one (subagent_type + a short context) costs far fewer tokens than writing the full prompt yourself.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "description": { "type": "string", "description": "Short (3-5 word) description of the task" },
-                    "prompt": { "type": "string", "description": "Self-contained instructions for the subagent — it does not see this conversation" },
+                    "prompt": { "type": "string", "description": "Self-contained instructions for the subagent — it does not see this conversation. Required unless subagent_type names a profile with a preset default_prompt (check with list_subagent_profiles) — in that case omit this and use context instead." },
                     "subagent_type": { "type": "string", "description": "Label for the subagent's role (default 'general-purpose')", "default": "general-purpose" },
+                    "context": { "type": "string", "description": "A short pointer (a file path, a target, a one-line description) appended to the matched profile's preset default_prompt. Only meaningful when prompt is omitted and subagent_type names a profile with default_prompt set — check list_subagent_profiles first." },
                     "persona": { "type": "string", "enum": ["security-auditor", "senior-dev", "debugger"], "description": "Optional role framing layered into the subagent's own directive — pick one when the task genuinely calls for that lens (a security review, an architecture-minded implementation, a bug hunt with a fixed reproduce/isolate/fix/verify order). Omit for general-purpose work." },
                     "run_in_background": { "type": "boolean", "description": "If true (default), return a task_id immediately instead of blocking", "default": true }
                 },
-                "required": ["description", "prompt"]
+                "required": ["description"]
             }
         }),
         serde_json::json!({
+            "name": "list_subagent_profiles",
+            "description": "List every subagent profile (built-in and custom) available to task, each with its id, description, allowed_tools restriction, and whether it has a preset default_prompt. Call this before task when you're not sure whether a profile already exists for what you're about to do — a profile with default_prompt set can be invoked with just subagent_type + a short context instead of writing a full prompt.",
+            "parameters": { "type": "object", "properties": {} }
+        }),
+        serde_json::json!({
             "name": "task_output",
-            "description": "Poll (or wait for) one or more background subagents launched with task. Returns a status snapshot per id: running, completed (with output), failed, or cancelled. Optional timeout_ms blocks until at least one id is terminal.",
+            "description": "Poll (or wait for) one or more background subagents launched with task. Returns a status snapshot per id: running, completed (with output), failed, or cancelled. With timeout_ms set: mode='any' (default) blocks until at least one id is terminal; mode='all' blocks until every id is terminal. Use this instead of a polling loop.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "task_ids": { "type": "array", "items": { "type": "string" }, "description": "Subagent ids returned by task" },
-                    "timeout_ms": { "type": "number", "description": "If set, block up to this many milliseconds for one id to finish (default 0 = no wait)" }
-                },
-                "required": ["task_ids"]
-            }
-        }),
-        serde_json::json!({
-            "name": "wait_tasks",
-            "description": "Block until subagents launched with task complete. mode='any' returns as soon as one finishes; mode='all' waits for every id. Prefer this over polling task_output in a loop.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task_ids": { "type": "array", "items": { "type": "string" } },
-                    "mode": { "type": "string", "enum": ["any", "all"], "default": "all" },
-                    "timeout_ms": { "type": "number", "description": "Give up after this many ms and return the current snapshot" }
+                    "timeout_ms": { "type": "number", "description": "If set, block up to this many milliseconds waiting on mode's condition (default 0 = no wait, just a snapshot)" },
+                    "mode": { "type": "string", "enum": ["any", "all"], "default": "any", "description": "Only matters when timeout_ms > 0: 'any' returns as soon as one id is terminal, 'all' waits for every id" }
                 },
                 "required": ["task_ids"]
             }
@@ -509,7 +683,7 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
         }),
         serde_json::json!({
             "name": "enter_plan_mode",
-            "description": "Enter plan mode. While active, mutating tools (write, edit, apply_patch, bash, powershell, notebook_edit, and their streaming variants) are refused — you can only read, search, and think. Use to sketch a plan before making changes. Provide an optional 'plan' summary.",
+            "description": "Enter plan mode. While active, mutating tools (write, edit, apply_patch, bash, powershell, notebook_edit, terminal_open, terminal_send) are refused — you can only read, search, and think. Use to sketch a plan before making changes. Provide an optional 'plan' summary.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -521,30 +695,6 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
             "name": "exit_plan_mode",
             "description": "Exit plan mode, re-enabling mutating tools. Returns the plan you recorded with enter_plan_mode, if any.",
             "parameters": { "type": "object", "properties": {} }
-        }),
-        serde_json::json!({
-            "name": "streaming_bash",
-            "description": "Same as bash but streams stdout/stderr to the GUI live as the command runs instead of buffering until completion. Use for long-running builds/tests where live progress matters; otherwise prefer plain bash.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": { "type": "string", "description": "Bash command to execute" },
-                    "timeout": { "type": "number", "description": "Timeout in seconds (default 120, max 600)" }
-                },
-                "required": ["command"]
-            }
-        }),
-        serde_json::json!({
-            "name": "streaming_powershell",
-            "description": "Same as powershell but streams stdout/stderr to the GUI live as the command runs. Use for long-running Windows commands where live progress matters; otherwise prefer plain powershell.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": { "type": "string" },
-                    "timeout": { "type": "number", "description": "Timeout in seconds (default 120, max 600)" }
-                },
-                "required": ["command"]
-            }
         }),
         serde_json::json!({
             "name": "sandbox_execute",

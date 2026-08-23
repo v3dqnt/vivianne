@@ -61,7 +61,7 @@ export function LivePreviewPanel() {
 
   if (!root) {
     return (
-      <Stack sx={{ height: '100%', alignItems: 'center', justifyContent: 'center', gap: 1, p: 2 }}>
+      <Stack sx={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 1, p: 2 }}>
         <MonitorLinear size={24} color="currentColor" />
         <Typography variant="caption" color="text.secondary">
           Open a workspace to preview its dev server.
@@ -71,7 +71,7 @@ export function LivePreviewPanel() {
   }
 
   return (
-    <Stack sx={{ height: '100%', minHeight: 0 }}>
+    <Stack sx={{ flex: 1, minHeight: 0 }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, p: 1, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
         {status.kind === 'running' ? (
           <>
@@ -136,8 +136,13 @@ export function LivePreviewPanel() {
 
       <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', justifyContent: 'center', bgcolor: 'action.hover' }}>
         {status.kind === 'running' ? (
-          <Box sx={{ width: breakpoint ?? '100%', flexShrink: 0, bgcolor: 'background.paper' }}>
-            <iframe key={reloadKey} src={status.url} title="Live preview" style={{ width: '100%', height: '100%', border: 'none', display: 'block', minHeight: '100%' }} />
+          <Box sx={{ width: breakpoint ?? '100%', flexShrink: 0, bgcolor: 'background.paper', position: 'relative' }}>
+            <iframe
+              key={reloadKey}
+              src={status.url}
+              title="Live preview"
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', display: 'block' }}
+            />
           </Box>
         ) : status.kind === 'crashed' ? (
           <Stack sx={{ p: 2, gap: 0.5, alignSelf: 'flex-start', maxWidth: '100%' }}>

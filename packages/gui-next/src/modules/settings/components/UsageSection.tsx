@@ -9,6 +9,10 @@ export interface UsageDay {
   output: number
   cost: number
   requests: number
+  /** True if at least one request that day used a model with no known
+   * price — `cost` is a real but partial total in that case, not the full
+   * day's spend. See `ai::pricing` on the Rust side for the priced models. */
+  hasUnknownCost: boolean
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -47,7 +51,7 @@ export function UsageSection() {
 
     const list: { date: string; day: UsageDay | null }[] = []
     let max = 0
-    const sum = { input: 0, output: 0, cost: 0, requests: 0 }
+    const sum = { input: 0, output: 0, cost: 0, requests: 0, hasUnknownCost: false }
 
     for (let i = 0; i < days; i++) {
       const d = new Date(start.getTime() + i * DAY_MS)
@@ -60,11 +64,24 @@ export function UsageSection() {
         sum.output += day.output
         sum.cost += day.cost
         sum.requests += day.requests
+        sum.hasUnknownCost = sum.hasUnknownCost || day.hasUnknownCost
       }
       list.push({ date: key, day })
     }
     return { cells: list, maxTotal: max, totals: sum }
   }, [history])
+
+  // No priced request contributed anything real — showing "$0.00" here would
+  // read as a confirmed zero rather than "unknown," so it's shown as "—"
+  // instead. A day with SOME known and some unknown-priced requests still
+  // shows the known partial total, marked with "+" (real money, just not
+  // the full amount).
+  const costLabel =
+    totals.requests === 0
+      ? '$0.00'
+      : totals.cost === 0 && totals.hasUnknownCost
+        ? '—'
+        : `$${totals.cost.toFixed(2)}${totals.hasUnknownCost ? '+' : ''}`
 
   return (
     <Stack sx={{ gap: 2 }}>
@@ -73,7 +90,7 @@ export function UsageSection() {
           { label: 'Requests', value: totals.requests.toLocaleString() },
           { label: 'Input tokens', value: totals.input.toLocaleString() },
           { label: 'Output tokens', value: totals.output.toLocaleString() },
-          { label: 'Est. cost', value: `$${totals.cost.toFixed(2)}` },
+          { label: 'Est. cost', value: costLabel },
         ].map((stat) => (
           <Box key={stat.label} sx={{ flex: 1, minWidth: 140, p: 1.5, borderRadius: 2, border: 1, borderColor: 'divider' }}>
             <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, fontSize: '0.625rem' }}>
@@ -85,6 +102,11 @@ export function UsageSection() {
           </Box>
         ))}
       </Stack>
+      {totals.hasUnknownCost && (
+        <Typography variant="caption" color="text.secondary">
+          Cost shown is partial — some requests used a model without known pricing, so the real total is at least this much.
+        </Typography>
+      )}
 
       <Box sx={{ p: 2, borderRadius: 2, border: 1, borderColor: 'divider' }}>
         {loading ? (
@@ -116,7 +138,10 @@ export function UsageSection() {
                   {hovered.date}
                 </Box>{' '}
                 — {hovered.day.requests} request{hovered.day.requests === 1 ? '' : 's'},{' '}
-                {(hovered.day.input + hovered.day.output).toLocaleString()} tokens, ${hovered.day.cost.toFixed(4)}
+                {(hovered.day.input + hovered.day.output).toLocaleString()} tokens,{' '}
+                {hovered.day.cost === 0 && hovered.day.hasUnknownCost
+                  ? 'cost unknown'
+                  : `$${hovered.day.cost.toFixed(4)}${hovered.day.hasUnknownCost ? '+' : ''}`}
               </Typography>
             )}
           </>

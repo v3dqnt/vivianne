@@ -8,10 +8,11 @@
 //! pattern, just richer (tool restrictions + model override, not only a
 //! prompt fragment).
 
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+
+use super::tool_exec::parse_frontmatter;
 
 /// Enough of `agent::types::ModelRef` to actually run a turn with — a bare
 /// model id string isn't resolvable on its own (no lookup table maps ids to
@@ -44,6 +45,13 @@ pub struct SubagentFrontmatter {
     pub allowed_tools: Option<Vec<String>>,
     #[serde(default = "default_true")]
     pub inject_agents_md: bool,
+    /// A preset task prompt the caller can point at instead of writing one:
+    /// when `task`'s `prompt` arg is omitted, this (plus an optional short
+    /// `context` pointer) is used as the subagent's actual instructions.
+    /// `None` = this profile only ever supplies role framing, never the task
+    /// itself — the caller must always pass `prompt`, matching pre-existing
+    /// profile behavior exactly.
+    pub default_prompt: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -63,6 +71,8 @@ pub struct SubagentProfile {
     pub inject_agents_md: bool,
     #[serde(default)]
     pub builtin: bool,
+    #[serde(default)]
+    pub default_prompt: Option<String>,
 }
 
 /// The two profiles that ship unconditionally, driven through the exact
@@ -82,6 +92,7 @@ pub fn builtin_profiles() -> Vec<SubagentProfile> {
             system_prompt: String::new(),
             inject_agents_md: true,
             builtin: true,
+            default_prompt: None,
         },
         SubagentProfile {
             id: "Explore".to_string(),
@@ -98,6 +109,7 @@ pub fn builtin_profiles() -> Vec<SubagentProfile> {
             system_prompt: String::new(),
             inject_agents_md: true,
             builtin: true,
+            default_prompt: None,
         },
     ]
 }
@@ -133,7 +145,7 @@ pub fn load_profiles_from_dir(dir: &str) -> Vec<SubagentProfile> {
 
 fn load_profile_from_file(path: &Path) -> Result<SubagentProfile, Box<dyn std::error::Error>> {
     let content = fs::read_to_string(path)?;
-    let (fm, body) = parse_frontmatter(&content);
+    let (fm, body) = parse_frontmatter::<SubagentFrontmatter>(&content);
     let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unnamed").to_string();
     let name = fm.name.clone().unwrap_or_else(|| id.clone());
     Ok(SubagentProfile {
@@ -146,26 +158,10 @@ fn load_profile_from_file(path: &Path) -> Result<SubagentProfile, Box<dyn std::e
         system_prompt: body.trim().to_string(),
         inject_agents_md: fm.inject_agents_md,
         builtin: false,
+        default_prompt: fm.default_prompt,
     })
 }
 
-/// Parse YAML frontmatter from markdown content — identical regex to
-/// `skills::parse_frontmatter` (kept as its own copy rather than shared: the
-/// frontmatter shapes differ and a shared generic would need a type param
-/// for one two-line regex).
-fn parse_frontmatter(content: &str) -> (SubagentFrontmatter, &str) {
-    lazy_static::lazy_static! {
-        static ref FRONTMATTER_RE: Regex = Regex::new(r"(?s)^---\s*\n(.*?)\n---\s*\n(.*)$").unwrap();
-    }
-    if let Some(caps) = FRONTMATTER_RE.captures(content) {
-        let yaml_text = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-        let body = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-        let frontmatter: SubagentFrontmatter = serde_yaml::from_str(yaml_text).unwrap_or_default();
-        (frontmatter, body)
-    } else {
-        (SubagentFrontmatter::default(), content)
-    }
-}
 
 /// Slugify a display name into a safe filename stem — same character policy
 /// `cmd_save_skill_file` uses, so file names stay predictable/greppable.
@@ -191,6 +187,7 @@ pub fn save_profile(dir: &str, profile: &SubagentProfile, original_id: Option<&s
         description: Some(profile.description.clone()),
         allowed_tools: profile.allowed_tools.clone(),
         inject_agents_md: profile.inject_agents_md,
+        default_prompt: profile.default_prompt.clone(),
     };
     let yaml = serde_yaml::to_string(&frontmatter).map_err(|e| format!("Failed to serialize profile: {e}"))?;
     let content = format!("---\n{yaml}---\n\n{}\n", profile.system_prompt.trim());
@@ -246,6 +243,7 @@ mod tests {
             system_prompt: "You review code, you don't write it.".to_string(),
             inject_agents_md: false,
             builtin: false,
+            default_prompt: Some("Review the code at {context} for bugs.".to_string()),
         };
         let slug = save_profile(dir.to_str().unwrap(), &profile, None).unwrap();
         assert_eq!(slug, "code-reviewer");
@@ -259,6 +257,7 @@ mod tests {
         assert_eq!(loaded[0].allowed_tools, Some(vec!["read".to_string(), "grep".to_string()]));
         assert!(!loaded[0].inject_agents_md);
         assert_eq!(loaded[0].system_prompt, "You review code, you don't write it.");
+        assert_eq!(loaded[0].default_prompt.as_deref(), Some("Review the code at {context} for bugs."));
     }
 
     #[test]
@@ -276,6 +275,7 @@ mod tests {
             system_prompt: "p".to_string(),
             inject_agents_md: true,
             builtin: false,
+            default_prompt: None,
         };
         save_profile(dir.to_str().unwrap(), &profile, None).unwrap();
         profile.name = "new-name".to_string();

@@ -121,6 +121,10 @@ export type AgentEvent =
       type: 'web_preview_requested'
       payload: { url: string; screenshot_base64: string | null; error: string | null }
     }
+  | {
+      type: 'panel_focus_requested'
+      payload: { panel: string; action: string }
+    }
 
 /** Flatten an assistant/user message's content blocks to plain text for display. */
 export function contentToText(content: MessageContent[]): string {

@@ -1025,6 +1025,7 @@ pub async fn cmd_save_subagent_profile(
     allowed_tools: Option<Vec<String>>,
     system_prompt: String,
     inject_agents_md: bool,
+    default_prompt: Option<String>,
 ) -> Result<String, String> {
     let dir = crate::agent::paths::viv_subagents_dir()?;
     let profile = crate::coding_agent::subagent_profiles::SubagentProfile {
@@ -1037,6 +1038,7 @@ pub async fn cmd_save_subagent_profile(
         system_prompt,
         inject_agents_md,
         builtin: false,
+        default_prompt: default_prompt.filter(|s| !s.trim().is_empty()),
     };
     crate::coding_agent::subagent_profiles::save_profile(&dir.to_string_lossy(), &profile, original_id.as_deref())
 }
@@ -1437,6 +1439,7 @@ pub async fn cmd_load_session(
     
     let agent = state.agent.lock().await;
     agent.state.set_messages(session.messages).await;
+    agent.state.clear_goal().await;
     let access_mode = if session.access_mode.as_deref() == Some("readOnly") {
         crate::agent::state::WorkspaceAccessMode::ReadOnly
     } else {
@@ -1893,7 +1896,9 @@ pub async fn cmd_terminal_spawn(
     shell_id: String,
     cwd: String,
 ) -> Result<(), String> {
-    crate::terminal::spawn(app, &registry, tab_id, shell_id, cwd)
+    // User-opened tab: real environment, no retained buffer (xterm renders
+    // from the live event stream).
+    crate::terminal::spawn(app, &registry, tab_id, shell_id, cwd, false)
 }
 
 #[tauri::command]
@@ -2140,6 +2145,33 @@ pub struct GitFileChange {
     pub staged: bool,
 }
 
+/// Resolve the actual git repository root for `path`. `git diff --numstat`,
+/// `git status --porcelain`, and `git ls-files` all report paths relative to
+/// this — regardless of what directory the command is invoked from — so any
+/// caller that re-joins those paths onto a base directory (another git
+/// pathspec, or a direct filesystem read) has to join onto *this*, not onto
+/// `path` itself. Without it, a workspace root scoped to a subdirectory of
+/// the repo (any monorepo package folder, not just the true top level)
+/// produced file paths that resolved to nowhere — a second `git diff --
+/// <path>` found no match and silently returned no output, which the caller
+/// then couldn't distinguish from "no changes". Falls back to `path`
+/// unchanged when it isn't inside a git repo at all (the git commands
+/// downstream just return empty results in that case, same as before).
+async fn git_toplevel(path: &str) -> String {
+    let output = tokio::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(path)
+        .output()
+        .await;
+    match output {
+        Ok(o) if o.status.success() => {
+            let top = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if top.is_empty() { path.to_string() } else { top }
+        }
+        _ => path.to_string(),
+    }
+}
+
 /// Per-file added/removed line counts for the Review panel.
 ///
 /// `--numstat` covers tracked changes only, so untracked files are counted
@@ -2147,6 +2179,7 @@ pub struct GitFileChange {
 /// status list with a meaningless `+0 -0` next to it.
 #[tauri::command]
 pub async fn cmd_git_diff_stat(path: String, staged: bool) -> Result<Vec<GitFileChange>, String> {
+    let path = git_toplevel(&path).await;
     let mut args = vec!["diff", "--numstat"];
     if staged {
         args.push("--cached");
@@ -2205,6 +2238,7 @@ pub async fn cmd_git_diff_stat(path: String, staged: bool) -> Result<Vec<GitFile
 /// returning nothing.
 #[tauri::command]
 pub async fn cmd_git_diff_file(path: String, file: String, staged: bool) -> Result<String, String> {
+    let path = git_toplevel(&path).await;
     let mut args = vec!["diff"];
     if staged {
         args.push("--cached");
@@ -2236,6 +2270,7 @@ pub async fn cmd_git_diff_file(path: String, file: String, staged: bool) -> Resu
 /// Working-tree status (dirty files) for a workspace folder.
 #[tauri::command]
 pub async fn cmd_git_status(path: String) -> Result<Vec<GitStatusEntry>, String> {
+    let path = git_toplevel(&path).await;
     let output = tokio::process::Command::new("git")
         .args(["status", "--porcelain"])
         .current_dir(&path)

@@ -1,45 +1,24 @@
 //! OCR module — runs Baidu's Unlimited-OCR model from HuggingFace via their
-//! Inference API (serverless), with a local lightweight PaddleOCR-based fallback.
+//! Inference API (serverless), with a local RapidOCR (PP-OCRv6) fallback.
 //!
 //! Two-tier approach:
-//!   1. **Preferred**: HuggingFace Inference API — zero local GPU, online, needs HF token.
-//!   2. **Fallback**: Local ONNX inference via `tract-onnx` using pre-converted
-//!      PaddleOCR mobile models — CPU-only, ~20MB total, no internet needed after download.
+//!   1. **Preferred**: HuggingFace Inference API — zero local compute, online, needs HF token.
+//!   2. **Fallback**: the real `rapidocr` Python package, run as a subprocess.
+//!      Reusing the actual reference implementation (DB detection, CTC
+//!      recognition, model downloading/caching all handled by the package
+//!      itself) instead of hand-porting its detection geometry to Rust — that
+//!      port is a lot of bug-prone surface area for something that already
+//!      exists, is maintained, and is one `pip install rapidocr` away.
 
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::path::Path;
+use std::sync::{Arc, OnceLock};
+
+use crate::agent::llama_manager::LlamaManager;
+use tauri::Manager;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const HF_API_URL: &str = "https://api-inference.huggingface.co/models/baidu/Unlimited-OCR";
-
-const FALLBACK_DET_URL: &str = "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4_mobile_det_infer.onnx";
-const FALLBACK_REC_URL: &str = "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4_mobile_rec_infer.onnx";
-const FALLBACK_DET: &str = "ppocrv4_mobile_det.onnx";
-const FALLBACK_REC: &str = "ppocrv4_mobile_rec.onnx";
-
-const EN_DICT: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ ";
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-fn ocr_cache_dir() -> &'static Path {
-    static DIR: OnceLock<PathBuf> = OnceLock::new();
-    DIR.get_or_init(|| {
-        let b = dirs::cache_dir().unwrap_or_else(|| std::env::temp_dir()).join("vivianne").join("ocr");
-        std::fs::create_dir_all(&b).ok(); b
-    })
-}
-
-async fn ensure_cached(url: &str, name: &str) -> Result<PathBuf, String> {
-    let p = ocr_cache_dir().join(name);
-    if p.exists() { return Ok(p); }
-    log::info!("[ocr] downloading {name}...");
-    let r = reqwest::Client::new().get(url).timeout(std::time::Duration::from_secs(120)).send().await.map_err(|e| format!("{name}: {e}"))?;
-    let b = r.bytes().await.map_err(|e| format!("{name}: {e}"))?;
-    tokio::fs::write(&p, &b).await.map_err(|e| format!("{name}: {e}"))?;
-    log::info!("[ocr] downloaded {name} ({} B)", b.len());
-    Ok(p)
-}
 
 // ── Result types ─────────────────────────────────────────────────────────────
 
@@ -53,7 +32,7 @@ pub struct OcrResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OcrMethod {
     HuggingFaceAPI,
-    LocalONNX,
+    LocalRapidOcr,
     Unavailable,
 }
 
@@ -61,13 +40,22 @@ impl OcrMethod {
     pub fn method_str(&self) -> &'static str {
         match self {
             OcrMethod::HuggingFaceAPI => "Baidu Unlimited-OCR via HF API",
-            OcrMethod::LocalONNX => "PaddleOCR via local ONNX",
+            OcrMethod::LocalRapidOcr => "RapidOCR (PP-OCRv6) via local Python",
             OcrMethod::Unavailable => "unavailable",
         }
     }
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
+
+static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+/// Installed from `lib.rs` setup. `ocr_image` is reached from the coding
+/// agent's tool dispatcher, which carries no `AppHandle`, so this is how the
+/// local tier gets at the managed `LlamaManager` to free RAM before inference.
+pub fn install_app_handle(app: tauri::AppHandle) {
+    let _ = APP_HANDLE.set(app);
+}
 
 pub async fn ocr_image(path: &Path) -> OcrResult {
     let start = std::time::Instant::now();
@@ -79,170 +67,141 @@ pub async fn ocr_image(path: &Path) -> OcrResult {
         }
     }
 
-    // Tier 2: Local ONNX fallback — auto-download models if missing
-    let dp = if ocr_cache_dir().join(FALLBACK_DET).exists() {
-        Some(ocr_cache_dir().join(FALLBACK_DET))
-    } else {
-        ensure_cached(FALLBACK_DET_URL, FALLBACK_DET).await.ok()
-    };
-    let rp = if ocr_cache_dir().join(FALLBACK_REC).exists() {
-        Some(ocr_cache_dir().join(FALLBACK_REC))
-    } else {
-        ensure_cached(FALLBACK_REC_URL, FALLBACK_REC).await.ok()
-    };
-    if let (Some(det_p), Some(rec_p)) = (dp, rp) {
-        let img_path = path.to_path_buf();
-        let r = tokio::task::spawn_blocking(move || ocr_inner(&img_path, &det_p, &rec_p)).await;
-        if let Ok(Ok(text)) = r {
-            if !text.trim().is_empty() {
-                return OcrResult { text, method: OcrMethod::LocalONNX, duration_ms: start.elapsed().as_millis() as u64 };
-            }
-        }
-    }
+    // Tier 2: local RapidOCR subprocess, one at a time — `read` is on the
+    // parallel fast path, so two image reads in one batch could otherwise
+    // both acquire a `LlamaPause`, each stop the same llama-server ids, and
+    // each resume them on drop: concurrent stop/start racing on one process.
+    // The lock also means a burst of OCR calls pays one pause/resume cycle,
+    // not one per call.
+    static LOCAL_OCR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _serialize = LOCAL_OCR_LOCK.lock().await;
+    let _pause = LlamaPause::acquire().await;
 
-    OcrResult { text: String::new(), method: OcrMethod::Unavailable, duration_ms: start.elapsed().as_millis() as u64 }
+    let (text, method) = match ocr_via_rapidocr(path).await {
+        Ok(text) if !text.trim().is_empty() => (text, OcrMethod::LocalRapidOcr),
+        Ok(_) => (String::new(), OcrMethod::LocalRapidOcr),
+        Err(e) => {
+            log::warn!("[ocr] local rapidocr unavailable: {e}");
+            (String::new(), OcrMethod::Unavailable)
+        }
+    };
+    OcrResult { text, method, duration_ms: start.elapsed().as_millis() as u64 }
 }
 
-pub async fn warmup_onnx_models() {
-    let _ = futures::future::join(ensure_cached(FALLBACK_DET_URL, FALLBACK_DET), ensure_cached(FALLBACK_REC_URL, FALLBACK_REC)).await;
+// ── RAM suppression ──────────────────────────────────────────────────────────
+
+/// Stops any running local llama-server processes for the duration of a local
+/// OCR run and restarts them afterwards: a resident GGUF is easily several GB,
+/// and holding it alongside the OCR subprocess's own model load is what
+/// actually pushes the machine into swap.
+///
+/// Scoped to the *local* tier only — the HF API tier does no local inference,
+/// so evicting the user's model there would cost a multi-GB reload for nothing.
+///
+/// Every step is best-effort: OCR must never fail because pausing failed.
+struct LlamaPause {
+    app: tauri::AppHandle,
+    ids: Vec<String>,
 }
 
-// ── Local ONNX pipeline ─────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-struct BBox { x: usize, y: usize, w: usize, h: usize }
-
-fn ocr_inner(img_path: &Path, det_path: &Path, rec_path: &Path) -> Result<String, String> {
-    use tract_onnx::prelude::*;
-    use std::sync::Arc;
-
-    /// Cache compiled models after first load (~1-5s each, so we don't want to redo it every call).
-    /// Using Arc so we can clone the reference without lifetime issues.
-    type Model = tract_onnx::prelude::SimplePlan<
-        tract_onnx::prelude::TypedFact,
-        Box<dyn tract_onnx::prelude::TypedOp>,
-        tract_onnx::prelude::Graph<tract_onnx::prelude::TypedFact, Box<dyn tract_onnx::prelude::TypedOp>>,
-    >;
-    static DET_CACHE: std::sync::Mutex<Option<Arc<Model>>> = std::sync::Mutex::new(None);
-    static REC_CACHE: std::sync::Mutex<Option<Arc<Model>>> = std::sync::Mutex::new(None);
-
-    fn load_cached(p: &Path, cache: &std::sync::Mutex<Option<Arc<Model>>>) -> Result<Arc<Model>, String> {
-        // Fast path: check if already loaded (brief lock, then release)
-        {
-            let guard = cache.lock().unwrap();
-            if let Some(ref m) = *guard {
-                return Ok(m.clone());
+impl LlamaPause {
+    async fn acquire() -> Option<Self> {
+        let app = APP_HANDLE.get()?.clone();
+        let manager = app.try_state::<Arc<LlamaManager>>()?.inner().clone();
+        let ids: Vec<String> = manager
+            .list()
+            .iter()
+            .filter(|e| matches!(e.get("status").and_then(|s| s.as_str()), Some("running") | Some("starting")))
+            .filter_map(|e| e.get("id").and_then(|s| s.as_str()).map(String::from))
+            .collect();
+        if ids.is_empty() { return None; }
+        for id in &ids {
+            if let Err(e) = manager.stop(id).await {
+                log::warn!("[ocr] could not pause local model '{id}': {e}");
             }
         }
-        // Slow path: load and compile
-        use tract_onnx::prelude::Framework;
-        let model = tract_onnx::onnx()
-            .model_for_path(p).map_err(|e| format!("load: {e}"))?
-            .with_input_fact(0, InferenceFact::default()).map_err(|e| format!("shape: {e}"))?
-            .into_optimized().map_err(|e| format!("opt: {e}"))?
-            .into_runnable().map_err(|e| format!("compile: {e}"))?;
-        let model = Arc::new(model);
-        let mut guard = cache.lock().unwrap();
-        *guard = Some(model.clone());
-        Ok(model)
+        log::info!("[ocr] paused {} local model process(es) to free RAM", ids.len());
+        Some(Self { app, ids })
     }
+}
 
-    let det = load_cached(det_path, &DET_CACHE)?;
-    let rec = load_cached(rec_path, &REC_CACHE)?;
-    let img = image::open(img_path).map_err(|e| format!("open: {e}"))?.to_rgb8();
-    let (ih, iw) = (img.height() as usize, img.width() as usize);
-
-    // Detection
-    let max_dim = 960usize;
-    let s = (max_dim as f64 / iw.max(ih) as f64).min(1.0);
-    let tw = ((iw as f64 * s) as usize).next_multiple_of(32).max(32);
-    let th = ((ih as f64 * s) as usize).next_multiple_of(32).max(32);
-    let resized = image::imageops::resize(&img, tw as u32, th as u32, image::imageops::FilterType::Triangle);
-    let mut inp = vec![0.0f32; 3 * th * tw];
-    for y in 0..th { for x in 0..tw {
-        let p = resized.get_pixel(x as u32, y as u32);
-        let b = y * tw + x;
-        inp[b] = p[0] as f32 / 255.0;
-        inp[th * tw + b] = p[1] as f32 / 255.0;
-        inp[2 * th * tw + b] = p[2] as f32 / 255.0;
-    }}
-    let t = Tensor::from_shape(&[1, 3, th, tw], &inp).map_err(|e| format!("tensor: {e}"))?;
-    let out = det.run(tvec!(t.into())).map_err(|e| format!("det: {e}"))?;
-    let arr = out[0].to_array_view::<f32>().map_err(|e| format!("arr: {e}"))?;
-    let sh = arr.shape();
-    let (oh, ow) = (sh.get(2).copied().unwrap_or(0), sh.get(3).copied().unwrap_or(0));
-    if oh == 0 || ow == 0 { return Ok(String::new()); }
-
-    let thr = 0.3f32;
-    let mut vis = vec![false; oh * ow];
-    let mut boxes = Vec::new();
-    for y in 0..oh { for x in 0..ow {
-        let idx = y * ow + x;
-        if vis[idx] || arr[[0, 0, y, x]] <= thr { continue; }
-        let mut st = vec![(x, y)]; vis[idx] = true;
-        let (mut mnx, mut mxx, mut mny, mut mxy) = (x, x, y, y);
-        let mut cnt = 0usize;
-        while let Some((cx, cy)) = st.pop() {
-            cnt += 1; mnx = mnx.min(cx); mxx = mxx.max(cx); mny = mny.min(cy); mxy = mxy.max(cy);
-            for &(dx, dy) in &[(0, -1), (0, 1), (-1, 0), (1, 0)] {
-                let (nx, ny) = (cx as i32 + dx, cy as i32 + dy);
-                if nx >= 0 && nx < ow as i32 && ny >= 0 && ny < oh as i32 {
-                    let ni = ny as usize * ow + nx as usize;
-                    if !vis[ni] && arr[[0, 0, ny as usize, nx as usize]] > thr {
-                        vis[ni] = true; st.push((nx as usize, ny as usize));
-                    }
+impl Drop for LlamaPause {
+    fn drop(&mut self) {
+        let app = self.app.clone();
+        let ids = std::mem::take(&mut self.ids);
+        // `start` is async and `Drop` is not, so resume in the background —
+        // the OCR caller shouldn't block on a multi-GB model reload.
+        tauri::async_runtime::spawn(async move {
+            let Some(manager) = app.try_state::<Arc<LlamaManager>>().map(|s| s.inner().clone()) else { return };
+            for id in ids {
+                if let Err(e) = manager.start(&id, &app).await {
+                    log::warn!("[ocr] could not resume local model '{id}': {e}");
                 }
             }
-        }
-        if cnt < 20 { continue; }
-        let (xs, ys) = (iw as f64 / ow as f64, ih as f64 / oh as f64);
-        let bb = BBox {
-            x: (mnx as f64 * xs) as usize, y: (mny as f64 * ys) as usize,
-            w: ((mxx - mnx + 1) as f64 * xs) as usize, h: ((mxy - mny + 1) as f64 * ys) as usize,
-        };
-        if bb.w >= 10 && bb.h >= 5 { boxes.push(bb); }
-    }}
-    let rg = (ih / 20).max(10);
-    boxes.sort_by(|a, b| if a.y.abs_diff(b.y) > rg { a.y.cmp(&b.y) } else { a.x.cmp(&b.x) });
-    if boxes.is_empty() { return Ok(String::new()); }
-
-    // Recognition for each box
-    let mut lines = Vec::new();
-    for bb in &boxes {
-        let x = bb.x.min(iw.saturating_sub(1));
-        let y = bb.y.min(ih.saturating_sub(1));
-        let w = bb.w.min(iw - x);
-        let h = bb.h.min(ih - y);
-        if w < 4 || h < 4 { continue; }
-        let crop = image::imageops::crop_imm(&img, x as u32, y as u32, w as u32, h as u32);
-        let rsz = image::imageops::resize(&crop.to_image(), 320, 48, image::imageops::FilterType::Triangle);
-        let mut inp2 = vec![0.0f32; 3 * 48 * 320];
-        for y2 in 0..48 { for x2 in 0..320 {
-            let px = rsz.get_pixel(x2, y2); let b = y2 * 320 + x2;
-            let n = |c: u8| (c as f32 / 255.0 - 0.5) / 0.5;
-            let bi = b as usize;
-            inp2[bi] = n(px[0]); inp2[48 * 320 + bi] = n(px[1]); inp2[2 * 48 * 320 + bi] = n(px[2]);
-        }}
-        let t2 = Tensor::from_shape(&[1, 3, 48, 320], &inp2).map_err(|e| format!("tensor: {e}"))?;
-        let out2 = rec.run(tvec!(t2.into())).map_err(|e| format!("rec: {e}"))?;
-        let a2 = out2[0].to_array_view::<f32>().map_err(|e| format!("arr: {e}"))?;
-        let s2 = a2.shape();
-        if s2.len() < 3 { continue; }
-        let (sl, nc) = (s2[1], s2[2]); let bl = nc - 1;
-        let mut prev = bl; let mut txt = String::new();
-        for t in 0..sl {
-            let (mut mi, mut mv) = (bl, 0.0f32);
-            for c in 0..nc { let v = a2[[0, t, c]]; if v > mv { mv = v; mi = c; } }
-            if mi != bl && mi != prev { if let Some(&ch) = EN_DICT.get(mi) { txt.push(ch as char); } }
-            prev = mi;
-        }
-        let t = txt.trim().to_string();
-        if !t.is_empty() { lines.push(t); }
+        });
     }
+}
+
+// ── Local RapidOCR subprocess ───────────────────────────────────────────────
+
+// One inline script, not a bundled .py file: it's small, has no dependency of
+// its own beyond `rapidocr`, and keeping it as a string means there's nothing
+// extra to ship or locate on disk. Prints a JSON array of recognized lines to
+// stdout so Rust doesn't have to parse RapidOCR's human-readable CLI output.
+const RAPIDOCR_SCRIPT: &str = r#"
+import sys, json
+from rapidocr import RapidOCR
+result = RapidOCR()(sys.argv[1])
+print(json.dumps(list(result.txts) if result and result.txts else []))
+"#;
+
+/// Generous, not tight: a first-ever local OCR call also pays for `rapidocr`
+/// downloading its detection/recognition models (tens of MB), on top of
+/// Python's own interpreter start. Still bounded — without this, a subprocess
+/// that never returns (a hung download, a broken install prompting on stdin)
+/// hung the whole tool call, and `read` carries no model-supplied timeout of
+/// its own to fall back on.
+const RAPIDOCR_TIMEOUT_SECS: u64 = 180;
+
+async fn ocr_via_rapidocr(path: &Path) -> Result<String, String> {
+    let child = tokio::process::Command::new("python")
+        .arg("-c").arg(RAPIDOCR_SCRIPT).arg(path)
+        // Least-privilege env, same as bash/powershell: an image-reading
+        // subprocess has no business seeing provider API keys.
+        .env_clear()
+        .envs(super::sandbox::filtered_env())
+        .kill_on_drop(true)
+        .output();
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(RAPIDOCR_TIMEOUT_SECS), child).await {
+        Ok(result) => result.map_err(|e| format!("could not launch python ({e}) — install Python and `pip install rapidocr` for local OCR"))?,
+        Err(_) => return Err(format!("rapidocr timed out after {RAPIDOCR_TIMEOUT_SECS}s")),
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // The common case is the package not being installed; say so plainly
+        // instead of surfacing a raw Python traceback.
+        if stderr.contains("ModuleNotFoundError") || stderr.contains("No module named") {
+            return Err("the `rapidocr` Python package is not installed — run `pip install rapidocr`".to_string());
+        }
+        return Err(format!("rapidocr exited with {}: {}", output.status, stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<String> = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("could not parse rapidocr output: {e} (raw: {})", stdout.trim()))?;
     Ok(lines.join("\n"))
 }
 
 // ── HF API ──────────────────────────────────────────────────────────────────
+
+/// One pooled client, not one per call — `reqwest::Client::new()` rebuilds
+/// the connection pool and TLS config from scratch every time, which is real
+/// overhead for a call the model can make once per image in a batch.
+fn hf_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
 
 async fn ocr_via_hf_api(path: &Path) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let token = std::env::var("HUGGINGFACE_TOKEN").or_else(|_| std::env::var("HF_TOKEN")).map_err(|_| "set HUGGINGFACE_TOKEN".to_string())?;
@@ -250,7 +209,7 @@ async fn ocr_via_hf_api(path: &Path) -> Result<String, Box<dyn std::error::Error
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     let payload = serde_json::json!({ "inputs": format!("data:image/png;base64,{b64}") });
-    let resp = reqwest::Client::new()
+    let resp = hf_client()
         .post(HF_API_URL).header("Authorization", format!("Bearer {token}"))
         .json(&payload).timeout(std::time::Duration::from_secs(120))
         .send().await?;
@@ -277,7 +236,17 @@ async fn ocr_via_hf_api(path: &Path) -> Result<String, Box<dyn std::error::Error
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    #[test] fn dict_len() { assert_eq!(EN_DICT.len(), 95); }
-    #[test] fn cache_dir() { assert!(ocr_cache_dir().exists()); }
+    #[test]
+    fn rapidocr_script_parses_a_sample_json_array() {
+        let sample = r#"["hello", "world"]"#;
+        let lines: Vec<String> = serde_json::from_str(sample).unwrap();
+        assert_eq!(lines.join("\n"), "hello\nworld");
+    }
+
+    #[test]
+    fn rapidocr_script_handles_empty_result() {
+        let sample = "[]";
+        let lines: Vec<String> = serde_json::from_str(sample).unwrap();
+        assert_eq!(lines.join("\n"), "");
+    }
 }

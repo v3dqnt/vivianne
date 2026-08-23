@@ -211,7 +211,7 @@ mod tests {
         let mut s = LandmarkSmoother::new(4);
         let mut out = 0.0;
         for _ in 0..60 {
-            out = s.push(Some(&hand_at(0.3)), 3).unwrap()[0].x;
+            out = s.push(Some(&hand_at(0.3)), 3).expect("push should return Some when given Some input")[0].x;
         }
         assert!((out - 0.3).abs() < 1e-3, "expected convergence to 0.3, got {out}");
     }
@@ -234,7 +234,7 @@ mod tests {
         partial.landmarks.truncate(5);
         s.push(Some(&partial), 2);
         // The bad frame must not have blown up the filter state.
-        let out = s.current().unwrap()[0].x;
+        let out = s.current().expect("current() should return Some when there is data")[0].x;
         assert!((out - 0.5).abs() < 0.2, "got {out}");
     }
 

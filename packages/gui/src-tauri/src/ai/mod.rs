@@ -13,3 +13,4 @@ pub mod local_onnx;
 pub mod completion;
 pub mod keychain_store;
 pub mod local_registry;
+pub mod pricing;

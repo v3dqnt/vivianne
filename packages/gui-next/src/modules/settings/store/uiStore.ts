@@ -11,7 +11,7 @@ export type SettingsSection =
   | 'skills'
   | 'automations'
   | 'themes'
-  | 'gestures'
+  | 'components'
 
 interface SettingsUiState {
   open: boolean

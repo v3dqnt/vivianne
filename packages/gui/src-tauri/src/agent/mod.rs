@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 //
 // Only `Agent` is re-exported flat — it's the one type external callers
-// (`orchestrator::supervisor`) actually reach for as `crate::agent::Agent`.
+// (`agent::commands::AppState`) actually reach for as `crate::agent::Agent`.
 // `types`/`state`/`events` are not: every real caller already qualifies
 // through its submodule (`agent::types::AgentMessage`, etc.), so a blanket
 // glob re-export here would just be an unused second path to the same types.

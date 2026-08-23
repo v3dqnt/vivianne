@@ -7,7 +7,7 @@ import Tooltip from '@mui/material/Tooltip'
 import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
 import { hasTauri } from '../ipc'
-import { FolderLinear, CommandSquareLinear, LayerLinear, TaskLinear, MonitorLinear, GlobalLinear, GithubLinear, DocumentTextLinear } from '../icons'
+import { FolderLinear, CommandSquareLinear, LayerLinear, TaskLinear, MonitorLinear, GithubLinear, DocumentTextLinear } from '../icons'
 import { usePanelStore, RIGHT_PANEL_LABELS, type RightPanelKind } from '../modules/dock/store/panelStore'
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
 
@@ -16,8 +16,7 @@ const TRAFFIC_LIGHT_SIZE = 12
 const RIGHT_PANEL_ICONS: Record<RightPanelKind, typeof FolderLinear> = {
   review: GithubLinear,
   files: DocumentTextLinear,
-  live: MonitorLinear,
-  browser: GlobalLinear,
+  preview: MonitorLinear,
   tasks: TaskLinear,
 }
 

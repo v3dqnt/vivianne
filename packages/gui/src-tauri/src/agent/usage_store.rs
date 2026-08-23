@@ -28,15 +28,33 @@ pub struct DayUsage {
     pub cache_write: u64,
     pub cost: f64,
     pub requests: u32,
+    /// True if at least one request this day contributed to `cost` from a
+    /// model `ai::pricing` has no known price for — `cost` is a real but
+    /// **partial** total in that case, not the full day's spend. Old records
+    /// written before real cost tracking existed (when every `cost` was a
+    /// hardcoded 0.0) deserialize this as `true` too, via the default below,
+    /// so they don't misrepresent a fake zero as a confirmed real one.
+    #[serde(default = "default_true")]
+    pub has_unknown_cost: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl DayUsage {
-    fn accumulate(&mut self, usage: &crate::ai::types::Usage) {
+    /// `cost` is the real, priced cost for this one request (from
+    /// `ai::pricing::compute_cost`), or `None` if the model has no known
+    /// price — accumulated honestly rather than silently treated as $0.
+    fn accumulate(&mut self, usage: &crate::ai::types::Usage, cost: Option<f64>) {
         self.input += usage.input as u64;
         self.output += usage.output as u64;
         self.cache_read += usage.cache_read as u64;
         self.cache_write += usage.cache_write as u64;
-        self.cost += usage.cost.as_ref().map(|c| c.total).unwrap_or(0.0);
+        match cost {
+            Some(c) => self.cost += c,
+            None => self.has_unknown_cost = true,
+        }
         self.requests += 1;
     }
 }
@@ -86,19 +104,27 @@ async fn read_all_by_source_from(path: &std::path::Path) -> UsageBySource {
     serde_json::from_str::<UsageBySource>(&content).unwrap_or_default()
 }
 
+/// Fold `src` into `target` — the one place all 6 fields get summed, reused
+/// by every merge site below instead of repeating the field list at each one
+/// (and silently dropping `has_unknown_cost` the way a naive copy-paste of
+/// the other 5 fields would).
+fn merge_into(target: &mut DayUsage, src: &DayUsage) {
+    target.input += src.input;
+    target.output += src.output;
+    target.cache_read += src.cache_read;
+    target.cache_write += src.cache_write;
+    target.cost += src.cost;
+    target.requests += src.requests;
+    target.has_unknown_cost = target.has_unknown_cost || src.has_unknown_cost;
+}
+
 async fn merge_and_write(
     path: &std::path::Path,
     buffer: &BTreeMap<String, DayUsage>,
 ) -> Result<(), String> {
     let mut disk = read_all_from(path).await;
     for (day, usage) in buffer {
-        let target = disk.entry(day.clone()).or_default();
-        target.input += usage.input;
-        target.output += usage.output;
-        target.cache_read += usage.cache_read;
-        target.cache_write += usage.cache_write;
-        target.cost += usage.cost;
-        target.requests += usage.requests;
+        merge_into(disk.entry(day.clone()).or_default(), usage);
     }
     let json = serde_json::to_string_pretty(&disk).map_err(|e| e.to_string())?;
     tokio::fs::write(path, json).await.map_err(|e| e.to_string())
@@ -112,13 +138,7 @@ async fn merge_and_write_by_source(
     for (day, sources) in buffer {
         let day_entry = disk.entry(day.clone()).or_default();
         for (tag, usage) in sources {
-            let target = day_entry.entry(tag.clone()).or_default();
-            target.input += usage.input;
-            target.output += usage.output;
-            target.cache_read += usage.cache_read;
-            target.cache_write += usage.cache_write;
-            target.cost += usage.cost;
-            target.requests += usage.requests;
+            merge_into(day_entry.entry(tag.clone()).or_default(), usage);
         }
     }
     let json = serde_json::to_string_pretty(&disk).map_err(|e| e.to_string())?;
@@ -151,16 +171,20 @@ async fn maybe_flush(state: &mut BufferState) {
     state.last_flush = Instant::now();
 }
 
-/// Accumulate `usage` into today's bucket (local date). Best-effort — a
-/// failure here should never break a turn, so this only ever logs.
-pub async fn record_usage(usage: &crate::ai::types::Usage) {
+/// Accumulate `usage` into today's bucket (local date), pricing it via
+/// `ai::pricing::compute_cost(provider, model_id, usage)` — real cost when
+/// the model is known, honestly tracked as unknown otherwise (see
+/// `DayUsage::has_unknown_cost`) rather than silently recorded as $0.
+/// Best-effort — a failure here should never break a turn, so this only ever logs.
+pub async fn record_usage(usage: &crate::ai::types::Usage, provider: &str, model_id: &str) {
     if usage.input == 0 && usage.output == 0 && usage.total_tokens == 0 {
         return;
     }
+    let cost = crate::ai::pricing::compute_cost(provider, model_id, usage);
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let mut state = USAGE_BUFFER.lock().await;
     let target = state.days.entry(today).or_default();
-    target.accumulate(usage);
+    target.accumulate(usage, cost);
     maybe_flush(&mut state).await;
 }
 
@@ -170,13 +194,7 @@ pub async fn read_history() -> BTreeMap<String, DayUsage> {
     let mut disk = read_all_from(&path).await;
     let state = USAGE_BUFFER.lock().await;
     for (day, usage) in &state.days {
-        let target = disk.entry(day.clone()).or_default();
-        target.input += usage.input;
-        target.output += usage.output;
-        target.cache_read += usage.cache_read;
-        target.cache_write += usage.cache_write;
-        target.cost += usage.cost;
-        target.requests += usage.requests;
+        merge_into(disk.entry(day.clone()).or_default(), usage);
     }
     disk
 }
@@ -185,10 +203,11 @@ pub async fn read_history() -> BTreeMap<String, DayUsage> {
 /// additive telemetry. `source_tag` is a free-form label
 /// (`"main:<session_id>"`, `"task:<session_id>"`).
 /// Best-effort — a failure here should never break a turn.
-pub async fn record_usage_tagged(usage: &crate::ai::types::Usage, source_tag: &str) {
+pub async fn record_usage_tagged(usage: &crate::ai::types::Usage, provider: &str, model_id: &str, source_tag: &str) {
     if usage.input == 0 && usage.output == 0 && usage.total_tokens == 0 {
         return;
     }
+    let cost = crate::ai::pricing::compute_cost(provider, model_id, usage);
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let mut state = USAGE_BUFFER.lock().await;
     let target = state
@@ -197,7 +216,7 @@ pub async fn record_usage_tagged(usage: &crate::ai::types::Usage, source_tag: &s
         .or_default()
         .entry(source_tag.to_string())
         .or_default();
-    target.accumulate(usage);
+    target.accumulate(usage, cost);
     maybe_flush(&mut state).await;
 }
 
@@ -209,13 +228,7 @@ pub async fn read_history_by_source() -> UsageBySource {
     for (day, sources) in &state.by_source {
         let day_entry = disk.entry(day.clone()).or_default();
         for (tag, usage) in sources {
-            let target = day_entry.entry(tag.clone()).or_default();
-            target.input += usage.input;
-            target.output += usage.output;
-            target.cache_read += usage.cache_read;
-            target.cache_write += usage.cache_write;
-            target.cost += usage.cost;
-            target.requests += usage.requests;
+            merge_into(day_entry.entry(tag.clone()).or_default(), usage);
         }
     }
     disk
@@ -253,26 +266,29 @@ pub async fn flush_all() {
 mod tests {
     use super::*;
 
-    fn usage(input: u32, output: u32, cost: f64) -> crate::ai::types::Usage {
-        crate::ai::types::Usage {
-            input,
-            output,
-            cache_read: 0,
-            cache_write: 0,
-            total_tokens: input + output,
-            cost: Some(crate::ai::types::CostBreakdown { input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, total: cost }),
-        }
+    fn usage(input: u32, output: u32) -> crate::ai::types::Usage {
+        crate::ai::types::Usage { input, output, cache_read: 0, cache_write: 0, total_tokens: input + output, cost: None }
     }
 
     #[test]
     fn accumulate_sums_across_multiple_requests() {
         let mut day = DayUsage::default();
-        day.accumulate(&usage(100, 50, 0.01));
-        day.accumulate(&usage(200, 75, 0.02));
+        day.accumulate(&usage(100, 50), Some(0.01));
+        day.accumulate(&usage(200, 75), Some(0.02));
         assert_eq!(day.input, 300);
         assert_eq!(day.output, 125);
         assert_eq!(day.requests, 2);
         assert!((day.cost - 0.03).abs() < 1e-9);
+        assert!(!day.has_unknown_cost, "both requests had a known cost");
+    }
+
+    #[test]
+    fn an_unknown_priced_request_taints_the_whole_day() {
+        let mut day = DayUsage::default();
+        day.accumulate(&usage(100, 50), Some(0.01));
+        day.accumulate(&usage(200, 75), None); // model with no known price
+        assert!(day.has_unknown_cost, "one unknown-priced request makes the day's total partial");
+        assert!((day.cost - 0.01).abs() < 1e-9, "the known-cost request's contribution is still counted");
     }
 
     #[tokio::test]
@@ -287,11 +303,11 @@ mod tests {
         assert!(days.is_empty());
 
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-        days.entry(today.clone()).or_default().accumulate(&usage(10, 5, 0.001));
+        days.entry(today.clone()).or_default().accumulate(&usage(10, 5), Some(0.001));
         tokio::fs::write(&path, serde_json::to_string_pretty(&days).unwrap()).await.unwrap();
 
         let mut reloaded = read_all_from(&path).await;
-        reloaded.entry(today.clone()).or_default().accumulate(&usage(20, 10, 0.002));
+        reloaded.entry(today.clone()).or_default().accumulate(&usage(20, 10), Some(0.002));
         tokio::fs::write(&path, serde_json::to_string_pretty(&reloaded).unwrap()).await.unwrap();
 
         let final_days = read_all_from(&path).await;
@@ -313,11 +329,11 @@ mod tests {
         let mut days = read_all_by_source_from(&path).await;
         assert!(days.is_empty());
 
-        days.entry(today.clone()).or_default().entry("main:session-1".to_string()).or_default().accumulate(&usage(10, 5, 0.001));
+        days.entry(today.clone()).or_default().entry("main:session-1".to_string()).or_default().accumulate(&usage(10, 5), Some(0.001));
         tokio::fs::write(&path, serde_json::to_string_pretty(&days).unwrap()).await.unwrap();
 
         let mut reloaded = read_all_by_source_from(&path).await;
-        reloaded.entry(today.clone()).or_default().entry("delegate:session-1".to_string()).or_default().accumulate(&usage(20, 10, 0.002));
+        reloaded.entry(today.clone()).or_default().entry("delegate:session-1".to_string()).or_default().accumulate(&usage(20, 10), Some(0.002));
         tokio::fs::write(&path, serde_json::to_string_pretty(&reloaded).unwrap()).await.unwrap();
 
         let final_days = read_all_by_source_from(&path).await;
@@ -331,7 +347,7 @@ mod tests {
 
     #[test]
     fn zero_usage_is_not_recorded() {
-        let u = usage(0, 0, 0.0);
+        let u = usage(0, 0);
         assert!(u.input == 0 && u.output == 0 && u.total_tokens == 0);
     }
 }

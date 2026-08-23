@@ -2,6 +2,38 @@
 
 All notable changes to Vivianne are documented here.
 
+## [1.7.0] — 2026-08-23
+
+### Fixed
+
+- **The inference-stalling bug** — every successful turn had a real chance of hanging for a full 120 seconds before erroring out, no matter how many earlier fixes had been tried. Root cause: a serde field-naming mismatch (`CostBreakdown` needed `rename_all = "camelCase"`, and `MessageContent`'s enum needed `rename_all_fields` — `rename_all` alone only renames enum variant tags, not struct-variant fields) meant the terminal event of a successful stream failed to deserialize, and the listener silently swallowed the parse failure instead of logging it. Both fixed; the listener now logs any future decode failure instead of hiding it.
+- **A 111MB read on every single turn** — the session list was being fully re-parsed (every message of every session file, up to 18MB each) after every turn just to refresh the sidebar. Replaced with metadata-only parsing and a cache invalidated at the one place sessions are actually written.
+- **"New chat" not creating a real session** — clicking New Session reset in-memory state but never persisted anything, so the new thread had no id until the first message completed; any UI assuming otherwise broke. It's now persisted immediately as an empty "New chat" session, idempotently (rapid double-clicks reuse the same empty session instead of creating duplicates).
+- **The Review panel showing "No textual diff" for real changes** — when the active workspace folder was a subdirectory of the git repo (not the true top level), a second `git diff` call resolved the file's pathspec against the wrong directory and silently returned nothing. Every git-backed command (`diff --numstat`, `diff <file>`, `status`) now resolves the actual repository root first.
+- **`run_git`/git subprocess calls with no timeout** — a `repo_clone` against a slow or hung remote (or one that stops to ask for credentials on stdin) could block the tool call, and the turn with it, indefinitely. Now bounded to 120s.
+- Windows path-length crash in an unrelated local test, a stale `local_onnx` test assertion, and several stale doc comments/dead code paths left over from earlier refactors.
+
+### Added
+
+- **Real vision for images, with an automatic OCR fallback** — `read` on an image now shows the model the actual pixels (downscaled to a sane max edge, original bytes passed through unmodified when they're already small enough) instead of a text-only summary. When the currently selected model can't take image input at all, this is detected automatically and the image is OCR'd instead — text-only models get the text a sighted model would get from looking, rather than an unusable image block or a provider error.
+- **Local OCR rebuilt on the real `RapidOCR` package** — the previous local fallback quietly ran an unrelated, mislabeled model. It now shells out to the actual, maintained `rapidocr` Python package (`pip install rapidocr`) instead of a hand-rolled reimplementation, with the HuggingFace-hosted tier still preferred first. Local OCR now also pauses any running local LLM process for the duration of the call to free RAM, resuming it afterward.
+- **Persistent terminal sessions** — `terminal_open`/`terminal_send`/`terminal_read`/`terminal_signal`/`terminal_close`/`terminal_list`, backed by the same real PTY sessions the GUI's own terminal tabs use. Unlike `bash`/`powershell` (one-shot, no memory between calls), these keep shell state alive across calls — for an activated virtualenv, an interactive installer, a long-running dev server you poll, or anything needing real stdin.
+- **Goal tracking** — `get_goal`/`create_goal`/`update_goal`, a durable-for-the-session objective distinct from the `todo_write` checklist (todos are steps; a goal is the point of the steps). Shown to the model every turn so it stays visible across compaction.
+- **`list_tools`** — lets the model check exactly what's registered right now (built-in, MCP-provided, playbook-defined) and whether each is enabled, instead of only ever seeing its own static schema block.
+- **Honest partial scans** — `grep`/`code_search` now say plainly when a scan was capped before finishing, instead of a partial search looking exhaustive and the model concluding "X isn't used anywhere" from an incomplete search.
+- **Line-numbered `read`** — text files come back `cat -n`-style with the total line count stated, so the model can tell "I saw the whole file" from "this got cut off" without guessing.
+- **Spill for truncated tool output** — when shell output is truncated to fit context, the trimmed middle is saved to disk and the truncation notice names the path, so the model can `read`/`grep` it back instead of it being gone for good. Old spill files are pruned automatically.
+- **Context-window-scaled compaction** — memory/prompt-injection budgets now derive from the selected model's actual context window instead of fixed constants, so a small-context model (e.g. 8K) doesn't try to compact every single turn while a huge-context model doesn't throw away far more history than it needs to.
+
+### Changed
+
+- **Gesture control removed from the main app** — it now lives entirely in its own standalone "Air Touch" app (`packages/gesture-control`); nothing about it remains in Vivianne proper.
+- **The dead Rust `orchestrator` module removed** — a full rewrite of an already-retired TypeScript package that the frontend never actually called into.
+- **`bash`/`powershell` always stream live output** to the GUI now, with labeled `[stdout]`/`[stderr]` sections, the exit code always appended, and head+tail truncation (so a build/test failure's summary at the end is never the part that gets cut). This used to be a separate `streaming_bash`/`streaming_powershell` tool pair the model had to choose to get live output — now there's one name per shell, not two.
+- **Duplicate tools folded together**: `read_file`/`list_dir` merged into `read`/`ls`, `ask_user_question` removed in favor of the already-live, richer `question` tool.
+- **`todo_write`** now rejects duplicate items and enforces at most one `in_progress` task at a time, and reports pending/in-progress/completed counts.
+- Numerous internal performance fixes: reduced write amplification in the terminal output buffer, pooled HTTP clients instead of one per call, faster image re-encoding, parallelized independent git subprocess calls, and consolidated several duplicated truncation/skip-directory implementations into one each.
+
 ## [1.5.0] — 2026-07-20
 
 ### Added

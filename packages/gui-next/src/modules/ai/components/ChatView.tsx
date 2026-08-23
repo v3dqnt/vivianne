@@ -6,7 +6,6 @@ import { Composer } from './Composer'
 import { PermissionDialog } from './PermissionDialog'
 import { AskQuestionDialog } from './AskQuestionDialog'
 import { ConfirmationDialog } from './ConfirmationDialog'
-import { WebPreviewPanel } from './WebPreviewPanel'
 
 export function ChatView() {
   const init = useAgentStore((s) => s.init)
@@ -22,7 +21,6 @@ export function ChatView() {
       <PermissionDialog />
       <AskQuestionDialog />
       <ConfirmationDialog />
-      <WebPreviewPanel />
     </Stack>
   )
 }

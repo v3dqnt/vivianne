@@ -7,12 +7,12 @@ import { ChatView } from './modules/ai/components/ChatView'
 import { ProjectRail } from './modules/sessions/components/ProjectRail'
 import { Sidebar } from './modules/sessions/components/Sidebar'
 import { SettingsDialog } from './modules/settings/components/SettingsDialog'
+import { OptionalComponentsModal } from './modules/settings/components/OptionalComponentsModal'
 import { SidePanel } from './modules/dock/components/SidePanel'
 import { BottomTerminal } from './modules/dock/components/BottomTerminal'
 import { ChatDockZone } from './modules/sessions/components/ChatDockZone'
 import { ThreadTabBar } from './modules/sessions/components/ThreadTabBar'
 import { useThreadsStore } from './modules/sessions/store/threadsStore'
-import { GestureCursorOverlay } from './modules/gesture/components/GestureCursorOverlay'
 
 function App() {
   const hasOpenThreads = useThreadsStore((s) => s.openIds.length > 0)
@@ -61,7 +61,7 @@ function App() {
       </Stack>
 
       <SettingsDialog />
-      {hasTauri() && <GestureCursorOverlay />}
+      <OptionalComponentsModal />
     </Stack>
   )
 }

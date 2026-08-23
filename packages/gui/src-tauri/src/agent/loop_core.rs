@@ -306,8 +306,13 @@ pub async fn run_agent_loop_continue(
     let mut repeat_count: usize = 0;
     const DOOM_LOOP_NUDGE_THRESHOLD: usize = 3;
     const DOOM_LOOP_STOP_THRESHOLD: usize = 5;
+    // Bookkeeping calls a real workflow naturally interleaves with repeated
+    // work — a todo update between two identical `grep` calls shouldn't reset
+    // the counter, or the loop detector is trivially laundered by whatever
+    // the model happens to call in between.
+    const DOOM_LOOP_EXCLUDED_TOOLS: &[&str] = &["todo_write"];
 
-    // Todo nudge: sustained tool-call volume with no todo_write/todo_write_rich
+    // Todo nudge: sustained tool-call volume with no todo_write
     // call suggests multi-step work isn't being tracked.
     let mut tool_calls_since_todo: usize = 0;
     const TODO_NUDGE_THRESHOLD: usize = 8;
@@ -565,18 +570,24 @@ pub async fn run_agent_loop_continue(
 
         // Doom-loop signature tracking: same tool(s) + same arguments as last
         // step. Compared before execution so it reflects what the model just
-        // decided to do again, not the result.
-        if !tool_calls.is_empty() {
-            let sig: Vec<(String, serde_json::Value)> =
-                tool_calls.iter().map(|tc| (tc.name.clone(), tc.arguments.clone())).collect();
+        // decided to do again, not the result. A step made up entirely of
+        // excluded (bookkeeping) calls is transparent to tracking — it
+        // neither resets nor increments — so `grep X, todo_write, grep X`
+        // still counts as two identical steps in a row, not a reset.
+        let sig: Vec<(String, serde_json::Value)> = tool_calls
+            .iter()
+            .filter(|tc| !DOOM_LOOP_EXCLUDED_TOOLS.contains(&tc.name.as_str()))
+            .map(|tc| (tc.name.clone(), tc.arguments.clone()))
+            .collect();
+        if !sig.is_empty() {
             let (new_last, new_count) = track_doom_loop(last_tool_signature.take(), sig, repeat_count);
             last_tool_signature = new_last;
             repeat_count = new_count;
         }
 
-        // Todo-nudge tracking: reset on any todo_write/todo_write_rich call,
+        // Todo-nudge tracking: reset on any todo_write call,
         // otherwise accumulate.
-        if tool_calls.iter().any(|tc| tc.name == "todo_write" || tc.name == "todo_write_rich") {
+        if tool_calls.iter().any(|tc| tc.name == "todo_write") {
             tool_calls_since_todo = 0;
         } else {
             tool_calls_since_todo += tool_calls.len();
@@ -626,7 +637,7 @@ pub async fn run_agent_loop_continue(
         // still ignored — not a one-shot.
         if tool_calls_since_todo >= TODO_NUDGE_THRESHOLD {
             context.messages.push(system_reminder(
-                "You've made several tool calls without tracking progress in a todo list. If this task has multiple remaining steps, call todo_write (or todo_write_rich) to lay them out before continuing."
+                "You've made several tool calls without tracking progress in a todo list. If this task has multiple remaining steps, call todo_write to lay them out before continuing."
             ));
             tool_calls_since_todo = 0;
         }
@@ -1729,9 +1740,11 @@ async fn call_provider_stream_and_await(
         #[cfg(debug_assertions)]
         eprintln!("[DEBUG] usage recorded: input={} output={} total_tokens={} cost={:?}", usage.input, usage.output, usage.total_tokens, usage.cost);
         let source_tag = source_tag.to_string();
+        let provider = model.provider.clone();
+        let model_id = model.id.clone();
         tokio::spawn(async move {
-            super::usage_store::record_usage(&usage).await;
-            super::usage_store::record_usage_tagged(&usage, &source_tag).await;
+            super::usage_store::record_usage(&usage, &provider, &model_id).await;
+            super::usage_store::record_usage_tagged(&usage, &provider, &model_id, &source_tag).await;
         });
         let end_message = convert_ai_assistant_message_to_agent(msg.clone());
         emit.emit(AgentEvent::MessageEnd { message: end_message.clone() });

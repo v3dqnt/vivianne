@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 
 use super::tool_exec::{Tool, ToolResult};
 
-const IGNORED_DIRS: &[&str] = &[".git", "node_modules", "__pycache__", ".venv", "dist", "build", ".next", "target", "vendor"];
 const STRUCTURE_LIMIT: usize = 200;
 const DEPENDENCY_FILES: &[&str] = &[
     "package.json", "package-lock.json", "bun.lock", "bun.lockb", "pnpm-lock.yaml", "yarn.lock",
@@ -59,13 +58,28 @@ fn cache_path_for(label: &str) -> PathBuf {
     cache_root().join(safe.replace('/', "__"))
 }
 
+/// `repo_clone`/`repo_overview` shell out to a real `git` process (clone,
+/// fetch, rev-parse) with no model-supplied timeout of their own, unlike
+/// bash/powershell — a clone against a slow or hung remote (or one that stops
+/// to ask for credentials on stdin, which git will do and then wait forever)
+/// previously blocked the tool call, and the whole turn with it, indefinitely.
+const GIT_TIMEOUT_SECS: u64 = 120;
+
 async fn run_git(args: &[&str], cwd: &Path) -> Result<String, String> {
-    let output = tokio::process::Command::new("git")
+    let child = tokio::process::Command::new("git")
         .args(args)
         .current_dir(cwd)
-        .output()
-        .await
-        .map_err(|e| format!("failed to run git: {e}"))?;
+        // Never let a stalled remote fall back to an interactive credential
+        // prompt that then waits on stdin forever — fail fast instead.
+        .env("GIT_TERMINAL_PROMPT", "0")
+        // So a timed-out process is actually killed, not leaked as an orphan
+        // once the timeout below drops this future.
+        .kill_on_drop(true)
+        .output();
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(GIT_TIMEOUT_SECS), child).await {
+        Ok(result) => result.map_err(|e| format!("failed to run git: {e}"))?,
+        Err(_) => return Err(format!("git {} timed out after {GIT_TIMEOUT_SECS}s", args.join(" "))),
+    };
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
@@ -80,20 +94,6 @@ impl RepoCloneTool { pub fn new() -> Self { Self } }
 #[async_trait]
 impl Tool for RepoCloneTool {
     fn name(&self) -> &str { "repo_clone" }
-    fn description(&self) -> &str {
-        "Clone (or reuse a cached clone of) a remote git repository so its files can be read/searched. Accepts a git URL, 'owner/repo' GitHub shorthand, or 'host/owner/repo'."
-    }
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "repository": { "type": "string", "description": "Git URL, 'owner/repo', or 'host/owner/repo'" },
-                "refresh": { "type": "boolean", "description": "Fetch the latest remote state into the cache" },
-                "branch": { "type": "string", "description": "Branch or ref to check out" }
-            },
-            "required": ["repository"]
-        })
-    }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let repository = args["repository"].as_str().unwrap_or("");
         let refresh = args["refresh"].as_bool().unwrap_or(false);
@@ -140,8 +140,13 @@ impl Tool for RepoCloneTool {
             status = "cloned";
         }
 
-        let head = run_git(&["rev-parse", "HEAD"], &local_path).await.ok();
-        let current_branch = run_git(&["rev-parse", "--abbrev-ref", "HEAD"], &local_path).await.ok();
+        // Two independent processes, not two round trips — each `run_git`
+        // spawn is its own ~20-60ms of process-creation overhead.
+        let (head, current_branch) = tokio::join!(
+            run_git(&["rev-parse", "HEAD"], &local_path),
+            run_git(&["rev-parse", "--abbrev-ref", "HEAD"], &local_path),
+        );
+        let (head, current_branch) = (head.ok(), current_branch.ok());
 
         let mut lines = vec![
             format!("Repository ready: {label}"),
@@ -207,7 +212,7 @@ fn walk_structure(root: &Path, depth: usize) -> (Vec<String>, bool) {
             .flatten()
             .filter_map(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
-                if IGNORED_DIRS.contains(&name.as_str()) { return None; }
+                if super::tool_exec::ALWAYS_SKIP_DIRS.contains(&name.as_str()) { return None; }
                 let ft = e.file_type().ok()?;
                 Some((name, e.path(), ft.is_dir()))
             })
@@ -226,19 +231,6 @@ fn walk_structure(root: &Path, depth: usize) -> (Vec<String>, bool) {
 #[async_trait]
 impl Tool for RepoOverviewTool {
     fn name(&self) -> &str { "repo_overview" }
-    fn description(&self) -> &str {
-        "Get a structured overview of a directory or cached repository: file tree, detected language/ecosystem, package manager, dependency files, and likely entrypoints."
-    }
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "repository": { "type": "string", "description": "A repository already fetched with repo_clone (git URL, 'owner/repo', or 'host/owner/repo')" },
-                "path": { "type": "string", "description": "Directory path to inspect instead of a cached repository" },
-                "depth": { "type": "number", "description": "Max structure depth to include (1-6, default 3)" }
-            }
-        })
-    }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let repository = args["repository"].as_str();
         let path_arg = args["path"].as_str();
@@ -299,8 +291,11 @@ impl Tool for RepoOverviewTool {
         }
 
         let (lines, truncated) = walk_structure(&target, depth);
-        let branch = run_git(&["rev-parse", "--abbrev-ref", "HEAD"], &target).await.ok();
-        let head = run_git(&["rev-parse", "HEAD"], &target).await.ok();
+        let (branch, head) = tokio::join!(
+            run_git(&["rev-parse", "--abbrev-ref", "HEAD"], &target),
+            run_git(&["rev-parse", "HEAD"], &target),
+        );
+        let (branch, head) = (branch.ok(), head.ok());
         let pm = package_manager(&top_level);
         let eco = ecosystems(&top_level);
 

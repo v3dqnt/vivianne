@@ -1,7 +1,6 @@
 //! Coding Agent Commands — Tauri command bindings that bridge the tool-side
-//! registries (subagents, plan mode, ask-user-question, streaming output) and
-//! the GUI. The frontend calls them to:
-//!   * resolve a pending `ask_user_question` after the user picks options
+//! registries (subagents, plan mode, streaming output) and the GUI. The
+//! frontend calls them to:
 //!   * inspect / cancel background subagents launched by the `task` tool
 //!   * inspect / toggle plan mode + read the current plan text
 //!   * register the live-output channel for streaming shell tools
@@ -13,20 +12,9 @@
 //! since a working gate already exists.
 
 use crate::coding_agent::orchestration::{
-    KillTaskTool, PlanModeState, QuestionRegistry, SubagentRegistry, SubagentStatus,
+    KillTaskTool, PlanModeState, SubagentRegistry, SubagentStatus,
 };
 use crate::coding_agent::tool_exec::Tool as _;
-
-/// Called by the GUI after the user picks options in an ask_user_question
-/// prompt. `selections` is the list of chosen labels (or a single freeform
-/// string if the user typed one).
-#[tauri::command]
-pub async fn cmd_coding_answer_question(
-    id: String,
-    selections: Vec<String>,
-) -> Result<bool, String> {
-    Ok(QuestionRegistry::global().resolve(&id, selections))
-}
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,7 +37,7 @@ pub struct SubagentSummary {
 pub async fn cmd_coding_list_subagents() -> Result<Vec<SubagentSummary>, String> {
     let mut out = Vec::new();
     for arc in SubagentRegistry::global().all() {
-        let g = arc.lock().unwrap();
+        let g = arc.lock().unwrap_or_else(|e| e.into_inner());
         let (status, output, error, turns, tool_calls) = match &g.status {
             SubagentStatus::Initializing => ("initializing".to_string(), None, None, 0, 0),
             SubagentStatus::Running { turns, tool_calls } => ("running".to_string(), None, None, *turns, *tool_calls),
@@ -90,8 +78,8 @@ pub async fn cmd_coding_get_subagent_messages(id: String) -> Result<Vec<crate::a
     // Bind the clone before returning: inlining it into `Ok(...)` makes the
     // MutexGuard a temporary that outlives `arc`/`g` at end-of-block scope.
     let messages = {
-        let g = arc.lock().unwrap();
-        let m = g.messages.lock().unwrap().clone();
+        let g = arc.lock().unwrap_or_else(|e| e.into_inner());
+        let m = g.messages.lock().unwrap_or_else(|e| e.into_inner()).clone();
         m
     };
     Ok(messages)

@@ -171,18 +171,6 @@ impl Tool for ApplyPatchTool {
     fn name(&self) -> &str {
         "apply_patch"
     }
-    fn description(&self) -> &str {
-        "Apply a multi-file patch in the 'V4A' format (*** Begin Patch / Add File / Update File / Delete File / End Patch). Use this to add, edit, move, or delete several files (or several regions of one file) in a single call instead of many `edit` calls."
-    }
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "patchText": { "type": "string", "description": "The full patch text (must start with '*** Begin Patch' and end with '*** End Patch')" }
-            },
-            "required": ["patchText"]
-        })
-    }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         if let Some(gated) = super::tool_exec::plan_mode_gate("apply_patch") { return gated; }
         let patch_text = args["patchText"].as_str().unwrap_or("");

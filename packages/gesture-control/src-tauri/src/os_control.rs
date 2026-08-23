@@ -38,14 +38,33 @@ use crate::gesture::events::{GestureEvent, SwipeDirection};
 /// normal scroll wheel rather than a single-line creep.
 const SCROLL_SCALE: f32 = 12.0;
 
+/// How far (in real screen pixels) the hand may drift while a pinch is held
+/// before it stops counting as tremor and starts counting as a deliberate
+/// drag. Inside this radius the cursor stays pinned where the pinch began —
+/// holding a pinch shakes the pinch midpoint enough to walk the pointer off
+/// the target the user aimed at — past it, the cursor follows the hand so
+/// pinch-and-move drags still work.
+const PINCH_DRAG_SLOP_PX: f32 = 48.0;
+
+/// State of the currently-active pinch, if any: `active` carries the pinch
+/// anchor (normalized pinch midpoint at `PinchStart`) while the button is
+/// logically down, and `following` records whether motion beyond
+/// [`PINCH_DRAG_SLOP_PX`] has upgraded this pinch into a deliberate drag.
+#[derive(Default)]
+struct PinchTracking {
+    active: Option<(f32, f32)>,
+    following: bool,
+}
+
 /// Owns the `Enigo` handle and the small amount of state OS-input mapping
-/// needs (drag-hold latch). One instance lives for the process lifetime,
-/// driven by the sidecar's event stream.
+/// needs (drag-hold latch + pinch state). One instance lives for the process
+/// lifetime, driven by the sidecar's event stream.
 pub struct OsController {
     enigo: Mutex<Enigo>,
     screen_size: (i32, i32),
     dragging: Mutex<bool>,
     hold_armed: Mutex<bool>,
+    pinch: Mutex<PinchTracking>,
 }
 
 impl OsController {
@@ -57,6 +76,7 @@ impl OsController {
             screen_size,
             dragging: Mutex::new(false),
             hold_armed: Mutex::new(false),
+            pinch: Mutex::new(PinchTracking::default()),
         })
     }
 
@@ -78,16 +98,34 @@ impl OsController {
     pub fn apply(&self, event: &GestureEvent) {
         match event {
             GestureEvent::PointerMove { x, y } => {
-                // Only move the free-floating cursor when not mid-drag — while
-                // dragging, `PinchStart`'s coordinate already positions the
-                // cursor at pinch time, and further PointerMove frames during
-                // the pinch legitimately continue to move it (the hand is
-                // still tracked), so this is intentionally a no-op guard only
-                // in the sense that both paths converge on the same call.
-                self.move_to_normalized(*x, *y);
+                // While a pinch is down, the cursor stays pinned to where the
+                // pinch began until hand motion exceeds `PINCH_DRAG_SLOP_PX` —
+                // natural tremor while holding a pinch must not walk the
+                // pointer off the target — beyond which the pinch has become
+                // a deliberate drag and the cursor follows the hand again.
+                let mut pinch = self.pinch.lock().unwrap();
+                if let Some((ax, ay)) = pinch.active {
+                    if !pinch.following {
+                        let (w, h) = self.screen_size;
+                        let dx = (*x - ax) * w as f32;
+                        let dy = (*y - ay) * h as f32;
+                        if dx.hypot(dy) > PINCH_DRAG_SLOP_PX {
+                            pinch.following = true;
+                        }
+                    }
+                    if pinch.following {
+                        drop(pinch);
+                        self.move_to_normalized(*x, *y);
+                    }
+                } else {
+                    drop(pinch);
+                    self.move_to_normalized(*x, *y);
+                }
             }
             GestureEvent::PinchStart { x, y } => {
                 self.move_to_normalized(*x, *y);
+                *self.pinch.lock().unwrap() =
+                    PinchTracking { active: Some((*x, *y)), following: false };
                 let armed = self.hold_armed.lock().map(|g| *g).unwrap_or(false);
                 if armed {
                     self.mouse_down();
@@ -103,7 +141,19 @@ impl OsController {
                 }
             }
             GestureEvent::PinchEnd { x, y } => {
-                self.move_to_normalized(*x, *y);
+                // Land a drag precisely on the release point. A plain click
+                // deliberately does NOT re-move the cursor to the (drifted)
+                // release midpoint — it stays where the user aimed at
+                // `PinchStart`, which is the whole point of the slop radius.
+                let was_following = {
+                    let mut p = self.pinch.lock().unwrap();
+                    let following = p.following;
+                    *p = PinchTracking::default();
+                    following
+                };
+                if was_following {
+                    self.move_to_normalized(*x, *y);
+                }
                 self.mouse_up();
             }
             GestureEvent::Click { .. } => {
@@ -135,8 +185,10 @@ impl OsController {
             GestureEvent::Adjust { delta } => self.scroll(*delta),
             GestureEvent::HandDetected | GestureEvent::HandLost => {
                 // No OS action — but a lost hand mid-drag must not leave the
-                // mouse button stuck down.
+                // mouse button stuck down, nor leave pinch tracking latched (it
+                // would freeze the cursor after re-detection).
                 if matches!(event, GestureEvent::HandLost) {
+                    *self.pinch.lock().unwrap() = PinchTracking::default();
                     self.mouse_up();
                     *self.hold_armed.lock().unwrap() = false;
                 }

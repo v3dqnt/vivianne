@@ -12,9 +12,11 @@ use tokio::sync::oneshot;
 /// real side effects or that reach outside the sandboxed workspace.
 const GATED_TOOLS: &[&str] = &[
     "bash", "powershell", "write", "edit", "apply_patch", "computer", "web_fetch", "web_search", "generate_image",
-    // streaming variants of bash/powershell carry the exact same risk — must
-    // be gated identically, not just their buffered counterparts.
-    "streaming_bash", "streaming_powershell",
+    // Same real-shell-execution risk as bash/powershell, just persistent and
+    // interactive rather than one-shot. `terminal_signal`/`terminal_close`
+    // are here because the registry is shared with the GUI: they can stop or
+    // kill a shell the *user* opened and is using, not just an agent one.
+    "terminal_open", "terminal_send", "terminal_signal", "terminal_close",
     // A stdio MCP server config is "run this local command with these args
     // and env vars" — functionally as risky as bash, just spelled
     // differently, so it needs the same approval gate.
@@ -36,8 +38,7 @@ const GATED_TOOLS: &[&str] = &[
 /// user an "approve this write?" prompt for a call that's going to be
 /// rejected regardless.
 const PLAN_MODE_GATED_TOOLS: &[&str] = &[
-    "write", "edit", "bash", "powershell", "apply_patch", "notebook_edit",
-    "streaming_bash", "streaming_powershell",
+    "write", "edit", "bash", "powershell", "apply_patch", "notebook_edit", "terminal_open", "terminal_send",
 ];
 
 /// Local, read-only, zero-side-effect tools — safe to run concurrently
@@ -50,8 +51,7 @@ const PLAN_MODE_GATED_TOOLS: &[&str] = &[
 /// at a time regardless. Deliberately excludes `sleep` (parallelizing a
 /// pause defeats its purpose) and `todo_write` (mutates shared list state,
 /// so concurrent calls could race/lose an update).
-const PARALLEL_READONLY_TOOLS: &[&str] =
-    &["read", "read_file", "ls", "list_dir", "grep", "glob", "code_search"];
+const PARALLEL_READONLY_TOOLS: &[&str] = &["read", "ls", "grep", "glob", "code_search"];
 
 lazy_static::lazy_static! {
     static ref PENDING_PERMISSIONS: StdMutex<HashMap<String, oneshot::Sender<bool>>> = StdMutex::new(HashMap::new());
@@ -193,6 +193,34 @@ pub(crate) fn path_in_workspace(resolved: &std::path::Path, folders: &[String]) 
     })
 }
 
+/// Turn a `ToolResult` into the `AgentToolResult` shape the message history
+/// wants, surfacing a `details.image_base64` payload (the computer tool's
+/// screenshot, or `read` on an image file) as a real `MessageContent::Image`
+/// block — but only when the active model can actually take image input.
+/// Sending pixels to a text-only model is either silently wasted or an
+/// outright provider error, and `read` already substitutes OCR'd text for
+/// the pixels in that case (see the `ocr` forcing in `execute_tool_calls`),
+/// so nothing is lost by dropping the attachment here.
+///
+/// Takes `image_base64` out of `details` rather than cloning it: the same
+/// multi-MB base64 string used to end up in both the `Image` block AND
+/// `details`, doubling the memory this result held for its lifetime (and the
+/// IPC payload size) for no reason — nothing downstream reads it back out of
+/// `details` once it's been surfaced as a proper content block.
+fn tool_result_to_agent_result(res: crate::coding_agent::tool_exec::ToolResult, vision_capable: bool) -> AgentToolResult {
+    let mut content = vec![MessageContent::Text { text: res.content }];
+    let mut details = res.details.unwrap_or(serde_json::Value::Null);
+    if vision_capable {
+        if let Some(b64) = details.get_mut("image_base64").map(|v| v.take()) {
+            if let serde_json::Value::String(b64) = b64 {
+                let media_type = details.get("media_type").and_then(|v| v.as_str()).unwrap_or("image/png").to_string();
+                content.push(MessageContent::Image { url: None, base64: Some(b64), media_type: Some(media_type) });
+            }
+        }
+    }
+    AgentToolResult { content, details, terminate: None }
+}
+
 /// Execute a list of tool calls sequentially or in parallel based on their
 /// execution modes.
 pub async fn execute_tool_calls(
@@ -209,6 +237,31 @@ pub async fn execute_tool_calls(
     let tools = crate::coding_agent::tool_exec::create_coding_tools(cwd.clone());
     let bypass_mode = read_bypass_mode().await;
 
+    // Whether the active model can take image input at all. Gates whether
+    // `read`/`computer` results attach real pixels (`tool_result_to_agent_result`)
+    // and whether `read` on an image file forces OCR instead (just below) —
+    // a text-only model gets the text a sighted one would get from looking,
+    // rather than an image block it can't use or an error from the provider.
+    let vision_capable = {
+        let m = state.model().await;
+        crate::ai::model_discovery::model_supports_vision(&m.provider, &m.id)
+    };
+    let mut tool_calls = tool_calls;
+    if !vision_capable {
+        for tc in &mut tool_calls {
+            if tc.name == "read" {
+                let is_image = tc.arguments.get("path").and_then(|v| v.as_str())
+                    .and_then(|p| std::path::Path::new(p).extension())
+                    .and_then(|e| e.to_str())
+                    .map(|e| crate::coding_agent::tools_enh::is_image_ext(&e.to_ascii_lowercase()))
+                    .unwrap_or(false);
+                if is_image {
+                    tc.arguments["ocr"] = serde_json::json!(true);
+                }
+            }
+        }
+    }
+
     // Tools whose `path` argument gets checked against the workspace folder
     // list — if the resolved path falls outside all of them, the call is
     // gated behind the same approval flow GATED_TOOLS already uses (below),
@@ -219,7 +272,7 @@ pub async fn execute_tool_calls(
     // GATED_TOOLS's blanket approval (every bash/powershell call already
     // asks, workspace or not).
     const PATH_SCOPED_TOOLS: &[&str] =
-        &["read", "write", "edit", "apply_patch", "ls", "grep", "glob", "code_search", "read_file", "list_dir"];
+        &["read", "write", "edit", "apply_patch", "ls", "grep", "glob", "code_search"];
 
     const WORKSPACE_MUTATING_TOOLS: &[&str] = &["write", "edit", "apply_patch", "bash", "powershell"];
 
@@ -307,21 +360,7 @@ pub async fn execute_tool_calls(
             async move {
                 if let Some(tool) = tools.iter().find(|t| t.name() == tc.name) {
                     let res = tool.execute(&tc.arguments, ".").await;
-                    let mut content = vec![MessageContent::Text { text: res.content }];
-                    if let Some(details) = &res.details {
-                        if let Some(b64) = details.get("image_base64").and_then(|v| v.as_str()) {
-                            content.push(MessageContent::Image {
-                                url: None,
-                                base64: Some(b64.to_string()),
-                                media_type: details
-                                    .get("media_type")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string())
-                                    .or_else(|| Some("image/png".to_string())),
-                            });
-                        }
-                    }
-                    AgentToolResult { content, details: res.details.unwrap_or(serde_json::Value::Null), terminate: None }
+                    tool_result_to_agent_result(res, vision_capable)
                 } else {
                     AgentToolResult {
                         content: vec![MessageContent::Text { text: format!("Tool not found: {}", tc.name) }],
@@ -464,7 +503,32 @@ pub async fn execute_tool_calls(
             }
         }
 
-        let tool_result = if tool_call.name == "remember" || tool_call.name == "recall" {
+        // Checked once, up front, for every tool — not repeated as an
+        // `&& !disabled_tools.contains(..)` clause on individual branches.
+        // That per-branch form silently didn't apply to any branch whose
+        // author forgot it, so a tool disabled in Settings (or withheld by
+        // persona mode, or absent from a subagent's allowlist) still ran.
+        let tool_result = if disabled_tools.contains(&tool_call.name) {
+            let reason = if settings_disabled_tools.contains(&tool_call.name) {
+                "disabled in Settings → Tools".to_string()
+            } else {
+                format!("restricted by the current '{}' mode", persona_mode.label())
+            };
+            AgentToolResult {
+                content: vec![MessageContent::Text {
+                    text: format!("The '{}' tool is {} and cannot be used right now.", tool_call.name, reason),
+                }],
+                details: serde_json::Value::Null,
+                terminate: None,
+            }
+        // From here down: tools needing `&AgentState`, `&AppHandle`, or
+        // `emit` — the `Tool` trait's `execute(&self, args, cwd)` has no way
+        // to carry any of those, so these are matched by name instead of
+        // going through the `create_coding_tools()` registry below. A tool
+        // that only needs `args`/`cwd` belongs in that registry, not here —
+        // see `schema_registry_consistency_tests::DISPATCH_CHAIN_TOOLS` for
+        // the full list this chain has to match.
+        } else if tool_call.name == "remember" || tool_call.name == "recall" {
             execute_memory_tool(&tool_call.name, &tool_call.arguments, app).await
         } else if tool_call.name == "read_skill" {
             execute_read_skill_tool(&tool_call.arguments).await
@@ -478,60 +542,67 @@ pub async fn execute_tool_calls(
             execute_present_snippet_tool(&tool_call.arguments)
         } else if tool_call.name == "web_preview" {
             execute_web_preview_tool(&tool_call.arguments, emit).await
-        } else if tool_call.name == "task" && !disabled_tools.contains(&tool_call.name) {
+        } else if tool_call.name == "browser_snapshot" {
+            execute_browser_snapshot_tool().await
+        } else if tool_call.name == "browser_click" {
+            execute_browser_click_tool(&tool_call.arguments, emit).await
+        } else if tool_call.name == "browser_type" {
+            execute_browser_type_tool(&tool_call.arguments, emit).await
+        } else if tool_call.name == "browser_press_key" {
+            execute_browser_press_key_tool(&tool_call.arguments, emit).await
+        } else if tool_call.name == "browser_scroll" {
+            execute_browser_scroll_tool(&tool_call.arguments, emit).await
+        } else if tool_call.name == "browser_evaluate" {
+            execute_browser_evaluate_tool(&tool_call.arguments).await
+        } else if tool_call.name == "browser_read_console" {
+            execute_browser_read_console_tool().await
+        } else if tool_call.name == "browser_read_network" {
+            execute_browser_read_network_tool().await
+        } else if tool_call.name == "task" {
             execute_task_tool(&tool_call.arguments, context.delegate_depth, state, app).await
-        } else if tool_call.name == "generate_image" && !disabled_tools.contains(&tool_call.name) {
+        } else if tool_call.name == "list_subagent_profiles" {
+            execute_list_subagent_profiles_tool().await
+        } else if tool_call.name == "generate_image" {
             execute_generate_image_tool(&tool_call.arguments, app).await
-        } else if tool_call.name == "connect_mcp_server" && !disabled_tools.contains(&tool_call.name) {
+        } else if tool_call.name == "connect_mcp_server" {
             execute_connect_mcp_server_tool(&tool_call.arguments).await
         } else if tool_call.name == "get_current_time" {
             execute_get_current_time_tool().await
-        } else if tool_call.name == "create_automation" && !disabled_tools.contains(&tool_call.name) {
+        } else if tool_call.name == "list_tools" {
+            execute_list_tools_tool(&disabled_tools).await
+        } else if tool_call.name == "set_panel" {
+            execute_set_panel_tool(&tool_call.arguments, emit)
+        } else if tool_call.name == "get_goal" {
+            execute_get_goal_tool(state).await
+        } else if tool_call.name == "create_goal" {
+            execute_create_goal_tool(&tool_call.arguments, state).await
+        } else if tool_call.name == "update_goal" {
+            execute_update_goal_tool(&tool_call.arguments, state).await
+        } else if tool_call.name == "terminal_open" {
+            execute_terminal_open_tool(&tool_call.arguments, app).await
+        } else if tool_call.name == "terminal_send" {
+            execute_terminal_send_tool(&tool_call.arguments, app).await
+        } else if tool_call.name == "terminal_read" {
+            execute_terminal_read_tool(&tool_call.arguments, app).await
+        } else if tool_call.name == "terminal_signal" {
+            execute_terminal_signal_tool(&tool_call.arguments, app).await
+        } else if tool_call.name == "terminal_close" {
+            execute_terminal_close_tool(&tool_call.arguments, app).await
+        } else if tool_call.name == "terminal_list" {
+            execute_terminal_list_tool(app).await
+        } else if tool_call.name == "create_automation" {
             execute_create_automation_tool(&tool_call.arguments, app).await
         } else if tool_call.name == "list_automations" {
             execute_list_automations_tool(app).await
-        } else if tool_call.name == "delete_automation" && !disabled_tools.contains(&tool_call.name) {
+        } else if tool_call.name == "delete_automation" {
             execute_delete_automation_tool(&tool_call.arguments, app).await
-        } else if tool_call.name == "set_automation_enabled" && !disabled_tools.contains(&tool_call.name) {
+        } else if tool_call.name == "set_automation_enabled" {
             execute_set_automation_enabled_tool(&tool_call.arguments, app).await
-        } else if tool_call.name == "sandbox_execute" && !disabled_tools.contains(&tool_call.name) {
+        } else if tool_call.name == "sandbox_execute" {
             execute_sandbox_tool(&tool_call.arguments).await
-        } else if disabled_tools.contains(&tool_call.name) {
-            let reason = if settings_disabled_tools.contains(&tool_call.name) {
-                "disabled in Settings → Tools".to_string()
-            } else {
-                format!("restricted by the current '{}' mode", persona_mode.label())
-            };
-            AgentToolResult {
-                content: vec![MessageContent::Text {
-                    text: format!("The '{}' tool is {} and cannot be used right now.", tool_call.name, reason),
-                }],
-                details: serde_json::Value::Null,
-                terminate: None,
-            }
         } else if let Some(tool) = tools.iter().find(|t| t.name() == tool_call.name) {
             let res = tool.execute(&tool_call.arguments, ".").await;
-            // A tool may attach an image (e.g. the computer tool's screenshot) via
-            // `details.image_base64`; surface it as an Image block so the model can see it.
-            let mut content = vec![MessageContent::Text { text: res.content }];
-            if let Some(details) = &res.details {
-                if let Some(b64) = details.get("image_base64").and_then(|v| v.as_str()) {
-                    content.push(MessageContent::Image {
-                        url: None,
-                        base64: Some(b64.to_string()),
-                        media_type: details
-                            .get("media_type")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                            .or_else(|| Some("image/png".to_string())),
-                    });
-                }
-            }
-            AgentToolResult {
-                content,
-                details: res.details.unwrap_or(serde_json::Value::Null),
-                terminate: None,
-            }
+            tool_result_to_agent_result(res, vision_capable)
         } else if let Some((server, real_name)) = tool_call.name.strip_prefix("mcp__").and_then(|rest| rest.split_once("__")) {
             match crate::mcp::call_tool(server, real_name, tool_call.arguments.clone()).await {
                 Ok(text) => AgentToolResult {
@@ -799,6 +870,190 @@ async fn execute_web_preview_tool(args: &serde_json::Value, emit: &EventSender) 
     }
 }
 
+/// Shared tail for every browser_* interaction tool: report the outcome to
+/// the (to-be-merged) preview panel via the same event `web_preview` uses,
+/// and turn the result into a plain-text tool response. `action_desc` is
+/// only used on success — an error already speaks for itself.
+async fn browser_action_result(
+    action_desc: String,
+    result: Result<crate::camoufox::NavigateResult, String>,
+    emit: &EventSender,
+) -> AgentToolResult {
+    let url = crate::camoufox::current_url().await.unwrap_or_default();
+    match result {
+        Ok(r) => {
+            emit.emit(AgentEvent::WebPreviewRequested { url: url.clone(), screenshot_base64: r.screenshot_base64.clone(), error: None });
+            AgentToolResult {
+                content: vec![MessageContent::Text { text: action_desc }],
+                details: serde_json::json!({ "url": url, "hasScreenshot": r.screenshot_base64.is_some() }),
+                terminate: None,
+            }
+        }
+        Err(e) => {
+            emit.emit(AgentEvent::WebPreviewRequested { url: url.clone(), screenshot_base64: None, error: Some(e.clone()) });
+            image_tool_err(e)
+        }
+    }
+}
+
+async fn execute_browser_snapshot_tool() -> AgentToolResult {
+    match crate::camoufox::snapshot().await {
+        Ok(text) => text_result(text),
+        Err(e) => image_tool_err(e),
+    }
+}
+
+async fn execute_browser_click_tool(args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
+    let Some(r) = args.get("ref").and_then(|v| v.as_str()) else {
+        return image_tool_err("Error: 'ref' is required — call browser_snapshot first to get one.");
+    };
+    let result = crate::camoufox::click(r).await;
+    browser_action_result(format!("Clicked {r}."), result, emit).await
+}
+
+async fn execute_browser_type_tool(args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
+    let Some(r) = args.get("ref").and_then(|v| v.as_str()) else {
+        return image_tool_err("Error: 'ref' is required — call browser_snapshot first to get one.");
+    };
+    let Some(text) = args.get("text").and_then(|v| v.as_str()) else {
+        return image_tool_err("Error: 'text' is required.");
+    };
+    let submit = args.get("submit").and_then(|v| v.as_bool()).unwrap_or(false);
+    let result = crate::camoufox::type_text(r, text, submit).await;
+    browser_action_result(format!("Typed into {r}{}.", if submit { " and pressed Enter" } else { "" }), result, emit).await
+}
+
+async fn execute_browser_press_key_tool(args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
+    let Some(key) = args.get("key").and_then(|v| v.as_str()) else {
+        return image_tool_err("Error: 'key' is required.");
+    };
+    let result = crate::camoufox::press_key(key).await;
+    browser_action_result(format!("Pressed {key}."), result, emit).await
+}
+
+async fn execute_browser_scroll_tool(args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
+    let direction = args.get("direction").and_then(|v| v.as_str()).unwrap_or("down").to_string();
+    let amount = args.get("amount").and_then(|v| v.as_i64()).unwrap_or(500);
+    let result = crate::camoufox::scroll(&direction, amount).await;
+    browser_action_result(format!("Scrolled {direction} by {amount}px."), result, emit).await
+}
+
+async fn execute_browser_evaluate_tool(args: &serde_json::Value) -> AgentToolResult {
+    let Some(expr) = args.get("expression").and_then(|v| v.as_str()) else {
+        return image_tool_err("Error: 'expression' is required.");
+    };
+    match crate::camoufox::evaluate(expr).await {
+        Ok(val) => AgentToolResult {
+            content: vec![MessageContent::Text { text: serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string()) }],
+            details: serde_json::json!({ "result": val }),
+            terminate: None,
+        },
+        Err(e) => image_tool_err(e),
+    }
+}
+
+/// Installs (idempotently — no-op if already present) a shim overriding
+/// console.log/warn/error/info/debug to also push into `window.__vivConsole`.
+/// Only sees output logged after this runs, and is lost on the next full
+/// page navigation (a fresh `window`) — there's no persistent DevTools-style
+/// capture available through camoufox-browser's REST API.
+const CONSOLE_SHIM_INSTALL: &str = r#"(function() {
+  if (window.__vivConsoleInstalled) return "already installed";
+  window.__vivConsoleInstalled = true;
+  window.__vivConsole = [];
+  ["log", "warn", "error", "info", "debug"].forEach(function(level) {
+    var orig = console[level].bind(console);
+    console[level] = function() {
+      try {
+        var text = Array.prototype.map.call(arguments, function(a) {
+          try { return typeof a === "string" ? a : JSON.stringify(a); } catch (e) { return String(a); }
+        }).join(" ");
+        window.__vivConsole.push({ level: level, text: text, time: Date.now() });
+      } catch (e) {}
+      orig.apply(console, arguments);
+    };
+  });
+  return "installed";
+})()"#;
+
+const CONSOLE_SHIM_DRAIN: &str = r#"(function() {
+  var buf = window.__vivConsole || [];
+  window.__vivConsole = [];
+  return buf;
+})()"#;
+
+async fn execute_browser_read_console_tool() -> AgentToolResult {
+    if let Err(e) = crate::camoufox::evaluate(CONSOLE_SHIM_INSTALL).await {
+        return image_tool_err(e);
+    }
+    match crate::camoufox::evaluate(CONSOLE_SHIM_DRAIN).await {
+        Ok(val) => {
+            let entries = val.as_array().cloned().unwrap_or_default();
+            if entries.is_empty() {
+                text_result(
+                    "No console output captured (the capture shim installs on first call, so this is expected right after opening the page — trigger whatever you want to observe, then call this again)."
+                        .to_string(),
+                )
+            } else {
+                let lines: Vec<String> = entries
+                    .iter()
+                    .map(|e| {
+                        let level = e.get("level").and_then(|v| v.as_str()).unwrap_or("log");
+                        let text = e.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                        format!("[{level}] {text}")
+                    })
+                    .collect();
+                AgentToolResult {
+                    content: vec![MessageContent::Text { text: lines.join("\n") }],
+                    details: serde_json::json!({ "entries": entries }),
+                    terminate: None,
+                }
+            }
+        }
+        Err(e) => image_tool_err(e),
+    }
+}
+
+/// Resource Timing API read — the only network visibility available without
+/// a DevTools protocol connection (URL/type/duration/size, no headers or
+/// bodies, limited to what's still in the browser's timing buffer).
+const NETWORK_READ: &str = r#"(function() {
+  var toEntry = function(r) {
+    return { url: r.name, type: r.initiatorType || "navigation", durationMs: Math.round(r.duration), transferSize: r.transferSize || 0 };
+  };
+  var nav = performance.getEntriesByType("navigation").map(toEntry);
+  var resources = performance.getEntriesByType("resource").map(toEntry);
+  return nav.concat(resources);
+})()"#;
+
+async fn execute_browser_read_network_tool() -> AgentToolResult {
+    match crate::camoufox::evaluate(NETWORK_READ).await {
+        Ok(val) => {
+            let entries = val.as_array().cloned().unwrap_or_default();
+            if entries.is_empty() {
+                text_result("No network requests recorded (the page may not have made any yet, or the timing buffer is empty).".to_string())
+            } else {
+                let lines: Vec<String> = entries
+                    .iter()
+                    .map(|e| {
+                        let url = e.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+                        let typ = e.get("type").and_then(|v| v.as_str()).unwrap_or("?");
+                        let dur = e.get("durationMs").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let size = e.get("transferSize").and_then(|v| v.as_i64()).unwrap_or(0);
+                        format!("[{typ}] {url} ({dur}ms, {size} bytes)")
+                    })
+                    .collect();
+                AgentToolResult {
+                    content: vec![MessageContent::Text { text: format!("{} network entries:\n{}", lines.len(), lines.join("\n")) }],
+                    details: serde_json::json!({ "entries": entries }),
+                    terminate: None,
+                }
+            }
+        }
+        Err(e) => image_tool_err(e),
+    }
+}
+
 #[cfg(test)]
 mod workspace_guard_tests {
     use super::path_in_workspace;
@@ -920,14 +1175,15 @@ async fn execute_task_tool(
         };
     }
     let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    if description.is_empty() || prompt.is_empty() {
+    if description.is_empty() {
         return AgentToolResult {
-            content: vec![MessageContent::Text { text: "Error: 'description' and 'prompt' are required.".to_string() }],
+            content: vec![MessageContent::Text { text: "Error: 'description' is required.".to_string() }],
             details: serde_json::Value::Null,
             terminate: None,
         };
     }
+    let explicit_prompt = args.get("prompt").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+    let context = args.get("context").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
     let subagent_type = args.get("subagent_type").and_then(|v| v.as_str()).unwrap_or("general-purpose").to_string();
     let run_in_background = args.get("run_in_background").and_then(|v| v.as_bool()).unwrap_or(true);
     let persona = args.get("persona").and_then(|v| v.as_str()).and_then(crate::agent::personas::find);
@@ -947,6 +1203,38 @@ async fn execute_task_tool(
         })
         .or_else(|| crate::coding_agent::subagent_profiles::find_builtin(&subagent_type));
 
+    // Resolve the actual task prompt: an explicit `prompt` always wins;
+    // otherwise fall back to the matched profile's preset `default_prompt`
+    // (the "pointer" path — caller supplies only `context`), with `context`
+    // appended either way when given. Never silently proceed with an empty
+    // prompt.
+    let prompt = match (explicit_prompt, profile.as_ref().and_then(|p| p.default_prompt.as_deref())) {
+        (Some(p), _) => match context {
+            Some(c) => format!("{p}\n\nContext: {c}"),
+            None => p.to_string(),
+        },
+        (None, Some(default)) => match context {
+            Some(c) => format!("{default}\n\nContext: {c}"),
+            None => default.to_string(),
+        },
+        (None, None) => {
+            let hint = if profile.is_some() {
+                format!("the '{subagent_type}' profile has no preset default_prompt")
+            } else {
+                format!("'{subagent_type}' doesn't match any known profile")
+            };
+            return AgentToolResult {
+                content: vec![MessageContent::Text {
+                    text: format!(
+                        "Error: no 'prompt' was given and {hint}, so there's nothing to run. Either supply 'prompt' directly, or call list_subagent_profiles to find one with a preset default_prompt you can point at with 'context' instead."
+                    ),
+                }],
+                details: serde_json::Value::Null,
+                terminate: None,
+            };
+        }
+    };
+
     let id = uuid::Uuid::new_v4().to_string();
     let handle = SubagentHandle {
         id: id.clone(),
@@ -956,7 +1244,6 @@ async fn execute_task_tool(
         cwd: parent_state.primary_workspace_folder().await.unwrap_or_default(),
         started_at: std::time::Instant::now(),
         started_at_epoch_ms: now_ms(),
-        run_in_background,
         status: SubagentStatus::Running { turns: 0, tool_calls: 0 },
         cancelled: false,
         notify: std::sync::Arc::new(tokio::sync::Notify::new()),
@@ -1022,7 +1309,7 @@ async fn execute_task_tool(
             let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
                 Ok(rt) => rt,
                 Err(e) => {
-                    let mut g = arc_bg.lock().unwrap();
+                    let mut g = arc_bg.lock().unwrap_or_else(|e| e.into_inner());
                     g.status = SubagentStatus::Failed { error: format!("failed to start subagent runtime: {e}") };
                     let notify = g.notify.clone();
                     drop(g);
@@ -1032,7 +1319,7 @@ async fn execute_task_tool(
             };
             let (output, tool_calls, turns) =
                 rt.block_on(drive_subagent(app, sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc_bg));
-            let mut g = arc_bg.lock().unwrap();
+            let mut g = arc_bg.lock().unwrap_or_else(|e| e.into_inner());
             if !g.cancelled {
                 g.status = SubagentStatus::Completed { output, tool_calls, turns };
             }
@@ -1054,7 +1341,7 @@ async fn execute_task_tool(
     let (output, tool_calls, turns) =
         drive_subagent(app.clone(), sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc).await;
     {
-        let mut g = arc.lock().unwrap();
+        let mut g = arc.lock().unwrap_or_else(|e| e.into_inner());
         g.status = SubagentStatus::Completed { output: output.clone(), tool_calls, turns };
         let notify = g.notify.clone();
         drop(g);
@@ -1114,7 +1401,20 @@ async fn drive_subagent(
     let drain_task = tokio::spawn(async move {
         while let Some(event) = rx.rx.recv().await {
             if let crate::agent::events::AgentEvent::MessageEnd { message } = event {
-                handle_for_events.lock().unwrap().messages.lock().unwrap().push(message);
+                let mut h = handle_for_events.lock().unwrap_or_else(|e| e.into_inner());
+                h.messages.lock().unwrap_or_else(|e| e.into_inner()).push(message);
+                // Live-update the turn/tool-call counts shown in the Subagents
+                // panel while this is still running — without this, both stay
+                // frozen at their `Running { turns: 0, tool_calls: 0 }` initial
+                // value until the subagent finishes and the caller overwrites
+                // `status` with the final `Completed` counts.
+                if !h.cancelled {
+                    let msgs = h.messages.lock().unwrap_or_else(|e| e.into_inner());
+                    let turns = msgs.iter().filter(|m| matches!(m, AgentMessage::Assistant { .. })).count() as u32;
+                    let tool_calls = msgs.iter().filter(|m| matches!(m, AgentMessage::ToolResult { .. })).count() as u32;
+                    drop(msgs);
+                    h.status = crate::coding_agent::orchestration::SubagentStatus::Running { turns, tool_calls };
+                }
             }
         }
     });
@@ -1137,7 +1437,7 @@ async fn drive_subagent(
     // on top of) that write.
     drop(tx);
     let _ = drain_task.await;
-    *handle.lock().unwrap().messages.lock().unwrap() = sub_messages.clone();
+    *handle.lock().unwrap_or_else(|e| e.into_inner()).messages.lock().unwrap_or_else(|e| e.into_inner()) = sub_messages.clone();
 
     let turns = sub_messages.iter().filter(|m| matches!(m, AgentMessage::Assistant { .. })).count() as u32;
     let tool_calls = sub_messages.iter().filter(|m| matches!(m, AgentMessage::ToolResult { .. })).count() as u32;
@@ -1259,6 +1559,270 @@ async fn execute_get_current_time_tool() -> AgentToolResult {
         now.format("%A, %B %-d %Y, %-I:%M %p"),
         now.format("%:z"),
     ))
+}
+
+/// Introspection: what tools actually exist right now, and which of them are
+/// currently reachable. Ported from dsh's `cordis_inspect` (minus the parts
+/// tied to its live plugin runtime, which Vivianne's static tool registry has
+/// no equivalent of) — the model otherwise only ever sees its own schema
+/// block, with no way to tell a disabled tool from one that never existed, or
+/// to see what an MCP connection or playbook actually added this session.
+async fn execute_list_tools_tool(disabled_tools: &[String]) -> AgentToolResult {
+    let defs = get_agent_tool_definitions().await;
+    // Scanned once, not once per tool: `load_playbooks` re-reads and re-parses
+    // every file in the playbooks directory on each call, so doing it inside
+    // the loop was ~50 directory scans (and 50xN JSON parses) to answer one
+    // question.
+    let playbook_names: std::collections::HashSet<String> =
+        crate::coding_agent::playbooks::load_playbooks().into_iter().map(|p| p.name).collect();
+    let disabled: std::collections::HashSet<&str> = disabled_tools.iter().map(String::as_str).collect();
+
+    let mut lines = Vec::with_capacity(defs.len());
+    for def in &defs {
+        let Some(name) = def.get("name").and_then(|v| v.as_str()) else { continue };
+        let source = if let Some(server) = name.strip_prefix("mcp__").and_then(|rest| rest.split_once("__")).map(|(s, _)| s) {
+            format!("mcp:{server}")
+        } else if playbook_names.contains(name) {
+            "playbook".to_string()
+        } else {
+            "built-in".to_string()
+        };
+        let state = if disabled.contains(name) { "disabled" } else { "enabled" };
+        lines.push(format!("{name} — {state} ({source})"));
+    }
+    lines.sort();
+    text_result(format!("{} tools registered:\n{}", lines.len(), lines.join("\n")))
+}
+
+/// List every subagent profile `task` can resolve `subagent_type` against —
+/// the two hardcoded built-ins plus whatever's saved in `~/.viv/subagents` —
+/// so the model can check whether a "pointer" call (subagent_type + context,
+/// no prompt) is available before deciding it has to write a full prompt
+/// itself. Same data source `cmd_list_subagent_profiles` (Settings UI) reads,
+/// so this never drifts from what `task` actually resolves.
+async fn execute_list_subagent_profiles_tool() -> AgentToolResult {
+    let custom = crate::agent::paths::viv_subagents_dir()
+        .ok()
+        .map(|dir| crate::coding_agent::subagent_profiles::load_profiles_from_dir(&dir.to_string_lossy()))
+        .unwrap_or_default();
+    let all = crate::coding_agent::subagent_profiles::builtin_profiles().into_iter().chain(custom);
+
+    let mut lines = Vec::new();
+    let mut details = Vec::new();
+    for p in all {
+        let pointer_ready = p.default_prompt.is_some();
+        let tools = match &p.allowed_tools {
+            Some(t) => format!("restricted to: {}", t.join(", ")),
+            None => "full tool access".to_string(),
+        };
+        lines.push(format!(
+            "{} — {}{} ({tools})",
+            p.name,
+            p.description,
+            if pointer_ready { " [pointer-ready: has a preset default_prompt]" } else { "" },
+        ));
+        details.push(serde_json::json!({
+            "id": p.id,
+            "name": p.name,
+            "description": p.description,
+            "allowed_tools": p.allowed_tools,
+            "pointer_ready": pointer_ready,
+            "builtin": p.builtin,
+        }));
+    }
+    if lines.is_empty() {
+        return text_result("No subagent profiles found (not even the built-ins — this shouldn't happen).".to_string());
+    }
+    lines.sort();
+    AgentToolResult {
+        content: vec![MessageContent::Text {
+            text: format!(
+                "{} subagent profiles available:\n{}\n\nCall task with subagent_type set to one of these; for a [pointer-ready] profile, pass 'context' instead of 'prompt'.",
+                lines.len(),
+                lines.join("\n")
+            ),
+        }],
+        details: serde_json::json!({ "profiles": details }),
+        terminate: None,
+    }
+}
+
+fn goal_json(g: &Goal) -> serde_json::Value {
+    serde_json::to_value(g).unwrap_or(serde_json::Value::Null)
+}
+
+/// Panel names the `set_panel` tool accepts — must stay in sync with the
+/// `panel` enum in its schema and the `RIGHT_PANEL_KINDS` list the frontend
+/// checks in `agentStore.ts`'s `panel_focus_requested` handler.
+const SETTABLE_PANELS: &[&str] = &["review", "files", "preview_dev", "preview_browser", "tasks", "terminal"];
+
+fn execute_set_panel_tool(args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
+    let Some(panel) = args.get("panel").and_then(|v| v.as_str()) else {
+        return image_tool_err("Error: 'panel' is required.");
+    };
+    let Some(action) = args.get("action").and_then(|v| v.as_str()) else {
+        return image_tool_err("Error: 'action' is required (\"open\" or \"close\").");
+    };
+    if !SETTABLE_PANELS.contains(&panel) {
+        return image_tool_err(format!("Error: unknown panel '{panel}' — must be one of: {}", SETTABLE_PANELS.join(", ")));
+    }
+    if action != "open" && action != "close" {
+        return image_tool_err("Error: 'action' must be \"open\" or \"close\".");
+    }
+    emit.emit(AgentEvent::PanelFocusRequested { panel: panel.to_string(), action: action.to_string() });
+    let verb = if action == "open" { "Opened" } else { "Closed" };
+    text_result(format!("{verb} the {panel} panel."))
+}
+
+async fn execute_get_goal_tool(state: &AgentState) -> AgentToolResult {
+    match state.goal().await {
+        Some(g) => AgentToolResult {
+            content: vec![MessageContent::Text { text: format!("Goal ({:?}): {}", g.phase, g.objective) }],
+            details: goal_json(&g),
+            terminate: None,
+        },
+        None => text_result("No goal is set for this session.".to_string()),
+    }
+}
+
+async fn execute_create_goal_tool(args: &serde_json::Value, state: &AgentState) -> AgentToolResult {
+    let objective = args.get("objective").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if objective.is_empty() {
+        return text_result("Error: 'objective' is required".to_string());
+    }
+    let g = state.create_goal(objective).await;
+    AgentToolResult {
+        content: vec![MessageContent::Text { text: format!("Goal created: {}", g.objective) }],
+        details: goal_json(&g),
+        terminate: None,
+    }
+}
+
+async fn execute_update_goal_tool(args: &serde_json::Value, state: &AgentState) -> AgentToolResult {
+    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let new_objective = args.get("objective").and_then(|v| v.as_str()).map(str::to_string);
+    let blocked_reason = args.get("blocked_reason").and_then(|v| v.as_str()).map(str::to_string);
+
+    let apply_result = match action {
+        "edit" => state.update_goal(|g| {
+            if let Some(obj) = new_objective { g.objective = obj; }
+        }).await,
+        "pause" => state.update_goal(|g| g.phase = GoalPhase::Paused).await,
+        "resume" => state.update_goal(|g| { g.phase = GoalPhase::Active; g.blocked_reason = None; }).await,
+        "complete" => state.update_goal(|g| g.phase = GoalPhase::Complete).await,
+        "blocked" => state.update_goal(|g| {
+            g.phase = GoalPhase::Blocked;
+            g.blocked_reason = blocked_reason;
+        }).await,
+        other => return text_result(format!("Error: unknown action '{other}' (expected edit|pause|resume|complete|blocked)")),
+    };
+
+    match apply_result {
+        Ok(g) => AgentToolResult {
+            content: vec![MessageContent::Text { text: format!("Goal updated ({:?}): {}", g.phase, g.objective) }],
+            details: goal_json(&g),
+            terminate: None,
+        },
+        Err(e) => text_result(format!("Error: {e}")),
+    }
+}
+
+/// Ceiling on what one `terminal_read` puts into context. Matches
+/// `streaming::MAX_STREAM_BYTES` — the same output through a different pipe
+/// shouldn't get a different budget.
+const TERMINAL_READ_BUDGET_BYTES: usize = 256_000;
+
+/// Model-facing surface over the same `TerminalRegistry` the GUI's terminal
+/// tabs already use (`packages/gui-next` xterm.js panel) — a session the
+/// model opens shows up there too, and vice versa. Distinct from `bash`/
+/// `powershell`: those are one-shot per call, with no way to keep shell state
+/// (a venv activation, an interactive REPL, `cd`) across calls, and no way to
+/// send input to a program that's already running and waiting on stdin.
+async fn execute_terminal_open_tool(args: &serde_json::Value, app: &tauri::AppHandle) -> AgentToolResult {
+    let registry = app.state::<std::sync::Arc<crate::terminal::TerminalRegistry>>();
+    let shells = crate::terminal::available_shells();
+    let shell_id = args.get("shell_id").and_then(|v| v.as_str()).map(str::to_string).unwrap_or_else(|| {
+        shells.first().map(|s| s.id.clone()).unwrap_or_else(|| "bash".to_string())
+    });
+    let cwd = args.get("cwd").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let tab_id = format!("agent-{}", uuid::Uuid::new_v4());
+    match crate::terminal::spawn(app.clone(), &registry, tab_id.clone(), shell_id.clone(), cwd, true) {
+        Ok(()) => text_result(format!(
+            "Opened terminal {tab_id} ({shell_id}). Use terminal_send to type into it, terminal_read to see its output, terminal_signal to send Ctrl-C, terminal_close when done."
+        )),
+        Err(e) => text_result(format!("Error: {e}")),
+    }
+}
+
+async fn execute_terminal_send_tool(args: &serde_json::Value, app: &tauri::AppHandle) -> AgentToolResult {
+    let registry = app.state::<std::sync::Arc<crate::terminal::TerminalRegistry>>();
+    let tab_id = args.get("tab_id").and_then(|v| v.as_str()).unwrap_or("");
+    let mut data = args.get("data").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if tab_id.is_empty() { return text_result("Error: 'tab_id' is required".to_string()); }
+    // Same destructive-command denylist bash/powershell/playbooks enforce — a
+    // PTY is a shell like any other, and was the one execution path that
+    // reached one without passing through this.
+    if let Some(reason) = crate::coding_agent::sandbox::check_command(&data) {
+        return text_result(format!("Error: {reason}"));
+    }
+    // A REPL/shell waits for Enter, not just the characters — matching what a
+    // human typing into the same terminal would send.
+    if !data.ends_with('\n') { data.push('\n'); }
+    match crate::terminal::write(&registry, tab_id, &data) {
+        Ok(()) => text_result("Sent.".to_string()),
+        Err(e) => text_result(format!("Error: {e}")),
+    }
+}
+
+async fn execute_terminal_read_tool(args: &serde_json::Value, app: &tauri::AppHandle) -> AgentToolResult {
+    let registry = app.state::<std::sync::Arc<crate::terminal::TerminalRegistry>>();
+    let tab_id = args.get("tab_id").and_then(|v| v.as_str()).unwrap_or("");
+    if tab_id.is_empty() { return text_result("Error: 'tab_id' is required".to_string()); }
+    match crate::terminal::read(&registry, tab_id) {
+        Ok(data) if data.is_empty() => text_result("(no new output since the last read)".to_string()),
+        // Same budget bash/powershell output goes through — a verbose build
+        // in a PTY can otherwise put a quarter-megabyte of scrollback into
+        // one tool result with no notice that anything was elided.
+        Ok(data) => text_result(crate::coding_agent::context_shaping::trim_middle_bytes(
+            &data,
+            TERMINAL_READ_BUDGET_BYTES / 4,
+            3 * TERMINAL_READ_BUDGET_BYTES / 4,
+        )),
+        Err(e) => text_result(format!("Error: {e}")),
+    }
+}
+
+async fn execute_terminal_signal_tool(args: &serde_json::Value, app: &tauri::AppHandle) -> AgentToolResult {
+    let registry = app.state::<std::sync::Arc<crate::terminal::TerminalRegistry>>();
+    let tab_id = args.get("tab_id").and_then(|v| v.as_str()).unwrap_or("");
+    if tab_id.is_empty() { return text_result("Error: 'tab_id' is required".to_string()); }
+    // Interrupt only — killing a session is `terminal_close`, and offering it
+    // here too was two model-facing spellings of one operation.
+    match crate::terminal::interrupt(&registry, tab_id) {
+        Ok(()) => text_result(format!("Sent interrupt (Ctrl-C) to {tab_id}.")),
+        Err(e) => text_result(format!("Error: {e}")),
+    }
+}
+
+async fn execute_terminal_close_tool(args: &serde_json::Value, app: &tauri::AppHandle) -> AgentToolResult {
+    let registry = app.state::<std::sync::Arc<crate::terminal::TerminalRegistry>>();
+    let tab_id = args.get("tab_id").and_then(|v| v.as_str()).unwrap_or("");
+    if tab_id.is_empty() { return text_result("Error: 'tab_id' is required".to_string()); }
+    crate::terminal::close(&registry, tab_id);
+    text_result(format!("Closed {tab_id}."))
+}
+
+async fn execute_terminal_list_tool(app: &tauri::AppHandle) -> AgentToolResult {
+    let registry = app.state::<std::sync::Arc<crate::terminal::TerminalRegistry>>();
+    let sessions = registry.list();
+    if sessions.is_empty() {
+        return text_result("No open terminal sessions.".to_string());
+    }
+    let lines: Vec<String> = sessions
+        .iter()
+        .map(|s| format!("{} — {} in {} (opened {})", s.tab_id, s.shell_id, s.cwd, format_epoch_ms(Some(s.started_at_epoch_ms))))
+        .collect();
+    text_result(lines.join("\n"))
 }
 
 fn format_epoch_ms(ms: Option<u64>) -> String {
@@ -1735,5 +2299,101 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+#[cfg(test)]
+mod schema_registry_consistency_tests {
+    use super::*;
+
+    /// Every tool `create_coding_tools()` actually constructs must have a
+    /// schema entry in `static_tool_definitions()` — otherwise the model can
+    /// never learn the tool exists and it's permanently dead weight. This is
+    /// exactly the bug class this test exists to catch: `read_file`,
+    /// `list_dir`, `ask_user_question`, and the two streaming tools were all
+    /// fully implemented and registered here while invisible to the model,
+    /// found only by manual code reading. User-defined playbooks are
+    /// excluded — they're merged into the live schema list separately (see
+    /// `get_agent_tool_definitions`), not part of the static baseline this
+    /// test checks.
+    #[test]
+    fn every_constructed_tool_has_a_schema_entry() {
+        let playbook_names: std::collections::HashSet<String> =
+            crate::coding_agent::playbooks::load_playbooks().into_iter().map(|p| p.name).collect();
+
+        let constructed: Vec<String> = crate::coding_agent::tool_exec::create_coding_tools(".".to_string())
+            .iter()
+            .map(|t| t.name().to_string())
+            .filter(|name| !playbook_names.contains(name))
+            .collect();
+
+        let schema_names: std::collections::HashSet<String> = static_tool_definitions()
+            .iter()
+            .filter_map(|def| def.get("name").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+
+        let missing: Vec<&String> = constructed.iter().filter(|name| !schema_names.contains(*name)).collect();
+        assert!(
+            missing.is_empty(),
+            "these tools are constructed by create_coding_tools() but have no schema entry \
+             in static_tool_definitions(), so the model can never call them: {missing:?}"
+        );
+    }
+
+    /// No two schema entries share a name — a duplicate would mean the
+    /// second silently shadows the first in anything that looks tools up by
+    /// name, and the model would have no way to know only one is real.
+    #[test]
+    fn schema_names_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for def in static_tool_definitions() {
+            let name = def.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            assert!(seen.insert(name.clone()), "duplicate schema entry for tool name: {name}");
+        }
+    }
+
+    /// The other direction from `every_constructed_tool_has_a_schema_entry`:
+    /// every schema entry needs a handler somewhere, or a schema-visible tool
+    /// silently dead-ends at "Tool not found" the first time the model tries
+    /// it — a wrong turn burned discovering it, not a compile error. Several
+    /// tools (goal, terminal, memory, ...) need `&AgentState`/`&AppHandle`/
+    /// `emit`, which the `Tool` trait's `execute(&self, args, cwd)` can't
+    /// carry, so they're handled as `else if tool_call.name == "..."`
+    /// branches in `execute_tool_calls` instead of the trait registry — this
+    /// list has to be kept in sync with that chain by hand, since nothing
+    /// generates it from the real `if`/`else if` conditions.
+    const DISPATCH_CHAIN_TOOLS: &[&str] = &[
+        "remember", "recall", "read_skill", "question", "confirm_action", "present_plan",
+        "present_snippet", "web_preview", "browser_snapshot", "browser_click", "browser_type",
+        "browser_press_key", "browser_scroll", "browser_evaluate", "browser_read_console",
+        "browser_read_network", "task", "list_subagent_profiles", "generate_image", "connect_mcp_server",
+        "get_current_time", "list_tools", "set_panel", "get_goal", "create_goal", "update_goal",
+        "terminal_open", "terminal_send", "terminal_read", "terminal_signal", "terminal_close",
+        "terminal_list", "create_automation", "list_automations", "delete_automation",
+        "set_automation_enabled", "sandbox_execute",
+    ];
+
+    #[test]
+    fn every_schema_entry_is_dispatchable() {
+        let playbook_names: std::collections::HashSet<String> =
+            crate::coding_agent::playbooks::load_playbooks().into_iter().map(|p| p.name).collect();
+        let constructed: std::collections::HashSet<String> =
+            crate::coding_agent::tool_exec::create_coding_tools(".".to_string())
+                .iter()
+                .map(|t| t.name().to_string())
+                .collect();
+
+        let undispatchable: Vec<String> = static_tool_definitions()
+            .iter()
+            .filter_map(|def| def.get("name").and_then(|v| v.as_str()).map(String::from))
+            .filter(|name| {
+                !constructed.contains(name) && !DISPATCH_CHAIN_TOOLS.contains(&name.as_str()) && !playbook_names.contains(name)
+            })
+            .collect();
+        assert!(
+            undispatchable.is_empty(),
+            "these tools have a schema entry but no handler in create_coding_tools() or the \
+             execute_tool_calls dispatch chain, so calling them dead-ends at 'Tool not found': {undispatchable:?}"
+        );
+    }
 }
 

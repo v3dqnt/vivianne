@@ -68,6 +68,7 @@ struct AgentStateInner {
     /// agent's own `AgentState` — only `execute_task_tool` sets it, on the
     /// freshly-constructed `sub_state` a spawned subagent runs with.
     subagent_allowed_tools: Option<Vec<String>>,
+    goal: Option<Goal>,
 }
 
 impl AgentState {
@@ -111,6 +112,7 @@ impl AgentState {
                 workspace_folders: Vec::new(),
                 access_mode: WorkspaceAccessMode::Full,
                 subagent_allowed_tools: None,
+                goal: None,
             })),
         };
         if !workspace_folders.is_empty() {
@@ -215,8 +217,40 @@ impl AgentState {
         self.inner.write().await.persona_mode = value;
     }
 
+    pub async fn goal(&self) -> Option<Goal> {
+        self.inner.read().await.goal.clone()
+    }
+
+    /// Replace any existing goal with a fresh one — dsh's `create_goal`
+    /// always starts a new one rather than requiring the caller to clear the
+    /// old one first, since a session only ever tracks one goal at a time.
+    pub async fn create_goal(&self, objective: String) -> Goal {
+        let goal = Goal { objective, phase: GoalPhase::Active, blocked_reason: None };
+        self.inner.write().await.goal = Some(goal.clone());
+        goal
+    }
+
+    /// Apply an update to the current goal, whatever it is — one writer at a
+    /// time reaches this (see the type's doc comment), so there's no
+    /// concurrent update to guard against.
+    pub async fn update_goal(&self, apply: impl FnOnce(&mut Goal)) -> Result<Goal, String> {
+        let mut inner = self.inner.write().await;
+        let goal = inner.goal.as_mut().ok_or("no goal is set for this session — call create_goal first")?;
+        apply(goal);
+        Ok(goal.clone())
+    }
+
+
     pub async fn set_messages(&self, messages: Vec<AgentMessage>) {
         self.inner.write().await.messages = messages;
+    }
+
+    /// Drop the current goal without touching anything else — for loading a
+    /// different session into a live `AgentState`, which sets messages and
+    /// workspace directly rather than going through `clear()`. Without this,
+    /// a goal set in session A was still readable after switching to B.
+    pub async fn clear_goal(&self) {
+        self.inner.write().await.goal = None;
     }
 
     pub async fn add_message(&self, message: AgentMessage) {
@@ -294,6 +328,10 @@ impl AgentState {
         inner.streaming_message = None;
         inner.pending_tool_calls.clear();
         inner.error_message = None;
+        // Same reasoning as the system prompt below: a fresh thread, or a
+        // freshly loaded different session, must not inherit the previous
+        // one's goal.
+        inner.goal = None;
         // A fresh thread must not carry forward the previous conversation's
         // accumulated system prompt (old workspace/skills/project-memory
         // blocks stacked in by `cmd_agent_prompt`'s per-turn rebuild) — start

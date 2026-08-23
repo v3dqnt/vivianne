@@ -54,6 +54,10 @@ If genuinely blocked on something only the user can decide (credentials, a real 
 Messages wrapped in <system-reminder> tags are automated meta-guidance injected by the app itself, not from the user — treat them as operational instructions about how to proceed, and never quote their tag syntax back to the user.\n\
 </rule>\n\
 \n\
+<rule priority=\"high\" name=\"file_mentions\">\n\
+A `@path` token in a user message (from the file picker, not free-form prose) is an explicit reference to that file — it is not its contents. Use read on it before relying on what's in it; never assume you've already seen a file just because it was @mentioned.\n\
+</rule>\n\
+\n\
 <rule priority=\"high\" name=\"tool_choice\">\n\
 Prefer the most specific tool for the job over a general one:\n\
 - grep/glob/code_search > bash for looking things up.\n\
@@ -70,7 +74,7 @@ For a task with several concrete steps, use todo_write to track them rather than
 <rule priority=\"high\" name=\"tool_tips\">\n\
 Every tool below is real and callable right now (they're in your tools list, not hypothetical):\n\
 - code_search: relevance-ranked search for loose/conceptual queries. Lexical/keyword-based, not embeddings — won't connect a query word to a code word that shares no letters.\n\
-- task: hand a self-contained subtask to a subagent. Runs in background by default — poll with task_output/wait_tasks. Set run_in_background=false only for a single one-off subtask you have nothing else to do until it returns. Don't use for anything you can do directly in 1-2 tool calls.\n\
+- task: hand a self-contained subtask to a subagent. Runs in background by default — poll with task_output/wait_tasks. Set run_in_background=false only for a single one-off subtask you have nothing else to do until it returns. Don't use for anything you can do directly in 1-2 tool calls. Call list_subagent_profiles first if you're unsure whether a profile with a preset prompt already exists — pointing at one (subagent_type + a short context) costs far fewer tokens than writing the full prompt yourself. While a background subagent runs, keep making progress yourself instead of idling on task_output: continue other parts of the task, or delegate more independent chunks to additional subagents run in parallel.\n\
 - computer: screenshot (action=\"screenshot\") when you genuinely need to see the screen. Screenshot immediately after a GUI click to confirm it landed. Don't screenshot speculatively or to check things you can read as text.\n\
 - todo_write: keep a live checklist for multi-step tasks.\n\
 When deciding how to approach a real dev task, actively consider whether code_search or task would serve better than defaulting to bash + grep.\n\
@@ -124,6 +128,17 @@ pub(crate) async fn assemble_capability_blocks(
 
     if let Some(mode_section) = mode_section {
         prompt = format!("{prompt}\n\n<vivianne_mode>\n{}\n</vivianne_mode>", mode_section);
+    }
+
+    // Re-stated every turn, not just left to whatever's still in scrollback —
+    // a goal set several turns ago (or before a compaction summarized away
+    // the tool call that set it) needs to still be visible for get_goal/
+    // update_goal to be worth calling at all.
+    if let Some(goal) = state.goal().await {
+        prompt = format!(
+            "{prompt}\n\n<vivianne_goal phase=\"{:?}\">\n{}\n</vivianne_goal>",
+            goal.phase, goal.objective
+        );
     }
 
     // Skills are strictly opt-in: only what the user explicitly `@mentions`

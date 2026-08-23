@@ -42,6 +42,14 @@ pub struct DiscoveredModel {
 /// never a false positive that'd make a non-vision model look vision-capable
 /// for an unrelated reason). Upgrade path: a real per-provider capabilities
 /// API if this proves too coarse in practice.
+/// Whether the currently selected model can take image input at all — used
+/// to decide whether `read` should attach an image's actual pixels or fall
+/// back to OCR text, since a `ModelRef` (unlike `DiscoveredModel`) carries no
+/// capability flags of its own.
+pub(crate) fn model_supports_vision(provider: &str, id: &str) -> bool {
+    classify_capabilities(provider, id).2
+}
+
 fn classify_capabilities(provider: &str, id: &str) -> (bool, bool, bool) {
     let l = id.to_lowercase();
 

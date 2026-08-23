@@ -64,13 +64,12 @@ impl IgnoreSet {
                 }
             }
         }
-        let always_skip: HashSet<String> = [
-            ".git", "node_modules", "target", ".next", ".venv", "venv", "__pycache__",
-            "dist", "build", ".turbo", ".cache",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
+        // One skip-list, shared with `tool_exec::walk_files` — this used to
+        // be a second, independently-maintained set (missing "vendor",
+        // present here but absent there) so `grep` and `list_dir` could
+        // genuinely disagree about what exists in the repo.
+        let always_skip: HashSet<String> =
+            super::tool_exec::ALWAYS_SKIP_DIRS.iter().map(|s| s.to_string()).collect();
         Self { rules, always_skip }
     }
 
@@ -138,23 +137,6 @@ const MAX_READ_BYTES: usize = 50_000;
 #[async_trait]
 impl Tool for ReadFileTool {
     fn name(&self) -> &str { "read_file" }
-
-    fn description(&self) -> &str {
-        "Smart file reader. For text files: returns a line-numbered slice (like `cat -n`) with optional offset/limit. For PDFs: returns page count plus best-effort extracted text. For images (png/jpg/gif/webp/bmp): returns format and pixel dimensions. For Jupyter notebooks (.ipynb): returns a cell-by-cell summary. Prefer this over the raw `read` tool when the target might be binary or notebook-shaped."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Path to the file" },
-                "offset": { "type": "number", "description": "Start line (1-indexed) for text files" },
-                "limit": { "type": "number", "description": "Max lines for text files" },
-                "pages": { "type": "string", "description": "PDF page range, e.g. \"1-5\" or \"3\"" }
-            },
-            "required": ["path"]
-        })
-    }
 
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let path = args["path"].as_str().unwrap_or("").to_string();
@@ -234,7 +216,15 @@ impl Tool for ReadFileTool {
         for (i, line) in lines[start..end].iter().enumerate() {
             numbered.push_str(&format!("{:>6}\t{}\n", start + i + 1, line));
         }
-        let (result, truncated) = truncate_text(&numbered, MAX_READ_LINES, MAX_READ_BYTES);
+        let (mut result, truncated) = truncate_text(&numbered, MAX_READ_LINES, MAX_READ_BYTES);
+        // `truncate_text` already appends a notice when it cuts something —
+        // but the far more common case is a small file shown in full, where
+        // there was previously no signal at all of the total line count.
+        // The model had no way to tell "this really is the whole file" from
+        // "this got silently cut somewhere I can't see" without this line.
+        if !truncated {
+            result.push_str(&format!("\n[{} lines total]", lines.len()));
+        }
         ToolResult {
             content: result,
             is_error: false,
@@ -248,7 +238,7 @@ impl Tool for ReadFileTool {
     }
 }
 
-fn is_image_ext(ext: &str) -> bool {
+pub(crate) fn is_image_ext(ext: &str) -> bool {
     matches!(ext, "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" | "ico")
 }
 
@@ -260,18 +250,74 @@ async fn read_image_ocr(display_path: &str, full: &PathBuf) -> ToolResult {
     read_image_summary_impl(display_path.to_string(), full.clone(), true).await
 }
 
+/// Longest edge a decoded image is downscaled to before being sent to the
+/// model — Anthropic's documented ideal max edge for vision input. Without
+/// this a multi-megapixel screenshot goes over the wire at full resolution
+/// for no accuracy benefit, just token/bandwidth cost.
+const MAX_IMAGE_EDGE: u32 = 1568;
+
 async fn read_image_summary_impl(display_path: String, full: PathBuf, do_ocr: bool) -> ToolResult {
-    let (w, h, fmt, bytes) = {
+    let (w, h, fmt, bytes, image_b64, media_type, encode_err) = {
         let full_path = full.clone();
-        let result = tokio::task::spawn_blocking(move || -> Result<(u32, u32, String, u64), String> {
-            let meta = std::fs::metadata(&full_path).map_err(|e| e.to_string())?;
-            let img = image::open(&full_path).map_err(|e| e.to_string())?;
+        let result = tokio::task::spawn_blocking(move || -> Result<(u32, u32, String, u64, Option<String>, &'static str, Option<String>), String> {
+            let raw = std::fs::read(&full_path).map_err(|e| e.to_string())?;
+            let img = image::load_from_memory(&raw).map_err(|e| e.to_string())?;
             let (w, h) = (img.width(), img.height());
-            let fmt = match image::ImageFormat::from_path(&full_path) {
-                Ok(f) => format!("{:?}", f).to_lowercase(),
-                Err(_) => "unknown".to_string(),
+            let format = image::guess_format(&raw).ok();
+            let fmt = match format {
+                Some(f) => format!("{:?}", f).to_lowercase(),
+                None => "unknown".to_string(),
             };
-            Ok((w, h, fmt, meta.len()))
+
+            // Already small enough, and already a format the model can take
+            // as-is: pass the original bytes straight through rather than
+            // decoding and re-encoding as PNG. For a photo, decode+RGBA8+PNG
+            // can ship several MB of lossless base64 where the original JPEG
+            // was a fraction of that — a token-cost regression for the sake
+            // of a re-encode nothing needed.
+            let already_fine = w.max(h) <= MAX_IMAGE_EDGE
+                && matches!(format, Some(image::ImageFormat::Png) | Some(image::ImageFormat::Jpeg));
+            if already_fine {
+                use base64::Engine;
+                let media_type = if format == Some(image::ImageFormat::Jpeg) { "image/jpeg" } else { "image/png" };
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&raw);
+                return Ok((w, h, fmt, raw.len() as u64, Some(b64), media_type, None));
+            }
+
+            let longest = w.max(h);
+            let scaled = if longest > MAX_IMAGE_EDGE {
+                let scale = MAX_IMAGE_EDGE as f64 / longest as f64;
+                img.resize((w as f64 * scale) as u32, (h as f64 * scale) as u32, image::imageops::FilterType::Triangle)
+            } else {
+                img
+            };
+
+            // RGB8 unless the source actually has transparency to preserve —
+            // an opaque PNG or a resized JPEG doesn't need an all-255 alpha
+            // channel inflating what the PNG encoder has to compress.
+            let has_alpha = scaled.color().has_alpha();
+            let mut png_bytes: Vec<u8> = Vec::with_capacity((scaled.width() * scaled.height()) as usize);
+            let encode_err = {
+                use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
+                use image::ImageEncoder;
+                let encoder = PngEncoder::new_with_quality(&mut png_bytes, CompressionType::Fast, PngFilterType::Adaptive);
+                let encode_result = if has_alpha {
+                    let rgba = scaled.to_rgba8();
+                    encoder.write_image(rgba.as_raw(), rgba.width(), rgba.height(), image::ExtendedColorType::Rgba8)
+                } else {
+                    let rgb = scaled.to_rgb8();
+                    encoder.write_image(rgb.as_raw(), rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
+                };
+                encode_result.err().map(|e| e.to_string())
+            };
+            let image_b64 = if encode_err.is_none() {
+                use base64::Engine;
+                Some(base64::engine::general_purpose::STANDARD.encode(&png_bytes))
+            } else {
+                None
+            };
+
+            Ok((w, h, fmt, raw.len() as u64, image_b64, "image/png", encode_err))
         }).await;
         match result {
             Ok(Ok(v)) => v,
@@ -284,6 +330,9 @@ async fn read_image_summary_impl(display_path: String, full: PathBuf, do_ocr: bo
         "Image: {}\n  format: {}\n  size: {}×{} px\n  bytes: {}",
         display_path, fmt, w, h, bytes
     );
+    if let Some(e) = &encode_err {
+        content.push_str(&format!("\n  (could not re-encode this image for viewing: {e} — only this text summary is available)"));
+    }
 
     if do_ocr {
         let ocr_result = super::ocr::ocr_image(&full).await;
@@ -300,18 +349,26 @@ async fn read_image_summary_impl(display_path: String, full: PathBuf, do_ocr: bo
         }
     }
 
-    ToolResult {
-        content,
-        is_error: false,
-        details: Some(json!({
-            "path": display_path,
-            "kind": "image",
-            "format": fmt,
-            "width": w,
-            "height": h,
-            "bytes": bytes,
-        })),
+    let mut details = json!({
+        "path": display_path,
+        "kind": "image",
+        "format": fmt,
+        "width": w,
+        "height": h,
+        "bytes": bytes,
+    });
+    // `image_base64`/`media_type` are the exact keys the tool dispatcher
+    // already looks for (see `ComputerTool`'s screenshot) to attach an Image
+    // content block — no dispatch-side change needed to wire this up.
+    // `media_type` matches whichever path produced `image_b64`: the original
+    // file's real type when passed through unmodified, "image/png" whenever
+    // this function did the encoding itself.
+    if let Some(b64) = image_b64 {
+        details["image_base64"] = json!(b64);
+        details["media_type"] = json!(media_type);
     }
+
+    ToolResult { content, is_error: false, details: Some(details) }
 }
 
 async fn read_pdf_summary(display_path: &str, full: &PathBuf, pages: &str) -> ToolResult {
@@ -453,21 +510,6 @@ const MAX_TREE_DEPTH: usize = 6;
 #[async_trait]
 impl Tool for ListDirTool {
     fn name(&self) -> &str { "list_dir" }
-
-    fn description(&self) -> &str {
-        "Hierarchical directory listing, gitignore-aware. Returns an indented tree of files and folders, skipping .git/node_modules/target/etc. and anything a .gitignore excludes. Prefer over the raw `ls` when you want to understand a folder's shape at a glance rather than just its immediate children."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Root directory (defaults to workspace root)" },
-                "depth": { "type": "number", "description": "Max depth to descend (default 3, max 6)" },
-                "show_hidden": { "type": "boolean", "description": "Include dotfiles (default false)" }
-            }
-        })
-    }
 
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let path = args["path"].as_str().unwrap_or(".").to_string();

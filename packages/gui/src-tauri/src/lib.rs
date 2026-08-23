@@ -9,15 +9,14 @@ use crate::agent::commands::AppState;
 
 // New modules
 pub mod coding_agent;
-pub mod orchestrator;
 pub mod lsp;
 pub mod mcp;
 pub mod camoufox;
 pub mod docker_installer;
+pub mod optional_components;
 pub mod voice;
 pub mod automation;
 pub mod terminal;
-pub mod gesture;
 use crate::automation::AutomationStore;
 use crate::agent::llama_manager::LlamaManager;
 use crate::agent::dev_server_manager::DevServerManager;
@@ -157,6 +156,8 @@ pub fn run() {
       crate::agent::commands::cmd_web_preview_refresh,
       crate::agent::commands::cmd_check_docker_status,
       crate::agent::commands::cmd_install_docker,
+      crate::optional_components::cmd_get_optional_components_status,
+      crate::optional_components::cmd_start_optional_components_download,
       crate::agent::commands::cmd_terminal_list_shells,
       crate::agent::commands::cmd_terminal_spawn,
       crate::agent::commands::cmd_terminal_write,
@@ -165,10 +166,6 @@ pub fn run() {
       crate::agent::commands::cmd_lsp_diagnostics,
       crate::agent::commands::cmd_git_current_branch,
       crate::agent::commands::cmd_terminal_list_sessions,
-      crate::gesture::commands::cmd_gesture_start,
-      crate::gesture::commands::cmd_gesture_stop,
-      crate::gesture::commands::cmd_gesture_status,
-      crate::gesture::commands::cmd_gesture_set_debug,
       crate::agent::commands::cmd_git_remote,
       crate::agent::commands::cmd_git_log,
       crate::agent::commands::cmd_git_branches,
@@ -179,15 +176,7 @@ pub fn run() {
       crate::agent::commands::cmd_git_create_branch,
       crate::agent::commands::cmd_get_project_dir,
       crate::agent::commands::cmd_set_project_dir,
-      // Orchestrator commands
-      crate::orchestrator::commands::cmd_orch_spawn,
-      crate::orchestrator::commands::cmd_orch_list,
-      crate::orchestrator::commands::cmd_orch_status,
-      crate::orchestrator::commands::cmd_orch_stop,
-      crate::orchestrator::commands::cmd_orch_rpc,
-      crate::orchestrator::commands::cmd_orch_rpc_stream,
       // Grok-parity coding-agent commands (subagents, plan mode, ask-user)
-      crate::coding_agent::commands::cmd_coding_answer_question,
       crate::coding_agent::commands::cmd_coding_list_subagents,
       crate::coding_agent::commands::cmd_coding_get_subagent_messages,
       crate::coding_agent::commands::cmd_coding_kill_subagent,
@@ -212,6 +201,15 @@ pub fn run() {
       let pruned = crate::agent::commands::prune_empty_sessions();
       if pruned > 0 {
         log::info!("[sessions] pruned {pruned} empty session(s)");
+      }
+
+      // Spilled tool output (see `coding_agent::context_shaping`) has no
+      // owning session to get cleaned up with, so it ages out on a timer
+      // instead — same "safe because nothing is active yet" reasoning as
+      // the session prune above.
+      let pruned_spill = crate::coding_agent::context_shaping::prune_old_spill_files();
+      if pruned_spill > 0 {
+        log::info!("[spill] pruned {pruned_spill} old spill file(s)");
       }
 
       // Initialize auth state + credential pool together, in one blocking
@@ -310,33 +308,17 @@ pub fn run() {
       // Initialize llama-server process manager
       app.manage(Arc::new(LlamaManager::new()));
 
+      // Local OCR's tool dispatcher has no AppHandle of its own — this is how
+      // it reaches the managed LlamaManager to pause local models for RAM.
+      crate::coding_agent::ocr::install_app_handle(app.handle().clone());
+
       // Initialize dev-server process manager (Live Preview panel)
       app.manage(Arc::new(DevServerManager::default()));
 
-// Grok-parity: install the ask_user_question emitter so tools can
-      // surface a choice UI to the frontend. The frontend listens for the
-      // `coding_ask_user_question` event and calls
-      // `cmd_coding_answer_question` when the user picks options.
-      let emit_handle = app.handle().clone();
-      crate::coding_agent::orchestration::install_question_emitter(std::sync::Arc::new(
-        move |payload| {
-          let _ = emit_handle.emit("coding_ask_user_question", payload);
-        },
-      ));
-
-      // Grok-parity: streaming_bash / streaming_powershell push live output
+// Grok-parity: streaming_bash / streaming_powershell push live output
       // over a Tauri `Channel` (registered by the frontend via
       // `cmd_coding_register_stream_channel`), not a global `emit()` — see
       // that command's doc comment for why.
-
-      // Initialize orchestrator supervisor
-      let orch_storage_path = app.path().app_data_dir().ok().map(|dir| dir.join("instances.json"));
-      let orch_storage = crate::orchestrator::storage::InstanceStorage::new(
-        orch_storage_path.unwrap_or_default()
-      );
-      let supervisor = crate::orchestrator::supervisor::Supervisor::new(orch_storage, app.handle().clone());
-      let supervisor = std::sync::Arc::new(tokio::sync::Mutex::new(supervisor));
-      app.manage(supervisor);
 
       // Automation store + background scheduler (emits `automation_fired`).
       app.manage(Arc::new(AutomationStore::new()));
@@ -344,7 +326,6 @@ pub fn run() {
 
       // PTY-backed terminal sessions (one per open tab).
       app.manage(Arc::new(crate::terminal::TerminalRegistry::new()));
-      app.manage(Arc::new(crate::gesture::GestureSidecar::new()));
 
       // Reconnect every MCP server persisted from the previous session.
       // Spawned rather than blocking startup on `block_on` — a slow or

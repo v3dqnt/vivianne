@@ -2,10 +2,12 @@
 //!
 //! Loads agent skills from markdown files with YAML frontmatter.
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use regex::Regex;
+
+use super::tool_exec::parse_frontmatter;
 
 /// Parsed frontmatter from a skill file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -116,7 +118,7 @@ fn walk_skills(root: &Path, dir: &Path, skills: &mut Vec<Skill>, errors: &mut Ve
 /// Load a single skill from a markdown file.
 pub fn load_skill_from_file(path: &Path) -> Result<Skill, Box<dyn std::error::Error>> {
     let content = fs::read_to_string(path)?;
-    let (frontmatter, body) = parse_frontmatter(&content);
+    let (frontmatter, body) = parse_frontmatter::<SkillFrontmatter>(&content);
 
     let name = frontmatter.name
         .or_else(|| path.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string()))
@@ -143,32 +145,6 @@ pub fn load_skill_from_file(path: &Path) -> Result<Skill, Box<dyn std::error::Er
     })
 }
 
-/// Parse YAML frontmatter from markdown content.
-/// Returns (parsed frontmatter, body text).
-fn parse_frontmatter(content: &str) -> (SkillFrontmatter, &str) {
-    lazy_static::lazy_static! {
-        // `(?s)` (DOTALL) is required so `.` matches newlines — without it the
-        // lazy `(.*?)` between the `---` fences cannot span the multiple lines a
-        // real frontmatter block always has (name + description), the whole regex
-        // fails to match, and every skill silently loses its frontmatter.
-        static ref FRONTMATTER_RE: Regex = Regex::new(
-            r"(?s)^---\s*\n(.*?)\n---\s*\n(.*)$"
-        ).unwrap();
-    }
-
-    if let Some(caps) = FRONTMATTER_RE.captures(content) {
-        let yaml_text = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-        let body = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-
-        let frontmatter: SkillFrontmatter = serde_yaml::from_str(yaml_text)
-            .unwrap_or_default();
-
-        (frontmatter, body)
-    } else {
-        (SkillFrontmatter::default(), content)
-    }
-}
-
 /// Format skills for inclusion in a system prompt.
 pub fn format_skills_for_prompt(skills: &[Skill]) -> String {
     let mut parts = Vec::new();
@@ -185,31 +161,6 @@ pub fn format_skills_for_prompt(skills: &[Skill]) -> String {
 
     parts.push("</skills>\n".to_string());
     parts.join("")
-}
-
-/// A lightweight name+description catalog for always-on system-prompt
-/// injection — deliberately NOT the full skill body (that's `format_skills_for_prompt`,
-/// reserved for on-demand fetches via the `read_skill` tool or an explicit
-/// `@mention`), so having many skills configured doesn't bloat every turn.
-/// Returns an empty string when `skills` is empty so callers can skip
-/// injecting anything.
-pub fn format_skills_catalog(skills: &[Skill]) -> String {
-    if skills.is_empty() {
-        return String::new();
-    }
-    let mut lines = vec![
-        "<vivianne_skills>".to_string(),
-        "The following skills are registered. Call the read_skill tool with a skill's name to see its full instructions before using it.".to_string(),
-    ];
-    for skill in skills {
-        if skill.disable_model_invocation {
-            lines.push(format!("- {} (user-only, cannot be invoked by you): {}", skill.name, skill.description));
-        } else {
-            lines.push(format!("- {}: {}", skill.name, skill.description));
-        }
-    }
-    lines.push("</vivianne_skills>".to_string());
-    lines.join("\n")
 }
 
 /// Which of `skills` the user explicitly `@mentioned` in their prompt text
@@ -270,27 +221,6 @@ mod tests {
             requires_provider: None,
             status: default_skill_status(),
         }
-    }
-
-    #[test]
-    fn catalog_is_empty_string_for_no_skills() {
-        assert_eq!(format_skills_catalog(&[]), "");
-    }
-
-    #[test]
-    fn catalog_lists_name_and_description_but_not_content() {
-        let skills = vec![test_skill("test-skill", "Does a thing.", false)];
-        let catalog = format_skills_catalog(&skills);
-        assert!(catalog.contains("test-skill"));
-        assert!(catalog.contains("Does a thing."));
-        assert!(!catalog.contains("full body content"), "catalog must stay lightweight, no full skill bodies");
-    }
-
-    #[test]
-    fn catalog_marks_user_only_skills() {
-        let skills = vec![test_skill("secret-skill", "Not for the model.", true)];
-        let catalog = format_skills_catalog(&skills);
-        assert!(catalog.contains("user-only"));
     }
 
     #[test]

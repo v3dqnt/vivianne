@@ -44,10 +44,83 @@ pub fn prune_aging_tool_results(messages: &mut [AgentMessage]) -> bool {
 }
 
 fn trim_middle(text: &str) -> String {
-    let head = char_boundary_prefix(text, TRIM_HEAD_CHARS);
-    let tail = char_boundary_suffix(text, TRIM_TAIL_CHARS);
+    trim_middle_bytes(text, TRIM_HEAD_CHARS, TRIM_TAIL_CHARS)
+}
+
+/// Keep `head_bytes` from the start and `tail_bytes` from the end, dropping
+/// the middle. Parametrized (rather than only the fixed-budget `trim_middle`
+/// above) so `bash`/`powershell` output — which needs a much larger budget,
+/// weighted toward the tail where build/test errors usually are — can reuse
+/// the same head+tail shape instead of a separate truncator.
+///
+/// Pure — no I/O. `prune_aging_tool_results` is the main caller and the
+/// original text it trims is already durably in the session file (see this
+/// module's header), so spilling here would just write a second copy of
+/// something already on disk. A caller whose full text genuinely exists
+/// nowhere else (bash/powershell output, truncated before it ever becomes a
+/// persisted message) should call `spill_and_trim_middle_bytes` instead.
+pub(crate) fn trim_middle_bytes(text: &str, head_bytes: usize, tail_bytes: usize) -> String {
+    let head = char_boundary_prefix(text, head_bytes);
+    let tail = char_boundary_suffix(text, tail_bytes);
     let trimmed_bytes = text.len().saturating_sub(head.len() + tail.len());
+    if trimmed_bytes == 0 {
+        return text.to_string();
+    }
     format!("{head}\n\n[...trimmed {trimmed_bytes} bytes to save context space...]\n\n{tail}")
+}
+
+/// Same shape as `trim_middle_bytes`, but the dropped middle is spilled to
+/// `~/.viv/agent/spill/` first (best-effort — a write failure just falls back
+/// to the bare notice) and the notice names the path, so the model can `read`
+/// or `grep` the full text back. Async and uses `tokio::fs` because the
+/// caller (shell output, potentially tens of MB) runs on the async turn path
+/// — a synchronous write of that size would stall the executor thread.
+pub(crate) async fn spill_and_trim_middle_bytes(text: &str, head_bytes: usize, tail_bytes: usize) -> String {
+    let head = char_boundary_prefix(text, head_bytes);
+    let tail = char_boundary_suffix(text, tail_bytes);
+    let trimmed_bytes = text.len().saturating_sub(head.len() + tail.len());
+    if trimmed_bytes == 0 {
+        return text.to_string();
+    }
+    match spill(text).await {
+        Some(path) => format!(
+            "{head}\n\n[...trimmed {trimmed_bytes} bytes to save context space — full output saved at: {path}, read it (optionally with offset/limit) or grep it to search within it...]\n\n{tail}"
+        ),
+        None => format!("{head}\n\n[...trimmed {trimmed_bytes} bytes to save context space...]\n\n{tail}"),
+    }
+}
+
+/// Write `text` in full to a new file under the spill directory, returning
+/// its path. `None` on any failure (directory unavailable, disk full, ...) —
+/// spilling is a nice-to-have, never worth failing the tool call over.
+async fn spill(text: &str) -> Option<String> {
+    let dir = crate::agent::paths::viv_spill_dir().ok()?;
+    let path = dir.join(format!("{}.txt", uuid::Uuid::new_v4()));
+    tokio::fs::write(&path, text).await.ok()?;
+    Some(path.display().to_string())
+}
+
+/// Days a spill file is kept before `prune_old_spill_files` deletes it.
+const SPILL_MAX_AGE_DAYS: u64 = 7;
+
+/// Delete spill files older than `SPILL_MAX_AGE_DAYS`. Nothing else ever
+/// removes them — each one is a live, `read`-able copy of a real past tool
+/// result for as long as the *conversation* that produced it might still
+/// reference it, but there's no signal for "that conversation is over," so
+/// age is the only practical bound. Called once at startup, matching
+/// `commands::prune_empty_sessions`'s spot in `lib.rs`'s `.setup()`.
+pub fn prune_old_spill_files() -> usize {
+    let Ok(dir) = crate::agent::paths::viv_spill_dir() else { return 0 };
+    let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(SPILL_MAX_AGE_DAYS * 24 * 60 * 60);
+    let Ok(entries) = std::fs::read_dir(&dir) else { return 0 };
+    let mut pruned = 0usize;
+    for entry in entries.flatten() {
+        let is_old = entry.metadata().and_then(|m| m.modified()).map(|m| m < cutoff).unwrap_or(false);
+        if is_old && std::fs::remove_file(entry.path()).is_ok() {
+            pruned += 1;
+        }
+    }
+    pruned
 }
 
 fn char_boundary_prefix(text: &str, max_bytes: usize) -> &str {

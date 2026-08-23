@@ -255,7 +255,10 @@ impl GestureClassifier {
 /// fill the full 0.0-1.0 pointer range, clamping past it. `margin` outside
 /// 0.0-0.5 degrades to a plain clamp (treated as "no remap").
 fn remap_pointer_axis(v: f32, margin: f32) -> f32 {
-    if !(0.0..0.5).contains(&margin) {
+    // Remap only when margin is in [0.0, 0.5]; inclusive on both ends so
+    // margin=0.5 still applies the linear remap rather than falling through
+    // to a plain clamp.
+    if !(0.0..=0.5).contains(&margin) {
         return v.clamp(0.0, 1.0);
     }
     ((v - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 1.0)

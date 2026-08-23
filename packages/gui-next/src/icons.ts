@@ -9,7 +9,6 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   ArrowUpIcon,
-  CameraIcon,
   CheckIcon,
   ClipboardDocumentListIcon,
   ClockIcon,
@@ -94,7 +93,6 @@ export const ArrowLeftLinear = icon(ArrowLeftIcon)
 export const ArrowRightLinear = icon(ArrowRightIcon)
 export const ArrowUpLinear = icon(ArrowUpIcon)
 export const BookLinear = icon(BookOpenIcon)
-export const CameraLinear = icon(CameraIcon)
 export const ChartLinear = icon(ChartBarIcon)
 export const CheckLinear = icon(CheckIcon)
 export const ColorSwatchLinear = icon(SwatchIcon)

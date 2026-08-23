@@ -18,8 +18,8 @@ import {
   MagicpenLinear,
   ClockLinear,
   ColorSwatchLinear,
-  CameraLinear,
   UserOctagonLinear,
+  ArchiveLinear,
 } from '../../../icons'
 import { ProvidersSection } from './ProvidersSection'
 import { LocalModelsSection } from './LocalModelsSection'
@@ -31,7 +31,7 @@ import { UsageSection } from './UsageSection'
 import { SkillsSection } from './SkillsSection'
 import { AutomationsSection } from './AutomationsSection'
 import { ThemesSection } from './ThemesSection'
-import { GestureCalibrationPanel } from '../../gesture/components/GestureCalibrationPanel'
+import { ComponentsSection } from './ComponentsSection'
 import { useSettingsUi, type SettingsSection } from '../store/uiStore'
 
 interface SectionDef {
@@ -66,7 +66,7 @@ const GROUPS: { label: string; items: SectionDef[] }[] = [
     items: [
       { id: 'usage', label: 'Usage', icon: ChartLinear },
       { id: 'themes', label: 'Theme', icon: ColorSwatchLinear },
-      { id: 'gestures', label: 'Gestures', icon: CameraLinear },
+      { id: 'components', label: 'Components', icon: ArchiveLinear },
     ],
   },
 ]
@@ -182,7 +182,7 @@ export function SettingsDialog() {
               {section === 'skills' && <SkillsSection />}
               {section === 'automations' && <AutomationsSection />}
               {section === 'themes' && <ThemesSection />}
-              {section === 'gestures' && <GestureCalibrationPanel />}
+              {section === 'components' && <ComponentsSection />}
             </Box>
           </Box>
         </Stack>

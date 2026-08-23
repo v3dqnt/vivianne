@@ -95,14 +95,6 @@ impl Tool for PlaybookTool {
         &self.def.name
     }
 
-    fn description(&self) -> &str {
-        &self.def.description
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        self.def.parameters.clone()
-    }
-
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let command = substitute(&self.def.command, args);
         // Same denylist/env-scrubbing every other shell-backed tool (bash,

@@ -11,6 +11,7 @@
 //! and at ~30-60 small JSON messages/sec the overhead difference against a
 //! local socket is not the bottleneck — MediaPipe's own inference time is.
 
+use std::io::ErrorKind;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Instant;
@@ -26,9 +27,14 @@ use super::config::GestureConfig;
 use super::events::GestureEvent;
 use super::landmarks::SidecarFrame;
 use super::smoothing::LandmarkSmoother;
+use crate::os_control::OsController;
 
-const GESTURE_EVENT: &str = "gesture_event";
 const GESTURE_DEBUG_EVENT: &str = "gesture_debug_frame";
+
+/// Maximum accepted size for one sidecar JSON frame line. Real frames are a
+/// few hundred bytes; the cap only exists so a wedged or hostile child can't
+/// grow our memory without bound by printing an endless run with no newline.
+const MAX_FRAME_BYTES: usize = 64 * 1024;
 
 /// Debug-mode payload — smoothed landmarks plus current classifier state, for
 /// the calibration overlay. Only emitted while `debug` is enabled (raw
@@ -68,12 +74,17 @@ impl GestureSidecar {
     pub async fn start(
         self: &Arc<Self>,
         app: AppHandle,
+        os: Arc<OsController>,
         script_path: std::path::PathBuf,
         camera_index: u32,
         config: GestureConfig,
         debug: bool,
     ) -> Result<(), String> {
-        if self.state.lock().await.is_some() {
+        // Held across the entire start sequence so two racing starts (tray
+        // toggle vs settings button) can't both pass the check and spawn two
+        // camera-holding children.
+        let mut guard = self.state.lock().await;
+        if guard.is_some() {
             return Err("Gesture tracking is already running".to_string());
         }
         if !script_path.exists() {
@@ -81,7 +92,7 @@ impl GestureSidecar {
         }
 
         let python = python_binary();
-        let mut child = Command::new(python)
+        let mut child = Command::new(&python)
             .arg(&script_path)
             .arg("--camera")
             .arg(camera_index.to_string())
@@ -104,12 +115,13 @@ impl GestureSidecar {
         let stdout = child.stdout.take().ok_or("Sidecar has no stdout")?;
         let stderr = child.stderr.take().ok_or("Sidecar has no stderr")?;
 
-        *self.state.lock().await = Some(SidecarState { child, debug });
+        *guard = Some(SidecarState { child, debug });
+        drop(guard);
 
         let this = self.clone();
         let app_out = app.clone();
         tokio::spawn(async move {
-            this.run_reader_loop(app_out, stdout, config).await;
+            this.run_reader_loop(app_out, os, stdout, config).await;
         });
 
         // Sidecar stderr is diagnostic (MediaPipe/OpenCV init logs, tracebacks
@@ -131,6 +143,7 @@ impl GestureSidecar {
     async fn run_reader_loop(
         self: Arc<Self>,
         app: AppHandle,
+        os: Arc<OsController>,
         stdout: tokio::process::ChildStdout,
         config: GestureConfig,
     ) {
@@ -140,10 +153,10 @@ impl GestureSidecar {
             config.smoothing_derivative_cutoff,
         );
         let mut classifier = GestureClassifier::new(config.clone());
-        let mut lines = BufReader::new(stdout).lines();
+        let mut reader = BufReader::new(stdout);
 
         loop {
-            let line = match lines.next_line().await {
+            let line = match read_frame_line(&mut reader).await {
                 Ok(Some(l)) => l,
                 Ok(None) => break, // sidecar closed stdout — process exited
                 Err(e) => {
@@ -181,8 +194,13 @@ impl GestureSidecar {
             let now = Instant::now();
             let events = classifier.process(smoothed.as_deref(), now);
 
+            // Applied directly rather than round-tripped through the Tauri
+            // event bus: the bus is writable from the webview, so routing OS
+            // input through it would let renderer-side code synthesize real
+            // mouse input. The sidecar reader loop is the only trusted
+            // producer, so it applies events itself.
             for event in &events {
-                let _ = app.emit(GESTURE_EVENT, event);
+                os.apply(event);
             }
 
             let debug = self.state.lock().await.as_ref().is_some_and(|s| s.debug);
@@ -225,8 +243,59 @@ impl Default for GestureSidecar {
     }
 }
 
-fn python_binary() -> &'static str {
-    if cfg!(windows) { "python" } else { "python3" }
+/// Interpreter used to run the sidecar script. Resolution order:
+/// 1. `GESTURE_CONTROL_PYTHON` env var — absolute path to a pinned
+///    interpreter; the recommended way for deployments that don't want the
+///    binary resolved from PATH at all.
+/// 2. `python` (Windows) / `python3` (elsewhere) from PATH — fine for dev,
+///    but a same-named executable earlier in PATH would win, which is
+///    exactly why the env override above exists.
+fn python_binary() -> String {
+    if let Ok(pinned) = std::env::var("GESTURE_CONTROL_PYTHON") {
+        if !pinned.trim().is_empty() {
+            return pinned;
+        }
+    }
+    if cfg!(windows) { "python".to_string() } else { "python3".to_string() }
+}
+
+/// Reads one `\n`-terminated line from `reader`, refusing to buffer more
+/// than [`MAX_FRAME_BYTES`] — unlike `BufRead::lines()`, which happily
+/// allocates for an arbitrarily long run without a newline. Returns
+/// `Ok(None)` on clean EOF, or a partial final line if the stream ends
+/// mid-line.
+async fn read_frame_line(
+    reader: &mut (impl tokio::io::AsyncBufRead + Unpin),
+) -> std::io::Result<Option<String>> {
+    let mut bytes: Vec<u8> = Vec::new();
+    loop {
+        let chunk = reader.fill_buf().await?;
+        if chunk.is_empty() {
+            // EOF — flush any trailing unterminated data, else signal end.
+            return if bytes.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+            };
+        }
+        match chunk.iter().position(|&b| b == b'\n') {
+            Some(nl) => {
+                bytes.extend_from_slice(&chunk[..nl]);
+                reader.consume(nl + 1);
+            }
+            None => {
+                bytes.extend_from_slice(chunk);
+                let consumed = chunk.len();
+                reader.consume(consumed);
+            }
+        }
+        if bytes.len() > MAX_FRAME_BYTES {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "sidecar frame exceeds size limit",
+            ));
+        }
+    }
 }
 
 /// Locate `hand_tracker.py` relative to the app's resource directory (bundled
