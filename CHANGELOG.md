@@ -11,6 +11,7 @@ All notable changes to Vivianne are documented here.
 - **"New chat" not creating a real session** — clicking New Session reset in-memory state but never persisted anything, so the new thread had no id until the first message completed; any UI assuming otherwise broke. It's now persisted immediately as an empty "New chat" session, idempotently (rapid double-clicks reuse the same empty session instead of creating duplicates).
 - **The Review panel showing "No textual diff" for real changes** — when the active workspace folder was a subdirectory of the git repo (not the true top level), a second `git diff` call resolved the file's pathspec against the wrong directory and silently returned nothing. Every git-backed command (`diff --numstat`, `diff <file>`, `status`) now resolves the actual repository root first.
 - **`run_git`/git subprocess calls with no timeout** — a `repo_clone` against a slow or hung remote (or one that stops to ask for credentials on stdin) could block the tool call, and the turn with it, indefinitely. Now bounded to 120s.
+- **The Subagents panel's turn/tool-call counter stuck at 0** while a subagent was actively running — it only ever got a real value once the subagent finished, so anything still in progress looked idle.
 - Windows path-length crash in an unrelated local test, a stale `local_onnx` test assertion, and several stale doc comments/dead code paths left over from earlier refactors.
 
 ### Added
@@ -24,11 +25,17 @@ All notable changes to Vivianne are documented here.
 - **Line-numbered `read`** — text files come back `cat -n`-style with the total line count stated, so the model can tell "I saw the whole file" from "this got cut off" without guessing.
 - **Spill for truncated tool output** — when shell output is truncated to fit context, the trimmed middle is saved to disk and the truncation notice names the path, so the model can `read`/`grep` it back instead of it being gone for good. Old spill files are pruned automatically.
 - **Context-window-scaled compaction** — memory/prompt-injection budgets now derive from the selected model's actual context window instead of fixed constants, so a small-context model (e.g. 8K) doesn't try to compact every single turn while a huge-context model doesn't throw away far more history than it needs to.
+- **Pointer-style custom subagents** — a saved subagent profile can carry a preset `default_prompt`; the model can then delegate with just a profile name and a short `context` string instead of writing the whole task prompt every time. New `list_subagent_profiles` tool lets it check what's available first.
+- **Real browser control** — `browser_snapshot`/`browser_click`/`browser_type`/`browser_press_key`/`browser_scroll`/`browser_evaluate`/`browser_read_console`/`browser_read_network`, built on camoufox-browser's REST API (click/type/scroll/evaluate were already there, just never wired up). `web_preview` was screenshot-only before this; now the agent can actually drive the page.
+- **`set_panel`** — the agent can open/close GUI panels (Review, workspace files, the merged Preview panel, background tasks, terminal) so it can show the user what it's doing instead of only ever reacting to clicks.
+- **First-launch prompt + background downloads for Camoufox and Docker** — both used to download silently (and block) on first use; now there's a one-time consent prompt, a non-blocking background download with real progress, and a Settings → Components section to check status or install later.
+- **Real per-model cost tracking** — Settings → Usage showed $0.00 for every day since cost was never actually computed by any provider integration. Now priced from a real, sourced table (Anthropic/OpenAI/Google); a model outside that table shows honestly as unpriced instead of a fake zero.
 
 ### Changed
 
 - **Gesture control removed from the main app** — it now lives entirely in its own standalone "Air Touch" app (`packages/gesture-control`); nothing about it remains in Vivianne proper.
 - **The dead Rust `orchestrator` module removed** — a full rewrite of an already-retired TypeScript package that the frontend never actually called into.
+- **Live Preview and Browser panels merged into one Preview panel** with a mode switch — Browser mode now also shows the agent's live camoufox session when it's actively driving one, replacing the separate Web Preview dialog.
 - **`bash`/`powershell` always stream live output** to the GUI now, with labeled `[stdout]`/`[stderr]` sections, the exit code always appended, and head+tail truncation (so a build/test failure's summary at the end is never the part that gets cut). This used to be a separate `streaming_bash`/`streaming_powershell` tool pair the model had to choose to get live output — now there's one name per shell, not two.
 - **Duplicate tools folded together**: `read_file`/`list_dir` merged into `read`/`ls`, `ask_user_question` removed in favor of the already-live, richer `question` tool.
 - **`todo_write`** now rejects duplicate items and enforces at most one `in_progress` task at a time, and reports pending/in-progress/completed counts.
