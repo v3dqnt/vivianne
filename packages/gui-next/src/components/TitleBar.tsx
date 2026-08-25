@@ -136,6 +136,7 @@ export function TitleBar() {
   useEffect(() => {
     if (!hasTauri()) return
     let unlisten: (() => void) | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
     ;(async () => {
       const { getCurrentWindow } = await import('@tauri-apps/api/window')
       const win = getCurrentWindow()
@@ -144,11 +145,19 @@ export function TitleBar() {
       // dedicated "maximize changed" event, and polling on a window `resize`
       // listener (rather than the DOM's) fires exactly when it actually
       // could have changed, not on some fixed timer.
-      unlisten = await win.onResized(async () => {
-        setIsMaximized(await win.isMaximized())
+      // Dragging a window edge floods that listener with events, so the IPC
+      // round-trip is debounced to one call ~150ms after the last tick.
+      unlisten = await win.onResized(() => {
+        clearTimeout(timer)
+        timer = setTimeout(() => {
+          void win.isMaximized().then(setIsMaximized)
+        }, 150)
       })
     })()
-    return () => unlisten?.()
+    return () => {
+      unlisten?.()
+      clearTimeout(timer)
+    }
   }, [])
 
   if (!hasTauri()) return null

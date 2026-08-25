@@ -425,10 +425,13 @@ pub async fn cmd_debug_agent_status(
     use crate::ai::auth::{AuthState, Credential};
     use tauri::Manager;
 
-    let agent = state.agent.lock().await;
-    let model = agent.state.model().await;
-    let thinking_level = agent.state.thinking_level().await;
-    let messages = agent.state.messages().await;
+    // Reads only `agent_state` (the lock-free `Arc<RwLock<_>>` clone `Agent`
+    // itself also holds), not the `agent` mutex — that mutex is held for a
+    // whole in-flight turn (up to 900s parked on a permission prompt), and
+    // this is a debug/status read that has no reason to queue behind it.
+    let model = state.agent_state.model().await;
+    let thinking_level = state.agent_state.thinking_level().await;
+    let messages = state.agent_state.messages().await;
 
     // Try to read API key for current provider
     let auth_state = app.state::<Arc<AuthState>>();
@@ -502,7 +505,6 @@ pub async fn cmd_agent_set_model(
         base_url
     };
 
-    let agent = state.agent.lock().await;
     let model_ref = ModelRef {
         id,
         name,
@@ -513,7 +515,10 @@ pub async fn cmd_agent_set_model(
         max_tokens: max_tokens.unwrap_or(8192),
         context_window: context_window.unwrap_or(128_000),
     };
-    agent.state.set_model(model_ref).await;
+    // Lock-free — see `cmd_debug_agent_status`'s comment. Switching models
+    // used to queue behind an in-flight turn's mutex for no reason: nothing
+    // here touches anything on `Agent` except `.state`.
+    state.agent_state.set_model(model_ref).await;
     Ok(())
 }
 
@@ -694,6 +699,7 @@ pub async fn cmd_compact_now(
         system_prompt: agent.state.system_prompt().await,
         messages: agent.state.messages().await,
         delegate_depth: 0,
+        ..Default::default()
     };
     let before = context.messages.len();
     crate::agent::loop_core::maybe_compact_context(&mut context, &agent.state, &app, &model, true).await;
@@ -764,9 +770,9 @@ pub async fn cmd_agent_session_stats(
 ) -> Result<SessionStats, String> {
     use crate::coding_agent::compaction::{calculate_context_tokens, message_char_len};
 
-    let agent = state.agent.lock().await;
-    let model = agent.state.model().await;
-    let messages = agent.state.messages().await;
+    // Lock-free — see `cmd_debug_agent_status`'s comment.
+    let model = state.agent_state.model().await;
+    let messages = state.agent_state.messages().await;
 
     let context_tokens = calculate_context_tokens(&messages);
     let context_window = model.context_window.max(1);
@@ -907,6 +913,7 @@ pub async fn cmd_save_settings(settings: serde_json::Value) -> Result<(), String
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
     std::fs::write(&path, content)
         .map_err(|e| format!("Failed to write settings: {}", e))?;
+    crate::agent::tool_exec::invalidate_settings_cache();
     Ok(())
 }
 
@@ -1324,6 +1331,12 @@ fn invalidate_session_list_cache() {
 /// abandoned "New chat" leaves a file behind holding nothing. Called once at
 /// startup, where it's unambiguously safe: no session is active yet, so a
 /// thread the user is part-way through creating cannot be caught by it.
+/// A session file bigger than this can't hold zero messages — a single real
+/// message (even a short one) plus JSON structure overhead clears it easily
+/// — so it's skipped by a cheap `metadata()` size check instead of being
+/// fully read and parsed just to confirm it isn't empty.
+const EMPTY_SESSION_SIZE_CAP_BYTES: u64 = 4096;
+
 pub fn prune_empty_sessions() -> usize {
     let Ok(dir) = get_session_dir() else { return 0 };
     let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
@@ -1332,6 +1345,15 @@ pub fn prune_empty_sessions() -> usize {
         let path = entry.path();
         if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
+        }
+        // Skip anything too big to possibly be empty without opening it —
+        // this is what actually saves the work: a startup prune that read
+        // and parsed every session file (up to 18MB each, 111MB total here)
+        // before first paint just to check a `messages` length.
+        match std::fs::metadata(&path) {
+            Ok(meta) if meta.len() > EMPTY_SESSION_SIZE_CAP_BYTES => continue,
+            Ok(_) => {}
+            Err(_) => continue,
         }
         let Ok(content) = std::fs::read_to_string(&path) else { continue };
         // Parsed as the full shape on purpose: `messages` must be read to
@@ -1467,8 +1489,15 @@ pub async fn cmd_save_current_session(
 /// `cmd_agent_prompt`'s post-turn autosave) save *that* thread's transcript,
 /// not whichever state happens to be the singleton default.
 async fn save_current_session_impl(name: Option<String>, state: &Arc<AppState>) -> Result<String, String> {
-    let agent = state.agent.lock().await;
-    let messages = agent.state.messages().await;
+    // Lock-free — see `cmd_debug_agent_status`'s comment. This used to lock
+    // `state.agent` and hold it through the whole save (message clone, JSON
+    // serialize, disk write) — for an 18MB transcript, that's real time spent
+    // blocking every other command mid-turn for no reason: nothing here
+    // touches anything on `Agent` except `.state`, which is available
+    // lock-free as `agent_state`. (`cmd_agent_prompt`'s own `drop(agent)`
+    // before calling this was pointless as long as this function re-locked
+    // the same mutex immediately anyway.)
+    let messages = state.agent_state.messages().await;
     if messages.is_empty() {
         return Ok("".to_string());
     }
@@ -1500,8 +1529,8 @@ async fn save_current_session_impl(name: Option<String>, state: &Arc<AppState>) 
         }).unwrap_or_else(|| "Untitled Session".to_string())
     });
 
-    let workspace_folders = agent.state.workspace_folders().await;
-    let access_mode = match agent.state.access_mode().await {
+    let workspace_folders = state.agent_state.workspace_folders().await;
+    let access_mode = match state.agent_state.access_mode().await {
         crate::agent::state::WorkspaceAccessMode::ReadOnly => Some("readOnly".to_string()),
         crate::agent::state::WorkspaceAccessMode::Full => Some("full".to_string()),
     };

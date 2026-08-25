@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import Stack from '@mui/material/Stack'
+import { Virtualizer } from 'virtua'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Dialog from '@mui/material/Dialog'
@@ -19,7 +19,6 @@ export function MessageList() {
   const streamingIndex = useAgentStore((s) => s.streamingIndex)
   const revertToIndex = useAgentStore((s) => s.revertToIndex)
   const containerRef = useRef<HTMLDivElement>(null)
-  const bottomRef = useRef<HTMLDivElement>(null)
   // Whether the user was already at (or near) the bottom before this update —
   // streaming shouldn't yank them back down if they scrolled up to reread
   // something earlier in a long reply.
@@ -43,11 +42,16 @@ export function MessageList() {
   useEffect(() => {
     if (!nearBottomRef.current) return
     // rAF-coalesced: `messages`/`isBusy` can change many times a second while
-    // streaming (often 10-60/sec), and scrollIntoView forces a synchronous
-    // layout — without coalescing, every token pays for its own layout pass.
+    // streaming (often 10-60/sec), and scrolling forces a synchronous layout —
+    // without coalescing, every token pays for its own layout pass. Sets
+    // `scrollTop` directly rather than `scrollIntoView` on a bottom sentinel:
+    // `Virtualizer` below keeps the container's real `scrollHeight` correct
+    // for the full (including unmounted) content, so this works the same
+    // whether or not the last message is currently mounted.
     if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current)
     scrollRafRef.current = requestAnimationFrame(() => {
-      bottomRef.current?.scrollIntoView({ block: 'end' })
+      const el = containerRef.current
+      if (el) el.scrollTop = el.scrollHeight
       scrollRafRef.current = null
     })
     return () => {
@@ -83,19 +87,33 @@ export function MessageList() {
   // in-bubble loading state — this row covers exactly that gap.
   const showTrailingIndicator = isBusy && streamingIndex === null
 
+  // A long thread otherwise mounts every message forever — DOM/memory grows
+  // unbounded, and (compounding it) each mounted `ToolCallCard` collapse body
+  // is measured by MUI's `Collapse` regardless of visibility. `Virtualizer`
+  // renders only what's near the viewport, using `containerRef` (this
+  // component's own scroll container) as the scrollable ancestor rather than
+  // owning its own — so the existing near-bottom / scroll-position logic
+  // above needs no changes to keep working.
+  const items = messages.map((m, i) => (
+    // Index key is acceptable here: this list is append-only within a
+    // session (no reordering/filtering), which is exactly the case index
+    // keys are safe for.
+    <Box key={i} sx={{ pb: 1.5 }}>
+      <MessageBubble message={m} index={i} onRevert={setRevertTarget} />
+    </Box>
+  ))
+  if (showTrailingIndicator) {
+    items.push(
+      <Box key="trailing-indicator" sx={{ pb: 1.5 }}>
+        <ThinkingIndicator />
+      </Box>,
+    )
+  }
+
   return (
     <Box ref={containerRef} sx={{ position: 'relative', flex: 1, minHeight: 0, overflowY: 'auto', px: 1.5, py: 1.5 }}>
       <TodoPanel />
-      <Stack spacing={1.5}>
-        {messages.map((m, i) => (
-          // Index key is acceptable here: this list is append-only within a
-          // session (no reordering/filtering), which is exactly the case
-          // index keys are safe for.
-          <MessageBubble key={i} message={m} index={i} onRevert={setRevertTarget} />
-        ))}
-        {showTrailingIndicator && <ThinkingIndicator />}
-        <div ref={bottomRef} />
-      </Stack>
+      <Virtualizer scrollRef={containerRef}>{items}</Virtualizer>
 
       <Dialog open={revertTarget !== null} onClose={() => setRevertTarget(null)} maxWidth="xs" fullWidth>
         <DialogTitle>Revert to this point?</DialogTitle>

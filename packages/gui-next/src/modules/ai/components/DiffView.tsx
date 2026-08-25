@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import Box from '@mui/material/Box'
 import { diffLines } from '../lib/diff'
 
@@ -9,8 +10,10 @@ const LINE_STYLE = {
 
 /** Renders a unified line diff between two full-file (or snippet) contents.
  * `before === null` means a new file (all-green added); `after === null`
- * means a deleted file (all-red removed). */
-export function DiffView({ before, after }: { before: string | null; after: string | null }) {
+ * means a deleted file (all-red removed). Memoized — `diffLines` runs an
+ * O(N*M) table for its exact path, so it shouldn't re-run on unrelated
+ * parent re-renders when `before`/`after` haven't changed. */
+export const DiffView = memo(function DiffView({ before, after }: { before: string | null; after: string | null }) {
   const lines = diffLines(before ?? '', after ?? '')
 
   return (
@@ -43,4 +46,4 @@ export function DiffView({ before, after }: { before: string | null; after: stri
       ))}
     </Box>
   )
-}
+})

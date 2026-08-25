@@ -84,6 +84,7 @@ impl Agent {
             system_prompt: self.state.system_prompt().await,
             messages: self.state.messages().await,
             delegate_depth: 0,
+            ..Default::default()
         };
         let queues = self.queue_handles();
 
@@ -106,6 +107,7 @@ impl Agent {
             system_prompt: self.state.system_prompt().await,
             messages: self.state.messages().await,
             delegate_depth: 0,
+            ..Default::default()
         };
         let mut new_messages = Vec::new();
         let queues = self.queue_handles();

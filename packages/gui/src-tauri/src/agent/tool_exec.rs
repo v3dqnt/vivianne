@@ -171,6 +171,17 @@ pub async fn get_agent_tool_definitions() -> Vec<serde_json::Value> {
     defs
 }
 
+/// Canonicalized workspace folders, cached against the exact `folders` value
+/// that produced them. `canonicalize` is a real syscall (expensive
+/// specifically on Windows), and every gated tool call (read/write/edit/
+/// bash/...) re-canonicalized every configured workspace folder from
+/// scratch — folders only actually change via `cmd_agent_set_workspace`, so
+/// re-deriving this every call was pure waste. Keyed by value (not
+/// invalidated explicitly) because `folders` arrives as a fresh `Vec` clone
+/// each call regardless of whether the underlying config changed; a value
+/// mismatch just means recompute-and-recache.
+static WORKSPACE_CANON_CACHE: std::sync::RwLock<Option<(Vec<String>, Vec<Option<std::path::PathBuf>>)>> = std::sync::RwLock::new(None);
+
 /// Is `resolved` inside any of `folders`? Canonicalizes both sides when the
 /// path already exists (handles `..`, symlinks, case differences on
 /// Windows); falls back to a string-prefix check for paths that don't exist
@@ -182,10 +193,25 @@ pub(crate) fn path_in_workspace(resolved: &std::path::Path, folders: &[String]) 
         return true;
     }
     let canonical_target = std::fs::canonicalize(resolved).ok();
-    folders.iter().any(|folder| {
+
+    let cached = WORKSPACE_CANON_CACHE.read().ok().and_then(|c| {
+        c.as_ref().and_then(|(cached_folders, cached_canon)| {
+            (cached_folders.as_slice() == folders).then(|| cached_canon.clone())
+        })
+    });
+    let canonical_folders = cached.unwrap_or_else(|| {
+        let canon: Vec<Option<std::path::PathBuf>> =
+            folders.iter().map(|f| std::fs::canonicalize(f).ok()).collect();
+        if let Ok(mut cache) = WORKSPACE_CANON_CACHE.write() {
+            *cache = Some((folders.to_vec(), canon.clone()));
+        }
+        canon
+    });
+
+    folders.iter().zip(canonical_folders.iter()).any(|(folder, canonical_folder)| {
         let folder_path = std::path::Path::new(folder);
-        if let (Some(target), Ok(canonical_folder)) = (&canonical_target, std::fs::canonicalize(folder_path)) {
-            return target.starts_with(&canonical_folder);
+        if let (Some(target), Some(canonical_folder)) = (&canonical_target, canonical_folder) {
+            return target.starts_with(canonical_folder);
         }
         // Neither side canonicalized (folder and/or target don't exist yet) —
         // fall back to a plain path-prefix comparison.
@@ -1380,6 +1406,7 @@ async fn drive_subagent(
         system_prompt: sub_system_prompt.clone(),
         messages: Vec::new(),
         delegate_depth: child_depth,
+        ..Default::default()
     };
     sub_state.set_system_prompt(sub_system_prompt).await;
 
@@ -2252,14 +2279,38 @@ async fn execute_memory_tool(name: &str, args: &serde_json::Value, app: &tauri::
     }
 }
 
+/// In-memory cache of `settings.json`, invalidated by `cmd_save_settings`
+/// (the only writer within this app — same cache-plus-invalidate-on-write
+/// shape as `commands::SESSION_LIST_CACHE`). Without it, every gated-tool
+/// check (`read_disabled_tools`/`read_bypass_mode`) and every provider call
+/// (`read_auto_retry_enabled`/`read_fallback_model`) re-read and re-parsed
+/// the whole file from disk — multiple times per turn, for a file that only
+/// ever changes when the user saves the Settings panel.
+static SETTINGS_CACHE: std::sync::RwLock<Option<serde_json::Value>> = std::sync::RwLock::new(None);
+
+pub(crate) fn invalidate_settings_cache() {
+    if let Ok(mut cache) = SETTINGS_CACHE.write() {
+        *cache = None;
+    }
+}
+
 /// Read `~/.viv/agent/settings.json` (written by the Settings panel).
 /// Missing file/parse failure resolve to an empty object rather than
 /// erroring the turn.
 pub(crate) async fn read_settings_json() -> serde_json::Value {
+    if let Ok(cache) = SETTINGS_CACHE.read() {
+        if let Some(cached) = cache.as_ref() {
+            return cached.clone();
+        }
+    }
     let Ok(dir) = crate::agent::paths::viv_agent_dir() else { return serde_json::json!({}) };
     let path = dir.join("settings.json");
     let Ok(content) = tokio::fs::read_to_string(&path).await else { return serde_json::json!({}) };
-    serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+    let value: serde_json::Value = serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}));
+    if let Ok(mut cache) = SETTINGS_CACHE.write() {
+        *cache = Some(value.clone());
+    }
+    value
 }
 
 /// Read the `disabledTools` list from settings.json (written by the

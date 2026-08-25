@@ -7,6 +7,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { call, on } from '../../../ipc'
 import { useWorkspaceStore } from '../../ai/store/workspaceStore'
+import { usePanelStore } from '../store/panelStore'
 
 interface ShellOption {
   id: string
@@ -69,9 +70,30 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
   const containerRef = useRef<HTMLDivElement>(null)
   const tabIdRef = useRef<string>(attachTabId ?? `term-${crypto.randomUUID()}`)
   const termRef = useRef<Terminal | null>(null)
+  const fitAddonRef = useRef<FitAddon | null>(null)
   const folders = useWorkspaceStore((s) => s.folders)
   const [status, setStatus] = useState<string | null>(attachTabId ? null : 'Spawning shell…')
   const theme = useTheme()
+
+  // True while a ResizeHandle drag (right panel or bottom terminal, whichever
+  // this instance happens to live inside) is in flight. The panel's real DOM
+  // size changes every frame of the drag regardless of that — flexbox lays
+  // out `containerRef` continuously — so the ResizeObserver below would
+  // still fire `fit()` + a resize IPC call per frame even though the drag
+  // itself no longer touches React state. Mirrored into a ref because the
+  // observer callback is created once, in the mount effect below.
+  const panelResizing = usePanelStore((s) => s.panelResizing)
+  const panelResizingRef = useRef(false)
+  useEffect(() => {
+    panelResizingRef.current = panelResizing
+    if (!panelResizing) {
+      try {
+        fitAddonRef.current?.fit()
+      } catch {
+        // element may be detached
+      }
+    }
+  }, [panelResizing])
 
   // Live theme updates (mode/palette switch) — xterm supports patching
   // `.options.theme` on an existing instance, no need to respawn the PTY.
@@ -99,11 +121,15 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
     })
     termRef.current = term
     const fitAddon = new FitAddon()
+    fitAddonRef.current = fitAddon
     term.loadAddon(fitAddon)
     term.open(container)
     fitAddon.fit()
 
     const ro = new ResizeObserver(() => {
+      // Skip mid-drag — the effect above runs one `fit()` when the drag
+      // ends instead of one per frame while it's in flight.
+      if (panelResizingRef.current) return
       try {
         fitAddon.fit()
       } catch {
@@ -126,10 +152,17 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
     // Synchronous promise chain: each unlisten is stored the moment its
     // listener resolves, before the next await — so an unmount can never
     // slip between "listener attached" and "unlisten stored" (the exact
-    // leak class the old app fixed with the same shape).
+    // leak class the old app fixed with the same shape). If unmount wins the
+    // race entirely — disposed before a promise resolves — the late listener
+    // registers just long enough to unregister itself, instead of living
+    // forever with its unlisten never captured.
     on<TerminalOutputPayload>('terminal-output', (event) => {
       if (!disposed && event.tabId === tabId) term.write(event.data)
     }).then((u) => {
+      if (disposed) {
+        u()
+        return null
+      }
       unlistenOutput = u
       return on<TerminalExitPayload>('terminal-exit', (event) => {
         if (!disposed && event.tabId === tabId) {
@@ -138,6 +171,11 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
         }
       })
     }).then((u) => {
+      if (!u) return
+      if (disposed) {
+        u()
+        return
+      }
       unlistenExit = u
       setStatus(null)
     })
@@ -162,6 +200,7 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
       ro.disconnect()
       term.dispose()
       termRef.current = null
+      fitAddonRef.current = null
       unlistenOutput?.()
       unlistenExit?.()
       // Only kill a PTY this component actually spawned — closing an attached

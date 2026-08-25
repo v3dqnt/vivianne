@@ -1,14 +1,20 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import { ArrowDownLinear } from '../../../icons'
+import { useThrottledValue } from '../../../lib/useThrottledValue'
 
 /** Collapsible model-reasoning text (`thinking` content blocks) — muted and auto-expanded while actively streaming so the reasoning is visible live, not just after the fact. */
-export function ReasoningBlock({ text, streaming }: { text: string; streaming?: boolean }) {
+export const ReasoningBlock = memo(function ReasoningBlock({ text, streaming }: { text: string; streaming?: boolean }) {
   // `null` means "no manual override yet" — the panel then just follows
   // `streaming` (open while thinking, collapses once the reply starts).
   // Once the user clicks it themselves, that choice sticks.
   const [manualOpen, setManualOpen] = useState<boolean | null>(null)
+  // Thinking streams token-by-token into one big pre-wrap text node — a full
+  // node swap per token. The same leading+trailing throttle Markdown uses for
+  // its parse work keeps DOM text updates to ~10/sec while staying live;
+  // the trailing edge guarantees the final text still lands.
+  const throttledText = useThrottledValue(text, 100)
   if (!text) return null
   const open = manualOpen ?? !!streaming
 
@@ -43,9 +49,9 @@ export function ReasoningBlock({ text, streaming }: { text: string; streaming?: 
             whiteSpace: 'pre-wrap',
           }}
         >
-          {text}
+          {throttledText}
         </Typography>
       )}
     </Box>
   )
-}
+})

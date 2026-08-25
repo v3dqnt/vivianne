@@ -494,7 +494,7 @@ pub async fn run_agent_loop_continue(
         let assistant_message = match call_provider_with_fallback(
             app,
             &model,
-            llm_context,
+            Arc::new(llm_context),
             thinking_level,
             emit,
             source_tag,
@@ -742,7 +742,7 @@ pub(crate) fn context_budgets(context_window: u32) -> (u32, u32) {
 }
 
 pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &AgentState, app: &tauri::AppHandle, model: &ModelRef, force: bool) {
-    use crate::coding_agent::compaction::{calculate_context_tokens, find_cut_point, generate_llm_summary, generate_mermaid_summary, CompactionConfig};
+    use crate::coding_agent::compaction::{calculate_context_tokens_incremental, find_cut_point, generate_llm_summary, generate_mermaid_summary, CompactionConfig};
 
     if !state.compaction_enabled().await {
         return;
@@ -759,7 +759,7 @@ pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &Ag
         explicit => explicit,
     };
 
-    let current_tokens = calculate_context_tokens(&context.messages);
+    let current_tokens = calculate_context_tokens_incremental(&context.messages, &mut context.token_cache_len, &mut context.token_cache_sum);
     let budget = model.context_window.saturating_sub(reserve_tokens);
     if !force && current_tokens <= budget {
         return;
@@ -928,7 +928,7 @@ fn retry_delay_ms(attempt: u32) -> u64 {
 async fn call_provider_with_retry(
     app: &tauri::AppHandle,
     model: &ModelRef,
-    context: Context,
+    context: Arc<Context>,
     api_key: Option<String>,
     thinking_level: ThinkingLevel,
     emit: &EventSender,
@@ -1012,7 +1012,7 @@ async fn read_fallback_model() -> Option<ModelRef> {
 async fn call_provider_with_pool_rotation(
     app: &tauri::AppHandle,
     model: &ModelRef,
-    context: Context,
+    context: Arc<Context>,
     thinking_level: ThinkingLevel,
     emit: &EventSender,
     source_tag: &str,
@@ -1099,7 +1099,7 @@ async fn call_provider_with_pool_rotation(
 async fn call_provider_with_fallback(
     app: &tauri::AppHandle,
     model: &ModelRef,
-    context: Context,
+    context: Arc<Context>,
     thinking_level: ThinkingLevel,
     emit: &EventSender,
     source_tag: &str,
@@ -1200,7 +1200,7 @@ fn emit_provider_error(app: &tauri::AppHandle, stream_id: &str, api: &str, provi
 async fn call_provider_stream_and_await(
     app: &tauri::AppHandle,
     model: &ModelRef,
-    context: Context,
+    context: Arc<Context>,
     api_key: Option<String>,
     thinking_level: ThinkingLevel,
     emit: &EventSender,
@@ -1276,7 +1276,13 @@ async fn call_provider_stream_and_await(
     let stream_id_clone2 = stream_id.clone();
     let model_clone = model.clone();
     let api_key_clone = api_key.clone();
-    let context_clone = context.clone();
+    // The one real deep clone in this call chain — `context` arrives here as
+    // an `Arc` that every wrapper layer above (fallback / pool-rotation /
+    // retry) only ever bumped the refcount on, so this materializes an owned
+    // `Context` exactly once per attempt actually made, right before it's
+    // needed to move into the spawned task below (was up to 4x per attempt:
+    // once per retry × once per pool candidate × once per fallback).
+    let context_clone = (*context).clone();
     let thinking_level_clone = thinking_level.clone();
     let base_url_clone = base_url.clone();
 
@@ -1960,7 +1966,7 @@ fn estimate_content_block_raw_str_len(block: &AiMessageContent) -> usize {
 /// Sum the raw byte length of every string inside a [`serde_json::Value`]
 /// tree. Handles Null, Bool, Number (digit-count estimate), String, Array,
 /// and Object recursively.
-fn estimate_json_value_raw_str_len(value: &serde_json::Value) -> usize {
+pub(crate) fn estimate_json_value_raw_str_len(value: &serde_json::Value) -> usize {
     match value {
         serde_json::Value::Null => 4,
         serde_json::Value::Bool(_) => 5,

@@ -130,6 +130,23 @@ async fn merge_and_write(
     tokio::fs::write(path, json).await.map_err(|e| e.to_string())
 }
 
+/// `by_source` gains a brand-new key (`"main:<session_id>"` /
+/// `"task:<session_id>"`) for every session/subagent run ever, with no
+/// natural expiry — unlike `usage.json`'s day totals, nothing here ever
+/// collapses old entries together. Bounding it to a rolling window is what
+/// actually keeps `merge_and_write_by_source` (a full read-merge-write on
+/// every flush, at most every `FLUSH_INTERVAL_MS`) from growing that read +
+/// rewrite indefinitely across the file's whole lifetime; a per-session
+/// dashboard has no use for a hundred-day-old tag's entry anyway.
+const BY_SOURCE_RETENTION_DAYS: i64 = 90;
+
+fn prune_stale_by_source_days(disk: &mut UsageBySource) {
+    let cutoff = (chrono::Local::now() - chrono::Duration::days(BY_SOURCE_RETENTION_DAYS))
+        .format("%Y-%m-%d")
+        .to_string();
+    disk.retain(|day, _| day.as_str() >= cutoff.as_str());
+}
+
 async fn merge_and_write_by_source(
     path: &std::path::Path,
     buffer: &UsageBySource,
@@ -141,7 +158,12 @@ async fn merge_and_write_by_source(
             merge_into(day_entry.entry(tag.clone()).or_default(), usage);
         }
     }
-    let json = serde_json::to_string_pretty(&disk).map_err(|e| e.to_string())?;
+    prune_stale_by_source_days(&mut disk);
+    // Compact, not pretty — this file grows one key per session/subagent
+    // run (unlike `usage.json`'s handful of day entries), and it's read by
+    // code, not skimmed by a human, so the pretty-printing cost buys nothing
+    // on a file that gets fully rewritten on every flush.
+    let json = serde_json::to_string(&disk).map_err(|e| e.to_string())?;
     tokio::fs::write(path, json).await.map_err(|e| e.to_string())
 }
 

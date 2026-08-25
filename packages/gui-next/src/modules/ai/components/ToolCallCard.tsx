@@ -91,7 +91,11 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
   const images = contentImages(message.content)
   // Only a completed, successful call has real before/after content — a
   // failed `edit` (e.g. old_string not found) changed nothing, so there's
-  // nothing to diff.
+  // nothing to diff. `extractDiffs` itself is cheap (just reshapes
+  // arguments/details), but each diff's actual line-by-line comparison is
+  // an O(N*M) table (see `lib/diff.ts`) — that only runs once `open` gates
+  // `DiffView` below, not here, so `hasBody` can still see whether there's
+  // anything to expand.
   const diffs = !pending && !isError ? extractDiffs(message) : []
   const hasBody = !!output || diffs.length > 0
 
@@ -160,40 +164,50 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
         )}
       </Box>
       {hasBody && (
+        // MUI's Collapse keeps its children mounted regardless of `in` — it
+        // animates height, so it needs them present to measure. That meant
+        // every diff's O(N*M) line comparison (`DiffView` → `diffLines`) ran
+        // on every render of a long thread even while collapsed. Gating the
+        // body on `open` means nothing here mounts — or diffs — until the
+        // card is actually expanded.
         <Collapse in={open}>
-          {diffs.map((d, i) => (
-            <Box key={i}>
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: 'block', px: 1.5, pt: 1, borderTop: i === 0 ? 1 : 0, borderColor: 'divider', fontFamily: 'monospace' }}
-              >
-                {d.path}
-              </Typography>
-              <DiffView before={d.before} after={d.after} />
-            </Box>
-          ))}
-          {output && (
-            <Box
-              component="pre"
-              sx={{
-                m: 0,
-                px: 1.5,
-                py: 1,
-                borderTop: 1,
-                borderColor: 'divider',
-                bgcolor: 'action.hover',
-                fontFamily: '"JetBrains Mono", ui-monospace, monospace',
-                fontSize: '0.75rem',
-                lineHeight: 1.5,
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-                maxHeight: 320,
-                overflowY: 'auto',
-              }}
-            >
-              {output}
-            </Box>
+          {open && (
+            <>
+              {diffs.map((d, i) => (
+                <Box key={i}>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: 'block', px: 1.5, pt: 1, borderTop: i === 0 ? 1 : 0, borderColor: 'divider', fontFamily: 'monospace' }}
+                  >
+                    {d.path}
+                  </Typography>
+                  <DiffView before={d.before} after={d.after} />
+                </Box>
+              ))}
+              {output && (
+                <Box
+                  component="pre"
+                  sx={{
+                    m: 0,
+                    px: 1.5,
+                    py: 1,
+                    borderTop: 1,
+                    borderColor: 'divider',
+                    bgcolor: 'action.hover',
+                    fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+                    fontSize: '0.75rem',
+                    lineHeight: 1.5,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    maxHeight: 320,
+                    overflowY: 'auto',
+                  }}
+                >
+                  {output}
+                </Box>
+              )}
+            </>
           )}
         </Collapse>
       )}

@@ -197,20 +197,22 @@ pub fn run() {
     .setup(|app| {
       // Abandoned "New chat" threads are persisted on creation, so clear out
       // any that were never used. Safe here specifically: nothing is active
-      // at startup.
-      let pruned = crate::agent::commands::prune_empty_sessions();
-      if pruned > 0 {
-        log::info!("[sessions] pruned {pruned} empty session(s)");
-      }
-
-      // Spilled tool output (see `coding_agent::context_shaping`) has no
-      // owning session to get cleaned up with, so it ages out on a timer
-      // instead — same "safe because nothing is active yet" reasoning as
-      // the session prune above.
-      let pruned_spill = crate::coding_agent::context_shaping::prune_old_spill_files();
-      if pruned_spill > 0 {
-        log::info!("[spill] pruned {pruned_spill} old spill file(s)");
-      }
+      // at startup — that invariant only requires running before anything
+      // else touches the session dir, not before first paint, so this runs
+      // on its own thread rather than blocking `.setup()` (and the window
+      // show that waits on it). Spilled tool output (see
+      // `coding_agent::context_shaping`) has no owning session to get
+      // cleaned up with, so it ages out on a timer here too, same reasoning.
+      std::thread::spawn(|| {
+        let pruned = crate::agent::commands::prune_empty_sessions();
+        if pruned > 0 {
+          log::info!("[sessions] pruned {pruned} empty session(s)");
+        }
+        let pruned_spill = crate::coding_agent::context_shaping::prune_old_spill_files();
+        if pruned_spill > 0 {
+          log::info!("[spill] pruned {pruned_spill} old spill file(s)");
+        }
+      });
 
       // Initialize auth state + credential pool together, in one blocking
       // setup call instead of two sequential ones — both need the same
@@ -446,6 +448,27 @@ pub fn run() {
       }
       Ok(())
     })
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application")
+    .run(|app_handle, event| {
+      // Nothing else runs an exit hook, so nothing else flushed the usage
+      // buffer or tore down child processes on quit: the usage buffer's
+      // last up-to-5s of unflushed data was silently lost, and every open
+      // terminal shell / running dev server / running local model was
+      // orphaned instead of exiting with the app.
+      if let tauri::RunEvent::Exit = event {
+        tauri::async_runtime::block_on(async {
+          crate::agent::usage_store::flush_all().await;
+          if let Some(terminals) = app_handle.try_state::<Arc<crate::terminal::TerminalRegistry>>() {
+            terminals.close_all();
+          }
+          if let Some(dev_servers) = app_handle.try_state::<Arc<DevServerManager>>() {
+            dev_servers.stop_all();
+          }
+          if let Some(llama) = app_handle.try_state::<Arc<LlamaManager>>() {
+            llama.stop_all().await;
+          }
+        });
+      }
+    });
 }

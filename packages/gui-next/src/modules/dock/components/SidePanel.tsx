@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import Box from '@mui/material/Box'
 import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
@@ -22,12 +23,25 @@ export function SidePanel() {
   const width = usePanelStore((s) => s.rightWidth)
   const setWidth = usePanelStore((s) => s.setRightWidth)
   const close = usePanelStore((s) => s.closeRight)
+  const setPanelResizing = usePanelStore((s) => s.setPanelResizing)
+  const panelRef = useRef<HTMLDivElement>(null)
 
   if (!open) return null
 
   return (
-    <Box sx={{ position: 'relative', width, flexShrink: 0, height: '100%', borderLeft: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
-      <ResizeHandle edge="left" size={width} min={MIN_WIDTH} max={MAX_WIDTH} onResize={setWidth} />
+    <Box
+      ref={panelRef}
+      sx={{ position: 'relative', width, flexShrink: 0, height: '100%', borderLeft: 1, borderColor: 'divider', bgcolor: 'background.default' }}
+    >
+      <ResizeHandle
+        edge="left"
+        size={width}
+        min={MIN_WIDTH}
+        max={MAX_WIDTH}
+        onResize={setWidth}
+        targetRef={panelRef}
+        onDragActiveChange={setPanelResizing}
+      />
       <Stack sx={{ height: '100%', minHeight: 0 }}>
         {/* The Review panel draws its own richer header (tabs + view mode),
             so it opts out of this plain one. */}

@@ -354,6 +354,18 @@ pub struct AgentContext {
     /// excluded from its own tool list once depth >= 1 — caps subagent
     /// spawning at a single level, not a recursive subagent tree.
     pub delegate_depth: usize,
+    /// Incremental token-count cache for
+    /// `compaction::calculate_context_tokens_incremental`: the first
+    /// `token_cache_len` of `messages` are already reflected in
+    /// `token_cache_sum`, so the twice-per-loop-iteration budget check in
+    /// `maybe_compact_context` only re-walks whatever's been appended since
+    /// the last check instead of the whole, ever-growing history every time.
+    /// Starts at 0 (correct — nothing cached yet) for every fresh
+    /// `AgentContext`, and self-invalidates the instant `messages` gets
+    /// shorter than this (compaction's own prefix drain), so no explicit
+    /// reset is needed elsewhere.
+    pub token_cache_len: usize,
+    pub token_cache_sum: u32,
 }
 
 /// Replacement runtime state used by the agent loop before starting another provider request.

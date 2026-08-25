@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from 'react'
+import { memo, useState, type KeyboardEvent } from 'react'
 import Box from '@mui/material/Box'
 import ListItemButton from '@mui/material/ListItemButton'
 import Typography from '@mui/material/Typography'
@@ -15,7 +15,10 @@ import { useProjectsStore } from '../store/projectsStore'
 import { useThreadsStore } from '../store/threadsStore'
 import { SESSION_DRAG_MIME } from './ChatDockZone'
 
-export function SessionRow({ session, active }: { session: SessionInfo; active: boolean }) {
+// Memoized: the sidebar re-renders on every filter keystroke and sessions-
+// store update; rows whose session object and active flag are unchanged bail
+// out instead of diffing two MUI Menus each time.
+export const SessionRow = memo(function SessionRow({ session, active }: { session: SessionInfo; active: boolean }) {
   const loadSession = useSessionsStore((s) => s.loadSession)
   const deleteSession = useSessionsStore((s) => s.deleteSession)
   const renameSession = useSessionsStore((s) => s.renameSession)
@@ -168,7 +171,10 @@ export function SessionRow({ session, active }: { session: SessionInfo; active: 
         </Tooltip>
       </Box>
 
-      <Menu anchorEl={projectAnchor} open={!!projectAnchor} onClose={() => setProjectAnchor(null)} onClick={(e) => e.stopPropagation()}>
+      {/* Menus mount only while open — a closed Menu per row used to cost a
+          portal + transition group for every single session row. */}
+      {projectAnchor !== null && (
+        <Menu anchorEl={projectAnchor} open onClose={() => setProjectAnchor(null)} onClick={(e) => e.stopPropagation()}>
         {projects.length === 0 ? (
           <MenuItem disabled>No projects yet</MenuItem>
         ) : (
@@ -195,15 +201,17 @@ export function SessionRow({ session, active }: { session: SessionInfo; active: 
             Remove from project
           </MenuItem>
         )}
-      </Menu>
+        </Menu>
+      )}
 
-      <Menu
-        open={contextMenu !== null}
-        onClose={() => setContextMenu(null)}
-        onClick={(e) => e.stopPropagation()}
-        anchorReference="anchorPosition"
-        anchorPosition={contextMenu ? { top: contextMenu.top, left: contextMenu.left } : undefined}
-      >
+      {contextMenu !== null && (
+        <Menu
+          open
+          onClose={() => setContextMenu(null)}
+          onClick={(e) => e.stopPropagation()}
+          anchorReference="anchorPosition"
+          anchorPosition={{ top: contextMenu.top, left: contextMenu.left }}
+        >
         <MenuItem
           onClick={() => {
             openThread(session.id)
@@ -255,7 +263,8 @@ export function SessionRow({ session, active }: { session: SessionInfo; active: 
         >
           Delete
         </MenuItem>
-      </Menu>
+        </Menu>
+      )}
     </ListItemButton>
   )
-}
+})

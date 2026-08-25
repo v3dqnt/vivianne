@@ -21,6 +21,11 @@ import type { AgentMessage } from '../../ai/lib/types'
  * `Composer`, which is wired to the primary store only — wiring the full
  * composer to be thread-aware is follow-up work, not bundled here.
  */
+// Split panes have no revert affordance — one stable module-level noop rather
+// than a fresh closure per render, which would defeat MessageBubble's memo
+// and make every bubble re-render on every streamed token.
+const NO_REVERT = () => {}
+
 export function ThreadPane({ threadId, focused }: { threadId: string; focused: boolean }) {
   const store = getThreadStore(threadId)
   const messages = store((s) => s.messages)
@@ -41,6 +46,7 @@ export function ThreadPane({ threadId, focused }: { threadId: string; focused: b
   const [text, setText] = useState('')
   const [loaded, setLoaded] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const nearBottomRef = useRef(true)
 
   useEffect(() => {
     void init()
@@ -64,7 +70,8 @@ export function ThreadPane({ threadId, focused }: { threadId: string; focused: b
   }, [threadId])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: 'end' })
+    if (!nearBottomRef.current) return
+    requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ block: 'end' }))
   }, [messages, isBusy])
 
   const submit = () => {
@@ -112,7 +119,13 @@ export function ThreadPane({ threadId, focused }: { threadId: string; focused: b
         </IconButton>
       </Stack>
 
-      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 1.5, py: 1.5 }}>
+      <Box
+        onScroll={(e) => {
+          const el = e.currentTarget
+          nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+        }}
+        sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 1.5, py: 1.5 }}
+      >
         {!loaded ? (
           <Typography variant="caption" color="text.secondary">
             Loading…
@@ -120,7 +133,7 @@ export function ThreadPane({ threadId, focused }: { threadId: string; focused: b
         ) : (
           <Stack spacing={1}>
             {messages.map((m, i) => (
-              <MessageBubble key={i} message={m} index={i} onRevert={() => {}} />
+              <MessageBubble key={`${i}-${m.timestamp}`} message={m} index={i} onRevert={NO_REVERT} />
             ))}
             <div ref={bottomRef} />
           </Stack>

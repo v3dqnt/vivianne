@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { memo, useState } from 'react'
 import Box from '@mui/material/Box'
 import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
@@ -13,7 +13,14 @@ interface TodoItem {
 
 /** Pulls the most recent todo_write / todo_write_rich tool call's items out
  * of the live message list — no separate backend read needed, the todo
- * state already flows through as an ordinary tool call the model made. */
+ * state already flows through as an ordinary tool call the model made.
+ *
+ * Memoized by the toolResult message object it came from: this runs on every
+ * store notification (i.e. per streaming token), and returning the SAME array
+ * reference while the source message is unchanged lets zustand's Object.is
+ * check skip the subscriber's re-render entirely. */
+const EMPTY_TODOS: TodoItem[] = []
+let todosCache: { src: AgentMessage; todos: TodoItem[] } | null = null
 function latestTodos(messages: AgentMessage[]): TodoItem[] {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
@@ -21,21 +28,26 @@ function latestTodos(messages: AgentMessage[]): TodoItem[] {
     if (m.toolName !== 'todo_write' && m.toolName !== 'todo_write_rich') continue
     const raw = m.arguments?.todos
     if (!Array.isArray(raw)) continue
-    return raw.map((t): TodoItem => ({
+    if (todosCache?.src === m) return todosCache.todos
+    const todos = raw.map((t): TodoItem => ({
       content: (t as { content?: string; subject?: string })?.content ?? (t as { subject?: string })?.subject ?? '',
       status: ((t as { status?: string })?.status ?? 'pending') as TodoItem['status'],
     }))
+    todosCache = { src: m, todos }
+    return todos
   }
-  return []
+  return EMPTY_TODOS
 }
 
 /** Small floating widget showing the agent's live todo list — an
  * absolutely-positioned overlay that floats above the activity feed,
- * collapsed to a pill by default. Not part of the dock system. */
-export function TodoPanel() {
+ * collapsed to a pill by default. Not part of the dock system.
+ *
+ * Memoized: MessageList re-renders per streamed token, and this widget sits
+ * inside it — with zero props, `memo` lets it bail out of all of those. */
+export const TodoPanel = memo(function TodoPanel() {
   const [expanded, setExpanded] = useState(false)
-  const messages = useAgentStore((s) => s.messages)
-  const todos = useMemo(() => latestTodos(messages), [messages])
+  const todos = useAgentStore((s) => latestTodos(s.messages))
   const doneCount = todos.filter((t) => t.status === 'completed').length
 
   if (todos.length === 0) return null
@@ -105,4 +117,4 @@ export function TodoPanel() {
       </Box>
     </Box>
   )
-}
+})

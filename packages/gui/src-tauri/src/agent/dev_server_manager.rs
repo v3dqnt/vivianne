@@ -128,6 +128,16 @@ impl DevServerManager {
         self.kill_internal(id);
     }
 
+    /// Kill every running dev server. Called on app exit — without it, a
+    /// `vite`/`next dev` process started from the Live Preview panel kept
+    /// running as an orphan after the app quit.
+    pub fn stop_all(&self) {
+        let ids: Vec<String> = self.instances.lock().expect("dev server manager lock").keys().cloned().collect();
+        for id in ids {
+            self.kill_internal(&id);
+        }
+    }
+
     pub fn status(&self, id: &str) -> Option<DevServerStatus> {
         self.instances.lock().expect("dev server manager lock").get(id).map(|i| i.status.clone())
     }

@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import Box from '@mui/material/Box'
 import Stack from '@mui/material/Stack'
 import Alert from '@mui/material/Alert'
@@ -9,10 +10,16 @@ import { Sidebar } from './modules/sessions/components/Sidebar'
 import { SettingsDialog } from './modules/settings/components/SettingsDialog'
 import { OptionalComponentsModal } from './modules/settings/components/OptionalComponentsModal'
 import { SidePanel } from './modules/dock/components/SidePanel'
-import { BottomTerminal } from './modules/dock/components/BottomTerminal'
 import { ChatDockZone } from './modules/sessions/components/ChatDockZone'
 import { ThreadTabBar } from './modules/sessions/components/ThreadTabBar'
 import { useThreadsStore } from './modules/sessions/store/threadsStore'
+
+// Lazy: @xterm is one of the heaviest deps in the app, and the terminal dock
+// is often never opened in a session — keep it out of the eager startup
+// bundle and let Vite split it into its own chunk.
+const BottomTerminal = lazy(() =>
+  import('./modules/dock/components/BottomTerminal').then((m) => ({ default: m.BottomTerminal })),
+)
 
 function App() {
   const hasOpenThreads = useThreadsStore((s) => s.openIds.length > 0)
@@ -42,7 +49,9 @@ function App() {
             <>
               <ThreadTabBar />
               <ChatView />
-              <BottomTerminal />
+              <Suspense fallback={null}>
+                <BottomTerminal />
+              </Suspense>
             </>
           )}
         </Stack>

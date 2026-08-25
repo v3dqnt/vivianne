@@ -336,6 +336,16 @@ impl LlamaManager {
         Ok(LlamaStatus::Stopped)
     }
 
+    /// Kill every running llama-server instance. Called on app exit — without
+    /// it, a locally-running model kept holding its RAM/GPU allocation as an
+    /// orphaned process after the app quit.
+    pub async fn stop_all(&self) {
+        let ids: Vec<String> = self.instances.lock().expect("llama manager lock").keys().cloned().collect();
+        for id in ids {
+            let _ = self.stop(&id).await;
+        }
+    }
+
     /// Internal helper: async kill (used within start to stop any running instance).
     async fn kill_internal(&self, id: &str) {
         let mut map = self.instances.lock().expect("llama manager lock");

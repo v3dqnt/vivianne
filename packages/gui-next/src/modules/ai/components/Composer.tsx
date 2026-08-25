@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, memo, type KeyboardEvent } from 'react'
 import Box from '@mui/material/Box'
 import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
@@ -10,20 +10,38 @@ import { useAgentStore } from '../store/agentStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { call } from '../../../ipc'
 import type { ImageAttachment, FileAttachment } from '../lib/types'
-import { ModelSelector } from './ModelSelector'
-import { ThinkingLevelControl } from './ThinkingLevelControl'
-import { WorkspaceSelector } from './WorkspaceSelector'
-import { BranchIndicator } from './BranchIndicator'
-import { PermissionModePill } from './PermissionModePill'
-import { AttachFileButton } from './AttachFileButton'
-import { ContextUsageBar } from './ContextUsageBar'
-import { StreamStatusLine } from './StreamStatusLine'
-import { PlanModeBanner } from './PlanModeBanner'
-import { SubagentPanel } from './SubagentPanel'
-import { ComputerUseBanner } from './ComputerUseBanner'
-import { QueuePanel } from './QueuePanel'
+import { ModelSelector as ModelSelectorImpl } from './ModelSelector'
+import { ThinkingLevelControl as ThinkingLevelControlImpl } from './ThinkingLevelControl'
+import { WorkspaceSelector as WorkspaceSelectorImpl } from './WorkspaceSelector'
+import { BranchIndicator as BranchIndicatorImpl } from './BranchIndicator'
+import { PermissionModePill as PermissionModePillImpl } from './PermissionModePill'
+import { AttachFileButton as AttachFileButtonImpl } from './AttachFileButton'
+import { ContextUsageBar as ContextUsageBarImpl } from './ContextUsageBar'
+import { StreamStatusLine as StreamStatusLineImpl } from './StreamStatusLine'
+import { PlanModeBanner as PlanModeBannerImpl } from './PlanModeBanner'
+import { SubagentPanel as SubagentPanelImpl } from './SubagentPanel'
+import { ComputerUseBanner as ComputerUseBannerImpl } from './ComputerUseBanner'
+import { QueuePanel as QueuePanelImpl } from './QueuePanel'
 import { UnifiedMentionMenu, type MentionItem, type MentionableFile, type MentionableSkill } from './MentionMenu'
 import { getSkillMentionQuery, applySkillMention, applyFileMention } from '../../../lib/mentions'
+
+// Every one of these is a zero-prop sibling that subscribes to its own store
+// slices — but Composer itself re-renders on every keystroke (text state) and
+// every token (isBusy), which used to drag all of them along. Wrapping at the
+// import site lets each bail out of those renders; context/store updates
+// still get through.
+const ModelSelector = memo(ModelSelectorImpl)
+const ThinkingLevelControl = memo(ThinkingLevelControlImpl)
+const WorkspaceSelector = memo(WorkspaceSelectorImpl)
+const BranchIndicator = memo(BranchIndicatorImpl)
+const PermissionModePill = memo(PermissionModePillImpl)
+const AttachFileButton = memo(AttachFileButtonImpl)
+const ContextUsageBar = memo(ContextUsageBarImpl)
+const StreamStatusLine = memo(StreamStatusLineImpl)
+const PlanModeBanner = memo(PlanModeBannerImpl)
+const SubagentPanel = memo(SubagentPanelImpl)
+const ComputerUseBanner = memo(ComputerUseBannerImpl)
+const QueuePanel = memo(QueuePanelImpl)
 
 /** Files ride along as plain text — no dedicated wire type, so they're woven
  * into the outgoing message the same way the image-count line primes the
@@ -163,6 +181,11 @@ export function Composer() {
     setPendingFiles([])
     void steer(toSend)
   }
+
+  // Stable identities so the memoized AttachFileButton actually bails on
+  // keystroke re-renders instead of seeing new props every time.
+  const handleAddImages = useCallback((imgs: ImageAttachment[]) => setPending((p) => [...p, ...imgs]), [])
+  const handleAddFiles = useCallback((files: FileAttachment[]) => setPendingFiles((p) => [...p, ...files]), [])
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (mentionOpen) {
@@ -305,8 +328,8 @@ export function Composer() {
 
             <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, px: 1.5, pb: 1, pt: 0.5 }}>
               <AttachFileButton
-                onAddImages={(imgs) => setPending((p) => [...p, ...imgs])}
-                onAddFiles={(files) => setPendingFiles((p) => [...p, ...files])}
+                onAddImages={handleAddImages}
+                onAddFiles={handleAddFiles}
               />
               <PermissionModePill />
 

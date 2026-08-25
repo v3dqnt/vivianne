@@ -75,12 +75,31 @@ fn send_batch(tool: &str, lines: Vec<StreamLine>) {
 // ── shared streaming executor ───────────────────────────────────────────────
 
 const MAX_STREAM_BYTES: usize = 256_000;
+/// Trigger a live head/tail trim once a single stream's live accumulator
+/// grows this far past `MAX_STREAM_BYTES` — without it, `all_stdout`/
+/// `all_stderr` grew unbounded for as long as the process kept running (the
+/// final trim only ever ran once, after exit), so a runaway/verbose command
+/// that took minutes to finish (or hit its timeout) grew RSS without limit
+/// in the meantime. Reuses the same head+tail+spill-to-disk helper the final
+/// trim uses, just applied periodically during the run instead of once at
+/// the end — same guarantees (head and tail preserved, trimmed middle
+/// recoverable from the spill file), just capped as it goes.
+const STREAM_LIVE_CAP_BYTES: usize = MAX_STREAM_BYTES * 4;
 /// Flush the pending-line buffer at least this often, so output still reads
 /// as "live" even during a quiet lull between bursts.
 const BATCH_INTERVAL_MS: u64 = 40;
 /// Flush early if a burst produces this many lines before the timer fires,
 /// so a very chatty command doesn't grow the buffer unbounded between ticks.
 const BATCH_MAX_LINES: usize = 50;
+
+/// Trim `buf` in place, head+tail preserved and the discarded middle
+/// spilled to disk, once it's grown past `STREAM_LIVE_CAP_BYTES`. No-op
+/// (and cheap to call unconditionally) otherwise.
+async fn cap_live_stream(buf: &mut String) {
+    if buf.len() > STREAM_LIVE_CAP_BYTES {
+        *buf = super::context_shaping::spill_and_trim_middle_bytes(buf, MAX_STREAM_BYTES / 4, 3 * MAX_STREAM_BYTES / 4).await;
+    }
+}
 
 /// Run `exe args...` in `cwd`, streaming stdout/stderr line-by-line to the
 /// GUI (if a channel is registered) as it runs, then returning the same
@@ -123,6 +142,7 @@ pub(crate) async fn run_streaming(
             line = so.next_line() => match line {
                 Ok(Some(l)) => {
                     all_stdout.push_str(&l); all_stdout.push('\n');
+                    cap_live_stream(&mut all_stdout).await;
                     pending.push(StreamLine { text: l, stderr: false });
                     if pending.len() >= BATCH_MAX_LINES { send_batch(tool, std::mem::take(&mut pending)); }
                 }
@@ -131,6 +151,7 @@ pub(crate) async fn run_streaming(
             line = se.next_line() => match line {
                 Ok(Some(l)) => {
                     all_stderr.push_str(&l); all_stderr.push('\n');
+                    cap_live_stream(&mut all_stderr).await;
                     pending.push(StreamLine { text: l, stderr: true });
                     if pending.len() >= BATCH_MAX_LINES { send_batch(tool, std::mem::take(&mut pending)); }
                 }
@@ -153,11 +174,13 @@ pub(crate) async fn run_streaming(
     // Drain any remaining lines after one stream closed.
     while let Ok(Some(l)) = so.next_line().await {
         all_stdout.push_str(&l); all_stdout.push('\n');
+        cap_live_stream(&mut all_stdout).await;
         pending.push(StreamLine { text: l, stderr: false });
         if pending.len() >= BATCH_MAX_LINES { send_batch(tool, std::mem::take(&mut pending)); }
     }
     while let Ok(Some(l)) = se.next_line().await {
         all_stderr.push_str(&l); all_stderr.push('\n');
+        cap_live_stream(&mut all_stderr).await;
         pending.push(StreamLine { text: l, stderr: true });
         if pending.len() >= BATCH_MAX_LINES { send_batch(tool, std::mem::take(&mut pending)); }
     }

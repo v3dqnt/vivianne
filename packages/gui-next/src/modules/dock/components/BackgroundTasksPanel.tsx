@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import Box from '@mui/material/Box'
 import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
@@ -10,7 +10,13 @@ import { CommandSquareLinear, AddLinear, StopCircleLinear, UserOctagonLinear } f
 import { call } from '../../../ipc'
 import { useSubagentStore } from '../../ai/store/subagentStore'
 import { useActiveWorkspaceRoot } from '../useActiveWorkspace'
-import { TerminalPanel } from './TerminalPanel'
+
+// Lazy: this panel is mounted by SidePanel at app start, so a static import
+// here kept @xterm in the eager startup bundle even for sessions that never
+// open a terminal. Deferred until one is actually selected below.
+const TerminalPanel = lazy(() =>
+  import('./TerminalPanel').then((m) => ({ default: m.TerminalPanel })),
+)
 
 interface TerminalSessionInfo {
   tabId: string
@@ -29,6 +35,19 @@ function formatElapsed(ms: number): string {
   return `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
+/** Field-wise compare so the 2.5s poll can keep the previous array identity
+ * when nothing changed — a fresh array here used to re-render the whole
+ * panel (and churn everything downstream of `sessions`) on every tick. */
+function sessionsEqual(a: TerminalSessionInfo[], b: TerminalSessionInfo[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (x, i) =>
+        x.tabId === b[i].tabId && x.shellId === b[i].shellId && x.cwd === b[i].cwd && x.startedAtEpochMs === b[i].startedAtEpochMs,
+    )
+  )
+}
+
 /**
  * Background Tasks — every live terminal session (whether I opened it or the
  * agent's shell tools did) plus running/finished subagents, in one list.
@@ -45,7 +64,7 @@ export function BackgroundTasksPanel() {
 
   const refreshSessions = async () => {
     const list = (await call<TerminalSessionInfo[]>('cmd_terminal_list_sessions')) ?? []
-    setSessions(list)
+    setSessions((prev) => (sessionsEqual(prev, list) ? prev : list))
     return list
   }
 
@@ -56,6 +75,8 @@ export function BackgroundTasksPanel() {
     // shell tools spawn their own), so this polls rather than relying on an
     // event we don't emit.
     const id = setInterval(() => {
+      // A hidden window gets nothing out of these ticks — skip the IPC.
+      if (document.hidden) return
       void refreshSessions()
       void refreshSubagents()
     }, 2500)
@@ -168,7 +189,9 @@ export function BackgroundTasksPanel() {
       <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex' }}>
         {selected ? (
           // Keyed so switching sessions remounts against the right tab id.
-          <TerminalPanel key={selected} attachTabId={selected === '__new__' ? undefined : selected} cwd={root ?? undefined} />
+          <Suspense fallback={null}>
+            <TerminalPanel key={selected} attachTabId={selected === '__new__' ? undefined : selected} cwd={root ?? undefined} />
+          </Suspense>
         ) : (
           <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 2 }}>
             <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>

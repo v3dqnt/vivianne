@@ -37,6 +37,13 @@ interface PanelStoreState {
   closeBottom: () => void
   setBottomHeight: (height: number) => void
   setPreviewMode: (mode: PreviewMode) => void
+  /** True while either `ResizeHandle` drag (right panel or bottom terminal)
+   * is active. Transient — never persisted. Lets a mounted `TerminalPanel`
+   * skip its ResizeObserver-driven xterm `fit()` + resize IPC while the
+   * panel's actual DOM size is changing every frame of the drag, then run
+   * one `fit()` when the drag ends. */
+  panelResizing: boolean
+  setPanelResizing: (resizing: boolean) => void
 }
 
 const STORAGE_KEY = 'viv.panels'
@@ -74,6 +81,7 @@ export const usePanelStore = create<PanelStoreState>((set, get) => {
     ...loaded,
     rightKind: migrated.rightKind,
     previewMode: migrated.previewMode ?? loaded.previewMode ?? 'dev',
+    panelResizing: false,
 
     toggleRight: (kind) => {
       const { rightOpen, rightKind } = get()
@@ -112,6 +120,9 @@ export const usePanelStore = create<PanelStoreState>((set, get) => {
     setPreviewMode: (previewMode) => {
       set({ previewMode })
       persist()
+    },
+    setPanelResizing: (panelResizing) => {
+      set({ panelResizing })
     },
   }
 })

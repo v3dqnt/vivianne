@@ -6,6 +6,7 @@
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tauri::{AppHandle, Emitter};
 
@@ -198,17 +199,34 @@ pub fn spawn(
     let output: Option<Arc<StdMutex<String>>> =
         retain_output.then(|| Arc::new(StdMutex::new(String::new())));
 
+    // How often accumulated output is flushed to the frontend as one event.
+    // A build/test run can produce hundreds to thousands of `read()`s a
+    // second; emitting one IPC event per read flooded the webview with that
+    // many events/sec for no benefit — nothing renders faster than a frame,
+    // so coalescing onto a ~1-frame timer cuts event count 10-30x with no
+    // perceptible added latency.
+    const COALESCE_INTERVAL_MS: u64 = 12;
+
+    // Reader-to-flush handoff buffer — separate from `output` above (that
+    // one is the model-facing retained buffer with its own cap/compaction
+    // policy; this one is purely "bytes read but not yet emitted").
+    let pending_emit: Arc<StdMutex<String>> = Arc::new(StdMutex::new(String::new()));
+    // Set by the reader thread right before it exits (PTY EOF or read
+    // error, from natural process exit or `close()`'s kill) — the flush
+    // thread's own exit signal, so it doesn't outlive the session.
+    let reader_done = Arc::new(AtomicBool::new(false));
+
     // Output pump — reads raw bytes (not necessarily valid UTF-8 boundaries
     // per chunk) and forwards them to the frontend's xterm.js instance,
     // which parses ANSI escapes itself; lossy UTF-8 conversion is fine here
     // since terminal output is overwhelmingly ASCII/UTF-8 already. Also
     // appends to the session's retained buffer, when it has one, so a
     // `terminal_read` tool call can see it — the event alone only reaches a
-    // subscribed frontend.
+    // subscribed frontend. Emitting itself is the flush thread's job below.
     {
-        let tab_id = tab_id.clone();
-        let app = app.clone();
         let output = output.clone();
+        let pending_emit = pending_emit.clone();
+        let reader_done = reader_done.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
@@ -231,9 +249,38 @@ pub fn spawn(
                                 out.drain(..cut);
                             }
                         }
-                        let _ = app.emit("terminal-output", TerminalOutputEvent { tab_id: tab_id.clone(), data });
+                        pending_emit.lock().unwrap().push_str(&data);
                     }
                     Err(_) => break,
+                }
+            }
+            reader_done.store(true, Ordering::Release);
+        });
+    }
+
+    // Flush thread — the only thing that actually calls `emit`. Wakes on a
+    // fixed interval rather than per-read, draining and sending whatever
+    // accumulated since the last tick as one event. Keeps going one extra
+    // iteration past `reader_done` so the final partial chunk (whatever
+    // arrived in the last <interval before EOF) isn't dropped.
+    {
+        let tab_id = tab_id.clone();
+        let app = app.clone();
+        let pending_emit = pending_emit.clone();
+        let reader_done = reader_done.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(COALESCE_INTERVAL_MS));
+                let done = reader_done.load(Ordering::Acquire);
+                let chunk = {
+                    let mut pending = pending_emit.lock().unwrap();
+                    if pending.is_empty() { None } else { Some(std::mem::take(&mut *pending)) }
+                };
+                if let Some(data) = chunk {
+                    let _ = app.emit("terminal-output", TerminalOutputEvent { tab_id: tab_id.clone(), data });
+                }
+                if done {
+                    break;
                 }
             }
         });
@@ -321,5 +368,17 @@ pub fn resize(registry: &TerminalRegistry, tab_id: &str, rows: u16, cols: u16) -
 pub fn close(registry: &TerminalRegistry, tab_id: &str) {
     if let Some(session) = registry.sessions.lock().unwrap().remove(tab_id) {
         let _ = session.child.lock().unwrap().kill();
+    }
+}
+
+impl TerminalRegistry {
+    /// Kill every live shell process. Called on app exit — without it, every
+    /// open terminal tab's shell (and whatever it spawned: a dev server, a
+    /// long-running build) was orphaned on quit instead of torn down with
+    /// the app.
+    pub fn close_all(&self) {
+        for (_, session) in self.sessions.lock().unwrap().drain() {
+            let _ = session.child.lock().unwrap().kill();
+        }
     }
 }

@@ -50,14 +50,23 @@ fn extract_text_from_content(content: &[crate::agent::types::MessageContent]) ->
 /// actually sees as tokens — inflating compaction thresholds so badly they
 /// fire on a fraction of the configured budget.
 pub(crate) fn message_char_len(msg: &AgentMessage) -> usize {
+    // Sums string length by walking the `serde_json::Value` tree directly
+    // (`crate::agent::loop_core::estimate_json_value_raw_str_len`) rather
+    // than `.to_string().len()`, which allocates and formats a full JSON
+    // string just to throw it away — on this function's actual hot path
+    // (`calculate_context_tokens_incremental`, called twice per loop
+    // iteration on tool args/details) that's a real allocation per call, not
+    // a one-off.
+    use crate::agent::loop_core::estimate_json_value_raw_str_len as json_len;
     fn content_len(content: &[crate::agent::types::MessageContent]) -> usize {
+        use crate::agent::loop_core::estimate_json_value_raw_str_len as json_len;
         use crate::agent::types::MessageContent;
         content.iter().map(|c| match c {
             MessageContent::Text { text } => text.len(),
             MessageContent::Thinking { thinking } => thinking.len(),
             MessageContent::Image { .. } => 0, // images aren't text tokens; not this estimate's job
-            MessageContent::ToolCall(tc) => tc.name.len() + tc.arguments.to_string().len(),
-            MessageContent::ToolResult(tr) => content_len(&tr.content) + tr.details.as_ref().map(|d| d.to_string().len()).unwrap_or(0),
+            MessageContent::ToolCall(tc) => tc.name.len() + json_len(&tc.arguments),
+            MessageContent::ToolResult(tr) => content_len(&tr.content) + tr.details.as_ref().map(json_len).unwrap_or(0),
         }).sum()
     }
     match msg {
@@ -67,10 +76,10 @@ pub(crate) fn message_char_len(msg: &AgentMessage) -> usize {
         }
         AgentMessage::ToolResult { content, details, arguments, .. } => {
             content_len(content)
-                + details.as_ref().map(|d| d.to_string().len()).unwrap_or(0)
-                + arguments.as_ref().map(|a| a.to_string().len()).unwrap_or(0)
+                + details.as_ref().map(json_len).unwrap_or(0)
+                + arguments.as_ref().map(json_len).unwrap_or(0)
         }
-        AgentMessage::Custom { payload, .. } => payload.to_string().len(),
+        AgentMessage::Custom { payload, .. } => json_len(payload),
     }
 }
 
@@ -79,6 +88,31 @@ pub fn calculate_context_tokens(messages: &[AgentMessage]) -> u32 {
     messages.iter()
         .map(|msg| (message_char_len(msg) as f32 / 4.0).ceil() as u32)
         .sum()
+}
+
+/// Same estimate as `calculate_context_tokens`, but incremental: `cached_len`/
+/// `cached_sum` (typically `AgentContext::token_cache_len`/`token_cache_sum`)
+/// hold how many messages, from the front, are already summed — only
+/// messages appended since the last call get walked. Self-invalidates (full
+/// recompute) if `messages` is now shorter than `cached_len`, which is
+/// exactly what compaction's own prefix-drain produces, so no separate reset
+/// call is needed at the compaction site.
+///
+/// `maybe_compact_context` calls this twice per loop iteration on a history
+/// that only ever grows by appending between compactions — without this, each
+/// of those calls re-walked (and, before `message_char_len`'s own fix,
+/// re-serialized) the entire accumulated transcript from message 0, every
+/// single time.
+pub fn calculate_context_tokens_incremental(messages: &[AgentMessage], cached_len: &mut usize, cached_sum: &mut u32) -> u32 {
+    if messages.len() < *cached_len {
+        *cached_len = 0;
+        *cached_sum = 0;
+    }
+    for msg in &messages[*cached_len..] {
+        *cached_sum += (message_char_len(msg) as f32 / 4.0).ceil() as u32;
+    }
+    *cached_len = messages.len();
+    *cached_sum
 }
 
 /// Suggest a cut point in the message list for compaction.

@@ -2,6 +2,28 @@
 
 All notable changes to Vivianne are documented here.
 
+## [1.7.2] — 2026-08-25
+
+### Fixed
+
+- **Resize drag re-rendering the whole panel tree per pixel** — dragging the side panel or terminal edge used to write to the layout store (and synchronously persist to localStorage) on every `pointermove`, re-rendering up to 1200 unvirtualized rows or re-running the terminal's `fit()` + a resize IPC call on every tick. The drag now mutates the panel's DOM size directly and commits to the store once, on release.
+- **Diff view computed while collapsed** — MUI's `Collapse` keeps its children mounted to measure them, so a tool call's O(N×M) line diff ran on every render of a long thread even when the diff was never opened. The diff body now only mounts (and only computes) once actually expanded.
+- **Long threads growing DOM/memory without bound** — the message list mounted every message for the life of the session. Now virtualized (`virtua`), rendering only what's near the viewport.
+- **Provider context cloned up to 4x per attempt** — the conversation context (including any inline images) was deep-cloned once per retry attempt, again per credential-pool candidate, and again on fallback — all before the single real network call that actually needed an owned copy. Now threaded as a shared reference through all three layers; exactly one real clone per attempt actually made.
+- **Token-budget check re-walking the whole transcript every round-trip** — re-serialized tool call arguments/results (`.to_string().len()`) and re-summed the full history from message 0, twice per loop iteration, regardless of how little had changed. Now walks JSON values directly (no allocation) and caches the running total, only summing newly appended messages.
+- **No cleanup on app exit** — quitting left every open terminal shell, running dev server, and running local model as an orphaned process, and dropped up to 5 seconds of unflushed usage/cost data. All four now shut down cleanly on exit.
+- **Settings and session-list re-read from disk per call** — `settings.json` was re-read and re-parsed on nearly every tool-gating check and provider call; the session sidebar re-parsed every session file (up to 18MB each) after every turn. Both now cached, invalidated only on an actual write.
+- **The agent mutex held for the whole turn** — a few read-only commands (session stats, model switch, debug status) and the post-turn autosave queued behind an in-flight turn's mutex (held up to 900s on an unanswered permission prompt) even though none of them touch anything the mutex actually protects. Now lock-free.
+- **Terminal output flooding the webview** — one IPC event per 8KB PTY read meant a verbose build could push thousands of events/sec. Output is now coalesced onto a 12ms timer, cutting event volume 10-30x with no perceptible added latency.
+- **Streaming shell output with no memory bound** — `bash`/`powershell`'s live output accumulated unboundedly for as long as the process ran, only ever getting trimmed after it finished. Now capped live, so a runaway command can't grow RSS without limit.
+- **`usage_by_source.json` growing forever** — gained a new, never-pruned key for every session/subagent run ever; now bounded to a 90-day rolling window and written compact instead of pretty-printed.
+- Startup no longer blocks first paint on a full parse of every session file just to prune empty ones — a cheap file-size check now skips anything too big to be empty, and the prune itself runs off the main setup path.
+- Workspace-folder path checks (every `read`/`write`/`edit`/`bash` workspace-boundary check) no longer re-run `canonicalize` — a real, comparatively expensive syscall on Windows — on every single call.
+
+### Changed
+
+- Release builds now compile with full LTO, single codegen unit, and stripped symbols.
+
 ## [1.7.0] — 2026-08-23
 
 ### Fixed
