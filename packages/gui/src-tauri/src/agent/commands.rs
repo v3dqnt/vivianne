@@ -160,8 +160,15 @@ pub async fn cmd_agent_prompt(
     // same sentinel `AgentRegistry::resolve` treats as "primary".
     let emit_thread_id = threadId.clone().unwrap_or_default();
     let app_clone = app.clone();
+    // Snapshotted once per turn, not re-read live inside the loop — the
+    // workspace can't change mid-turn (nothing else runs while `agent`'s
+    // mutex is held), and re-reading it live inside the spawned task would
+    // just add an await per event for no different an answer.
+    let mp_workspace_folders = agent.state.workspace_folders().await;
+    let mp_workspace_folders_for_loop = mp_workspace_folders.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.rx.recv().await {
+            crate::multiplayer::broadcast_agent_event(&app_clone, &mp_workspace_folders_for_loop, &event).await;
             let _ = app_clone.emit(
                 "agent_event",
                 serde_json::json!({ "threadId": emit_thread_id, "event": event }),
@@ -234,6 +241,7 @@ pub async fn cmd_agent_prompt(
         content,
         timestamp: now_ms(),
     };
+    crate::multiplayer::broadcast_user_message(&app, &mp_workspace_folders, &message).await;
     let source_tag = main_source_tag(&state).await;
     let _new_messages = agent.prompt(message, &app, &tx, &state.abort_flag, &state.steer_flag, &source_tag).await;
     drop(agent);
@@ -253,8 +261,10 @@ pub async fn cmd_agent_continue(
     let (tx, mut rx) = crate::agent::events::event_bus();
 
     let app_clone = app.clone();
+    let mp_workspace_folders = agent.state.workspace_folders().await;
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.rx.recv().await {
+            crate::multiplayer::broadcast_agent_event(&app_clone, &mp_workspace_folders, &event).await;
             let _ = app_clone.emit("agent_event", serde_json::json!({ "threadId": "", "event": event }));
         }
     });

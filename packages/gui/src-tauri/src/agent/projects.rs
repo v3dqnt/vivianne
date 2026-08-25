@@ -25,6 +25,29 @@ pub struct Project {
     /// the frontend). `None` = pick one from the id hash.
     #[serde(default)]
     pub color: Option<String>,
+    /// `Some` marks this a multiplayer project — a solo project stays
+    /// `None` forever. Kept as an optional sub-struct rather than flat
+    /// fields on `Project` so "is this multiplayer" is one check
+    /// (`.is_some()`) instead of several fields that could disagree.
+    #[serde(default)]
+    pub multiplayer: Option<MultiplayerProjectInfo>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct MultiplayerProjectInfo {
+    /// The paired peer authorized to share work in *this* project — not
+    /// every peer this machine has ever connected to (see
+    /// `crate::multiplayer::broadcast_agent_event`'s gate), so a session in
+    /// one multiplayer project never leaks into an unrelated pairing.
+    pub peer_id: String,
+    #[serde(default)]
+    pub peer_display_name: Option<String>,
+    /// A git remote both sides push/pull through. `None` means the project
+    /// is git-initialized locally but not yet wired to somewhere the peer
+    /// can actually pull from — real collaboration needs one, but project
+    /// creation doesn't hard-require it up front.
+    #[serde(default)]
+    pub git_remote: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -79,6 +102,100 @@ pub async fn cmd_create_project(name: String, path: Option<String>, color: Optio
         created_at: chrono::Utc::now().to_rfc3339(),
         path,
         color,
+        multiplayer: None,
+    };
+    data.projects.push(project.clone());
+    save(&data)?;
+    Ok(project)
+}
+
+/// Which (if any) project a given workspace maps to — the primary folder is
+/// what "a project is its folder" (see `projectsStore.ts`) actually keys
+/// on, so this is the one lookup `multiplayer::broadcast_agent_event` needs
+/// to decide whether the turn just produced belongs to a multiplayer
+/// project at all, before it even checks which peer is authorized for it.
+pub fn find_project_for_workspace(folders: &[String]) -> Option<Project> {
+    let Some(primary) = folders.first() else { return None };
+    let data = load().ok()?;
+    data.projects.into_iter().find(|p| p.path.as_deref() == Some(primary.as_str()))
+}
+
+/// Is `peer_id` the pairing partner on *any* multiplayer project? This is
+/// the inbound-connection gate — `multiplayer::state::run_accept_loop`
+/// checks it before ever opening a stream with whoever just dialed in, so
+/// an unauthorized peer can't reach the wire protocol at all, let alone get
+/// its frames adopted into `peer_messages`/`chat_log`. Deliberately
+/// separate from `find_project_for_workspace`'s per-workspace check (used
+/// for outbound broadcast scoping): accepting the connection is a single
+/// yes/no gate across every project, not tied to whichever workspace
+/// happens to be active right now.
+pub fn is_authorized_peer(peer_id: &str) -> bool {
+    let Ok(data) = load() else { return false };
+    data.projects.iter().any(|p| p.multiplayer.as_ref().is_some_and(|m| m.peer_id == peer_id))
+}
+
+/// Create a project backed by a real git repo two people can both work
+/// against — `git init`s the folder (idempotent: a no-op if it's already a
+/// repo) and wires `origin` when a remote is given. Git failures are
+/// logged, not fatal: a multiplayer project with a broken/missing git
+/// toolchain still works as a plain shared-context + chat pairing, it just
+/// can't sync a codebase until git is sorted out.
+#[tauri::command]
+pub async fn cmd_create_multiplayer_project(
+    name: String,
+    path: String,
+    peer_id: String,
+    peer_display_name: Option<String>,
+    git_remote: Option<String>,
+    color: Option<String>,
+) -> Result<Project, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Project name must not be empty".to_string());
+    }
+    if peer_id.trim().is_empty() {
+        return Err("A multiplayer project needs the peer's pairing code.".to_string());
+    }
+
+    let folder = std::path::Path::new(&path);
+    std::fs::create_dir_all(folder).map_err(|e| format!("Failed to create project folder: {e}"))?;
+
+    if !folder.join(".git").is_dir() {
+        match std::process::Command::new("git").arg("init").current_dir(folder).output() {
+            Ok(out) if !out.status.success() => {
+                log::warn!("[projects] `git init` in {path} failed: {}", String::from_utf8_lossy(&out.stderr));
+            }
+            Err(e) => log::warn!("[projects] `git init` in {path} could not run (is git installed?): {e}"),
+            Ok(_) => {}
+        }
+    }
+    if let Some(remote) = git_remote.as_deref().filter(|r| !r.trim().is_empty()) {
+        // `remote add` fails if `origin` already exists — `set-url` first
+        // (itself failing harmlessly on a fresh repo with no `origin` yet)
+        // makes this idempotent either way instead of erroring on a re-run.
+        let _ = std::process::Command::new("git").args(["remote", "set-url", "origin", remote]).current_dir(folder).output();
+        if let Ok(out) = std::process::Command::new("git").args(["remote", "add", "origin", remote]).current_dir(folder).output() {
+            if !out.status.success() && !String::from_utf8_lossy(&out.stderr).contains("already exists") {
+                log::warn!("[projects] `git remote add origin` in {path} failed: {}", String::from_utf8_lossy(&out.stderr));
+            }
+        }
+    }
+
+    let mut data = load()?;
+    let project = Project {
+        id: format!(
+            "project_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()
+        ),
+        name: name.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        path: Some(path),
+        color,
+        multiplayer: Some(MultiplayerProjectInfo {
+            peer_id: peer_id.trim().to_string(),
+            peer_display_name,
+            git_remote,
+        }),
     };
     data.projects.push(project.clone());
     save(&data)?;

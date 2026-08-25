@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 
 export type SettingsSection =
+  | 'account'
+  | 'multiplayer'
   | 'providers'
   | 'local'
   | 'mods'

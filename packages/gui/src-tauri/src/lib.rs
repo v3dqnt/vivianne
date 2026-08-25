@@ -6,6 +6,10 @@ pub mod ai;
 use crate::ai::auth::{AuthState, auth_read_credential, auth_store_api_key, auth_store_oauth, auth_delete_credential, auth_is_authenticated, auth_resolve_api_key, CredentialPool, cmd_pool_list, cmd_pool_add, cmd_pool_remove, cmd_pool_set_strategy, cmd_pool_get_strategy, cmd_pool_reset_cooldowns};
 pub mod agent;
 use crate::agent::commands::AppState;
+pub mod accounts;
+use crate::accounts::AccountState;
+pub mod multiplayer;
+use crate::multiplayer::MultiplayerState;
 
 // New modules
 pub mod coding_agent;
@@ -106,6 +110,7 @@ pub fn run() {
       crate::agent::commands::cmd_get_active_session_id,
       crate::agent::projects::cmd_list_projects,
       crate::agent::projects::cmd_create_project,
+      crate::agent::projects::cmd_create_multiplayer_project,
       crate::agent::projects::cmd_update_project,
       crate::agent::projects::cmd_open_external,
       crate::agent::projects::cmd_delete_project,
@@ -193,6 +198,21 @@ pub fn run() {
       crate::automation::cmd_automation_set_enabled,
       crate::automation::cmd_automation_delete,
       crate::automation::cmd_automation_run_now,
+      // Account commands
+      crate::accounts::commands::cmd_account_sign_in_with_browser,
+      crate::accounts::commands::cmd_account_sign_out,
+      crate::accounts::commands::cmd_account_get_session,
+      crate::accounts::commands::cmd_account_update_profile,
+      // Multiplayer commands
+      crate::multiplayer::commands::cmd_multiplayer_my_id,
+      crate::multiplayer::commands::cmd_multiplayer_status,
+      crate::multiplayer::commands::cmd_multiplayer_connect,
+      crate::multiplayer::commands::cmd_multiplayer_disconnect,
+      crate::multiplayer::commands::cmd_multiplayer_get_display_name,
+      crate::multiplayer::commands::cmd_multiplayer_set_display_name,
+      crate::multiplayer::commands::cmd_multiplayer_peer_messages,
+      crate::multiplayer::commands::cmd_multiplayer_chat_log,
+      crate::multiplayer::commands::cmd_multiplayer_send_chat,
     ])
     .setup(|app| {
       // Abandoned "New chat" threads are persisted on creation, so clear out
@@ -303,6 +323,30 @@ pub fn run() {
       // existing command that isn't thread-aware); secondary panes opened
       // via drag-to-dock get their own independent entry.
       app.manage(crate::agent::commands::AgentRegistry::new(app_state));
+
+      // Account system: load whatever session the OS keychain has (if any)
+      // before the window shows, so a restart doesn't force a re-login —
+      // same "resolve before managing" shape as the auth_state/credential_pool
+      // block above.
+      let account_state = Arc::new(AccountState::default());
+      tauri::async_runtime::block_on(crate::accounts::load_persisted_session(&account_state));
+      app.manage(account_state);
+
+      // Multiplayer: bind the P2P endpoint and start listening for incoming
+      // pairing connections. A bind failure (e.g. no usable network
+      // interface) degrades to multiplayer commands erroring clearly
+      // instead of crashing app startup over an optional feature.
+      match tauri::async_runtime::block_on(MultiplayerState::new()) {
+        Ok(mp_state) => {
+          let mp_state = Arc::new(mp_state);
+          app.manage(mp_state.clone());
+          let mp_app_handle = app.handle().clone();
+          tauri::async_runtime::spawn(async move {
+            mp_state.run_accept_loop(mp_app_handle).await;
+          });
+        }
+        Err(e) => log::warn!("[multiplayer] failed to start: {e}"),
+      }
 
       // Initialize local endpoint registry
       app.manage(crate::ai::local_registry::new_registry());

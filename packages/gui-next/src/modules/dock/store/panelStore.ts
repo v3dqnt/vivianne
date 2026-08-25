@@ -4,13 +4,14 @@ import { loadPersisted, savePersisted } from '../../../lib/persist'
 /** Which panel the right-hand side is showing. `'live'` and `'browser'` were
  * merged into a single `'preview'` panel with an internal mode switch (dev
  * server vs. browser) — see `PreviewPanel.tsx`. */
-export type RightPanelKind = 'review' | 'files' | 'preview' | 'tasks'
+export type RightPanelKind = 'review' | 'files' | 'preview' | 'tasks' | 'multiplayer'
 
 export const RIGHT_PANEL_LABELS: Record<RightPanelKind, string> = {
   review: 'Review',
   files: 'All files',
   preview: 'Preview',
   tasks: 'Background tasks',
+  multiplayer: 'Multiplayer',
 }
 
 /** Which of the two modes the merged Preview panel is showing. */

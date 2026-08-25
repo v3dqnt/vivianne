@@ -32,6 +32,8 @@ import { SkillsSection } from './SkillsSection'
 import { AutomationsSection } from './AutomationsSection'
 import { ThemesSection } from './ThemesSection'
 import { ComponentsSection } from './ComponentsSection'
+import { AccountSection } from '../../account/components/AccountSection'
+import { MultiplayerSection } from '../../multiplayer/components/MultiplayerSection'
 import { useSettingsUi, type SettingsSection } from '../store/uiStore'
 
 interface SectionDef {
@@ -43,6 +45,13 @@ interface SectionDef {
 /** Groups exist purely as visual breathing room in the sidebar — sections
  * within a group share no other coupling. */
 const GROUPS: { label: string; items: SectionDef[] }[] = [
+  {
+    label: 'Account',
+    items: [
+      { id: 'account', label: 'Account', icon: UserOctagonLinear },
+      { id: 'multiplayer', label: 'Multiplayer', icon: Link2Linear },
+    ],
+  },
   {
     label: 'Model',
     items: [
@@ -172,6 +181,8 @@ export function SettingsDialog() {
                 the full width; every other section is a single settings
                 column, which reads better constrained. */}
             <Box sx={section === 'providers' ? { height: '100%' } : { maxWidth: 640 }}>
+              {section === 'account' && <AccountSection />}
+              {section === 'multiplayer' && <MultiplayerSection />}
               {section === 'providers' && <ProvidersSection />}
               {section === 'local' && <LocalModelsSection />}
               {section === 'mods' && <ModsSection />}

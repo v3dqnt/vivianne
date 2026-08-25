@@ -11,6 +11,7 @@ import { WorkspaceTree } from './WorkspaceTree'
 import { PreviewPanel } from './PreviewPanel'
 import { BackgroundTasksPanel } from './BackgroundTasksPanel'
 import { ReviewPanel } from '../../git/components/ReviewPanel'
+import { MultiplayerWorkspacePanel } from '../../multiplayer/components/MultiplayerWorkspacePanel'
 
 const MIN_WIDTH = 300
 const MAX_WIDTH = 900
@@ -63,6 +64,7 @@ export function SidePanel() {
           {kind === 'files' && <WorkspaceTree />}
           {kind === 'preview' && <PreviewPanel />}
           {kind === 'tasks' && <BackgroundTasksPanel />}
+          {kind === 'multiplayer' && <MultiplayerWorkspacePanel />}
         </Box>
       </Stack>
     </Box>

@@ -2,12 +2,21 @@ import { create } from 'zustand'
 import { call } from '../../../ipc'
 import { useWorkspaceStore } from '../../ai/store/workspaceStore'
 
+// snake_case fields, matching `Project`'s own wire shape (`created_at`) —
+// neither struct uses `rename_all = "camelCase"` on the Rust side.
+export interface MultiplayerProjectInfo {
+  peer_id: string
+  peer_display_name: string | null
+  git_remote: string | null
+}
+
 export interface Project {
   id: string
   name: string
   created_at: string
   path: string | null
   color: string | null
+  multiplayer: MultiplayerProjectInfo | null
 }
 
 /** Accent colors for the sidebar project rail. */
@@ -47,6 +56,14 @@ interface ProjectsStoreState {
   loading: boolean
   refresh: () => Promise<void>
   create: (name: string, path?: string | null, color?: string | null) => Promise<Project | null>
+  createMultiplayer: (
+    name: string,
+    path: string,
+    peerId: string,
+    peerDisplayName: string | null,
+    gitRemote: string | null,
+    color?: string | null,
+  ) => Promise<Project | null>
   update: (id: string, name: string, path?: string | null, color?: string | null) => Promise<void>
   remove: (id: string) => Promise<void>
   /** Assign (or clear, with null) a session's project. */
@@ -112,6 +129,22 @@ export const useProjectsStore = create<ProjectsStoreState>((set, get) => ({
     await get().refresh()
     // Via the action, not a raw `set` — a new project should point the
     // workspace at its folder straight away.
+    if (project) get().setActiveProject(project.id)
+    return project
+  },
+
+  createMultiplayer: async (name, path, peerId, peerDisplayName, gitRemote, color = null) => {
+    const trimmed = name.trim()
+    if (!trimmed || !path.trim() || !peerId.trim()) return null
+    const project = await call<Project>('cmd_create_multiplayer_project', {
+      name: trimmed,
+      path,
+      peerId,
+      peerDisplayName,
+      gitRemote,
+      color,
+    })
+    await get().refresh()
     if (project) get().setActiveProject(project.id)
     return project
   },

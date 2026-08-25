@@ -13,9 +13,12 @@ import Button from '@mui/material/Button'
 import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
-import { AddLinear, SettingsLinear, FolderLinear } from '../../../icons'
+import FormControlLabel from '@mui/material/FormControlLabel'
+import Switch from '@mui/material/Switch'
+import { AddLinear, SettingsLinear, FolderLinear, Link2Linear } from '../../../icons'
 import { useSettingsUi } from '../../settings/store/uiStore'
 import { useProjectsStore, projectColor, projectInitial, PROJECT_COLORS, type Project } from '../store/projectsStore'
+import { useMultiplayerStore } from '../../multiplayer/store/multiplayerStore'
 
 export const PROJECT_RAIL_WIDTH = 56
 
@@ -25,17 +28,31 @@ export const PROJECT_RAIL_WIDTH = 56
 function ProjectDialog({ project, open, onClose }: { project: Project | null; open: boolean; onClose: () => void }) {
   const create = useProjectsStore((s) => s.create)
   const update = useProjectsStore((s) => s.update)
+  const createMultiplayer = useProjectsStore((s) => s.createMultiplayer)
+  const myId = useMultiplayerStore((s) => s.myId)
+  const initMultiplayer = useMultiplayerStore((s) => s.init)
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
   const [color, setColor] = useState<string>(Object.keys(PROJECT_COLORS)[0])
   const [busy, setBusy] = useState(false)
+  // Multiplayer projects are set up at creation only — editing an existing
+  // project's pairing/git-remote isn't wired yet, so the toggle is hidden
+  // once a project already exists (renaming/re-coloring still works via the
+  // fields above).
+  const [multiplayer, setMultiplayer] = useState(false)
+  const [peerId, setPeerId] = useState('')
+  const [gitRemote, setGitRemote] = useState('')
 
   useEffect(() => {
     if (!open) return
     setName(project?.name ?? '')
     setPath(project?.path ?? '')
     setColor(project?.color ?? Object.keys(PROJECT_COLORS)[0])
-  }, [open, project])
+    setMultiplayer(false)
+    setPeerId('')
+    setGitRemote('')
+    if (!project) void initMultiplayer()
+  }, [open, project, initMultiplayer])
 
   const pickFolder = async () => {
     // Same picker the workspace selector uses — the dialog plugin, not a
@@ -48,12 +65,20 @@ function ProjectDialog({ project, open, onClose }: { project: Project | null; op
     }
   }
 
+  const isMultiplayerReady = multiplayer && !!path.trim() && !!peerId.trim()
+
   const submit = async () => {
     if (!name.trim()) return
     setBusy(true)
     try {
-      if (project) await update(project.id, name, path || null, color)
-      else await create(name, path || null, color)
+      if (project) {
+        await update(project.id, name, path || null, color)
+      } else if (multiplayer) {
+        if (!isMultiplayerReady) return
+        await createMultiplayer(name, path.trim(), peerId.trim(), null, gitRemote.trim() || null, color)
+      } else {
+        await create(name, path || null, color)
+      }
       onClose()
     } finally {
       setBusy(false)
@@ -100,13 +125,61 @@ function ProjectDialog({ project, open, onClose }: { project: Project | null; op
               ))}
             </Stack>
           </Stack>
+
+          {!project && (
+            <>
+              <FormControlLabel
+                control={<Switch size="small" checked={multiplayer} onChange={(e) => setMultiplayer(e.target.checked)} />}
+                label={
+                  <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75 }}>
+                    <Link2Linear size={14} color="currentColor" />
+                    <Typography variant="body2">Multiplayer project</Typography>
+                  </Stack>
+                }
+              />
+              {multiplayer && (
+                <Stack sx={{ gap: 1.5, p: 1.5, borderRadius: 1.5, bgcolor: 'action.hover' }}>
+                  <Typography variant="caption" color="text.secondary">
+                    A folder is required — it becomes a git repo both of you work against. Get your pair's pairing code from
+                    Settings → Multiplayer on their end.
+                  </Typography>
+                  <TextField
+                    size="small"
+                    label="Your pair's pairing code"
+                    value={peerId}
+                    onChange={(e) => setPeerId(e.target.value)}
+                    fullWidth
+                    slotProps={{ input: { sx: { fontFamily: '"JetBrains Mono", ui-monospace, monospace', fontSize: '0.75rem' } } }}
+                  />
+                  <TextField
+                    size="small"
+                    label="Git remote (optional)"
+                    placeholder="https://github.com/you/project.git"
+                    value={gitRemote}
+                    onChange={(e) => setGitRemote(e.target.value)}
+                    fullWidth
+                  />
+                  {myId && (
+                    <Typography variant="caption" color="text.secondary">
+                      Your own pairing code (share it with them): <code>{myId}</code>
+                    </Typography>
+                  )}
+                </Stack>
+              )}
+            </>
+          )}
         </Stack>
       </DialogContent>
       <DialogActions>
         <Button color="inherit" onClick={onClose}>
           Cancel
         </Button>
-        <Button variant="contained" disableElevation onClick={() => void submit()} disabled={busy || !name.trim()}>
+        <Button
+          variant="contained"
+          disableElevation
+          onClick={() => void submit()}
+          disabled={busy || !name.trim() || (!project && multiplayer && !isMultiplayerReady)}
+        >
           {project ? 'Save' : 'Create'}
         </Button>
       </DialogActions>
