@@ -57,7 +57,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
           fontFamily: '"JetBrains Mono", ui-monospace, monospace',
           fontSize: '0.8125em',
           bgcolor: 'action.hover',
-          borderRadius: 0.5,
+          borderRadius: 1,
           px: 0.5,
           py: 0.15,
         },

@@ -6,12 +6,13 @@ import IconButton from '@mui/material/IconButton'
 import Divider from '@mui/material/Divider'
 import CircularProgress from '@mui/material/CircularProgress'
 import Tooltip from '@mui/material/Tooltip'
-import { CommandSquareLinear, AddLinear, StopCircleLinear, UserOctagonLinear } from '../../../icons'
+import { CommandSquareLinear, AddLinear, StopCircleLinear, UserOctagonLinear, CloseCircleLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { useSubagentStore } from '../../ai/store/subagentStore'
+import { useShellTaskStore } from '../store/shellTaskStore'
 import { useActiveWorkspaceRoot } from '../useActiveWorkspace'
 
-// Lazy: this panel is mounted by SidePanel at app start, so a static import
+// Lazy: this panel can be mounted as a dock tab at app start, so a static import
 // here kept @xterm in the eager startup bundle even for sessions that never
 // open a terminal. Deferred until one is actually selected below.
 const TerminalPanel = lazy(() =>
@@ -61,6 +62,15 @@ export function BackgroundTasksPanel() {
   const subagents = useSubagentStore((s) => s.subagents)
   const refreshSubagents = useSubagentStore((s) => s.refresh)
   const killSubagent = useSubagentStore((s) => s.kill)
+  const shellTasks = useShellTaskStore((s) => s.tasks)
+  const clearFinishedShell = useShellTaskStore((s) => s.clearFinished)
+  // Filtered here rather than in the selector: `.filter()` inside a zustand
+  // selector returns a fresh array every read and re-renders on every store
+  // change anywhere.
+  const runningShell = shellTasks.filter((t) => t.endedAt === undefined)
+  // Drives the elapsed-time label on still-running commands; advanced by the
+  // same interval that polls sessions below, so it costs no extra timer.
+  const [now, setNow] = useState(() => Date.now())
 
   const refreshSessions = async () => {
     const list = (await call<TerminalSessionInfo[]>('cmd_terminal_list_sessions')) ?? []
@@ -77,6 +87,7 @@ export function BackgroundTasksPanel() {
     const id = setInterval(() => {
       // A hidden window gets nothing out of these ticks — skip the IPC.
       if (document.hidden) return
+      setNow(Date.now())
       void refreshSessions()
       void refreshSubagents()
     }, 2500)
@@ -151,6 +162,60 @@ export function BackgroundTasksPanel() {
             </IconButton>
           </Stack>
         ))}
+
+        {shellTasks.length > 0 && (
+          <>
+            <Divider sx={{ my: 1 }} />
+            <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, mb: 0.5 }}>
+              <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4, fontSize: '0.625rem', flex: 1 }}>
+                Commands ({runningShell.length ? `${runningShell.length} running` : shellTasks.length})
+              </Typography>
+              {shellTasks.some((t) => t.endedAt !== undefined) && (
+                <Tooltip title="Clear finished">
+                  <IconButton size="small" onClick={clearFinishedShell} sx={{ p: 0.25 }}>
+                    <CloseCircleLinear size={13} color="currentColor" />
+                  </IconButton>
+                </Tooltip>
+              )}
+            </Stack>
+            {[...shellTasks].reverse().map((t) => {
+              const running = t.endedAt === undefined
+              return (
+                <Stack key={t.toolCallId} direction="row" sx={{ alignItems: 'center', gap: 0.75, px: 0.75, py: 0.5 }}>
+                  {running ? (
+                    <CircularProgress size={11} thickness={5} sx={{ flexShrink: 0 }} />
+                  ) : (
+                    <CommandSquareLinear
+                      size={13}
+                      color="currentColor"
+                      style={{ flexShrink: 0, opacity: t.isError ? 1 : 0.5 }}
+                    />
+                  )}
+                  <Stack sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography
+                      variant="caption"
+                      noWrap
+                      title={t.command}
+                      sx={{
+                        fontSize: '0.6875rem',
+                        fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+                        color: t.isError ? 'error.main' : running ? 'text.primary' : 'text.secondary',
+                      }}
+                    >
+                      {t.command || t.tool}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.625rem' }}>
+                      {t.tool} ·{' '}
+                      {running
+                        ? `running · ${formatElapsed(now - t.startedAt)}`
+                        : `${t.isError ? 'failed' : 'done'} in ${formatElapsed((t.endedAt ?? t.startedAt) - t.startedAt)}`}
+                    </Typography>
+                  </Stack>
+                </Stack>
+              )
+            })}
+          </>
+        )}
 
         {subagents.length > 0 && (
           <>

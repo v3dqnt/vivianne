@@ -133,6 +133,78 @@ pub fn invalidate_tool_defs_cache() {
 ///
 /// Results are cached across turns and only rebuilt when MCP tools change
 /// or the cache is explicitly invalidated (by `invalidate_tool_defs_cache`).
+/// Tools a read-only workspace takes away — the same set persona mode's
+/// read-only variants restrict.
+const WORKSPACE_MUTATING_TOOLS: &[&str] = &["write", "edit", "apply_patch", "bash", "powershell"];
+
+/// The four sources that can take a tool away from the agent this turn.
+pub(crate) struct Restrictions {
+    /// Only what the user turned off in Settings — kept separate so a blocked
+    /// call can name the actual cause instead of blaming Settings for a
+    /// persona-mode or workspace restriction.
+    pub settings_disabled_tools: Vec<String>,
+    /// The union of all four sources.
+    pub disabled_tools: Vec<String>,
+    pub ptc_enabled: bool,
+}
+
+/// Resolve which tools are unavailable this turn.
+///
+/// Shared by the executor (which refuses a disabled call) and the system
+/// prompt's capability section (which must describe exactly the same set) —
+/// if these two ever disagreed, the prompt would either advertise a tool the
+/// agent gets refused for calling or hide one it actually has.
+pub(crate) async fn compute_restrictions(state: &AgentState) -> Restrictions {
+    let settings_disabled_tools = read_disabled_tools().await;
+    let persona_mode = state.persona_mode().await;
+    let workspace_read_only = state.access_mode().await == crate::agent::state::WorkspaceAccessMode::ReadOnly;
+    let mut disabled_tools = settings_disabled_tools.clone();
+    for t in persona_mode.restricted_tools() {
+        if !disabled_tools.iter().any(|d| d == t) {
+            disabled_tools.push(t.to_string());
+        }
+    }
+    let ptc_enabled = read_ptc_enabled().await;
+    if !ptc_enabled && !disabled_tools.iter().any(|d| d == "run_script") {
+        disabled_tools.push("run_script".to_string());
+    }
+    if workspace_read_only {
+        for t in WORKSPACE_MUTATING_TOOLS {
+            if !disabled_tools.iter().any(|d| d == t) {
+                disabled_tools.push(t.to_string());
+            }
+        }
+    }
+    // Fourth restriction source: a subagent profile's tool allowlist (see
+    // `coding_agent::subagent_profiles`). Unlike the three above, this is an
+    // ALLOWlist, not a denylist — everything NOT named gets disabled. `None`
+    // (the default for the main agent, and for a subagent whose profile
+    // didn't specify one) means no restriction from this source at all.
+    if let Some(allowed) = state.subagent_allowed_tools().await {
+        for def in crate::agent::tool_schemas::static_tool_definitions() {
+            if let Some(name) = def.get("name").and_then(|v| v.as_str()) {
+                if !allowed.iter().any(|a| a == name) && !disabled_tools.iter().any(|d| d == name) {
+                    disabled_tools.push(name.to_string());
+                }
+            }
+        }
+    }
+    Restrictions { settings_disabled_tools, disabled_tools, ptc_enabled }
+}
+
+/// Every tool actually callable this turn — the live schema list (built-ins
+/// plus user playbooks) minus everything `compute_restrictions` took away.
+/// This is what the capability section is rendered from.
+pub(crate) async fn available_tool_names(state: &AgentState) -> std::collections::HashSet<String> {
+    let disabled = compute_restrictions(state).await.disabled_tools;
+    get_agent_tool_definitions()
+        .await
+        .iter()
+        .filter_map(|d| d.get("name").and_then(|v| v.as_str()).map(String::from))
+        .filter(|n| !disabled.contains(n))
+        .collect()
+}
+
 pub async fn get_agent_tool_definitions() -> Vec<serde_json::Value> {
     // Fast path: return cached definitions if still fresh
     if !TOOL_DEFS_CACHE_DIRTY.load(std::sync::atomic::Ordering::Acquire) {
@@ -144,7 +216,7 @@ pub async fn get_agent_tool_definitions() -> Vec<serde_json::Value> {
 
     // Slow path: rebuild the full definition list
     let mut defs = static_tool_definitions();
-    for def in crate::coding_agent::playbooks::load_playbooks() {
+    for def in crate::coding_agent::playbooks::load_playbooks().into_iter().filter(|d| d.is_tool()) {
         defs.push(serde_json::json!({
             "name": def.name,
             "description": def.description,
@@ -300,7 +372,6 @@ pub async fn execute_tool_calls(
     const PATH_SCOPED_TOOLS: &[&str] =
         &["read", "write", "edit", "apply_patch", "ls", "grep", "glob", "code_search"];
 
-    const WORKSPACE_MUTATING_TOOLS: &[&str] = &["write", "edit", "apply_patch", "bash", "powershell"];
 
     // Tools disabled by the user in Settings, whatever the active persona
     // mode restricts (e.g. Ask/Explore can't write or execute), and whatever
@@ -309,37 +380,10 @@ pub async fn execute_tool_calls(
     // say *which* of the three actually blocked it — conflating them
     // previously produced a "disabled in Settings → Tools" message even when
     // Settings had nothing disabled and the real cause was persona mode.
-    let settings_disabled_tools = read_disabled_tools().await;
+    let Restrictions { settings_disabled_tools, disabled_tools, ptc_enabled } = compute_restrictions(state).await;
+    // Only for naming the cause in a refusal message; the restriction itself
+    // was already applied above.
     let persona_mode = state.persona_mode().await;
-    let persona_restricted_tools = persona_mode.restricted_tools();
-    let workspace_read_only = state.access_mode().await == crate::agent::state::WorkspaceAccessMode::ReadOnly;
-    let mut disabled_tools = settings_disabled_tools.clone();
-    for t in persona_restricted_tools {
-        if !disabled_tools.iter().any(|d| d == t) {
-            disabled_tools.push(t.to_string());
-        }
-    }
-    if workspace_read_only {
-        for t in WORKSPACE_MUTATING_TOOLS {
-            if !disabled_tools.iter().any(|d| d == t) {
-                disabled_tools.push(t.to_string());
-            }
-        }
-    }
-    // Fourth restriction source: a subagent profile's tool allowlist (see
-    // `coding_agent::subagent_profiles`). Unlike the three above, this is an
-    // ALLOWlist, not a denylist — everything NOT named gets disabled. `None`
-    // (the default for the main agent, and for a subagent whose profile
-    // didn't specify one) means no restriction from this source at all.
-    if let Some(allowed) = state.subagent_allowed_tools().await {
-        for def in crate::agent::tool_schemas::static_tool_definitions() {
-            if let Some(name) = def.get("name").and_then(|v| v.as_str()) {
-                if !allowed.iter().any(|a| a == name) && !disabled_tools.iter().any(|d| d == name) {
-                    disabled_tools.push(name.to_string());
-                }
-            }
-        }
-    }
 
     // Split off the read-only calls that qualify for the concurrent fast
     // path (never gated, never disabled, and — for the ones with a `path`
@@ -537,6 +581,8 @@ pub async fn execute_tool_calls(
         let tool_result = if disabled_tools.contains(&tool_call.name) {
             let reason = if settings_disabled_tools.contains(&tool_call.name) {
                 "disabled in Settings → Tools".to_string()
+            } else if tool_call.name == "run_script" && !ptc_enabled {
+                "an experimental feature not yet enabled in Settings → Tools".to_string()
             } else {
                 format!("restricted by the current '{}' mode", persona_mode.label())
             };
@@ -569,7 +615,7 @@ pub async fn execute_tool_calls(
         } else if tool_call.name == "web_preview" {
             execute_web_preview_tool(&tool_call.arguments, emit).await
         } else if tool_call.name == "browser_snapshot" {
-            execute_browser_snapshot_tool().await
+            execute_browser_snapshot_tool(&tool_call.arguments).await
         } else if tool_call.name == "browser_click" {
             execute_browser_click_tool(&tool_call.arguments, emit).await
         } else if tool_call.name == "browser_type" {
@@ -626,6 +672,15 @@ pub async fn execute_tool_calls(
             execute_set_automation_enabled_tool(&tool_call.arguments, app).await
         } else if tool_call.name == "sandbox_execute" {
             execute_sandbox_tool(&tool_call.arguments).await
+        } else if tool_call.name == "run_script" {
+            crate::agent::ptc::execute_ptc_tool(&tool_call.arguments, context.delegate_depth, state, emit, app, &tool_call.id).await
+        } else if tool_call.name == "computer" {
+            // Merged pixel-mode + (Windows-only) structured-mode tool — see
+            // `coding_agent::computer::execute_computer_tool`. Needs
+            // `&tauri::AppHandle` (structured mode drives the highlight
+            // overlay), so it's dispatched here rather than through the
+            // plain `Tool` trait registry below.
+            tool_result_to_agent_result(crate::coding_agent::computer::execute_computer_tool(&tool_call.arguments, app).await, vision_capable)
         } else if let Some(tool) = tools.iter().find(|t| t.name() == tool_call.name) {
             let res = tool.execute(&tool_call.arguments, ".").await;
             tool_result_to_agent_result(res, vision_capable)
@@ -922,9 +977,21 @@ async fn browser_action_result(
     }
 }
 
-async fn execute_browser_snapshot_tool() -> AgentToolResult {
-    match crate::camoufox::snapshot().await {
-        Ok(text) => text_result(text),
+async fn execute_browser_snapshot_tool(args: &serde_json::Value) -> AgentToolResult {
+    let offset = args.get("offset").and_then(|v| v.as_u64()).map(|v| v as u32);
+    match crate::camoufox::snapshot(offset).await {
+        Ok(s) => {
+            let mut header = format!("{} — {} interactive element(s)", s.url, s.refs_count);
+            if s.truncated {
+                header.push_str(", truncated");
+                if let Some(next) = s.next_offset {
+                    header.push_str(&format!(" (call browser_snapshot again with offset={next} to see more)"));
+                } else {
+                    header.push_str(" (this is the last chunk)");
+                }
+            }
+            text_result(format!("{header}\n\n{}", s.text))
+        }
         Err(e) => image_tool_err(e),
     }
 }
@@ -1601,7 +1668,7 @@ async fn execute_list_tools_tool(disabled_tools: &[String]) -> AgentToolResult {
     // the loop was ~50 directory scans (and 50xN JSON parses) to answer one
     // question.
     let playbook_names: std::collections::HashSet<String> =
-        crate::coding_agent::playbooks::load_playbooks().into_iter().map(|p| p.name).collect();
+        crate::coding_agent::playbooks::load_playbooks().into_iter().filter(|p| p.is_tool()).map(|p| p.name).collect();
     let disabled: std::collections::HashSet<&str> = disabled_tools.iter().map(String::as_str).collect();
 
     let mut lines = Vec::with_capacity(defs.len());
@@ -1690,8 +1757,17 @@ fn execute_set_panel_tool(args: &serde_json::Value, emit: &EventSender) -> Agent
     let Some(action) = args.get("action").and_then(|v| v.as_str()) else {
         return image_tool_err("Error: 'action' is required (\"open\" or \"close\").");
     };
-    if !SETTABLE_PANELS.contains(&panel) {
-        return image_tool_err(format!("Error: unknown panel '{panel}' — must be one of: {}", SETTABLE_PANELS.join(", ")));
+    // `custom:<name>` opens a panel-type playbook (see `coding_agent::playbooks`
+    // — `PlaybookDef::is_panel()`) — validated against what's actually on disk
+    // right now, not a fixed list, since these are added/removed without a restart.
+    let is_valid_custom = panel
+        .strip_prefix("custom:")
+        .is_some_and(|name| crate::coding_agent::playbooks::load_playbooks().iter().any(|p| p.is_panel() && p.name == name));
+    if !SETTABLE_PANELS.contains(&panel) && !is_valid_custom {
+        return image_tool_err(format!(
+            "Error: unknown panel '{panel}' — must be one of: {}, or \"custom:<name>\" from list_tools/Settings → Mods → Playbooks.",
+            SETTABLE_PANELS.join(", ")
+        ));
     }
     if action != "open" && action != "close" {
         return image_tool_err("Error: 'action' must be \"open\" or \"close\".");
@@ -2330,6 +2406,14 @@ async fn read_bypass_mode() -> bool {
     read_settings_json().await.get("bypassMode").and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
+/// Read the `enableProgrammaticToolCalling` flag from settings.json. Off
+/// (false) by default — `run_script` is an experimental feature gated the
+/// same way any other disabled tool is (see the `disabled_tools` push in
+/// `execute_tool_calls`), not hidden from the model's schema.
+async fn read_ptc_enabled() -> bool {
+    read_settings_json().await.get("enableProgrammaticToolCalling").and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
 /// Extract tool calls from message content.
 pub fn extract_tool_calls(content: &[MessageContent]) -> Vec<AgentToolCall> {
     content
@@ -2369,7 +2453,7 @@ mod schema_registry_consistency_tests {
     #[test]
     fn every_constructed_tool_has_a_schema_entry() {
         let playbook_names: std::collections::HashSet<String> =
-            crate::coding_agent::playbooks::load_playbooks().into_iter().map(|p| p.name).collect();
+            crate::coding_agent::playbooks::load_playbooks().into_iter().filter(|p| p.is_tool()).map(|p| p.name).collect();
 
         let constructed: Vec<String> = crate::coding_agent::tool_exec::create_coding_tools(".".to_string())
             .iter()
@@ -2420,13 +2504,13 @@ mod schema_registry_consistency_tests {
         "get_current_time", "list_tools", "set_panel", "get_goal", "create_goal", "update_goal",
         "terminal_open", "terminal_send", "terminal_read", "terminal_signal", "terminal_close",
         "terminal_list", "create_automation", "list_automations", "delete_automation",
-        "set_automation_enabled", "sandbox_execute",
+        "set_automation_enabled", "sandbox_execute", "run_script", "computer",
     ];
 
     #[test]
     fn every_schema_entry_is_dispatchable() {
         let playbook_names: std::collections::HashSet<String> =
-            crate::coding_agent::playbooks::load_playbooks().into_iter().map(|p| p.name).collect();
+            crate::coding_agent::playbooks::load_playbooks().into_iter().filter(|p| p.is_tool()).map(|p| p.name).collect();
         let constructed: std::collections::HashSet<String> =
             crate::coding_agent::tool_exec::create_coding_tools(".".to_string())
                 .iter()

@@ -1,12 +1,11 @@
 //! Subagent profiles — user-defined roles for `task`-spawned subagents: a
 //! name, optional model override, optional tool allowlist, and a system
 //! prompt, stored as markdown files with YAML frontmatter (same convention
-//! `skills.rs` uses for its own file-backed definitions). Two read-only
-//! built-ins (general-purpose, Explore) ship unconditionally so the
-//! Settings UI has real, useful content before a user creates their first
-//! custom one — mirrors `agent::personas::PERSONAS`'s hardcoded-const
-//! pattern, just richer (tool restrictions + model override, not only a
-//! prompt fragment).
+//! `skills.rs` uses for its own file-backed definitions). A set of read-only
+//! built-ins ships unconditionally (see `builtin_profiles`) so the Settings
+//! UI has real, useful content before a user creates their first custom one
+//! — mirrors `agent::personas::PERSONAS`'s hardcoded-const pattern, just
+//! richer (tool restrictions + model override, not only a prompt fragment).
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -75,7 +74,7 @@ pub struct SubagentProfile {
     pub default_prompt: Option<String>,
 }
 
-/// The two profiles that ship unconditionally, driven through the exact
+/// The profiles that ship unconditionally, driven through the exact
 /// same restriction mechanism (`AgentState::subagent_allowed_tools`) a
 /// saved custom profile uses — hardcoded instead of a file on disk, and not
 /// user-editable (enforced in the Settings UI and `cmd_save_subagent_profile`,
@@ -111,8 +110,95 @@ pub fn builtin_profiles() -> Vec<SubagentProfile> {
             builtin: true,
             default_prompt: None,
         },
+        SubagentProfile {
+            id: "code-reviewer".to_string(),
+            name: "code-reviewer".to_string(),
+            color: Some("rose".to_string()),
+            model: None,
+            description: "Reviews a change for real defects — logic errors, unhandled edge cases, security issues, and anything that contradicts the surrounding code's conventions. Reports findings; never edits.".to_string(),
+            allowed_tools: Some(
+                READ_ONLY_TOOLS.iter().map(|s| s.to_string()).collect(),
+            ),
+            system_prompt: "You are reviewing code for defects. Read the change and enough of the surrounding code to judge it in context — a diff alone hides most real bugs.\n\nReport only findings you can justify concretely. For each: the file and line, what breaks, and the specific input or state that triggers it. Rank by severity.\n\nPrioritise, in order: correctness bugs (wrong results, unhandled errors, race conditions, off-by-one, null/undefined paths), security issues (injection, path traversal, leaked secrets, missing authorisation), then contradictions with the conventions already established in this codebase.\n\nDo not pad the review. \"No defects found\" is a valid and useful result — say it plainly rather than inventing nitpicks to look thorough. Style preferences that the surrounding code does not already enforce are not findings.".to_string(),
+            inject_agents_md: true,
+            builtin: true,
+            default_prompt: Some("Review the current uncommitted changes (`git diff HEAD`, plus untracked files) for defects.".to_string()),
+        },
+        SubagentProfile {
+            id: "debugger".to_string(),
+            name: "debugger".to_string(),
+            color: Some("amber".to_string()),
+            model: None,
+            description: "Root-causes a failing test, error, or misbehaviour by reading and running code. Diagnoses rather than patching, so the fix is a deliberate decision.".to_string(),
+            allowed_tools: Some(
+                ["read", "grep", "glob", "code_search", "ls", "bash", "powershell", "diagnostics", "todo_write", "web_search", "web_fetch"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            ),
+            system_prompt: "You are diagnosing a specific failure. Work from evidence, not guesses.\n\n1. Reproduce it first. Run the failing test or command and read the actual output — never reason about a failure you have not observed.\n2. Narrow it down. Read the code on the failing path, and use targeted runs (a single test, a small script, extra output) to isolate which step first goes wrong.\n3. Identify the root cause, not the symptom. Trace back to the change or assumption that made the failure possible, and check whether other callers hit the same problem.\n\nEnd with: the root cause in one or two sentences, the evidence that proves it, and what change would fix it. Do not edit source files — the caller decides the fix. If you genuinely cannot reproduce it, say so and report what you ruled out.".to_string(),
+            inject_agents_md: true,
+            builtin: true,
+            default_prompt: None,
+        },
+        SubagentProfile {
+            id: "test-writer".to_string(),
+            name: "test-writer".to_string(),
+            color: Some("green".to_string()),
+            model: None,
+            description: "Writes tests that match the project's existing framework and conventions, then runs them to prove they pass and actually fail when the behaviour breaks.".to_string(),
+            allowed_tools: None,
+            system_prompt: "You write tests for existing behaviour.\n\nBefore writing anything, read the project's existing tests and match them: same framework, same file layout, same naming and assertion style. Do not introduce a new test dependency or runner.\n\nCover the behaviour that actually matters — the normal path, the edge cases the code explicitly handles (empty, boundary, error), and any bug the caller specifically named. Skip trivial getters and framework code.\n\nAlways run the tests you wrote. A test you have not executed is not finished. If one fails, decide whether the test or the code is wrong and say which. Verify each test genuinely fails when the behaviour it covers is broken — a test that passes unconditionally is worse than no test.".to_string(),
+            inject_agents_md: true,
+            builtin: true,
+            default_prompt: None,
+        },
+        SubagentProfile {
+            id: "web-researcher".to_string(),
+            name: "web-researcher".to_string(),
+            color: Some("blue".to_string()),
+            model: None,
+            description: "Researches a question on the live web and reports back with sourced findings. No filesystem or shell access.".to_string(),
+            allowed_tools: Some(
+                [
+                    "web_search", "web_fetch", "web_preview", "browser_snapshot", "browser_click",
+                    "browser_type", "browser_press_key", "browser_scroll", "browser_evaluate", "todo_write",
+                ]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            ),
+            system_prompt: "You research questions using the live web.\n\nCorroborate anything load-bearing across more than one source, and prefer primary sources (official docs, the project's own repo, the spec) over blog summaries of them. Note the publication date when recency matters — an answer that was right two years ago is often wrong now.\n\nReport findings with the URL each one came from. State your confidence honestly: distinguish what you confirmed, what a single source claims, and what you could not establish. Never fill a gap with a plausible guess — an explicit \"I couldn't confirm this\" is far more useful than a fabricated fact.".to_string(),
+            inject_agents_md: false,
+            builtin: true,
+            default_prompt: None,
+        },
+        SubagentProfile {
+            id: "doc-writer".to_string(),
+            name: "doc-writer".to_string(),
+            color: Some("violet".to_string()),
+            model: None,
+            description: "Writes and updates documentation — READMEs, API docs, comments, runbooks — grounded in what the code actually does.".to_string(),
+            allowed_tools: Some(
+                ["read", "write", "edit", "grep", "glob", "code_search", "ls", "bash", "powershell", "todo_write"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            ),
+            system_prompt: "You write documentation grounded in the real code.\n\nRead the implementation before describing it — never document intended behaviour you have not verified. Where a command or example appears, run it and confirm the output matches what you wrote.\n\nMatch the surrounding docs' voice, structure, and formatting. Explain why something exists and when to reach for it, not just its signature; the signature is already in the code.\n\nBe concise. Do not restate the obvious, do not add marketing language, and do not invent features, flags, or endpoints that do not exist. If something is genuinely unclear from the code, say so rather than guessing.".to_string(),
+            inject_agents_md: true,
+            builtin: true,
+            default_prompt: None,
+        },
     ]
 }
+
+/// Tools that only observe — no writes, no shell, no network side effects
+/// beyond fetching. Shared by the review-style built-ins below so "read-only"
+/// means one thing rather than drifting per profile.
+const READ_ONLY_TOOLS: &[&str] = &[
+    "read", "grep", "glob", "code_search", "ls", "bash", "powershell", "diagnostics", "todo_write",
+];
 
 pub fn find_builtin(id: &str) -> Option<SubagentProfile> {
     builtin_profiles().into_iter().find(|p| p.id == id)

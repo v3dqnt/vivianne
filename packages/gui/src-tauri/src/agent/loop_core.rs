@@ -268,6 +268,33 @@ pub async fn run_agent_loop_with_prompts(
         state.add_message(prompt.clone()).await;
     }
 
+    // Capability routing: if the request clearly implies a tool group, name
+    // those tools right here — immediately after the message, where a small
+    // model actually reads them. The same facts are in the system prompt, but
+    // at that distance, competing with 60 other tool definitions, they lose to
+    // the model's prior that it can't do the thing. Not persisted to
+    // `state` (unlike the prompt messages above): it's derived per turn from
+    // the live tool set, so storing it would pin a stale capability list into
+    // the transcript.
+    if let Some(last_user_text) = prompts.iter().rev().find_map(|m| match m {
+        AgentMessage::User { content, .. } => Some(
+            content
+                .iter()
+                .filter_map(|c| match c {
+                    crate::agent::types::MessageContent::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        _ => None,
+    }) {
+        let available = crate::agent::tool_exec::available_tool_names(state).await;
+        if let Some(hint) = crate::agent::capabilities::intent_hint(&last_user_text, &available) {
+            context.messages.push(system_reminder(&hint));
+        }
+    }
+
     run_agent_loop_continue(context, app, &mut new_messages, state, emit, queues, abort_flag, steer_flag, source_tag).await;
     new_messages
 }
@@ -447,6 +474,7 @@ pub async fn run_agent_loop_continue(
         crate::coding_agent::context_shaping::evict_old_images(&mut context.messages, state.image_keep_last_n().await as usize);
 
         // Convert context messages to AI messages
+        drop_orphaned_tool_results(&mut context.messages);
         let llm_messages = convert_agent_messages_to_ai(&context.messages);
         #[cfg(debug_assertions)]
         eprintln!("[DEBUG] converted {} AI messages for LLM", llm_messages.len());
@@ -551,6 +579,23 @@ pub async fn run_agent_loop_continue(
         // the stopReason check happens BEFORE tool-call extraction).
         if let AgentMessage::Assistant { stop_reason, .. } = &assistant_message {
             if stop_reason == "error" || stop_reason == "aborted" {
+                // MessageEnd before TurnEnd: nothing else emits this message
+                // to the frontend on this path. A provider that fails before
+                // producing a single token (out of credits, rate limited,
+                // bad key) streams nothing, so no MessageStart ever fired,
+                // and TurnEnd alone has no handler — the turn just stopped
+                // with the real reason visible only in the log, which reads
+                // as the agent aborting instantly for no reason. The sibling
+                // `Err(e)` path above already emits its message for exactly
+                // this reason; this branch was the one that didn't.
+                //
+                // Deliberately NOT paired with a MessageStart: when the
+                // stream DID produce tokens before erroring, the streaming
+                // layer already emitted one, and a second would append a
+                // duplicate bubble. `message_end` on the frontend appends
+                // when it has no in-flight message and replaces when it
+                // does, so this one event is correct either way.
+                emit.emit(AgentEvent::MessageEnd { message: assistant_message.clone() });
                 emit.emit(AgentEvent::TurnEnd {
                     message: assistant_message.clone(),
                     tool_results: Vec::new(),
@@ -667,11 +712,22 @@ pub async fn run_agent_loop_continue(
     // The inner loop only exits when there are no more tool calls AND no
     // pending steering messages — i.e. the agent would otherwise stop here.
     // Only now check the follow-up queue (matches agent-loop.ts's outer loop).
-    let follow_ups = drain_queue(&queues.follow_up_queue, &queues.follow_up_mode).await;
-    if follow_ups.is_empty() {
+    //
+    // Steering is re-checked FIRST, even though the inner loop just drained
+    // it: a message queued after that last drain (the user hits Enter as the
+    // run is wrapping up — a very normal thing to do) would otherwise sit in
+    // the queue with nothing left to pick it up. The run is ending here, so
+    // this is the last chance to notice it; without this check it stays
+    // queued until some later prompt happens to flush it, which reads as
+    // "queued but never sent".
+    let mut next = drain_queue(&queues.steering_queue, &queues.steering_mode).await;
+    if next.is_empty() {
+        next = drain_queue(&queues.follow_up_queue, &queues.follow_up_mode).await;
+    }
+    if next.is_empty() {
         break 'outer;
     }
-    pending_messages = follow_ups;
+    pending_messages = next;
     has_more_tool_calls = true;
     } // 'outer
 
@@ -1989,6 +2045,49 @@ pub(crate) fn estimate_json_value_raw_str_len(value: &serde_json::Value) -> usiz
             .iter()
             .map(|(k, v)| k.len() + estimate_json_value_raw_str_len(v))
             .sum(),
+    }
+}
+
+/// Drop tool-result messages whose originating tool call is no longer in the
+/// transcript.
+///
+/// Providers reject this outright rather than ignoring it — OpenAI answers
+/// `No tool call found for function call output with call_id <id>` and fails
+/// the whole request, so a single orphan bricks every subsequent turn in that
+/// thread until the history is cleared.
+///
+/// Orphans are produced by any operation that removes messages from the
+/// middle of the transcript: compaction cutting between an assistant's tool
+/// call and its result, a revert landing between the two, or history
+/// truncation under the request-size cap. Rather than making each of those
+/// sites tool-call-aware — three places to get right, and the next one added
+/// starts out wrong — this is a single guard immediately before the request
+/// is built, where the invariant actually has to hold.
+///
+/// Only results are dropped, never calls: an assistant tool call with no
+/// result is a normal in-flight state, and providers accept it.
+fn drop_orphaned_tool_results(msgs: &mut Vec<AgentMessage>) {
+    let mut seen_call_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for msg in msgs.iter() {
+        if let AgentMessage::Assistant { content, .. } = msg {
+            for block in content {
+                if let crate::agent::types::MessageContent::ToolCall(call) = block {
+                    seen_call_ids.insert(call.id.clone());
+                }
+            }
+        }
+    }
+
+    let before = msgs.len();
+    msgs.retain(|m| match m {
+        AgentMessage::ToolResult { tool_call_id, .. } => seen_call_ids.contains(tool_call_id),
+        _ => true,
+    });
+    if msgs.len() != before {
+        log::warn!(
+            "[loop] dropped {} orphaned tool result(s) with no matching tool call — history was trimmed between a call and its result",
+            before - msgs.len()
+        );
     }
 }
 

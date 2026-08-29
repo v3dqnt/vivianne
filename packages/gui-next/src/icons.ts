@@ -6,6 +6,8 @@ import {
   BookOpenIcon,
   ArchiveBoxIcon,
   ChevronDownIcon,
+  ChevronRightIcon,
+  FolderOpenIcon,
   ArrowLeftIcon,
   ArrowRightIcon,
   ArrowUpIcon,
@@ -13,6 +15,7 @@ import {
   ClipboardDocumentListIcon,
   ClockIcon,
   XCircleIcon,
+  XMarkIcon,
   CodeBracketIcon,
   CommandLineIcon,
   DocumentDuplicateIcon,
@@ -43,6 +46,7 @@ import {
   ChatBubbleLeftIcon,
   ComputerDesktopIcon,
   PaperClipIcon,
+  MicrophoneIcon,
   PlayCircleIcon,
   PlayIcon,
   ArrowPathIcon,
@@ -89,6 +93,11 @@ export const AddLinear = icon(PlusIcon)
 export const ArchiveBookLinear = icon(BookOpenIcon)
 export const ArchiveLinear = icon(ArchiveBoxIcon)
 export const ArrowDownLinear = icon(ChevronDownIcon)
+/** Tree disclosure chevron. Distinct from `ArrowRightLinear`, which is a
+ * literal → arrow — pairing that with a chevron-down for the open state made
+ * the two states look like unrelated controls. */
+export const ChevronRightLinear = icon(ChevronRightIcon)
+export const FolderOpenLinear = icon(FolderOpenIcon)
 export const ArrowLeftLinear = icon(ArrowLeftIcon)
 export const ArrowRightLinear = icon(ArrowRightIcon)
 export const ArrowUpLinear = icon(ArrowUpIcon)
@@ -99,6 +108,9 @@ export const ColorSwatchLinear = icon(SwatchIcon)
 export const ClipboardTextLinear = icon(ClipboardDocumentListIcon)
 export const ClockLinear = icon(ClockIcon)
 export const CloseCircleLinear = icon(XCircleIcon)
+/** Plain ✕ with no surrounding circle. At the 10-14px sizes tab and panel
+ * close buttons use, XCircleIcon collapses into an unreadable dot. */
+export const CloseLinear = icon(XMarkIcon)
 export const CodeLinear = icon(CodeBracketIcon)
 export const CommandLinear = icon(CommandLineIcon)
 export const CommandSquareLinear = icon(CommandLineIcon)
@@ -147,3 +159,4 @@ export const TrashLinear = icon(TrashIcon)
 export const UndoLinear = icon(ArrowUturnLeftIcon)
 export const UnlockLinear = icon(LockOpenIcon)
 export const UserOctagonLinear = icon(UserCircleIcon)
+export const MicrophoneLinear = icon(MicrophoneIcon)

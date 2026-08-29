@@ -1,6 +1,6 @@
 {
 	"name": "gesture-control",
-	"version": "0.1.0",
+	"version": "1.7.3",
 	"private": true,
 	"scripts": {
 		"tauri": "tauri",

@@ -2,6 +2,43 @@
 
 All notable changes to Vivianne are documented here.
 
+## [1.7.3] — 2026-08-29
+
+### Fixed
+
+- **Provider errors ending the turn with no explanation** — when a provider returned a message whose `stop_reason` was `error` (out of credits, rate limited, bad key), that path emitted only `TurnEnd`, and the frontend store has no `turn_end` handler. The real reason existed solely in the log, so the agent appeared to abort instantly for no reason. Compounding it, `message_end` began with `if (streamingIndex === null) return s` — a final message with no in-flight stream was discarded outright, which is exactly the shape of a provider that fails before its first token. Both fixed; provider failures now surface as a red error in the transcript.
+- **The agent denying capabilities it has** — the model's self-description came from a hand-written prompt block listing four tools while sixty existed, with web access described as `web_search`/`web_fetch` and no mention of the nine `browser_*` tools. Smaller models answered "I don't have browser tools" from that prose rather than scanning their own function list. Replaced with a capability map generated from the live, post-restriction tool set, plus a keyword router that names the exact tools for a request right after the user's message. A build-failing test now catches any tool added to the schema without a capability group.
+- **camoufox never auto-starting on Windows** — the spawn ran `node` against `node_modules/.bin/camofox-browser`, which on Windows is npm's *shell* shim (`#!/bin/sh`). Node parsed it as JavaScript and died instantly, so every `web_preview`/`browser_*` call fell through to "not running" and the agent rationalised it as a missing capability. Now runs each package's real declared `bin` entrypoint.
+- **camoufox failing on first request with a missing native binding** — the installer passes `--ignore-scripts` (to dodge `impit`'s `preinstall` hook), which also skipped `better-sqlite3`'s `install` script, leaving it with no compiled binding. `npm rebuild` now runs for the native modules specifically, and "installed" means the bindings exist rather than just the package.
+- **`browser_snapshot` unable to page through a large DOM** — the server windows big accessibility trees and embeds a "call snapshot with offset=N" instruction, but the tool exposed no `offset` parameter, so anything past the first chunk was unreachable. Interaction errors also surfaced as raw JSON payloads instead of the actionable hint inside them.
+- **Queued messages that were delivered but looked stuck** — the queue panel polls only while the agent is busy, so it froze on its last poll and kept rendering messages the run had already answered. Separately, a message queued after the loop's final steering drain had nothing left to pick it up until some later prompt.
+- **Any non-text file failing to preview** — the All-files panel called a bare `read_to_string`, so every image, PDF, archive and binary rendered the same "stream did not contain valid UTF-8" error. Files are now classified and rendered by what they are.
+- **Attachments decoding binaries into mojibake** — `File.text()` never fails (it substitutes replacement characters), so PDFs and Office files arrived as pages of garbage that looked like content to the model. Binaries are now detected and described instead.
+- **Image input silently dropped on capable models** — vision support was guessed from substrings in the model id, which answers "no" for most OpenRouter models. OpenRouter publishes `architecture.input_modalities`; that is now read as authoritative, with the heuristic only as a fallback.
+- **Terminals erroring on every launch** — the first `fit()` fired a resize before `cmd_terminal_spawn` resolved, so every terminal that started hidden logged "no terminal session for tab …" and spawned stuck at 80x24.
+- **Model selection not surviving a restart** — nothing ever persisted it. Stored in its own file rather than `settings.json`, which is rewritten wholesale from a frontend snapshot and would clobber it.
+- **`@` mentions and the file tree seeing only one workspace folder** — both were hardcoded to `folders[0]`, so a second folder was entirely unmentionable and invisible, and the depth/entry caps hid most of any real repo.
+- **A re-render storm in the title bar** — a zustand selector returning `.filter(...)` built a fresh array on every read, so every store change anywhere re-rendered the whole bar.
+- **`sync-versions.js` not updating the files the updater reads** — it synced only `package.json` files, leaving `Cargo.toml` and `tauri.conf.json` at the old version. A release would build, publish, and then be ignored by every client as "not newer", with no error anywhere.
+
+### Added
+
+- **Auto-update, changelog, and announcements.** The updater plugin was configured but never called from anywhere; it now checks silently at startup, installs with progress, and restarts. A "what's new" dialog fires once per upgrade from the embedded `CHANGELOG.md`, and a remote JSON feed can carry announcements between releases.
+- **`create_document`** — real PDF, DOCX, XLSX and PPTX files. PDF and DOCX share one block vocabulary; XLSX keeps numbers numeric so they can be summed; PPTX is hand-written OOXML (no credible Rust crate exists) limited to title-and-bullet slides.
+- **Tabbed docks.** The right sidebar and bottom bar are now the same tabbed container and can host any view, so switching to the file tree no longer discards what was already open.
+- **A usage screen** — lifetime totals, streaks, a year-long activity heatmap with daily/weekly/cumulative modes, and an insights table, all from real recorded token counts.
+- **Message actions** — timestamp, copy, edit, and revert under every bubble. Edit reverts to that message and refills the composer.
+- **More built-in subagents** — `code-reviewer`, `debugger`, `test-writer`, `web-researcher`, `doc-writer`, each with a real tool allowlist.
+- **Agent shell commands in Background Tasks.** `bash`/`powershell` run as one-shot processes, not PTY sessions, so the panel could never see them; they're now tracked from the tool events that were already being emitted.
+- **Paste and drag-drop attachments**, sharing one classification path with the attach button.
+- **`computer-use` and `camoufox-browser` skills** documenting the call sequences models most often get wrong.
+
+### Changed
+
+- **`computer` and the six `dip_*` tools merged into one tool** with an `action` enum. The split was the problem: the model had to pick the right tool out of seven before it could start, with no guidance on when to reach for which.
+- **Playbooks and custom panels merged into one system** — presence of a `command` or `panel` field decides what a playbook is, instead of two parallel directories, stores and Settings tabs doing the same job.
+- **One surface treatment across the app chrome.** The sidebar, both docks and the Settings dialog now share a single glass fill and corner radius; the previous `borderRadius: 3` resolved to 30px against this theme's base.
+
 ## [1.7.2] — 2026-08-25
 
 ### Fixed

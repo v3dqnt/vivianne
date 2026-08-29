@@ -9,13 +9,20 @@ export interface MentionableSkill {
 }
 
 export interface MentionableFile {
-  /** Workspace-relative display path, forward-slash separated. */
+  /** Workspace-relative display path, forward-slash separated. With more
+   * than one workspace folder open this is prefixed by the folder's name so
+   * two files with the same relative path stay tellable apart. */
   relPath: string
   /** File basename for the primary label. */
   name: string
   /** True for directories — inserting one leaves the mention open for deeper
    * navigation instead of closing. */
   isDir: boolean
+  /** What actually gets inserted into the composer. Same as `relPath` for a
+   * single-folder workspace (the agent resolves relative paths against the
+   * primary folder); the absolute path once several folders are open, since
+   * a relative path is ambiguous — or outright wrong — outside the primary. */
+  insertPath: string
 }
 
 export type MentionItem =

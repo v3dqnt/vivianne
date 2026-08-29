@@ -156,7 +156,7 @@ function AddServerDialog({ open, onClose }: { open: boolean; onClose: () => void
   const canSubmit = mode === 'form' ? !!name.trim() && (kind === 'stdio' ? !!command.trim() : !!url.trim()) : !!rawJson.trim()
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth slotProps={{ paper: { sx: { borderRadius: '18px' } } }}>
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth slotProps={{ paper: { sx: { borderRadius: 3 } } }}>
       <Stack sx={{ p: 3, gap: 2.5 }}>
         <Stack direction="row" sx={{ alignItems: 'flex-start', justifyContent: 'space-between' }}>
           <Stack sx={{ gap: 0.5 }}>

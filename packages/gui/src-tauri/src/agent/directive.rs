@@ -72,7 +72,7 @@ For a task with several concrete steps, use todo_write to track them rather than
 </rule>\n\
 \n\
 <rule priority=\"high\" name=\"tool_tips\">\n\
-Every tool below is real and callable right now (they're in your tools list, not hypothetical):\n\
+Your full, live capability list is in the <vivianne_capabilities> section below. It is generated from the tools you actually have this turn, so trust it: never answer \"I don't have X\" for anything listed there, and call list_tools if you are genuinely unsure. Extra notes on a few of them:\n\
 - code_search: relevance-ranked search for loose/conceptual queries. Lexical/keyword-based, not embeddings — won't connect a query word to a code word that shares no letters.\n\
 - task: hand a self-contained subtask to a subagent. Runs in background by default — poll with task_output/wait_tasks. Set run_in_background=false only for a single one-off subtask you have nothing else to do until it returns. Don't use for anything you can do directly in 1-2 tool calls. Call list_subagent_profiles first if you're unsure whether a profile with a preset prompt already exists — pointing at one (subagent_type + a short context) costs far fewer tokens than writing the full prompt yourself. While a background subagent runs, keep making progress yourself instead of idling on task_output: continue other parts of the task, or delegate more independent chunks to additional subagents run in parallel.\n\
 - computer: screenshot (action=\"screenshot\") when you genuinely need to see the screen. Screenshot immediately after a GUI click to confirm it landed. Don't screenshot speculatively or to check things you can read as text.\n\
@@ -95,7 +95,7 @@ Use remember for durable facts worth carrying into future sessions (\"always use
 <guideline priority=\"medium\" name=\"environment\">\n\
 This machine is Windows: default to powershell for Windows-native things (services, registry, installed programs, Windows paths) and bash for POSIX-style scripting, git, and pipes.\n\
 Don't mix syntaxes — && fails in PowerShell 5.1, backslash paths confuse bash. If a shell command fails with a parse error, suspect wrong-shell syntax before suspecting the command itself.\n\
-To search the web: call web_search (then web_fetch to read a result) — do not shell out to curl or a browser.\n\
+To reach the web: web_search finds pages, web_fetch reads one as text, and web_preview plus the browser_* tools let you actually use a site (click, type, log in). Don't shell out to curl.\n\
 </guideline>\n\
 \n\
 <guideline priority=\"medium\" name=\"images_and_diagrams\">\n\
@@ -129,6 +129,19 @@ pub(crate) async fn assemble_capability_blocks(
     if let Some(mode_section) = mode_section {
         prompt = format!("{prompt}\n\n<vivianne_mode>\n{}\n</vivianne_mode>", mode_section);
     }
+
+    // Placed immediately after the directive (and after mode framing, which
+    // is what restricts the list) so the model reads what it CAN do before
+    // anything about the task. Generated from the live, post-restriction tool
+    // set rather than written by hand — see `agent::capabilities` for why
+    // that matters: the hand-written version drifted far enough that the
+    // agent started telling users it had no browser tools while holding nine
+    // of them.
+    let available = crate::agent::tool_exec::available_tool_names(state).await;
+    prompt = format!(
+        "{prompt}\n\n<vivianne_capabilities>\n{}\n</vivianne_capabilities>",
+        crate::agent::capabilities::capability_section(&available)
+    );
 
     // Re-stated every turn, not just left to whatever's still in scrollback —
     // a goal set several turns ago (or before a compaction summarized away

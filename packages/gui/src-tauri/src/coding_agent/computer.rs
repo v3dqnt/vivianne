@@ -1,28 +1,64 @@
-//! Computer tool — Rust rewrite of `packages/coding-agent/src/core/tools/computer.ts`.
+//! Computer tool — one merged surface for controlling the machine.
 //!
-//! Lets the agent control the machine: move/click the mouse, type text, press
-//! keys, read the cursor position, and take screenshots. Mouse/keyboard control
-//! uses `enigo`; screen capture uses `xcap`. Screenshots are returned as a
-//! base64 PNG in the tool result `details` so the executor can attach them as an
-//! image content block the model can actually see.
+//! Two complementary halves, both reachable through the single `computer`
+//! tool (see `agent/tool_schemas.rs` for the schema the model sees):
+//!
+//! - **Pixel mode** (this file, `execute_pointer_action` — cross-platform):
+//!   move/click the mouse, type text, press keys, read the cursor position,
+//!   and take screenshots. Mouse/keyboard control uses `enigo`; screen
+//!   capture uses `xcap`. Screenshots are returned as a base64 PNG in the
+//!   tool result `details` so the executor can attach them as an image
+//!   content block the model can actually see.
+//! - **Structured mode** (`super::dip`, Windows only): reads the real UI
+//!   Automation tree instead of guessing pixel coordinates. Preferred for
+//!   real application UI; pixel mode is the fallback for canvas-rendered
+//!   apps/games that expose nothing useful to UI Automation.
+//!
+//! These used to be two separate tools (`computer` and six `dip_*` tools).
+//! They were merged into one because the split itself was the problem: the
+//! model had to pick the right tool out of seven before it could even start,
+//! with no guidance on when to reach for which. One tool with an `action`
+//! enum, plus the `computer-use` skill (`~/.viv/skills/computer-use/SKILL.md`
+//! — same live-loaded, no-restart skill mechanism as every other skill; see
+//! `coding_agent::skills`) documenting the actual decision process, replaces
+//! that guesswork with one flow to learn. `execute_computer_tool` below is
+//! the merged dispatch point.
 
-use async_trait::async_trait;
 use base64::Engine;
 use enigo::{
     Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings,
 };
 use serde_json::json;
 
-use super::tool_exec::{Tool, ToolResult};
+use super::tool_exec::ToolResult;
 
-pub struct ComputerTool {
-    auto_resize: bool,
+/// Dispatches every `computer` action. Structured-mode actions
+/// (`snapshot`/`interact`/`list_windows`/`focus_window`/`window_action`/
+/// `launch_app`) only exist on Windows — `dip`'s functions require
+/// `uiautomation`, a Windows-only dependency (see `Cargo.toml`'s
+/// `[target."cfg(windows)".dependencies]`) — so this function itself is
+/// compiled in two variants rather than branching at runtime on an action
+/// list that wouldn't even resolve on other platforms.
+#[cfg(target_os = "windows")]
+pub(crate) async fn execute_computer_tool(args: &serde_json::Value, app: &tauri::AppHandle) -> ToolResult {
+    let action = match args.get("action").and_then(|v| v.as_str()) {
+        Some(a) => a,
+        None => return err("'action' is required"),
+    };
+    match action {
+        "snapshot" => super::dip::execute_dip_snapshot_tool(app).await,
+        "interact" => super::dip::execute_dip_interact_tool(args).await,
+        "list_windows" => super::dip::execute_dip_list_windows_tool().await,
+        "focus_window" => super::dip::execute_dip_focus_window_tool(args).await,
+        "window_action" => super::dip::execute_dip_window_action_tool(args).await,
+        "launch_app" => super::dip::execute_dip_launch_app_tool(args).await,
+        _ => execute_pointer_action(args).await,
+    }
 }
 
-impl ComputerTool {
-    pub fn new() -> Self {
-        Self { auto_resize: true }
-    }
+#[cfg(not(target_os = "windows"))]
+pub(crate) async fn execute_computer_tool(args: &serde_json::Value, _app: &tauri::AppHandle) -> ToolResult {
+    execute_pointer_action(args).await
 }
 
 fn err(msg: impl Into<String>) -> ToolResult {
@@ -75,98 +111,114 @@ fn parse_key(token: &str) -> Option<Key> {
     })
 }
 
-#[async_trait]
-impl Tool for ComputerTool {
-    fn name(&self) -> &str {
-        "computer"
+/// Pixel-mode actions: `screenshot`, `mouse_move`, `left_click`,
+/// `right_click`, `middle_click`, `double_click`, `left_click_drag`, `type`,
+/// `key`, `cursor_position`. Also the fallback for any action name a
+/// structured-mode-only platform doesn't recognize.
+async fn execute_pointer_action(args: &serde_json::Value) -> ToolResult {
+    let action = match args.get("action").and_then(|v| v.as_str()) {
+        Some(a) => a,
+        None => return err("'action' is required"),
+    };
+
+    // Screenshot needs no input device.
+    if action == "screenshot" {
+        return capture_screenshot();
     }
 
-    async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        let action = match args.get("action").and_then(|v| v.as_str()) {
-            Some(a) => a,
-            None => return err("'action' is required"),
-        };
+    let mut enigo = match Enigo::new(&Settings::default()) {
+        Ok(e) => e,
+        Err(e) => return err(format!("failed to access input devices: {e}")),
+    };
 
-        // Screenshot needs no input device.
-        if action == "screenshot" {
-            return capture_screenshot(self.auto_resize);
-        }
+    let coordinate = args.get("coordinate").and_then(|v| v.as_array()).map(|a| {
+        (
+            a.first().and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            a.get(1).and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+        )
+    });
+    let text = args.get("text").and_then(|v| v.as_str());
 
-        let mut enigo = match Enigo::new(&Settings::default()) {
-            Ok(e) => e,
-            Err(e) => return err(format!("failed to access input devices: {e}")),
-        };
-
-        let coordinate = args.get("coordinate").and_then(|v| v.as_array()).map(|a| {
-            (
-                a.first().and_then(|v| v.as_i64()).unwrap_or(0) as i32,
-                a.get(1).and_then(|v| v.as_i64()).unwrap_or(0) as i32,
-            )
-        });
-        let text = args.get("text").and_then(|v| v.as_str());
-
-        match action {
-            "mouse_move" => match coordinate {
-                Some((x, y)) => match enigo.move_mouse(x, y, Coordinate::Abs) {
-                    Ok(_) => ok(format!("Moved mouse to X={x}, Y={y}")),
-                    Err(e) => err(format!("mouse_move failed: {e}")),
-                },
-                None => err("'coordinate' is required for mouse_move"),
+    match action {
+        "mouse_move" => match coordinate {
+            Some((x, y)) => match enigo.move_mouse(x, y, Coordinate::Abs) {
+                Ok(_) => ok(format!("Moved mouse to X={x}, Y={y}")),
+                Err(e) => err(format!("mouse_move failed: {e}")),
             },
-            "left_click" => match enigo.button(Button::Left, Direction::Click) {
-                Ok(_) => ok("Left clicked"),
-                Err(e) => err(format!("left_click failed: {e}")),
-            },
-            "right_click" => match enigo.button(Button::Right, Direction::Click) {
-                Ok(_) => ok("Right clicked"),
-                Err(e) => err(format!("right_click failed: {e}")),
-            },
-            "middle_click" => match enigo.button(Button::Middle, Direction::Click) {
-                Ok(_) => ok("Middle clicked"),
-                Err(e) => err(format!("middle_click failed: {e}")),
-            },
-            "double_click" => {
-                if let Err(e) = enigo.button(Button::Left, Direction::Click) {
-                    return err(format!("double_click failed: {e}"));
-                }
-                match enigo.button(Button::Left, Direction::Click) {
-                    Ok(_) => ok("Double clicked"),
-                    Err(e) => err(format!("double_click failed: {e}")),
+            None => err("'coordinate' is required for mouse_move"),
+        },
+        "left_click" => {
+            if let Some((x, y)) = coordinate {
+                if let Err(e) = enigo.move_mouse(x, y, Coordinate::Abs) {
+                    return err(format!("left_click failed: {e}"));
                 }
             }
-            "left_click_drag" => match coordinate {
-                Some((x, y)) => {
-                    if let Err(e) = enigo.button(Button::Left, Direction::Press) {
-                        return err(format!("left_click_drag failed: {e}"));
-                    }
-                    if let Err(e) = enigo.move_mouse(x, y, Coordinate::Abs) {
-                        let _ = enigo.button(Button::Left, Direction::Release);
-                        return err(format!("left_click_drag failed: {e}"));
-                    }
-                    match enigo.button(Button::Left, Direction::Release) {
-                        Ok(_) => ok(format!("Dragged to X={x}, Y={y}")),
-                        Err(e) => err(format!("left_click_drag failed: {e}")),
-                    }
-                }
-                None => err("'coordinate' is required for left_click_drag"),
-            },
-            "type" => match text {
-                Some(t) => match enigo.text(t) {
-                    Ok(_) => ok(format!("Typed: {t}")),
-                    Err(e) => err(format!("type failed: {e}")),
-                },
-                None => err("'text' is required for type"),
-            },
-            "key" => match text {
-                Some(t) => press_key_combo(&mut enigo, t),
-                None => err("'text' is required for key"),
-            },
-            "cursor_position" => match enigo.location() {
-                Ok((x, y)) => ok(format!("Cursor is at X={x}, Y={y}")),
-                Err(e) => err(format!("cursor_position failed: {e}")),
-            },
-            other => err(format!("unknown action: {other}")),
+            match enigo.button(Button::Left, Direction::Click) {
+                Ok(_) => ok("Left clicked"),
+                Err(e) => err(format!("left_click failed: {e}")),
+            }
         }
+        "right_click" => {
+            if let Some((x, y)) = coordinate {
+                if let Err(e) = enigo.move_mouse(x, y, Coordinate::Abs) {
+                    return err(format!("right_click failed: {e}"));
+                }
+            }
+            match enigo.button(Button::Right, Direction::Click) {
+                Ok(_) => ok("Right clicked"),
+                Err(e) => err(format!("right_click failed: {e}")),
+            }
+        }
+        "middle_click" => match enigo.button(Button::Middle, Direction::Click) {
+            Ok(_) => ok("Middle clicked"),
+            Err(e) => err(format!("middle_click failed: {e}")),
+        },
+        "double_click" => {
+            if let Some((x, y)) = coordinate {
+                if let Err(e) = enigo.move_mouse(x, y, Coordinate::Abs) {
+                    return err(format!("double_click failed: {e}"));
+                }
+            }
+            if let Err(e) = enigo.button(Button::Left, Direction::Click) {
+                return err(format!("double_click failed: {e}"));
+            }
+            match enigo.button(Button::Left, Direction::Click) {
+                Ok(_) => ok("Double clicked"),
+                Err(e) => err(format!("double_click failed: {e}")),
+            }
+        }
+        "left_click_drag" => match coordinate {
+            Some((x, y)) => {
+                if let Err(e) = enigo.button(Button::Left, Direction::Press) {
+                    return err(format!("left_click_drag failed: {e}"));
+                }
+                if let Err(e) = enigo.move_mouse(x, y, Coordinate::Abs) {
+                    let _ = enigo.button(Button::Left, Direction::Release);
+                    return err(format!("left_click_drag failed: {e}"));
+                }
+                match enigo.button(Button::Left, Direction::Release) {
+                    Ok(_) => ok(format!("Dragged to X={x}, Y={y}")),
+                    Err(e) => err(format!("left_click_drag failed: {e}")),
+                }
+            }
+            None => err("'coordinate' is required for left_click_drag"),
+        },
+        "type" => match text {
+            Some(t) => match enigo.text(t) {
+                Ok(_) => ok(format!("Typed: {t}")),
+                Err(e) => err(format!("type failed: {e}")),
+            },
+            None => err("'text' is required for type"),
+        },
+        "key" => match text {
+            Some(t) => press_key_combo(&mut enigo, t),
+            None => err("'text' is required for key"),
+        },
+        "cursor_position" => match enigo.location() {
+            Ok((x, y)) => ok(format!("Cursor is at X={x}, Y={y}")),
+            Err(e) => err(format!("cursor_position failed: {e}")),
+        },
+        other => err(format!("unknown action: {other}")),
     }
 }
 
@@ -211,7 +263,7 @@ fn press_key_combo(enigo: &mut Enigo, combo: &str) -> ToolResult {
 }
 
 /// Capture the primary monitor and return it as a base64 PNG in `details`.
-fn capture_screenshot(_auto_resize: bool) -> ToolResult {
+fn capture_screenshot() -> ToolResult {
     use xcap::Monitor;
 
     let monitors = match Monitor::all() {

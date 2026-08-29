@@ -15,6 +15,8 @@ use crate::multiplayer::MultiplayerState;
 pub mod coding_agent;
 pub mod lsp;
 pub mod mcp;
+mod file_preview;
+mod updates;
 pub mod camoufox;
 pub mod docker_installer;
 pub mod optional_components;
@@ -124,6 +126,16 @@ pub fn run() {
       crate::agent::commands::cmd_new_session,
       crate::agent::commands::cmd_agent_revert_to_index,
       crate::agent::commands::cmd_get_usage_history,
+      // Updates / changelog / announcements
+      crate::file_preview::cmd_read_file_preview,
+      crate::updates::cmd_app_version,
+      crate::updates::cmd_get_changelog,
+      crate::updates::cmd_get_update_state,
+      crate::updates::cmd_mark_version_seen,
+      crate::updates::cmd_dismiss_announcement,
+      crate::updates::cmd_get_announcements,
+      crate::updates::cmd_check_for_update,
+      crate::updates::cmd_install_update,
       crate::agent::commands::cmd_session_cost,
       crate::agent::commands::cmd_list_dir_tree,
       crate::agent::commands::cmd_read_file_content,
@@ -134,6 +146,7 @@ pub fn run() {
       crate::agent::commands::cmd_save_skill_file,
       crate::agent::commands::cmd_list_playbooks,
       crate::agent::commands::cmd_add_playbook_file,
+      crate::agent::commands::cmd_save_playbook,
       crate::agent::commands::cmd_remove_playbook,
       crate::agent::commands::cmd_list_subagent_profiles,
       crate::agent::commands::cmd_save_subagent_profile,
@@ -490,6 +503,18 @@ pub fn run() {
             .build(),
         )?;
       }
+
+      // DIP's snapshot-highlight overlay must never intercept clicks — it
+      // sits on top of whatever window it's highlighting, so without this
+      // every click meant for that window would hit the (invisible) overlay
+      // instead. `set_ignore_cursor_events` has no static tauri.conf.json
+      // equivalent, hence setting it here once at startup.
+      if let Some(overlay) = app.get_webview_window("dip_overlay") {
+        if let Err(e) = overlay.set_ignore_cursor_events(true) {
+          log::warn!("[dip] failed to make the overlay window click-through: {e}");
+        }
+      }
+
       Ok(())
     })
     .build(tauri::generate_context!())

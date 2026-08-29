@@ -124,14 +124,16 @@ export function ThreadPane({ threadId, focused }: { threadId: string; focused: b
           const el = e.currentTarget
           nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
         }}
-        sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 1.5, py: 1.5 }}
+        sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 2, py: 1.5 }}
       >
         {!loaded ? (
           <Typography variant="caption" color="text.secondary">
             Loading…
           </Typography>
         ) : (
-          <Stack spacing={1}>
+          // Same reading-measure cap as the primary chat column (MessageList)
+          // so a split-view pane doesn't diverge from the one right next to it.
+          <Stack spacing={1} sx={{ maxWidth: 820, mx: 'auto' }}>
             {messages.map((m, i) => (
               <MessageBubble key={`${i}-${m.timestamp}`} message={m} index={i} onRevert={NO_REVERT} />
             ))}

@@ -18,6 +18,7 @@ export function MessageList() {
   const isBusy = useAgentStore((s) => s.isBusy)
   const streamingIndex = useAgentStore((s) => s.streamingIndex)
   const revertToIndex = useAgentStore((s) => s.revertToIndex)
+  const setDraft = useAgentStore((s) => s.setDraft)
   const containerRef = useRef<HTMLDivElement>(null)
   // Whether the user was already at (or near) the bottom before this update —
   // streaming shouldn't yank them back down if they scrolled up to reread
@@ -27,6 +28,16 @@ export function MessageList() {
 
   const [revertTarget, setRevertTarget] = useState<number | null>(null)
   const [reverting, setReverting] = useState(false)
+
+  /** Edit = revert the conversation to just before this message, then hand
+   * its original text back to the composer to change and re-send. Reverting
+   * is what makes the edit meaningful: leaving the old message (and every
+   * reply built on it) in context would mean "editing" only ever appended a
+   * near-duplicate. */
+  const startEdit = async (index: number, text: string) => {
+    await revertToIndex(index)
+    setDraft(text)
+  }
 
   useEffect(() => {
     const el = containerRef.current
@@ -99,7 +110,7 @@ export function MessageList() {
     // session (no reordering/filtering), which is exactly the case index
     // keys are safe for.
     <Box key={i} sx={{ pb: 1.5 }}>
-      <MessageBubble message={m} index={i} onRevert={setRevertTarget} />
+      <MessageBubble message={m} index={i} onRevert={setRevertTarget} onEdit={startEdit} />
     </Box>
   ))
   if (showTrailingIndicator) {
@@ -111,9 +122,13 @@ export function MessageList() {
   }
 
   return (
-    <Box ref={containerRef} sx={{ position: 'relative', flex: 1, minHeight: 0, overflowY: 'auto', px: 1.5, py: 1.5 }}>
+    <Box ref={containerRef} sx={{ position: 'relative', flex: 1, minHeight: 0, overflowY: 'auto', px: 2, py: 1.5 }}>
       <TodoPanel />
-      <Virtualizer scrollRef={containerRef}>{items}</Virtualizer>
+      {/* Capped and centred so the reading measure stays stable as the window
+          resizes, and lines up with the Composer's matching maxWidth below it. */}
+      <Box sx={{ maxWidth: 820, mx: 'auto' }}>
+        <Virtualizer scrollRef={containerRef}>{items}</Virtualizer>
+      </Box>
 
       <Dialog open={revertTarget !== null} onClose={() => setRevertTarget(null)} maxWidth="xs" fullWidth>
         <DialogTitle>Revert to this point?</DialogTitle>

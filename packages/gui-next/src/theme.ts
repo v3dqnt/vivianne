@@ -1,6 +1,16 @@
 import { createTheme, type Theme } from '@mui/material/styles'
 import './assets/fonts/fonts.css'
 
+// A third background level, between `default` (canvas) and `paper` (floating
+// cards) — used by docked shell chrome (rail, sidebar, side panel, bottom
+// terminal) so those regions read as a distinct tone instead of relying on a
+// 1px divider line to do all the separating work.
+declare module '@mui/material/styles' {
+  interface TypeBackground {
+    chrome: string
+  }
+}
+
 /**
  * The single source of visual truth. The previous frontend accumulated four
  * overlapping styling systems (Tailwind + daisyUI + Astryx + Radix), which is
@@ -24,6 +34,10 @@ export interface PaletteDef {
 
 export interface PaletteColors {
   background: string
+  /** Docked shell chrome (rail, sidebar, side panel, terminal) \u2014 one step
+   * from `background`, one step before `paper`. See the `TypeBackground`
+   * augmentation above. */
+  chrome: string
   paper: string
   primary: string
   textPrimary: string
@@ -36,24 +50,24 @@ export const PALETTES: PaletteDef[] = [
     label: 'Vivianne',
     symbol: '\u2600',
     swatches: ['#4a9eff', '#0a5a9c', '#0a0a0a', '#ededed'],
-    light: { background: '#f4f6fb', paper: '#ffffff', primary: '#1a73e8', textPrimary: '#14171c', textSecondary: '#5b6470' },
-    dark: { background: '#0a0a0a', paper: '#141414', primary: '#4a9eff', textPrimary: '#ededed', textSecondary: '#a1a1a1' },
+    light: { background: '#f4f6fb', chrome: '#f8f9fc', paper: '#ffffff', primary: '#1a73e8', textPrimary: '#14171c', textSecondary: '#5b6470' },
+    dark: { background: '#0a0a0a', chrome: '#101010', paper: '#141414', primary: '#4a9eff', textPrimary: '#ededed', textSecondary: '#a1a1a1' },
   },
   {
     id: 'indigo',
     label: 'Space Indigo',
     symbol: '\u2726',
     swatches: ['#ef233c', '#2b2d42', '#8d99ae', '#edf2f4'],
-    light: { background: '#f0f2f8', paper: '#ffffff', primary: '#c41e30', textPrimary: '#2b2d42', textSecondary: '#5d6078' },
-    dark: { background: '#1a1b2e', paper: '#2b2d42', primary: '#ef233c', textPrimary: '#edf2f4', textSecondary: '#8d99ae' },
+    light: { background: '#f0f2f8', chrome: '#f5f6fb', paper: '#ffffff', primary: '#c41e30', textPrimary: '#2b2d42', textSecondary: '#5d6078' },
+    dark: { background: '#1a1b2e', chrome: '#212236', paper: '#2b2d42', primary: '#ef233c', textPrimary: '#edf2f4', textSecondary: '#8d99ae' },
   },
   {
     id: 'graphite',
     label: 'Graphite',
     symbol: '\u25c8',
     swatches: ['#a9a29c', '#333333', '#d5ccc7', '#28262b'],
-    light: { background: '#f5f3f1', paper: '#ffffff', primary: '#5a5550', textPrimary: '#333333', textSecondary: '#6b6560' },
-    dark: { background: '#1a1819', paper: '#28262b', primary: '#a9a29c', textPrimary: '#e8e4e0', textSecondary: '#b0a8a2' },
+    light: { background: '#f5f3f1', chrome: '#f9f7f5', paper: '#ffffff', primary: '#5a5550', textPrimary: '#333333', textSecondary: '#6b6560' },
+    dark: { background: '#1a1819', chrome: '#201e20', paper: '#28262b', primary: '#a9a29c', textPrimary: '#e8e4e0', textSecondary: '#b0a8a2' },
   },
 ]
 
@@ -73,7 +87,7 @@ export function buildTheme(mode: 'light' | 'dark', paletteId: string): Theme {
     ...BASE,
     palette: {
       mode,
-      background: { default: colors.background, paper: colors.paper },
+      background: { default: colors.background, chrome: colors.chrome, paper: colors.paper },
       primary: { main: colors.primary },
       text: { primary: colors.textPrimary, secondary: colors.textSecondary },
       divider: mode === 'dark' ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.12)',
@@ -125,6 +139,21 @@ export const theme = buildTheme('dark', 'vivianne')
  * lightens with translucent white too but shifts the shadow and border to
  * dark-tinted so it still reads as glass rather than a flat white card.
  */
+/** Corner radius for every floating chrome surface — the sidebar, both docks,
+ * and the Settings dialog. One constant because these sit next to each other
+ * on screen: a card at 30px beside one at 12px reads as two unrelated
+ * components rather than one system. Deliberately a raw px value, not a
+ * `theme.shape.borderRadius` multiple — `borderRadius: 3` against this
+ * theme's base of 10 silently means 30px, which is what made these look
+ * like blobs. */
+export const SURFACE_RADIUS = 12
+
+/** The full card treatment: glass fill plus the shared radius. Prefer this
+ * over hand-pairing `glassSurface` with a local radius. */
+export function surfaceCard(mode: 'light' | 'dark') {
+  return { ...glassSurface(mode), borderRadius: `${SURFACE_RADIUS}px` } as const
+}
+
 export function glassSurface(mode: 'light' | 'dark') {
   const dark = mode === 'dark'
   return {

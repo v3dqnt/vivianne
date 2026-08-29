@@ -45,8 +45,8 @@ export function ResizeHandle({
         // Mutate the panel's own size directly during the drag. Going
         // through the store here — `set` + a synchronous localStorage
         // `persist()` — on every `pointermove` re-rendered up to 1200
-        // unvirtualized tree rows per tick (SidePanel) or forced an xterm
-        // `fit()` + resize IPC per tick (BottomTerminal). The store is only
+        // unvirtualized tree rows per tick (the file tree) or forced an xterm
+        // `fit()` + resize IPC per tick (a terminal tab). The store is only
         // touched once, in `onUp`, below.
         const el = targetRef.current
         if (el) el.style[dimProp] = `${dragValue}px`

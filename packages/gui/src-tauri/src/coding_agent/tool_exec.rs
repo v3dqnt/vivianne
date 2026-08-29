@@ -44,8 +44,12 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         Box::new(LsTool::new(cwd.clone())),
         Box::new(GrepTool::new(cwd.clone())),
         Box::new(CodeSearchTool::new(cwd.clone())),
-        Box::new(super::computer::ComputerTool::new()),
+        // `computer` is NOT registered here — it needs `&tauri::AppHandle`
+        // (structured mode drives the highlight overlay) and goes through
+        // the dispatch-chain pattern in `agent/tool_exec.rs` instead, same
+        // reasoning as `run_script`/PTC. See `coding_agent::computer`.
         Box::new(super::apply_patch::ApplyPatchTool::new(cwd.clone())),
+        Box::new(super::documents::CreateDocumentTool::new(cwd.clone())),
         Box::new(super::repo_tools::RepoCloneTool::new()),
         Box::new(super::repo_tools::RepoOverviewTool::new(cwd.clone())),
         // ── Extra tools ported from claude-code-gg (src/tools/*) ──────────
@@ -83,7 +87,11 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         Box::new(super::orchestration::ExitPlanModeTool::new()),
     ];
     // ── User-defined: playbooks (~/.viv/playbooks/*.json) ──────────────────
-    for def in super::playbooks::load_playbooks() {
+    // A playbook is a tool if it has `command`, a panel if it has `panel`
+    // (see `PlaybookDef`'s doc comment) — only the tool-shaped ones register
+    // here; panel-shaped ones are read by `cmd_list_playbooks` for the
+    // frontend's Panels menu, never dispatched as a tool.
+    for def in super::playbooks::load_playbooks().into_iter().filter(|d| d.is_tool()) {
         tools.push(Box::new(super::playbooks::PlaybookTool::new(def, cwd.clone())));
     }
     tools

@@ -7,33 +7,26 @@ import Tooltip from '@mui/material/Tooltip'
 import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
 import { hasTauri } from '../ipc'
-import { FolderLinear, CommandSquareLinear, LayerLinear, TaskLinear, MonitorLinear, GithubLinear, DocumentTextLinear, Link2Linear } from '../icons'
-import { usePanelStore, RIGHT_PANEL_LABELS, type RightPanelKind } from '../modules/dock/store/panelStore'
+import { FolderLinear, CommandSquareLinear } from '../icons'
+import { usePanelStore } from '../modules/dock/store/panelStore'
+import { usePlaybookStore } from '../modules/settings/store/playbookStore'
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
 
 const TRAFFIC_LIGHT_SIZE = 12
-
-const RIGHT_PANEL_ICONS: Record<RightPanelKind, typeof FolderLinear> = {
-  review: GithubLinear,
-  files: DocumentTextLinear,
-  preview: MonitorLinear,
-  tasks: TaskLinear,
-  multiplayer: Link2Linear,
-}
 
 /** Panel toggles + project shortcuts, right-aligned in the title bar. These
  * used to be a permanent vertical icon rail pinned to the window's right
  * edge; moving them here gives that column back to actual content. */
 function TitleBarActions() {
-  const rightOpen = usePanelStore((s) => s.rightOpen)
-  const rightKind = usePanelStore((s) => s.rightKind)
-  const toggleRight = usePanelStore((s) => s.toggleRight)
-  const bottomOpen = usePanelStore((s) => s.bottomOpen)
-  const toggleBottom = usePanelStore((s) => s.toggleBottom)
+  const rightOpen = usePanelStore((s) => s.right.open)
+  const bottomOpen = usePanelStore((s) => s.bottom.open)
+  const toggleDock = usePanelStore((s) => s.toggleDock)
+  // Panel playbooks are listed in each dock's own "add a view" menu now, but
+  // this is still where they get loaded — the docks read the same store.
+  const refreshCustomPanels = usePlaybookStore((s) => s.refresh)
   const openExternal = useProjectsStore((s) => s.openExternal)
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const projects = useProjectsStore((s) => s.projects)
-  const [panelAnchor, setPanelAnchor] = useState<HTMLElement | null>(null)
   const [openAnchor, setOpenAnchor] = useState<HTMLElement | null>(null)
 
   const hasFolder = !!projects.find((p) => p.id === activeProjectId)?.path
@@ -48,6 +41,10 @@ function TitleBarActions() {
     transition: 'background-color 0.15s, color 0.15s',
     '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
   })
+
+  useEffect(() => {
+    void refreshCustomPanels()
+  }, [refreshCustomPanels])
 
   return (
     <Stack direction="row" sx={{ alignItems: 'center', gap: 0.25, flexShrink: 0, pr: 0.5, zIndex: 1 }}>
@@ -81,46 +78,44 @@ function TitleBarActions() {
         </MenuItem>
       </Menu>
 
-      <Tooltip title="Terminal panel">
-        <IconButton size="small" onClick={toggleBottom} sx={iconSx(bottomOpen)}>
-          <CommandLinearGlyph />
+      {/* Two dock toggles, replacing the old terminal button + Panels menu.
+          Choosing WHICH views are open now lives inside each dock's own tab
+          strip (see `Dock.tsx`), so the title bar only has to expand and
+          collapse them. */}
+      <Tooltip title={bottomOpen ? 'Hide bottom bar' : 'Show bottom bar'}>
+        <IconButton size="small" onClick={() => toggleDock('bottom')} sx={iconSx(bottomOpen)}>
+          <PanelBottomGlyph />
         </IconButton>
       </Tooltip>
 
-      <Tooltip title="Panels">
-        <IconButton size="small" onClick={(e) => setPanelAnchor(e.currentTarget)} sx={iconSx(rightOpen)}>
-          <LayerLinear size={14} color="currentColor" />
+      <Tooltip title={rightOpen ? 'Hide right sidebar' : 'Show right sidebar'}>
+        <IconButton size="small" onClick={() => toggleDock('right')} sx={iconSx(rightOpen)}>
+          <PanelRightGlyph />
         </IconButton>
       </Tooltip>
-      <Menu anchorEl={panelAnchor} open={!!panelAnchor} onClose={() => setPanelAnchor(null)}>
-        {(Object.keys(RIGHT_PANEL_LABELS) as RightPanelKind[]).map((kind) => {
-          const Icon = RIGHT_PANEL_ICONS[kind]
-          return (
-            <MenuItem
-              key={kind}
-              selected={rightOpen && rightKind === kind}
-              onClick={() => {
-                toggleRight(kind)
-                setPanelAnchor(null)
-              }}
-              sx={{ gap: 1, fontSize: '0.8125rem' }}
-            >
-              <Icon size={14} color="currentColor" />
-              {RIGHT_PANEL_LABELS[kind]}
-            </MenuItem>
-          )
-        })}
-      </Menu>
     </Stack>
   )
 }
 
-/** Terminal glyph — a `>_` prompt, which no icon in the set draws. */
-function CommandLinearGlyph() {
+/** Right-sidebar glyph — a rounded rect with its right column filled. No icon
+ * in the set draws a dock-panel affordance. */
+function PanelRightGlyph() {
   return (
-    <Box component="svg" viewBox="0 0 24 24" sx={{ width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }}>
-      <path d="M4 6l5 6-5 6" />
-      <path d="M13 18h7" />
+    <Box component="svg" viewBox="0 0 24 24" sx={{ width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.8 }}>
+      <rect x="3" y="4" width="18" height="16" rx="2.5" />
+      <path d="M15 4v16" />
+      <rect x="15" y="4" width="6" height="16" rx="2.5" fill="currentColor" stroke="none" opacity="0.35" />
+    </Box>
+  )
+}
+
+/** Bottom-bar glyph — same rect, bottom row filled. */
+function PanelBottomGlyph() {
+  return (
+    <Box component="svg" viewBox="0 0 24 24" sx={{ width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.8 }}>
+      <rect x="3" y="4" width="18" height="16" rx="2.5" />
+      <path d="M3 14h18" />
+      <rect x="3" y="14" width="18" height="6" rx="2.5" fill="currentColor" stroke="none" opacity="0.35" />
     </Box>
   )
 }
@@ -188,8 +183,11 @@ export function TitleBar() {
         flexShrink: 0,
         userSelect: 'none',
         px: 1,
-        borderBottom: 1,
-        borderColor: 'divider',
+        // Same surface as the rail/sidebar below, with no dividing border —
+        // together they read as one continuous piece of chrome wrapping the
+        // content area, which curves away from it (see App.tsx's chat column
+        // and its rounded top-left corner).
+        bgcolor: 'background.chrome',
       }}
     >
       <Box

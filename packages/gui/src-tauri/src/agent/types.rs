@@ -407,6 +407,37 @@ impl Default for ModelRef {
     }
 }
 
+impl ModelRef {
+    /// `~/.viv/agent/selected-model.json` — deliberately its own file rather
+    /// than a key in `settings.json`. `cmd_save_settings` rewrites that file
+    /// wholesale from a snapshot the frontend fetched when its Settings
+    /// panel mounted, so any key written to it out-of-band (like this one,
+    /// written on every model switch) gets silently reverted the next time
+    /// the user toggles anything in Settings. A separate file has no such
+    /// shared read-modify-write to lose a race against.
+    fn persist_path() -> Result<std::path::PathBuf, String> {
+        Ok(crate::agent::paths::viv_agent_dir()?.join("selected-model.json"))
+    }
+
+    /// The model persisted from the last `cmd_agent_set_model` call, if any.
+    /// This is what makes a freshly-launched app (or a newly-opened dock
+    /// pane) start back on whatever model was last selected instead of
+    /// `Agent::new_with_cwd_and_model`'s hardcoded placeholder. `None` on a
+    /// first-ever launch or any I/O/parse failure — callers already have a
+    /// sensible fallback.
+    pub fn load_persisted() -> Option<Self> {
+        let content = std::fs::read_to_string(Self::persist_path().ok()?).ok()?;
+        serde_json::from_str(&content).ok()
+    }
+
+    /// Best-effort: a write failure here shouldn't fail the model switch
+    /// itself, so errors are swallowed.
+    pub fn persist(&self) {
+        let (Ok(path), Ok(content)) = (Self::persist_path(), serde_json::to_string_pretty(self)) else { return };
+        let _ = std::fs::write(path, content);
+    }
+}
+
 // ============================================================================
 // AgentMessage — union of LLM messages + custom messages
 // ============================================================================

@@ -35,7 +35,13 @@ impl Agent {
     /// workspace folder (so its file tools resolve against `cwd`, not the
     /// process cwd) instead of every instance sharing the process cwd `"."`.
     pub fn new_with_cwd_and_model(cwd: String, model: Option<crate::agent::types::ModelRef>) -> Self {
-        let model = model.unwrap_or_else(|| crate::agent::types::ModelRef {
+        // No explicit model: restore whatever was last selected (see
+        // `ModelRef::load_persisted`) before falling back to this hardcoded
+        // placeholder — only reached on a genuinely first-ever launch. Only
+        // `Agent::new()` (no cwd/model) ever hits this path; every
+        // orchestrator-spawned subagent instance passes `Some(model)`
+        // explicitly, so persisted-model lookup never runs on that hot path.
+        let model = model.or_else(crate::agent::types::ModelRef::load_persisted).unwrap_or_else(|| crate::agent::types::ModelRef {
             id: "gpt-4".to_string(),
             name: "GPT-4".to_string(),
             api: "openai-chat".to_string(),

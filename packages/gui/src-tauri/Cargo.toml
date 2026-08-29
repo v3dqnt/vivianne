@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.7.2"
+version = "1.7.3"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -89,3 +89,11 @@ tract-onnx = "0.21"
 tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 ndarray = "0.16"
 iroh = "1.0.3"
+rquickjs = { version = "0.8.1", default-features = false, features = ["futures"] }
+rust_xlsxwriter = "0.92"
+docx-rs = "0.4"
+printpdf = "0.11"
+zip = "4.2"
+
+[target."cfg(windows)".dependencies]
+uiautomation = "0.25.0"

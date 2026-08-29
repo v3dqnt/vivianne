@@ -17,7 +17,24 @@ async function highlight(code: string, lang: string): Promise<string> {
   }
 }
 
-export function CodeBlock({ code, lang, wrap = false }: { code: string; lang: string; wrap?: boolean }) {
+/**
+ * @param bare Strip the card chrome — no header bar, border, radius, or
+ *   background of its own. For places where the code IS the surface rather
+ *   than a block embedded in prose (the file tree's inline preview), where a
+ *   bordered card floating inside another panel reads as a nested box rather
+ *   than as the file's contents.
+ */
+export function CodeBlock({
+  code,
+  lang,
+  wrap = false,
+  bare = false,
+}: {
+  code: string
+  lang: string
+  wrap?: boolean
+  bare?: boolean
+}) {
   const [html, setHtml] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
@@ -53,13 +70,16 @@ export function CodeBlock({ code, lang, wrap = false }: { code: string; lang: st
         // and the whole containing panel grows instead of scrolling.
         minWidth: 0,
         maxWidth: '100%',
-        borderRadius: 1.5,
-        overflow: 'hidden',
-        border: 1,
-        borderColor: 'divider',
+        ...(bare
+          ? { my: 0, '&:hover .code-copy': { opacity: 1 } }
+          : { borderRadius: 1.5, overflow: 'hidden', border: 1, borderColor: 'divider' }),
         '& pre': {
           m: 0,
-          p: 1.5,
+          p: bare ? 0 : 1.5,
+          // shiki writes its theme background as an inline style on the
+          // <pre>, so only !important can hand the surface back to whatever
+          // the preview is sitting on.
+          ...(bare ? { background: 'transparent !important' } : {}),
           fontSize: '0.8125rem',
           lineHeight: 1.55,
           ...(wrap
@@ -69,31 +89,46 @@ export function CodeBlock({ code, lang, wrap = false }: { code: string; lang: st
         '& code': { fontFamily: '"JetBrains Mono", ui-monospace, monospace' },
       }}
     >
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          px: 1.5,
-          py: 0.5,
-          bgcolor: 'action.hover',
-          borderBottom: 1,
-          borderColor: 'divider',
-        }}
-      >
-        <Box component="span" sx={{ fontSize: '0.6875rem', color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4 }}>
-          {lang}
-        </Box>
+      {bare ? (
+        // Copy stays available, but as a hover-only affordance floating over
+        // the code instead of a header bar that would reinstate the card.
         <Tooltip title={copied ? 'Copied' : 'Copy'}>
-          <IconButton size="small" onClick={copy}>
-            {copied ? <CopySuccessLinear size={14} color="currentColor" /> : <CopyLinear size={14} color="currentColor" />}
+          <IconButton
+            size="small"
+            className="code-copy"
+            onClick={copy}
+            sx={{ position: 'absolute', top: 2, right: 2, zIndex: 1, opacity: 0, transition: 'opacity 0.12s' }}
+          >
+            {copied ? <CopySuccessLinear size={13} color="currentColor" /> : <CopyLinear size={13} color="currentColor" />}
           </IconButton>
         </Tooltip>
-      </Box>
-      {html ? (
-        <Box sx={{ bgcolor: '#0d1117' }} dangerouslySetInnerHTML={{ __html: html }} />
       ) : (
-        <Box component="pre" sx={{ bgcolor: '#0d1117', color: '#c9d1d9' }}>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            px: 1.5,
+            py: 0.5,
+            bgcolor: 'action.hover',
+            borderBottom: 1,
+            borderColor: 'divider',
+          }}
+        >
+          <Box component="span" sx={{ fontSize: '0.6875rem', color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+            {lang}
+          </Box>
+          <Tooltip title={copied ? 'Copied' : 'Copy'}>
+            <IconButton size="small" onClick={copy}>
+              {copied ? <CopySuccessLinear size={14} color="currentColor" /> : <CopyLinear size={14} color="currentColor" />}
+            </IconButton>
+          </Tooltip>
+        </Box>
+      )}
+      {html ? (
+        <Box sx={bare ? undefined : { bgcolor: '#0d1117' }} dangerouslySetInnerHTML={{ __html: html }} />
+      ) : (
+        <Box component="pre" sx={bare ? { color: 'text.secondary' } : { bgcolor: '#0d1117', color: '#c9d1d9' }}>
           <code>{code}</code>
         </Box>
       )}

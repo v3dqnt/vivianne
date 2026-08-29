@@ -6,7 +6,7 @@ import IconButton from '@mui/material/IconButton'
 import ButtonBase from '@mui/material/ButtonBase'
 import Tooltip from '@mui/material/Tooltip'
 import { useTheme } from '@mui/material/styles'
-import { glassSurface } from '../../../theme'
+import { surfaceCard } from '../../../theme'
 import {
   CloseCircleLinear,
   KeyLinear,
@@ -20,6 +20,8 @@ import {
   ColorSwatchLinear,
   UserOctagonLinear,
   ArchiveLinear,
+  MicrophoneLinear,
+  SparkleLinear,
 } from '../../../icons'
 import { ProvidersSection } from './ProvidersSection'
 import { LocalModelsSection } from './LocalModelsSection'
@@ -31,7 +33,9 @@ import { UsageSection } from './UsageSection'
 import { SkillsSection } from './SkillsSection'
 import { AutomationsSection } from './AutomationsSection'
 import { ThemesSection } from './ThemesSection'
+import { VoiceSection } from './VoiceSection'
 import { ComponentsSection } from './ComponentsSection'
+import { UpdatesSection } from './UpdatesSection'
 import { AccountSection } from '../../account/components/AccountSection'
 import { MultiplayerSection } from '../../multiplayer/components/MultiplayerSection'
 import { useSettingsUi, type SettingsSection } from '../store/uiStore'
@@ -68,6 +72,7 @@ const GROUPS: { label: string; items: SectionDef[] }[] = [
       { id: 'memory', label: 'Memory', icon: ArchiveBookLinear },
       { id: 'skills', label: 'Skills', icon: MagicpenLinear },
       { id: 'automations', label: 'Automations', icon: ClockLinear },
+      { id: 'voice', label: 'Voice', icon: MicrophoneLinear },
     ],
   },
   {
@@ -76,13 +81,14 @@ const GROUPS: { label: string; items: SectionDef[] }[] = [
       { id: 'usage', label: 'Usage', icon: ChartLinear },
       { id: 'themes', label: 'Theme', icon: ColorSwatchLinear },
       { id: 'components', label: 'Components', icon: ArchiveLinear },
+      { id: 'updates', label: 'Updates', icon: SparkleLinear },
     ],
   },
 ]
 
 export function SettingsDialog() {
   const theme = useTheme()
-  const GLASS = glassSurface(theme.palette.mode)
+  const SURFACE = surfaceCard(theme.palette.mode)
   const open = useSettingsUi((s) => s.open)
   const section = useSettingsUi((s) => s.section)
   const openSettings = useSettingsUi((s) => s.openSettings)
@@ -96,7 +102,7 @@ export function SettingsDialog() {
       maxWidth="md"
       fullWidth
       slotProps={{
-        paper: { sx: { height: 660, borderRadius: '18px', overflow: 'hidden', backgroundImage: 'none', ...GLASS } },
+        paper: { sx: { height: 660, overflow: 'hidden', backgroundImage: 'none', ...SURFACE } },
         backdrop: { sx: { backdropFilter: 'blur(3px)' } },
       }}
     >
@@ -192,8 +198,10 @@ export function SettingsDialog() {
               {section === 'usage' && <UsageSection />}
               {section === 'skills' && <SkillsSection />}
               {section === 'automations' && <AutomationsSection />}
+              {section === 'voice' && <VoiceSection />}
               {section === 'themes' && <ThemesSection />}
               {section === 'components' && <ComponentsSection />}
+              {section === 'updates' && <UpdatesSection />}
             </Box>
           </Box>
         </Stack>

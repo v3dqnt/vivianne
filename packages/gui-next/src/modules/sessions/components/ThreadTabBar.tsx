@@ -46,8 +46,7 @@ export function ThreadTabBar() {
         py: 0.5,
         flexShrink: 0,
         overflowX: 'auto',
-        borderBottom: 1,
-        borderColor: 'divider',
+        bgcolor: 'background.chrome',
       }}
     >
       {openIds.map((id) => {

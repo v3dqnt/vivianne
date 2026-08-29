@@ -525,6 +525,11 @@ pub async fn cmd_agent_set_model(
         max_tokens: max_tokens.unwrap_or(8192),
         context_window: context_window.unwrap_or(128_000),
     };
+    // Persisted before the in-memory set so a crash/kill between the two
+    // still leaves the on-disk value correct — the write is what makes model
+    // choice survive an app restart (`ModelRef::load_persisted`, read back
+    // by `Agent::new_with_cwd_and_model`).
+    model_ref.persist();
     // Lock-free — see `cmd_debug_agent_status`'s comment. Switching models
     // used to queue behind an in-flight turn's mutex for no reason: nothing
     // here touches anything on `Agent` except `.state`.
@@ -934,6 +939,11 @@ pub async fn cmd_save_settings(settings: serde_json::Value) -> Result<(), String
 pub fn cmd_list_tool_names() -> Vec<serde_json::Value> {
     crate::agent::tool_schemas::static_tool_definitions()
         .into_iter()
+        // run_script has its own dedicated experimental toggle in Settings
+        // (enableProgrammaticToolCalling) instead of the generic per-tool
+        // disable switch, since it needs to default OFF rather than the
+        // "everything on unless disabled" default every other tool gets here.
+        .filter(|t| t["name"] != "run_script")
         .map(|t| serde_json::json!({ "name": t["name"], "description": t["description"] }))
         .collect()
 }
@@ -1067,16 +1077,18 @@ pub async fn cmd_delete_subagent_profile(id: String) -> Result<(), String> {
 }
 
 /// Add a playbook from an already-written JSON file (e.g. picked via a
-/// native file dialog): validate it parses as a `PlaybookDef`, copy it into
-/// `~/.viv/playbooks/<name>.json`, and invalidate the tool-defs cache so the
-/// model sees it on its very next turn — no restart.
+/// native file dialog): validate it parses as a `PlaybookDef` describing
+/// EITHER a tool or a panel, copy it into `~/.viv/playbooks/<name>.json`,
+/// and invalidate the tool-defs cache so a tool-type playbook is live on the
+/// model's very next turn (a panel-type one needs no cache invalidation —
+/// `cmd_list_playbooks` always reads fresh).
 #[tauri::command]
 pub async fn cmd_add_playbook_file(path: String) -> Result<String, String> {
     let content = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read {path}: {e}"))?;
     let def: crate::coding_agent::playbooks::PlaybookDef =
         serde_json::from_str(&content).map_err(|e| format!("Not a valid playbook: {e}"))?;
-    if def.name.trim().is_empty() || def.command.trim().is_empty() {
-        return Err("Playbook needs a non-empty 'name' and 'command'.".to_string());
+    if def.name.trim().is_empty() || (!def.is_tool() && !def.is_panel()) {
+        return Err("Playbook needs a non-empty 'name' and either a 'command' or a 'panel'.".to_string());
     }
 
     let stem: String = def
@@ -1091,7 +1103,63 @@ pub async fn cmd_add_playbook_file(path: String) -> Result<String, String> {
     Ok(def.name)
 }
 
-/// Remove a playbook by name (matches its `name` field, not the filename).
+/// Create or update a playbook from in-app form fields — either a tool
+/// (`command` set) or a panel (`panel_url` set; exactly one of the two
+/// should be given, enforced by the caller's form, not re-validated here
+/// beyond requiring at least one). The in-app counterpart to
+/// `cmd_add_playbook_file`'s "import an existing file" path, so authoring
+/// one doesn't require hand-writing JSON externally.
+/// `original_name` is the playbook's name before this save (so a rename —
+/// which changes the destination filename, see `cmd_add_playbook_file`'s
+/// same slugify — removes the stale old file); omit/empty for a new one.
+#[tauri::command]
+pub async fn cmd_save_playbook(
+    original_name: Option<String>,
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+    command: Option<String>,
+    panel_url: Option<String>,
+) -> Result<String, String> {
+    let name = name.trim().to_string();
+    let command = command.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+    let panel_url = panel_url.map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
+    if name.is_empty() || (command.is_none() && panel_url.is_none()) {
+        return Err("Playbook needs a non-empty name and either a command or a panel URL.".to_string());
+    }
+    if let Some(url) = &panel_url {
+        if !crate::coding_agent::playbooks::is_allowed_panel_url(url) {
+            return Err("Panel URL must start with http://localhost: or http://127.0.0.1: — the app's CSP won't frame anything else.".to_string());
+        }
+    }
+    let panel = panel_url.map(|url| crate::coding_agent::playbooks::PanelSpec { url });
+    let def = crate::coding_agent::playbooks::PlaybookDef { name: name.clone(), description, parameters, command, panel };
+    let dir = crate::coding_agent::playbooks::playbooks_dir()?;
+
+    let slugify = |s: &str| -> String {
+        s.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect()
+    };
+    let new_stem = slugify(&name);
+    let dest = dir.join(format!("{new_stem}.json"));
+
+    // Renamed: remove the old file so the save doesn't leave a duplicate
+    // playbook under the old name sitting alongside the new one.
+    if let Some(original) = original_name.as_deref().filter(|o| !o.is_empty()) {
+        let old_stem = slugify(original);
+        if old_stem != new_stem {
+            let old_path = dir.join(format!("{old_stem}.json"));
+            let _ = std::fs::remove_file(&old_path);
+        }
+    }
+
+    let content = serde_json::to_string_pretty(&def).map_err(|e| format!("Failed to serialize playbook: {e}"))?;
+    std::fs::write(&dest, content).map_err(|e| format!("Failed to write playbook: {e}"))?;
+    crate::agent::tool_exec::invalidate_tool_defs_cache();
+    Ok(name)
+}
+
+/// Remove a playbook by name (matches its `name` field, not the filename) —
+/// works for both tool- and panel-type playbooks.
 #[tauri::command]
 pub async fn cmd_remove_playbook(name: String) -> Result<bool, String> {
     let dir = crate::coding_agent::playbooks::playbooks_dir()?;

@@ -33,6 +33,14 @@ export const PROJECT_COLORS: Record<string, string> = {
 
 const COLOR_IDS = Object.keys(PROJECT_COLORS)
 
+/** Sentinel `activeProjectId` for "General" — not a real project (never sent
+ * to the backend, never appears in `projects`), just a fixed rail entry for
+ * questions that aren't about any particular codebase. Threads started here
+ * are left unassigned (`sessionProjectMap[id]` absent), which is also how
+ * the sidebar recognizes them as belonging to General rather than to a
+ * project that happens to not exist (yet) in the list. */
+export const GENERAL_PROJECT_ID = '__general__'
+
 /** A project with no explicit color still needs a stable one — derive it
  * from the id so it never changes between launches. */
 export function projectColor(project: Pick<Project, 'id' | 'color'>): string {
@@ -112,7 +120,12 @@ export const useProjectsStore = create<ProjectsStoreState>((set, get) => ({
         sessionProjectMap: map ?? {},
         // Keep a valid selection at all times — the sidebar always shows
         // exactly one project, so a null/stale id would render it empty.
-        activeProjectId: list.some((p) => p.id === s.activeProjectId) ? s.activeProjectId : (list[0]?.id ?? null),
+        // General is exempt: it's never in `list`, so the plain `.some`
+        // check below would otherwise "correct" it away on every refresh.
+        activeProjectId:
+          s.activeProjectId === GENERAL_PROJECT_ID || list.some((p) => p.id === s.activeProjectId)
+            ? s.activeProjectId
+            : (list[0]?.id ?? null),
       }))
       // Covers app start, where the first project resolves here rather than
       // through an explicit click.
@@ -170,7 +183,9 @@ export const useProjectsStore = create<ProjectsStoreState>((set, get) => ({
 
   setActiveProject: (id) => {
     set({ activeProjectId: id })
-    syncWorkspaceToProject(get().projects.find((p) => p.id === id))
+    // General has no folder of its own to point the workspace at — leave it
+    // exactly as it was rather than forcing a change.
+    if (id !== GENERAL_PROJECT_ID) syncWorkspaceToProject(get().projects.find((p) => p.id === id))
   },
 
   openExternal: async (target) => {

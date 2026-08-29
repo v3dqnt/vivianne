@@ -141,7 +141,24 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
     term.onData((data) => {
       void call('cmd_terminal_write', { tabId, data })
     })
+    // The ResizeObserver's first `fit()` fires onResize during mount, before
+    // `cmd_terminal_spawn` has resolved — resizing a PTY that doesn't exist
+    // yet threw "no terminal session for tab …" on every terminal that
+    // started life hidden (which is every dock tab that isn't the active
+    // one). Hold the last requested size instead and replay it once the PTY
+    // is actually there. An attached session is ready by definition.
+    // Two plain numbers rather than a nullable object: the only writes are
+    // inside the onResize callback, which the spawn flow below can't see, so
+    // TS narrows a captured `{...} | null` to `never` at the replay site.
+    let ptyReady = !!attachTabId
+    let pendingRows = 0
+    let pendingCols = 0
     term.onResize(({ cols, rows }) => {
+      if (!ptyReady) {
+        pendingRows = rows
+        pendingCols = cols
+        return
+      }
       void call('cmd_terminal_resize', { tabId, rows, cols })
     })
 
@@ -189,6 +206,15 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
         const spawnCwd = cwd ?? folders[0] ?? ''
         await call('cmd_terminal_spawn', { tabId, shellId, cwd: spawnCwd })
         if (disposed) return
+        ptyReady = true
+        // Replay whatever size the terminal settled on while the PTY was
+        // still starting, so the shell's view matches the actual panel
+        // instead of the 80x24 default it spawned with.
+        if (pendingRows > 0 && pendingCols > 0) {
+          void call('cmd_terminal_resize', { tabId, rows: pendingRows, cols: pendingCols })
+          pendingRows = 0
+          pendingCols = 0
+        }
         setStatus(null)
       })().catch(() => {
         if (!disposed) setStatus('Failed to spawn shell')
@@ -215,7 +241,10 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
   }, [])
 
   return (
-    <Box sx={{ position: 'relative', flex: 1, minHeight: 0, px: 1, py: 1 }}>
+    // Flush to its container: the dock card already clips to its own radius,
+    // so padding here just floated a hard-edged black rectangle inside a
+    // rounded panel with glass visible around it.
+    <Box sx={{ position: 'relative', flex: 1, minHeight: 0, px: 1, pt: 0.75, pb: 0.5 }}>
       {status && (
         <Typography variant="caption" color="text.secondary" sx={{ position: 'absolute', top: 8, left: 12, zIndex: 2 }}>
           {status}

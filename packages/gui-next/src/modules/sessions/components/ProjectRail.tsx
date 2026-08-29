@@ -15,9 +15,10 @@ import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
 import FormControlLabel from '@mui/material/FormControlLabel'
 import Switch from '@mui/material/Switch'
-import { AddLinear, SettingsLinear, FolderLinear, Link2Linear } from '../../../icons'
+import Divider from '@mui/material/Divider'
+import { AddLinear, SettingsLinear, FolderLinear, Link2Linear, MessageSquareLinear } from '../../../icons'
 import { useSettingsUi } from '../../settings/store/uiStore'
-import { useProjectsStore, projectColor, projectInitial, PROJECT_COLORS, type Project } from '../store/projectsStore'
+import { useProjectsStore, projectColor, projectInitial, PROJECT_COLORS, GENERAL_PROJECT_ID, type Project } from '../store/projectsStore'
 import { useMultiplayerStore } from '../../multiplayer/store/multiplayerStore'
 
 export const PROJECT_RAIL_WIDTH = 56
@@ -212,11 +213,32 @@ export function ProjectRail() {
         alignItems: 'center',
         gap: 1,
         py: 1.5,
-        borderRight: 1,
-        borderColor: 'divider',
-        bgcolor: 'background.default',
+        bgcolor: 'background.chrome',
       }}
     >
+      <Tooltip title="General — questions not tied to a project" placement="right">
+        <ButtonBase
+          onClick={() => setActiveProject(GENERAL_PROJECT_ID)}
+          sx={{
+            width: 38,
+            height: 38,
+            flexShrink: 0,
+            borderRadius: 2,
+            color: activeProjectId === GENERAL_PROJECT_ID ? 'text.primary' : 'text.secondary',
+            bgcolor: 'action.hover',
+            border: '1.5px solid',
+            borderColor: activeProjectId === GENERAL_PROJECT_ID ? 'text.primary' : 'transparent',
+            transition: 'border-color 0.15s, transform 0.08s',
+            '&:hover': { borderColor: 'text.secondary' },
+            '&:active': { transform: 'scale(0.94)' },
+          }}
+        >
+          <MessageSquareLinear size={17} color="currentColor" />
+        </ButtonBase>
+      </Tooltip>
+
+      {projects.length > 0 && <Divider sx={{ width: 24 }} />}
+
       {projects.map((p) => {
         const active = p.id === activeProjectId
         return (

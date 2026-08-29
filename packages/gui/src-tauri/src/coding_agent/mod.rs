@@ -10,10 +10,13 @@
 
 pub mod tool_exec;
 pub mod computer;
+#[cfg(target_os = "windows")]
+pub mod dip;
 pub mod tools_ext;
 pub mod apply_patch;
 pub mod repo_tools;
 pub mod compaction;
+pub mod documents;
 pub mod playbooks;
 pub mod skills;
 pub mod subagent_profiles;

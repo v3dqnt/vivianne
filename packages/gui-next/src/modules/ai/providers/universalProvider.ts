@@ -247,8 +247,33 @@ export async function streamUniversal(req: ProviderStreamRequest): Promise<void>
       // and an unobserved one is an unhandled rejection, which in a webview
       // is a hard crash. Seen live as `AI_NoOutputGeneratedError` the moment
       // the watchdog aborted a stalled stream.
-      for (const settled of [result.text, result.usage, result.finishReason, result.toolCalls]) {
-        void Promise.resolve(settled).catch(() => {})
+      // `AI_NoOutputGeneratedError` specifically comes from the promises that
+      // resolve only once there IS output — `content`, `steps`, `response`,
+      // `totalUsage` — not from `.text`/`.usage`, so the original four missed
+      // exactly the case a failing provider produces (stream errors before a
+      // single token: out of credits, upstream 5xx, rate limit). Reading a
+      // property the installed SDK version doesn't expose just yields
+      // `undefined`, which `Promise.resolve` handles, so listing generously
+      // is safe and beats rediscovering this one rejection at a time.
+      const settledProps = [
+        'text',
+        'usage',
+        'totalUsage',
+        'finishReason',
+        'toolCalls',
+        'toolResults',
+        'content',
+        'steps',
+        'response',
+        'reasoning',
+        'reasoningText',
+        'sources',
+        'files',
+        'warnings',
+        'providerMetadata',
+      ] as const
+      for (const prop of settledProps) {
+        void Promise.resolve((result as unknown as Record<string, unknown>)[prop]).catch(() => {})
       }
 
       // Raced, not just awaited: `abortSignal` above cancels the HTTP

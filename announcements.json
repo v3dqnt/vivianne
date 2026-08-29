@@ -1,0 +1,9 @@
+[
+  {
+    "id": "welcome-1",
+    "title": "Announcements are live",
+    "body": "Vivianne can now show notes between releases. Edit announcements.json in the repo root to publish one; it is fetched from the main branch.",
+    "level": "info",
+    "date": "2026-08-29"
+  }
+]

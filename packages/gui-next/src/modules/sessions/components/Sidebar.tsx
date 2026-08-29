@@ -6,11 +6,13 @@ import IconButton from '@mui/material/IconButton'
 import InputBase from '@mui/material/InputBase'
 import ButtonBase from '@mui/material/ButtonBase'
 import Tooltip from '@mui/material/Tooltip'
+import { useTheme } from '@mui/material/styles'
 import { MessageAddLinear, SearchNormalLinear, CloseCircleLinear, ExportLinear } from '../../../icons'
 import { useSessionsStore } from '../store/sessionsStore'
-import { useProjectsStore, projectColor } from '../store/projectsStore'
+import { useProjectsStore, projectColor, GENERAL_PROJECT_ID } from '../store/projectsStore'
 import { useAgentStore } from '../../ai/store/agentStore'
 import { useWorkspaceStore } from '../../ai/store/workspaceStore'
+import { surfaceCard } from '../../../theme'
 import { SessionRow } from './SessionRow'
 
 export const SIDEBAR_WIDTH = 260
@@ -22,6 +24,18 @@ export const SIDEBAR_WIDTH = 260
  * "which group am I looking at". A new thread is assigned to the active
  * project on creation, so nothing can end up orphaned. */
 export function Sidebar() {
+  const theme = useTheme()
+  // Same treatment the Settings dialog and both docks use, so every piece of
+  // floating chrome in the app reads as one material.
+  const SIDEBAR_CARD_SX = {
+    width: SIDEBAR_WIDTH,
+    flexShrink: 0,
+    height: 'auto',
+    m: 1,
+    mr: 0,
+    overflow: 'hidden',
+    ...surfaceCard(theme.palette.mode),
+  } as const
   const sessions = useSessionsStore((s) => s.sessions)
   const activeSessionId = useSessionsStore((s) => s.activeSessionId)
   const refresh = useSessionsStore((s) => s.refresh)
@@ -65,7 +79,11 @@ export function Sidebar() {
         // which is what made "New session" look like it did nothing.
         const id = useSessionsStore.getState().activeSessionId
         const assigned = useProjectsStore.getState().sessionProjectMap
-        if (id && activeProjectId && !assigned[id]) await assign(id, activeProjectId)
+        // General threads should stay unassigned, not get claimed by a
+        // sentinel id that isn't a real project.
+        if (id && activeProjectId && activeProjectId !== GENERAL_PROJECT_ID && !assigned[id]) {
+          await assign(id, activeProjectId)
+        }
       })()
     }
     wasBusy.current = isBusy
@@ -75,13 +93,18 @@ export function Sidebar() {
     if (searchOpen) searchRef.current?.focus()
   }, [searchOpen])
 
+  const isGeneral = activeProjectId === GENERAL_PROJECT_ID
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null
 
   const visible = useMemo(() => {
-    const mine = sessions.filter((s) => sessionProjectMap[s.id] === activeProjectId)
+    // General shows threads with no project at all, not threads "assigned"
+    // to a sentinel id that was never a real project.
+    const mine = isGeneral
+      ? sessions.filter((s) => !sessionProjectMap[s.id])
+      : sessions.filter((s) => sessionProjectMap[s.id] === activeProjectId)
     const q = query.trim().toLowerCase()
     return q ? mine.filter((s) => s.name.toLowerCase().includes(q)) : mine
-  }, [sessions, sessionProjectMap, activeProjectId, query])
+  }, [sessions, sessionProjectMap, activeProjectId, isGeneral, query])
 
   const startChat = async () => {
     if (startingRef.current) return
@@ -95,6 +118,9 @@ export function Sidebar() {
 
   const startChatInner = async () => {
     await newChat()
+    // General threads stay unassigned by design — nothing to claim them, and
+    // no project folder to re-point the workspace at.
+    if (isGeneral) return
     // The thread is persisted up front now, so its id exists here and it can
     // be claimed for this project straight away — no waiting for the first
     // turn to finish.
@@ -117,9 +143,9 @@ export function Sidebar() {
     })
   }
 
-  if (!activeProject) {
+  if (!activeProject && !isGeneral) {
     return (
-      <Stack component="nav" sx={{ width: SIDEBAR_WIDTH, flexShrink: 0, height: '100%', borderRight: 1, borderColor: 'divider', p: 2, gap: 1 }}>
+      <Stack component="nav" sx={{ ...SIDEBAR_CARD_SX, p: 2, gap: 1 }}>
         <Typography variant="body2" sx={{ fontWeight: 600 }}>
           No projects yet
         </Typography>
@@ -131,19 +157,16 @@ export function Sidebar() {
   }
 
   return (
-    <Stack
-      component="nav"
-      sx={{ width: SIDEBAR_WIDTH, flexShrink: 0, height: '100%', borderRight: 1, borderColor: 'divider', bgcolor: 'background.default' }}
-    >
+    <Stack component="nav" sx={SIDEBAR_CARD_SX}>
       <Stack sx={{ px: 2, pt: 2, pb: 1.5, gap: 0.25, flexShrink: 0 }}>
         <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, minWidth: 0 }}>
-          <Box sx={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, bgcolor: projectColor(activeProject) }} />
-          <Typography variant="subtitle2" sx={{ fontWeight: 700, minWidth: 0 }} noWrap title={activeProject.name}>
-            {activeProject.name}
+          {activeProject && <Box sx={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, bgcolor: projectColor(activeProject) }} />}
+          <Typography variant="subtitle2" sx={{ fontWeight: 700, minWidth: 0 }} noWrap title={activeProject?.name ?? 'General'}>
+            {activeProject?.name ?? 'General'}
           </Typography>
         </Stack>
-        <Typography variant="caption" color="text.secondary" noWrap title={activeProject.path ?? undefined}>
-          {activeProject.path ?? 'No folder set'}
+        <Typography variant="caption" color="text.secondary" noWrap title={activeProject?.path ?? undefined}>
+          {isGeneral ? 'Not tied to a project' : (activeProject?.path ?? 'No folder set')}
         </Typography>
       </Stack>
 
@@ -225,7 +248,7 @@ export function Sidebar() {
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pb: 1 }}>
         {visible.length === 0 ? (
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 2, py: 1.5 }}>
-            {query ? 'No matching threads.' : 'No threads in this project yet.'}
+            {query ? 'No matching threads.' : isGeneral ? 'No general threads yet.' : 'No threads in this project yet.'}
           </Typography>
         ) : (
           visible.map((session) => <SessionRow key={session.id} session={session} active={session.id === activeSessionId} />)

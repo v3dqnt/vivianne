@@ -4,7 +4,8 @@
   "description": "enables the default permissions",
   "windows": [
     "main",
-    "notch"
+    "notch",
+    "dip_overlay"
   ],
   "permissions": [
     "core:default",

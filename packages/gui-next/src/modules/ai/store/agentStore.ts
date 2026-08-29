@@ -4,6 +4,7 @@ import type { AgentEvent, AgentMessage, ImageAttachment, MessageContent, Questio
 import { useModelStore } from './modelStore'
 import { usePlanModeStore } from './planModeStore'
 import { useSubagentStore } from './subagentStore'
+import { useShellTaskStore, isShellTool } from '../../dock/store/shellTaskStore'
 import { useWebPreviewStore } from './webPreviewStore'
 import { usePanelStore, type RightPanelKind } from '../../dock/store/panelStore'
 
@@ -107,6 +108,13 @@ interface AgentStoreState {
    * deliberately invisible to the model (it's told not to narrate reading
    * memory), so this is the only signal the user gets that it happened. */
   memoryRecalled: number | null
+  /** One-shot channel for putting text INTO the composer from elsewhere —
+   * "edit this message" reverts to that point and hands the original text
+   * back to be re-sent. The composer consumes and clears it, so this is a
+   * transient handoff, not the live editor value (which stays local to the
+   * composer so typing doesn't re-render every store subscriber). */
+  draft: string
+  setDraft: (text: string) => void
   /** What's sitting in the backend steering + follow-up queues. */
   queuedMessages: QueuedMessages
   init: () => Promise<void>
@@ -168,6 +176,8 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
     credentialRotated: null,
     computerUseActive: false,
     memoryRecalled: null,
+    draft: '',
+    setDraft: (text: string) => set({ draft: text }),
     queuedMessages: { steering: [], followUp: [] },
 
     init: async () => {
@@ -233,7 +243,6 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
           }
           case 'message_end': {
             set((s) => {
-              if (s.streamingIndex === null) return s
               const messages = [...s.messages]
               let message = event.payload.message
               const startedAt = streamStartedAt.get(threadId)
@@ -244,6 +253,17 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
                 }
               }
               streamStartedAt.delete(threadId)
+              // No in-flight streaming message means no `message_start` ever
+              // fired for this one — a provider that errors before its first
+              // token (out of credits, rate limit, bad key) does exactly
+              // that. Dropping it here is what made those failures look like
+              // the agent aborting silently; append instead so the error
+              // actually reaches the transcript. Start/end are balanced
+              // (end always clears the index), so this can't double-append a
+              // message that did stream.
+              if (s.streamingIndex === null) {
+                return { messages: [...messages, message], streamingIndex: null }
+              }
               messages[s.streamingIndex] = message
               return { messages, streamingIndex: null }
             })
@@ -251,12 +271,33 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
           }
           case 'agent_end': {
             set({ isBusy: false, streamingIndex: null, memoryRecalled: null })
-            if (isPrimary(threadId)) void useModelStore.getState().refreshStats()
+            if (isPrimary(threadId)) {
+              void useModelStore.getState().refreshStats()
+              // QueuePanel only polls while `isBusy`, so without this the
+              // panel keeps rendering whatever was queued at the last poll
+              // — including messages the run has since drained and answered,
+              // which reads as "queued but never sent". This is the one
+              // refresh that runs after the drain, so it's what makes the
+              // panel reflect reality once a run ends.
+              void get().refreshQueues()
+            }
             break
           }
           case 'tool_execution_start': {
             if (event.payload.tool_name === 'computer') set({ computerUseActive: true })
             if (isPrimary(threadId) && event.payload.tool_name === 'task') void useSubagentStore.getState().refresh()
+            // Shell tools run as one-shot processes, not PTY sessions, so the
+            // Background Tasks panel (which lists terminal sessions) can only
+            // learn about them from here.
+            if (isShellTool(event.payload.tool_name)) {
+              useShellTaskStore
+                .getState()
+                .start(
+                  event.payload.tool_call_id,
+                  event.payload.tool_name,
+                  event.payload.args as Record<string, unknown> | undefined,
+                )
+            }
             // Insert a pending placeholder immediately so the tool card shows
             // a spinner while it runs, instead of only appearing once the
             // (possibly slow) tool finishes. `tool_execution_end` below
@@ -280,6 +321,9 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
           }
           case 'tool_execution_end': {
             if (event.payload.tool_name === 'computer') set({ computerUseActive: false })
+            if (isShellTool(event.payload.tool_name)) {
+              useShellTaskStore.getState().finish(event.payload.tool_call_id, !!event.payload.is_error)
+            }
             if (isPrimary(threadId) && PLAN_MODE_TOOLS.has(event.payload.tool_name)) void usePlanModeStore.getState().refresh()
             if (isPrimary(threadId) && event.payload.tool_name === 'task') void useSubagentStore.getState().refresh()
             set((s) => {
@@ -384,7 +428,14 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             if (!isPrimary(threadId)) break
             const p = event.payload
             const RIGHT_PANEL_KINDS: RightPanelKind[] = ['review', 'files', 'preview', 'tasks']
-            if (p.panel === 'terminal') {
+            if (p.panel.startsWith('custom:')) {
+              // Always "open" — set_panel's backend-side validation already
+              // confirmed this id exists, and there's no sensible "close the
+              // panel showing THIS custom id specifically" distinct from
+              // closeRight (the slot is shared across all custom panels).
+              if (p.action === 'open') usePanelStore.getState().openCustomPanel(p.panel.slice('custom:'.length))
+              else usePanelStore.getState().closeRight()
+            } else if (p.panel === 'terminal') {
               if (p.action === 'open') usePanelStore.getState().openBottom()
               else usePanelStore.getState().closeBottom()
             } else if (p.panel === 'preview_dev' || p.panel === 'preview_browser') {

@@ -23,10 +23,10 @@ pub struct DiscoveredModel {
     /// USD per 1M tokens, when the provider's listing includes pricing (e.g. OpenRouter).
     pub input_cost_per_million: Option<f64>,
     pub output_cost_per_million: Option<f64>,
-    /// Best-effort capability labels — see `classify_capabilities`. A provider's
-    /// bare `/models` listing (this is all any of these endpoints expose) doesn't
-    /// carry structured capability flags, so these are pattern-matched from the
-    /// model id/name, not authoritative.
+    /// Capability labels. Taken from the provider's own listing where it
+    /// publishes one (OpenRouter reports `architecture.input_modalities`),
+    /// and pattern-matched from the model id only as a fallback — see
+    /// `classify_capabilities`.
     pub is_image_model: bool,
     pub is_audio_model: bool,
     pub supports_vision: bool,
@@ -143,7 +143,21 @@ async fn fetch_openai_style(
         .into_iter()
         .filter_map(|m| {
             let id = json_str(&m, "id")?;
+            let id_for_caps = id.clone();
             let context_window = json_u32(&m, &["context_window", "context_length", "max_context_length"]);
+
+            // OpenRouter DOES publish structured modality data, unlike the
+            // bare OpenAI-style listings the heuristic below was written for.
+            // When it's there it is authoritative — a substring guess against
+            // an id like "z-ai/glm-5.3-flash" or "nvidia/nemotron-3.5" has no
+            // way to know, and silently answering "no vision" is what makes
+            // an image attachment get dropped or OCR'd on a model that could
+            // have looked at it.
+            let declared_vision = m
+                .get("architecture")
+                .and_then(|a| a.get("input_modalities"))
+                .and_then(|v| v.as_array())
+                .map(|mods| mods.iter().any(|x| x.as_str() == Some("image")));
             let max_output = json_u32(&m, &["max_completion_tokens", "max_output_tokens"]);
 
             // OpenRouter includes per-token pricing as decimal strings (USD/token).
@@ -165,6 +179,7 @@ async fn fetch_openai_style(
                 max_output_tokens: max_output,
                 input_cost_per_million: input_cost,
                 output_cost_per_million: output_cost,
+                supports_vision: declared_vision.unwrap_or_else(|| model_supports_vision(provider, &id_for_caps)),
                 ..Default::default()
             })
         })

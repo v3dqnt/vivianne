@@ -3,8 +3,21 @@
 //! schemas, the execution loop, and per-tool handlers) so the two concerns
 //! don't have to be scrolled through together.
 
+#[allow(unused_mut)] // `mut` on `computer_actions` only needed on Windows, extended below
 pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
-    vec![
+    // The `computer` tool's action list — cross-platform "pixel mode" plus,
+    // on Windows only, "structured mode" (real UI Automation tree instead of
+    // guessed pixel coordinates; see `coding_agent::dip`). Built as a plain
+    // Vec so the schema's `enum` only ever lists actions that actually
+    // dispatch on this platform — see `computer::execute_computer_tool`.
+    let mut computer_actions = vec![
+        "screenshot", "mouse_move", "left_click", "left_click_drag", "right_click",
+        "middle_click", "double_click", "type", "key", "cursor_position",
+    ];
+    #[cfg(target_os = "windows")]
+    computer_actions.extend(["snapshot", "interact", "list_windows", "focus_window", "window_action", "launch_app"]);
+
+    let mut defs = vec![
         serde_json::json!({
             "name": "read",
             "description": "Read the contents of a file. Text files are returned line-numbered (like `cat -n`), with the total line count stated so you know whether you saw the whole file or need offset/limit to continue. Handles PDFs (page count + extracted text via 'pages' param) and Jupyter notebooks (.ipynb, cell-by-cell) the same way. Images are shown to you directly (downscaled if oversized) alongside a text summary (format/dimensions) — set ocr=true to also extract any text in the image instead of just seeing it. If the current model can't take image input, an image is OCR'd automatically instead of shown, so you still get any text it contains.",
@@ -96,26 +109,57 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
         }),
         serde_json::json!({
             "name": "computer",
-            "description": "Control the computer: move and click the mouse, type text, press keys, and take screenshots. Take a screenshot first to orient yourself before clicking.",
+            "description": "Control the computer: mouse, keyboard, and screen. Read the 'computer-use' skill before your first call if you haven't already — it has the full decision process and worked examples. Two modes, pick per situation:\n\nPIXEL MODE (screenshot / mouse_move / left_click / left_click_drag / right_click / middle_click / double_click / type / key / cursor_position) — cross-platform. Take a screenshot first to see what's on screen, then act on pixel coordinates read off it. left_click/right_click/double_click accept an optional 'coordinate' to move-then-click in one call. Works on anything, including canvas-rendered apps and games, but coordinates are a guess you verify visually with another screenshot.\n\nSTRUCTURED MODE (snapshot / interact / list_windows / focus_window / window_action / launch_app) — Windows only, PREFERRED for real application UI over guessing pixels. snapshot reads the focused window's actual UI Automation tree (buttons, fields, text, each with a reliable numeric id) and briefly highlights every found element on screen. interact then acts on one element by id — the real cursor visibly moves there first, then clicks/types, exactly like a person would. list_windows/focus_window/window_action manage which window is in front (snapshot/interact only ever act on whichever window is currently focused); launch_app starts a new process. Typical flow: list_windows -> focus_window (or launch_app if it isn't open yet) -> snapshot -> interact -> snapshot again (ids only last one snapshot call, so re-snapshot after anything that could have changed the UI). Fall back to pixel mode only when snapshot finds nothing useful (canvas/game UI).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": [
-                            "key", "type", "mouse_move", "left_click", "left_click_drag",
-                            "right_click", "middle_click", "double_click", "screenshot", "cursor_position"
-                        ],
-                        "description": "The action to perform."
+                        "enum": computer_actions,
+                        "description": "Which action to perform — see the tool description for the full pixel-mode / structured-mode split."
                     },
                     "coordinate": {
                         "type": "array",
                         "items": { "type": "number" },
-                        "description": "X,Y screen coordinates for mouse actions."
+                        "description": "X,Y screen coordinates. Required for mouse_move and left_click_drag; optional for left_click/right_click/double_click (moves the cursor there first, then clicks)."
                     },
-                    "text": { "type": "string", "description": "Text to type, or key combination such as 'Control+C'." }
+                    "text": { "type": "string", "description": "Text to type (action=type), or a key combination such as 'Control+C' (action=key)." },
+                    "id": { "type": "number", "description": "Element id from the last snapshot (action=interact), or window id from the last list_windows (action=focus_window, action=window_action)." },
+                    "element_action": {
+                        "type": "string",
+                        "enum": ["click", "focus", "set_value", "scroll_into_view"],
+                        "description": "What to do with the element — required for action=interact."
+                    },
+                    "window_state": {
+                        "type": "string",
+                        "enum": ["minimize", "maximize", "restore", "close"],
+                        "description": "Required for action=window_action."
+                    },
+                    "value": { "type": "string", "description": "Text to type into the element — required when action=interact and element_action=set_value." },
+                    "command": { "type": "string", "description": "Executable name (resolved via PATH) or full path — required for action=launch_app." },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "Command-line arguments, if any — for action=launch_app." }
                 },
                 "required": ["action"]
+            }
+        }),
+        serde_json::json!({
+            "name": "create_document",
+            "description": "Create a real PDF, Word (docx), Excel (xlsx), or PowerPoint (pptx) file on disk that opens in the corresponding app. Use this when the user asks for a document, report, spreadsheet, or deck as a FILE — not when they just want text in the chat.
+
+pdf/docx take `blocks`: an ordered array of {type: \"heading\"|\"paragraph\"|\"bullets\"|\"table\"} where heading has `text` and `level` (1-3), paragraph has `text`, bullets has `items` (array of strings), and table has `rows` (array of arrays; the first row is treated as a header).
+xlsx takes `sheets`: [{name, rows: [[cell, ...], ...]}] — numbers stay numeric so Excel can sum them, and the first row is bolded as a header.
+pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "format": { "type": "string", "enum": ["pdf", "docx", "xlsx", "pptx"], "description": "Which file type to write" },
+                    "path": { "type": "string", "description": "Where to write it, relative to the workspace (e.g. \"reports/q1.xlsx\")" },
+                    "title": { "type": "string", "description": "Document title, rendered at the top — pdf/docx only" },
+                    "blocks": { "type": "array", "items": { "type": "object" }, "description": "Ordered content blocks — required for pdf and docx" },
+                    "sheets": { "type": "array", "items": { "type": "object" }, "description": "Worksheets — required for xlsx" },
+                    "slides": { "type": "array", "items": { "type": "object" }, "description": "Slides — required for pptx" }
+                },
+                "required": ["format", "path"]
             }
         }),
         serde_json::json!({
@@ -252,8 +296,13 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
         }),
         serde_json::json!({
             "name": "browser_snapshot",
-            "description": "Get the accessibility tree of the page currently open via web_preview, with element refs (e1, e2, ...) that browser_click/browser_type target. Call this first to see what's on the page and find the ref of the element you want, or after a page change/navigation to refresh refs before the next click/type.",
-            "parameters": { "type": "object", "properties": {} }
+            "description": "Get the accessibility tree (DOM structure, not a picture) of the page currently open via web_preview, with element refs (e1, e2, ...) that browser_click/browser_type target. Call this first to see what's on the page and find the ref of the element you want, and again after any action that could have changed the page (navigation, a click that opens/closes something, typing that triggers a live update) — refs from a stale snapshot can point at the wrong element or nothing at all. Large pages are windowed to keep this readable: if the result says 'truncated', call this again with the given offset to read further into the page rather than assuming you've seen everything.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "offset": { "type": "number", "description": "Character offset to resume from — only needed when a previous call reported 'truncated' and gave a next offset to continue from." }
+                }
+            }
         }),
         serde_json::json!({
             "name": "browser_click",
@@ -493,7 +542,7 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "panel": { "type": "string", "enum": ["review", "files", "preview_dev", "preview_browser", "tasks", "terminal"], "description": "review = diff/review panel, files = workspace file tree, preview_dev = the Preview panel in dev-server mode, preview_browser = the Preview panel in browser mode (what shows web_preview/browser_* activity), tasks = background subagent tasks, terminal = the bottom terminal panel" },
+                    "panel": { "type": "string", "description": "One of: review (diff/review panel), files (workspace file tree), preview_dev (the Preview panel in dev-server mode), preview_browser (the Preview panel in browser mode — web_preview/browser_* activity), tasks (background subagent tasks), terminal (the bottom terminal panel). Or \"custom:<name>\" for a panel-type playbook (see list_tools for what's installed — Settings → Mods → Playbooks)." },
                     "action": { "type": "string", "enum": ["open", "close"] }
                 },
                 "required": ["panel", "action"]
@@ -708,6 +757,20 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
                 },
                 "required": ["language", "code"]
             }
-        })
-    ]
+        }),
+        serde_json::json!({
+            "name": "run_script",
+            "description": "Experimental. Run a short JavaScript script that can call several of your own tools directly, in one turn, instead of one tool call per round-trip — use it to chain several reads/searches before a write, or to loop over a list of files, in a single call. Available async functions inside the script (all return Promises — use await):\n  bash(command, timeoutSeconds?) -> string\n  read(path, opts?: {offset?, limit?, pages?, ocr?}) -> string\n  write(path, content) -> string\n  edit(path, oldString, newString) -> string\n  ls(path?, opts?: {depth?, show_hidden?}) -> string\n  grep(pattern, path?) -> string\n  glob(pattern, path?) -> string\nEach call goes through the same approval/gating as calling the tool directly. A failed call throws a catchable JS exception — wrap calls in try/catch if the script should recover instead of aborting. Only use this for genuine multi-step chains; call a tool directly for a single step.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": { "type": "string", "description": "JavaScript source to execute. May use top-level await." },
+                    "timeout_seconds": { "type": "number", "description": "Max seconds before the script is aborted (default 30, max 120)" }
+                },
+                "required": ["code"]
+            }
+        }),
+    ];
+
+    defs
 }

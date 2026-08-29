@@ -69,23 +69,44 @@ fn install_dir() -> Result<PathBuf, String> {
     crate::agent::paths::viv_camoufox_dir()
 }
 
-/// Path to the binary entrypoint inside the install dir.
-/// `~/.viv/camoufox/node_modules/.bin/camofox-browser`
-fn binary_path() -> Result<PathBuf, String> {
-    Ok(install_dir()?.join("node_modules").join(".bin").join("camofox-browser"))
+/// The server's real JS entrypoint — the package's own declared `bin`
+/// (`@askjo/camofox-browser`'s `bin/camofox-browser.js`), NOT the
+/// `node_modules/.bin/camofox-browser` shim next to it.
+///
+/// That distinction is the whole reason this is a separate function: npm
+/// writes three shims into `.bin` — an extensionless *shell script*, a
+/// `.cmd`, and a `.ps1`. The extensionless one is what a bare path resolves
+/// to, and handing it to `node` fails instantly with
+/// `SyntaxError: missing ) after argument list`, because node is parsing
+/// `basedir=$(dirname ...)` as JavaScript. Auto-start therefore never once
+/// worked on Windows, which is why the agent kept reporting
+/// "camoufox-browser is not running" no matter how many times it retried.
+fn server_entry() -> Result<PathBuf, String> {
+    Ok(install_dir()?
+        .join("node_modules")
+        .join("@askjo")
+        .join("camofox-browser")
+        .join("bin")
+        .join("camofox-browser.js"))
 }
 
-/// Path to the `camoufox-js` CLI (a separate package binary from
+/// Path to the `camoufox-js` CLI's real entrypoint (a separate package from
 /// `camofox-browser` above) — used only for its `fetch` subcommand, which
-/// downloads the actual ~300MB browser engine with progress output.
+/// downloads the actual ~300MB browser engine with progress output. Same
+/// shim trap as `server_entry`: this is the declared `bin` target, not
+/// `.bin/camoufox-js`.
 fn camoufox_js_path() -> Result<PathBuf, String> {
-    Ok(install_dir()?.join("node_modules").join(".bin").join("camoufox-js"))
+    Ok(install_dir()?.join("node_modules").join("camoufox-js").join("dist").join("__main__.js"))
 }
 
-/// Check whether camoufox-browser is already installed in our persistent
-/// directory by verifying the binary entrypoint exists.
+/// Whether camoufox-browser is installed AND usable: the entrypoint exists
+/// and its native modules are built. Both halves matter — an install left by
+/// an older build (or interrupted before `rebuild_native_modules`) has the
+/// entrypoint but no bindings, and answering "installed" for that state is
+/// what let a broken install persist across restarts instead of being
+/// repaired on the next launch.
 fn is_installed() -> bool {
-    binary_path().ok().map_or(false, |p| p.exists())
+    server_entry().ok().is_some_and(|p| p.exists()) && native_modules_built()
 }
 
 /// Same check, for `optional_components::status` to report — this only
@@ -148,13 +169,88 @@ async fn install() -> Result<(), String> {
         return Err(format!(
             "`npm install {}` succeeded but the binary wasn't found at {}",
             CAMOUFOX_PACKAGE,
-            binary_path().unwrap_or_default().display(),
+            server_entry().unwrap_or_default().display(),
         ));
     }
+
+    rebuild_native_modules(&dir).await?;
 
     INSTALL_CONFIRMED.store(true, Ordering::SeqCst);
     log::info!("[camoufox] installed successfully at {}", dir.display());
     Ok(())
+}
+
+/// Packages whose `install` script must run for the server to work at all —
+/// they ship native `.node` bindings that `--ignore-scripts` skips.
+///
+/// `better-sqlite3` is the one that bites: its install script is
+/// `prebuild-install || node-gyp rebuild`, so with scripts off it lands on
+/// disk with no `build/` and no `prebuilds/`, and the server 500s on the
+/// first request that touches its session store with a long "Could not
+/// locate the bindings file. Tried: ..." path dump.
+const NATIVE_MODULES: &[&str] = &["better-sqlite3"];
+
+/// Run the install scripts we actually need, without re-enabling scripts for
+/// the whole tree.
+///
+/// `npm install` above deliberately passes `--ignore-scripts` to dodge
+/// `impit`'s `preinstall` hook (`npx only-allow pnpm`, which fails outright
+/// in a spawned process with no `npx` on PATH). That flag is all-or-nothing,
+/// so it took the native builds down with it. `npm rebuild <pkg>` re-runs
+/// scripts for exactly the named packages, leaving `impit` untouched.
+///
+/// Best-effort per package: a rebuild failure is logged and reported, but the
+/// server may still be usable for whatever doesn't touch that module.
+async fn rebuild_native_modules(dir: &std::path::Path) -> Result<(), String> {
+    for pkg in NATIVE_MODULES {
+        log::info!("[camoufox] building native module {pkg}");
+        let mut cmd = if cfg!(windows) {
+            let mut c = tokio::process::Command::new("cmd");
+            c.args(["/C", "npm", "rebuild", pkg]);
+            c
+        } else {
+            let mut c = tokio::process::Command::new("npm");
+            c.args(["rebuild", pkg]);
+            c
+        };
+        cmd.current_dir(dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        match cmd.output().await {
+            Ok(out) if out.status.success() => log::info!("[camoufox] {pkg} built"),
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                return Err(format!(
+                    "camoufox-browser installed, but building its native module `{pkg}` failed (exit {}): {}. \
+                     The browser will fail on first use until this succeeds — it usually needs build tools \
+                     (on Windows, the Visual Studio C++ workload) to be installed.",
+                    out.status,
+                    stderr.trim(),
+                ));
+            }
+            Err(e) => return Err(format!("Couldn't run `npm rebuild {pkg}` ({e}) — is npm on PATH?")),
+        }
+    }
+    Ok(())
+}
+
+/// Whether every native module the server needs is actually built. The npm
+/// package can be fully present while these are missing — that's exactly the
+/// state `--ignore-scripts` leaves behind — so "installed" has to mean both.
+fn native_modules_built() -> bool {
+    let Ok(dir) = install_dir() else { return false };
+    NATIVE_MODULES.iter().all(|pkg| {
+        let base = dir.join("node_modules").join(pkg);
+        // `prebuild-install` drops a prebuilt binary in `prebuilds/`;
+        // `node-gyp rebuild` compiles one into `build/Release/`. Either is fine.
+        base.join("build").join("Release").exists() || base.join("prebuilds").exists()
+    })
 }
 
 // ── Base URL ──────────────────────────────────────────────────────────────
@@ -202,10 +298,11 @@ pub async fn health() -> bool {
 // ── Spawn / ensure running ────────────────────────────────────────────────
 
 /// Launch the locally-installed camoufox-browser server as a detached child
-/// process. Runs `node node_modules/.bin/camofox-browser` from the install
-/// directory — no npx, no re-download.
+/// process. Runs `node` against the package's real entrypoint (see
+/// `server_entry` — deliberately not the `.bin` shim) from the install
+/// directory: no npx, no re-download.
 fn spawn_camoufox() -> Result<(), String> {
-    let bin = binary_path()?;
+    let bin = server_entry()?;
     if !bin.exists() {
         return Err(format!(
             "camoufox-browser binary not found at {}. Run `npm install @askjo/camofox-browser` manually.",
@@ -327,7 +424,7 @@ async fn create_tab(url: &str) -> Result<String, String> {
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("camoufox-browser: creating a tab returned HTTP {status}: {text}"));
+        return Err(format!("camoufox-browser: couldn't open {url} ({status}): {}", explain_error_body(&text)));
     }
     let body: Value = resp.json().await.map_err(|e| format!("camoufox-browser: bad response creating tab: {e}"))?;
     body.get("tabId")
@@ -449,32 +546,78 @@ async fn interact(tab_id: &str, path: &str, body: Value) -> Result<NavigateResul
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("camoufox-browser: {path} returned HTTP {status}: {text}"));
+        return Err(format!("camoufox-browser: {path} failed ({status}): {}", explain_error_body(&text)));
     }
     let screenshot_base64 = take_screenshot(tab_id).await.ok();
     Ok(NavigateResult { tab_id: tab_id.to_string(), screenshot_base64, title_hint: None })
+}
+
+/// The server's error responses (click/type/press/scroll, tab creation,
+/// evaluate) are JSON with an `error` message and, for the recoverable cases
+/// (a stale ref, or the page changing mid-action), a `hint` telling the
+/// caller exactly what to do next (almost always "call browser_snapshot and
+/// retry"). Surfacing the raw JSON blob left that guidance buried in a wall
+/// of `{"error":...,"code":...,"retryable":...}` noise — pull the
+/// actually-actionable fields out instead so the model sees a plain
+/// instruction, not a payload to parse itself.
+fn explain_error_body(body: &str) -> String {
+    let Ok(val) = serde_json::from_str::<Value>(body) else { return body.to_string() };
+    let error = val.get("error").and_then(|v| v.as_str()).unwrap_or(body);
+    match val.get("hint").and_then(|v| v.as_str()) {
+        Some(hint) if hint != error => format!("{error} — {hint}"),
+        _ => error.to_string(),
+    }
+}
+
+/// An accessibility-tree snapshot, plus the metadata needed to know whether
+/// it's the whole page or one windowed chunk of a larger one.
+pub struct SnapshotResult {
+    pub url: String,
+    pub text: String,
+    pub refs_count: u32,
+    pub truncated: bool,
+    pub has_more: bool,
+    pub next_offset: Option<u32>,
 }
 
 /// Accessibility-tree snapshot of the current tab, with element refs (`e1`,
 /// `e2`, ...) that `click`/`type` target — the same endpoint `search()`
 /// already consumes internally, exposed directly so a caller can read the
 /// page before deciding what to click.
-pub async fn snapshot() -> Result<String, String> {
+///
+/// camoufox-browser windows large snapshots (`lib/snapshot.js`, 80,000-char
+/// budget — plenty of real pages exceed that) and embeds a "call snapshot
+/// with offset=N to see more" marker directly in the returned text when it
+/// truncates. `offset` is what makes that instruction actually followable —
+/// without it (the bug this fixed: the endpoint always ignored `offset`),
+/// the model could see the marker telling it to page through the rest of the
+/// DOM but had no parameter to do it with, so anything past the first ~20K
+/// tokens of a page's accessibility tree was permanently unreachable.
+pub async fn snapshot(offset: Option<u32>) -> Result<SnapshotResult, String> {
     let tab_id = current_tab().await?;
     let base = base_url().await;
-    let resp = client()
-        .get(format!("{base}/tabs/{tab_id}/snapshot?userId={USER_ID}"))
-        .send()
-        .await
-        .map_err(|e| not_running_err(&base, e))?;
+    let mut url = format!("{base}/tabs/{tab_id}/snapshot?userId={USER_ID}");
+    if let Some(o) = offset.filter(|o| *o > 0) {
+        url.push_str(&format!("&offset={o}"));
+    }
+    let resp = client().get(url).send().await.map_err(|e| not_running_err(&base, e))?;
     if !resp.status().is_success() {
         return Err(format!("camoufox-browser: snapshot returned HTTP {}", resp.status()));
     }
     let val: Value = resp.json().await.map_err(|e| format!("camoufox-browser: bad snapshot response: {e}"))?;
-    val.get("snapshot")
+    let text = val
+        .get("snapshot")
         .and_then(|v| v.as_str())
         .map(str::to_string)
-        .ok_or_else(|| "camoufox-browser: snapshot response had no 'snapshot' field".to_string())
+        .ok_or_else(|| "camoufox-browser: snapshot response had no 'snapshot' field".to_string())?;
+    Ok(SnapshotResult {
+        url: val.get("url").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        text,
+        refs_count: val.get("refsCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        truncated: val.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false),
+        has_more: val.get("hasMore").and_then(|v| v.as_bool()).unwrap_or(false),
+        next_offset: val.get("nextOffset").and_then(|v| v.as_u64()).map(|v| v as u32),
+    })
 }
 
 /// Click the element with accessibility ref `r` (from `snapshot`).
@@ -520,7 +663,7 @@ pub async fn evaluate(expression: &str) -> Result<Value, String> {
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("camoufox-browser: evaluate returned HTTP {status}: {text}"));
+        return Err(format!("camoufox-browser: evaluate failed ({status}): {}", explain_error_body(&text)));
     }
     let body: Value = resp.json().await.map_err(|e| format!("camoufox-browser: bad evaluate response: {e}"))?;
     body.get("result").cloned().ok_or_else(|| "camoufox-browser: evaluate response had no 'result' field".to_string())

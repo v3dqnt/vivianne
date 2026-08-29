@@ -358,8 +358,9 @@ async fn read_image_summary_impl(display_path: String, full: PathBuf, do_ocr: bo
         "bytes": bytes,
     });
     // `image_base64`/`media_type` are the exact keys the tool dispatcher
-    // already looks for (see `ComputerTool`'s screenshot) to attach an Image
-    // content block — no dispatch-side change needed to wire this up.
+    // already looks for (see `computer::execute_pointer_action`'s
+    // screenshot action) to attach an Image content block — no dispatch-side
+    // change needed to wire this up.
     // `media_type` matches whichever path produced `image_b64`: the original
     // file's real type when passed through unmodified, "image/png" whenever
     // this function did the encoding itself.

@@ -14,6 +14,8 @@ export type SettingsSection =
   | 'automations'
   | 'themes'
   | 'components'
+  | 'updates'
+  | 'voice'
 
 interface SettingsUiState {
   open: boolean

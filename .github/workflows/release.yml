@@ -1,0 +1,97 @@
+# Builds, signs, and publishes a release the in-app updater can consume.
+#
+# The app already ships a configured updater pointing at
+# `releases/latest/download/latest.json` on this repo. That file only exists
+# if something publishes it — this workflow is that something.
+#
+# Trigger: push a version tag.
+#   npm version patch -ws --no-git-tag-version   # or edit versions by hand
+#   git commit -am "Release v1.7.3" && git tag v1.7.3 && git push --follow-tags
+#
+# Required repository secret (Settings → Secrets and variables → Actions):
+#   TAURI_SIGNING_PRIVATE_KEY   — the minisign PRIVATE key whose public half
+#                                 is in tauri.conf.json's `plugins.updater.pubkey`.
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — only if you set a passphrase.
+#
+# Generate a pair with:  npx @tauri-apps/cli signer generate -w ~/.tauri/viv.key
+# Then put the PRIVATE key's contents in the secret, and the printed PUBLIC
+# key into tauri.conf.json. An update signed by a key that doesn't match the
+# configured pubkey is rejected by every client — that check is the whole
+# point of the signature, so a mismatch fails closed and silently.
+#
+# GITHUB_TOKEN is provided automatically by Actions; no token needs creating.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Manual runs build and verify without publishing, so the pipeline can be
+  # exercised before committing to a tag.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Windows only for now — this is a Windows-first app (the DIP automation
+    # layer is Windows-only). Add macos-latest / ubuntu-22.04 to this matrix
+    # when those platforms are actually supported; tauri-action merges every
+    # matrix job's artifacts into one latest.json.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Keyed on the lockfile so a dependency change busts it, and scoped to
+      # the tauri crate's own target dir.
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: packages/gui/src-tauri -> target
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Fail before the (slow) Rust build if the frontend is broken.
+      - name: Typecheck frontend
+        run: npx tsc -b --noEmit
+        working-directory: packages/gui-next
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: packages/gui
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Vivianne ${{ github.ref_name }}'
+          # Pulled from CHANGELOG.md rather than retyped — the app's own
+          # "what's new" dialog reads that same file, so a release whose notes
+          # were written separately would disagree with what users are shown.
+          releaseBody: 'See CHANGELOG.md for the full notes.'
+          # Published immediately: a draft release does not serve
+          # `releases/latest/download/latest.json`, so leaving this true means
+          # the updater keeps 404ing exactly as it does today.
+          releaseDraft: false
+          prerelease: false
+          # The manifest the updater actually fetches. Without this, the
+          # release contains installers but nothing telling clients they exist.
+          includeUpdaterJson: true
+          args: ${{ matrix.args }}

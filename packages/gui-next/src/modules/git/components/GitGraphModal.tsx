@@ -22,7 +22,7 @@ export function GitGraphModal({ open, onClose, root }: { open: boolean; onClose:
   const branchesByHead = branches.filter((b) => b.isCurrent).map((b) => b.name)
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth slotProps={{ paper: { sx: { height: 560, borderRadius: '18px' } } }}>
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth slotProps={{ paper: { sx: { height: 560, borderRadius: 3 } } }}>
       <Stack sx={{ height: '100%', minHeight: 0 }}>
         <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
           <Hierarchy2Linear size={16} color="currentColor" />
