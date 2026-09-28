@@ -1,7 +1,5 @@
 import { memo, useState } from 'react'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
+import { Box, Stack, Typography } from '../../../ui'
 import { TaskLinear, ArrowDownLinear, ArrowUpLinear, TickCircleLinear, AddCircleLinear, StopCircleLinear } from '../../../icons'
 import { useAgentStore } from '../store/agentStore'
 import type { AgentMessage } from '../lib/types'

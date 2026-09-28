@@ -25,6 +25,9 @@ fn migrate_dir_once(old: &Path, new: &Path) {
 /// exist yet and `.pi` does.
 pub fn viv_home() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "Could not find home directory".to_string())?;
+    if let Some(p) = profile() {
+        return Ok(profile_home(&p).unwrap_or_else(|| home.join(".viv-profiles").join(&p)));
+    }
     let viv = home.join(".viv");
     MIGRATE_ONCE.call_once(|| migrate_dir_once(&home.join(".pi"), &viv));
     Ok(viv)
@@ -130,4 +133,75 @@ mod tests {
         assert!(!new.exists());
         let _ = std::fs::remove_dir_all(&temp);
     }
+}
+
+/// Move `old` to `new` when only `old` exists (file or folder), creating
+/// `new`'s parent first. Best-effort, like `migrate_dir_once`: a failed move
+/// leaves the data where it was, and nothing is ever deleted.
+fn migrate_path(old: &Path, new: &Path) {
+    if !new.exists() && old.exists() {
+        if let Some(parent) = new.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::rename(old, new);
+    }
+}
+
+/// `~/.viv/<rel…>`. Some features predate the `.viv` name and wrote to
+/// `~/.vivianne/<rel…>`; that data is moved here the first time it's asked for.
+pub fn viv_home_path(rel: &[&str]) -> PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let new = rel.iter().fold(viv_home().unwrap_or_else(|_| home.join(".viv")), |p, part| p.join(part));
+    let old = rel.iter().fold(home.join(".vivianne"), |p, part| p.join(part));
+    migrate_path(&old, &new);
+    new
+}
+
+/// `<project>/.viv/<rel…>`, moving an older `<project>/.vivianne/<rel…>` here
+/// the first time — so a project keeps one app folder, not two.
+pub fn project_viv_path(root: &Path, rel: &[&str]) -> PathBuf {
+    let new = rel.iter().fold(root.join(".viv"), |p, part| p.join(part));
+    let old = rel.iter().fold(root.join(".vivianne"), |p, part| p.join(part));
+    migrate_path(&old, &new);
+    new
+}
+
+#[cfg(test)]
+mod legacy_path_tests {
+    use super::*;
+
+    #[test]
+    fn project_data_moves_from_vivianne_to_viv() {
+        let root = std::env::temp_dir().join(format!("viv-paths-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join(".vivianne").join("memory")).unwrap();
+        std::fs::write(root.join(".vivianne").join("memory").join("entries.jsonl"), "x").unwrap();
+        let p = project_viv_path(&root, &["memory"]);
+        assert_eq!(p, root.join(".viv").join("memory"));
+        assert_eq!(std::fs::read_to_string(p.join("entries.jsonl")).unwrap(), "x");
+        assert!(!root.join(".vivianne").join("memory").exists());
+        // Already moved: a second call changes nothing.
+        assert_eq!(project_viv_path(&root, &["memory"]), p);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+/// The profile this process runs as, from `VIV_PROFILE` — `None` for the
+/// normal install. A profile is a completely separate Vivianne on the same
+/// machine: its own settings, projects, sessions, multiplayer identity and
+/// browser storage (API keys stay shared through the OS keychain). It's how
+/// two instances can pair with each other for testing on one computer.
+pub fn profile() -> Option<String> {
+    static PROFILE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    PROFILE
+        .get_or_init(|| {
+            let raw = std::env::var("VIV_PROFILE").ok()?;
+            let clean: String = raw.trim().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(32).collect();
+            (!clean.is_empty()).then_some(clean)
+        })
+        .clone()
+}
+
+/// Where profile `name` keeps its data: `~/.viv-profiles/<name>`.
+pub fn profile_home(name: &str) -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join(".viv-profiles").join(name))
 }

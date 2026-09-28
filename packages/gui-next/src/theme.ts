@@ -1,169 +1,200 @@
-import { createTheme, type Theme } from '@mui/material/styles'
+import { createTheme, type Mode, type Theme, type Tokens } from './ui'
 import './assets/fonts/fonts.css'
 
-// A third background level, between `default` (canvas) and `paper` (floating
-// cards) — used by docked shell chrome (rail, sidebar, side panel, bottom
-// terminal) so those regions read as a distinct tone instead of relying on a
-// 1px divider line to do all the separating work.
-declare module '@mui/material/styles' {
-  interface TypeBackground {
-    chrome: string
-  }
-}
-
 /**
- * The single source of visual truth. The previous frontend accumulated four
- * overlapping styling systems (Tailwind + daisyUI + Astryx + Radix), which is
- * what made it unmaintainable — every component picked a different one. This
- * app has exactly one: MUI's theme. No utility classes, no second component
- * library, no raw hex outside this file.
- *
- * Themes: a small set of named palettes, each with light + dark variants,
- * picked from the Settings → Themes tab (the old frontend's equivalent lived
- * in CSS variables on <html>; here it's just MUI palette overrides).
+ * The single source of visual truth: Terax's design language (see
+ * `ui/theme.ts`). The default theme is monochrome — "primary" is the ink
+ * colour. Presets add a colour identity by swapping only `primary` and
+ * `ring`; every neutral stays put, so the chrome reads the same in all of
+ * them. Picked from Settings → Theme & layout.
  */
+
+type TokenSet = Omit<Tokens, 'frame'>
+
+/** Terax's default neutrals. */
+const NEUTRAL: Record<Mode, TokenSet> = {
+  light: {
+    background: '#ffffff',
+    foreground: '#111111',
+    card: '#f3f3f3',
+    popover: '#ffffff',
+    primary: '#111111',
+    primaryForeground: '#ffffff',
+    secondary: '#ededed',
+    muted: '#ededed',
+    mutedForeground: '#656565',
+    accent: '#e5e5e5',
+    destructive: '#c0392f',
+    border: 'rgba(0, 0, 0, 0.09)',
+    input: 'rgba(0, 0, 0, 0.13)',
+    ring: '#8a8a8a',
+  },
+  dark: {
+    background: '#141414',
+    foreground: '#f7f7f7',
+    card: '#1d1d1d',
+    popover: '#1d1d1d',
+    primary: '#f7f7f7',
+    primaryForeground: '#141414',
+    secondary: '#2a2a2a',
+    muted: '#1d1d1d',
+    mutedForeground: '#a3a3a3',
+    accent: '#2a2a2a',
+    destructive: '#e35d5d',
+    border: 'rgba(255, 255, 255, 0.09)',
+    input: 'rgba(255, 255, 255, 0.13)',
+    ring: '#8a8a8a',
+  },
+}
 
 export interface PaletteDef {
   id: string
   label: string
   symbol: string
   swatches: string[]
-  light: PaletteColors
-  dark: PaletteColors
+  /** Per mode: the tokens this preset changes. Usually just the accent. */
+  light: Partial<TokenSet>
+  dark: Partial<TokenSet>
 }
 
-export interface PaletteColors {
-  background: string
-  /** Docked shell chrome (rail, sidebar, side panel, terminal) \u2014 one step
-   * from `background`, one step before `paper`. See the `TypeBackground`
-   * augmentation above. */
-  chrome: string
-  paper: string
-  primary: string
-  textPrimary: string
-  textSecondary: string
-}
+const accent = (color: string, onColor: string) => ({ primary: color, primaryForeground: onColor, ring: color })
 
 export const PALETTES: PaletteDef[] = [
   {
+    id: 'terax',
+    label: 'Monochrome',
+    symbol: '◐',
+    swatches: ['#f7f7f7', '#a3a3a3', '#2a2a2a', '#141414'],
+    light: {},
+    dark: {},
+  },
+  {
     id: 'vivianne',
     label: 'Vivianne',
-    symbol: '\u2600',
-    swatches: ['#4a9eff', '#0a5a9c', '#0a0a0a', '#ededed'],
-    light: { background: '#f4f6fb', chrome: '#f8f9fc', paper: '#ffffff', primary: '#1a73e8', textPrimary: '#14171c', textSecondary: '#5b6470' },
-    dark: { background: '#0a0a0a', chrome: '#101010', paper: '#141414', primary: '#4a9eff', textPrimary: '#ededed', textSecondary: '#a1a1a1' },
+    symbol: '☀',
+    swatches: ['#4a9eff', '#1a73e8', '#1d1d1d', '#f7f7f7'],
+    light: accent('#1a73e8', '#ffffff'),
+    dark: accent('#4a9eff', '#0a0a0a'),
+  },
+  {
+    id: 'claude',
+    label: 'Claude',
+    symbol: '✳',
+    swatches: ['#d97757', '#262624', '#b0a89a', '#f5f4ee'],
+    light: {
+      background: '#faf9f5',
+      card: '#f0eee6',
+      popover: '#faf9f5',
+      foreground: '#1f1e1d',
+      mutedForeground: '#6b675f',
+      secondary: '#e8e6dc',
+      muted: '#e8e6dc',
+      accent: '#e3e0d4',
+      border: 'rgba(31, 30, 29, 0.10)',
+      ...accent('#c96442', '#ffffff'),
+    },
+    dark: {
+      background: '#1f1e1d',
+      card: '#262624',
+      popover: '#262624',
+      foreground: '#f5f4ee',
+      mutedForeground: '#b0a89a',
+      secondary: '#30302e',
+      muted: '#262624',
+      accent: '#30302e',
+      border: 'rgba(245, 244, 238, 0.10)',
+      input: 'rgba(245, 244, 238, 0.13)',
+      ...accent('#d97757', '#1f1e1d'),
+    },
   },
   {
     id: 'indigo',
     label: 'Space Indigo',
-    symbol: '\u2726',
+    symbol: '✦',
     swatches: ['#ef233c', '#2b2d42', '#8d99ae', '#edf2f4'],
-    light: { background: '#f0f2f8', chrome: '#f5f6fb', paper: '#ffffff', primary: '#c41e30', textPrimary: '#2b2d42', textSecondary: '#5d6078' },
-    dark: { background: '#1a1b2e', chrome: '#212236', paper: '#2b2d42', primary: '#ef233c', textPrimary: '#edf2f4', textSecondary: '#8d99ae' },
+    light: accent('#c41e30', '#ffffff'),
+    dark: accent('#ef233c', '#ffffff'),
   },
   {
     id: 'graphite',
     label: 'Graphite',
-    symbol: '\u25c8',
-    swatches: ['#a9a29c', '#333333', '#d5ccc7', '#28262b'],
-    light: { background: '#f5f3f1', chrome: '#f9f7f5', paper: '#ffffff', primary: '#5a5550', textPrimary: '#333333', textSecondary: '#6b6560' },
-    dark: { background: '#1a1819', chrome: '#201e20', paper: '#28262b', primary: '#a9a29c', textPrimary: '#e8e4e0', textSecondary: '#b0a8a2' },
+    symbol: '◈',
+    swatches: ['#a9a29c', '#5a5550', '#28262b', '#e8e4e0'],
+    light: accent('#5a5550', '#ffffff'),
+    dark: accent('#a9a29c', '#141414'),
   },
 ]
 
-const BASE = {
-  shape: { borderRadius: 10 },
-  typography: {
-    fontFamily: '"Sora", system-ui, -apple-system, sans-serif',
-    fontSize: 13,
-    button: { textTransform: 'none' as const, fontWeight: 500 },
-  },
-}
+const FONT_FAMILY = '"Geist", system-ui, -apple-system, "Segoe UI", sans-serif'
+const MONO_FAMILY = '"Geist Mono", ui-monospace, "Cascadia Code", monospace'
 
-export function buildTheme(mode: 'light' | 'dark', paletteId: string): Theme {
-  const palette = PALETTES.find((p) => p.id === paletteId) ?? PALETTES[0]
-  const colors = mode === 'dark' ? palette.dark : palette.light
+export function buildTheme(mode: Mode, paletteId: string): Theme {
+  const preset = PALETTES.find((p) => p.id === paletteId) ?? PALETTES[0]
   return createTheme({
-    ...BASE,
-    palette: {
-      mode,
-      background: { default: colors.background, chrome: colors.chrome, paper: colors.paper },
-      primary: { main: colors.primary },
-      text: { primary: colors.textPrimary, secondary: colors.textSecondary },
-      divider: mode === 'dark' ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.12)',
-    },
-    components: {
-      // A desktop app is a single long-lived window, not a document — it should
-      // never rubber-band or show a page scrollbar at the root.
-      MuiCssBaseline: {
-        styleOverrides: {
-          'html, body, #root': {
-            height: '100%',
-            overflow: 'hidden',
-            margin: 0,
-          },
-          '*': {
-            scrollbarWidth: 'thin',
-            scrollbarColor: mode === 'dark' ? 'rgba(255,255,255,0.18) transparent' : 'rgba(0,0,0,0.25) transparent',
-          },
-          '*::-webkit-scrollbar': { width: 8, height: 8 },
-          '*::-webkit-scrollbar-track': { background: 'transparent' },
-          '*::-webkit-scrollbar-thumb': {
-            backgroundColor: mode === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.2)',
-            borderRadius: 8,
-            border: '2px solid transparent',
-            backgroundClip: 'padding-box',
-          },
-          '*::-webkit-scrollbar-thumb:hover': {
-            backgroundColor: mode === 'dark' ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.32)',
-            border: '1px solid transparent',
-            backgroundClip: 'padding-box',
-          },
-        },
-      },
-    },
+    mode,
+    tokens: { ...NEUTRAL[mode], ...preset[mode] },
+    fontFamily: FONT_FAMILY,
+    monoFamily: MONO_FAMILY,
+    radius: 10,
   })
 }
 
-/** Default export kept for any consumer that hasn't adopted the store yet. */
-export const theme = buildTheme('dark', 'vivianne')
-
-/**
- * The one glass-surface treatment used by every piece of floating/docked
- * chrome — sidebar, dock, composer, settings dialog. Originally hand-rolled
- * separately in the composer and the dock with identical dark-only rgba
- * values; centralized here so the whole app reads as one surface language
- * instead of a composer that happens to look like the dock. Mode-aware
- * (the old hardcoded white-tinted values were invisible against a light
- * background) — dark mode lightens with translucent white, light mode
- * lightens with translucent white too but shifts the shadow and border to
- * dark-tinted so it still reads as glass rather than a flat white card.
- */
-/** Corner radius for every floating chrome surface — the sidebar, both docks,
- * and the Settings dialog. One constant because these sit next to each other
- * on screen: a card at 30px beside one at 12px reads as two unrelated
- * components rather than one system. Deliberately a raw px value, not a
- * `theme.shape.borderRadius` multiple — `borderRadius: 3` against this
- * theme's base of 10 silently means 30px, which is what made these look
- * like blobs. */
-export const SURFACE_RADIUS = 12
-
-/** The full card treatment: glass fill plus the shared radius. Prefer this
- * over hand-pairing `glassSurface` with a local radius. */
-export function surfaceCard(mode: 'light' | 'dark') {
-  return { ...glassSurface(mode), borderRadius: `${SURFACE_RADIUS}px` } as const
+/** App-wide resets on top of the kit's baseline, passed to `CssBaseline`. */
+export function baselineExtras(_mode: Mode) {
+  return {
+    // A desktop app is a single long-lived window, not a document — it should
+    // never rubber-band or show a page scrollbar at the root.
+    'html, body, #root': {
+      height: '100%',
+      // `clip`, not `hidden`. Both hide overflow, but a `hidden` box is
+      // still a scroll container: focusing anything that sits below the
+      // fold scrolls it to bring the element into view. When a docked
+      // terminal first mounted, its input briefly sat off-screen and
+      // xterm focused it — scrolling the entire app up by ~260px, with
+      // no scrollbar to scroll it back. `clip` can't be scrolled at all.
+      overflow: 'clip',
+      margin: 0,
+    },
+    // No native scrollbars anywhere: they are chunky on Windows and flash
+    // on macOS. Regions still scroll with the wheel, trackpad and keys.
+    'html *': { scrollbarWidth: 'none' },
+    'html *::-webkit-scrollbar': { display: 'none', width: 0, height: 0 },
+    // Chrome isn't text. Selection is on only where there's something to
+    // copy: fields, editors, the terminal, and regions marked `.select-text`.
+    body: { userSelect: 'none' },
+    'input, textarea, [contenteditable="true"], .select-text, .select-text *, .cm-editor, .xterm': { userSelect: 'text' },
+    // One global snap for reduced motion rather than per-component opt-outs.
+    '@media (prefers-reduced-motion: reduce)': {
+      '*, *::before, *::after': { animationDuration: '0.01ms !important', animationIterationCount: '1 !important', transitionDuration: '0.01ms !important' },
+    },
+  }
 }
 
-export function glassSurface(mode: 'light' | 'dark') {
-  const dark = mode === 'dark'
+/** Default export kept for any consumer that hasn't adopted the store yet. */
+export const theme = buildTheme('dark', 'terax')
+
+/** Corner radius of a pane — the sidebar, every dock panel, the composer
+ * card (Terax's `--pane-radius`, base radius × 1.4). One constant because
+ * panes sit side by side: different radii would read as unrelated objects.
+ * A raw px value, not an `sx` radius multiple (`borderRadius: 1.4` would
+ * also mean 14px, but reads as a mystery number). */
+export const SURFACE_RADIUS = 14
+
+/**
+ * A pane: the working surfaces floating on the frame. Solid fill, a 9%
+ * hairline, no drop shadow (resizable panes would clip it) — in dark mode
+ * only a faint inset top highlight. Values are palette paths, for `sx`.
+ */
+export function glassSurface(mode: Mode) {
   return {
-    bgcolor: dark ? 'rgba(255,255,255,0.045)' : 'rgba(255,255,255,0.6)',
-    backdropFilter: 'blur(20px) saturate(150%)',
-    WebkitBackdropFilter: 'blur(20px) saturate(150%)',
+    bgcolor: 'background.pane',
     border: '1px solid',
-    borderColor: dark ? 'rgba(255,255,255,0.08)' : 'rgba(20,23,28,0.08)',
-    boxShadow: dark
-      ? '0 12px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)'
-      : '0 12px 32px rgba(20,23,28,0.12), inset 0 1px 0 rgba(255,255,255,0.7)',
+    borderColor: 'divider',
+    boxShadow: mode === 'dark' ? 'inset 0 1px 0 rgba(255,255,255,0.035)' : 'none',
   } as const
+}
+
+/** A pane with its radius. */
+export function surfaceCard(mode: Mode) {
+  return { ...glassSurface(mode), borderRadius: `${SURFACE_RADIUS}px` } as const
 }

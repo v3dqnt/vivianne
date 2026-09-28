@@ -1,25 +1,12 @@
 import { useEffect, useState } from 'react'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import ButtonBase from '@mui/material/ButtonBase'
-import Tooltip from '@mui/material/Tooltip'
-import IconButton from '@mui/material/IconButton'
-import Dialog from '@mui/material/Dialog'
-import DialogTitle from '@mui/material/DialogTitle'
-import DialogContent from '@mui/material/DialogContent'
-import DialogActions from '@mui/material/DialogActions'
-import TextField from '@mui/material/TextField'
-import Button from '@mui/material/Button'
-import Menu from '@mui/material/Menu'
-import MenuItem from '@mui/material/MenuItem'
-import Typography from '@mui/material/Typography'
-import FormControlLabel from '@mui/material/FormControlLabel'
-import Switch from '@mui/material/Switch'
-import Divider from '@mui/material/Divider'
+import { Box, Stack, ButtonBase, Tooltip, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button, Menu, MenuItem, Typography, FormControlLabel, Switch, Divider } from '../../../ui'
 import { AddLinear, SettingsLinear, FolderLinear, Link2Linear, MessageSquareLinear } from '../../../icons'
 import { useSettingsUi } from '../../settings/store/uiStore'
 import { useProjectsStore, projectColor, projectInitial, PROJECT_COLORS, GENERAL_PROJECT_ID, type Project } from '../store/projectsStore'
 import { useMultiplayerStore } from '../../multiplayer/store/multiplayerStore'
+import { call } from '../../../ipc'
+import { isWindows } from '../../../lib/platform'
+import { OnboardingDialog } from './OnboardingDialog'
 
 export const PROJECT_RAIL_WIDTH = 56
 
@@ -42,6 +29,9 @@ function ProjectDialog({ project, open, onClose }: { project: Project | null; op
   // fields above).
   const [multiplayer, setMultiplayer] = useState(false)
   const [peerId, setPeerId] = useState('')
+  // Pair with a second Vivianne on this computer instead of another device.
+  const [testPartner, setTestPartner] = useState(false)
+  const [partnerError, setPartnerError] = useState<string | null>(null)
   const [gitRemote, setGitRemote] = useState('')
 
   useEffect(() => {
@@ -50,6 +40,8 @@ function ProjectDialog({ project, open, onClose }: { project: Project | null; op
     setPath(project?.path ?? '')
     setColor(project?.color ?? Object.keys(PROJECT_COLORS)[0])
     setMultiplayer(false)
+    setTestPartner(false)
+    setPartnerError(null)
     setPeerId('')
     setGitRemote('')
     if (!project) void initMultiplayer()
@@ -76,7 +68,11 @@ function ProjectDialog({ project, open, onClose }: { project: Project | null; op
         await update(project.id, name, path || null, color)
       } else if (multiplayer) {
         if (!isMultiplayerReady) return
-        await createMultiplayer(name, path.trim(), peerId.trim(), null, gitRemote.trim() || null, color)
+        await createMultiplayer(name, path.trim(), peerId.trim(), testPartner ? 'Test partner' : null, gitRemote.trim() || null, color)
+        if (testPartner) {
+          // Gives the partner the mirror of this project and opens it.
+          await call('cmd_multiplayer_launch_test_partner', { name: name.trim(), folder: path.trim() })
+        }
       } else {
         await create(name, path || null, color)
       }
@@ -99,7 +95,7 @@ function ProjectDialog({ project, open, onClose }: { project: Project | null; op
               value={path}
               onChange={(e) => setPath(e.target.value)}
               fullWidth
-              placeholder="C:\\Users\\you\\Work\\project"
+              placeholder={isWindows ? String.raw`C:\Users\you\Work\project` : '/Users/you/Work/project'}
             />
             <Button size="small" onClick={() => void pickFolder()} startIcon={<FolderLinear size={13} color="currentColor" />} sx={{ flexShrink: 0 }}>
               Browse
@@ -141,16 +137,55 @@ function ProjectDialog({ project, open, onClose }: { project: Project | null; op
               {multiplayer && (
                 <Stack sx={{ gap: 1.5, p: 1.5, borderRadius: 1.5, bgcolor: 'action.hover' }}>
                   <Typography variant="caption" color="text.secondary">
-                    A folder is required — it becomes a git repo both of you work against. Get your pair's pairing code from
-                    Settings → Multiplayer on their end.
+                    A folder is required — it becomes a git repo both of you work against. You each paste the other’s
+                    pairing code (yours is below; they see theirs in this same dialog).
                   </Typography>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        size="small"
+                        checked={testPartner}
+                        onChange={async (e) => {
+                          const on = e.target.checked
+                          setTestPartner(on)
+                          setPartnerError(null)
+                          if (!on) {
+                            setPeerId('')
+                            return
+                          }
+                          try {
+                            const id = await call<string>('cmd_multiplayer_test_partner_id')
+                            if (id) setPeerId(id)
+                          } catch (err) {
+                            setTestPartner(false)
+                            setPartnerError(err instanceof Error ? err.message : String(err))
+                          }
+                        }}
+                      />
+                    }
+                    label={
+                      <Stack>
+                        <Typography variant="body2">Test with a partner on this computer</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          No second device? A second Vivianne opens here with its own data, already paired to this project.
+                        </Typography>
+                      </Stack>
+                    }
+                    sx={{ alignItems: 'flex-start', '& .ui-Switch': { mt: 0.25 } }}
+                  />
+                  {partnerError && (
+                    <Typography variant="caption" color="error.main">
+                      {partnerError}
+                    </Typography>
+                  )}
                   <TextField
                     size="small"
-                    label="Your pair's pairing code"
+                    label={testPartner ? "Test partner's pairing code" : "Your pair's pairing code"}
                     value={peerId}
                     onChange={(e) => setPeerId(e.target.value)}
+                    disabled={testPartner}
                     fullWidth
-                    slotProps={{ input: { sx: { fontFamily: '"JetBrains Mono", ui-monospace, monospace', fontSize: '0.75rem' } } }}
+                    slotProps={{ input: { sx: { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem' } } }}
                   />
                   <TextField
                     size="small"
@@ -199,6 +234,9 @@ export function ProjectRail() {
   const openSettings = useSettingsUi((s) => s.openSettings)
   const [dialog, setDialog] = useState<{ open: boolean; project: Project | null }>({ open: false, project: null })
   const [menu, setMenu] = useState<{ anchor: HTMLElement; project: Project } | null>(null)
+  // New projects start with onboarding. The plain dialog remains for editing
+  // a project and for multiplayer setup, which onboarding doesn't cover.
+  const [onboarding, setOnboarding] = useState(false)
 
   useEffect(() => {
     void refresh()
@@ -274,7 +312,7 @@ export function ProjectRail() {
       <Tooltip title="New project" placement="right">
         <IconButton
           size="small"
-          onClick={() => setDialog({ open: true, project: null })}
+          onClick={() => setOnboarding(true)}
           sx={{ width: 38, height: 38, flexShrink: 0, borderRadius: 2, color: 'text.secondary', '&:hover': { bgcolor: 'action.hover' } }}
         >
           <AddLinear size={17} color="currentColor" />
@@ -310,6 +348,15 @@ export function ProjectRail() {
       </Menu>
 
       <ProjectDialog open={dialog.open} project={dialog.project} onClose={() => setDialog({ open: false, project: null })} />
+      <OnboardingDialog
+        open={onboarding}
+        project={null}
+        onClose={() => setOnboarding(false)}
+        onMultiplayer={() => {
+          setOnboarding(false)
+          setDialog({ open: true, project: null })
+        }}
+      />
     </Stack>
   )
 }

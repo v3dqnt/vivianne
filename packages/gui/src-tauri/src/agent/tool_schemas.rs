@@ -3,6 +3,64 @@
 //! schemas, the execution loop, and per-tool handlers) so the two concerns
 //! don't have to be scrolled through together.
 
+/// Every top-level tool name a playbook must NOT be allowed to take:
+/// every built-in tool's own name, plus `"computer"` — not itself a schema
+/// entry, but a name `agent::tool_exec` still dispatches as a silent alias
+/// for `dip` (see its match arm), so it needs to be off-limits too.
+///
+/// `coding_agent::playbooks::load_playbooks` is the ONE place both the
+/// schema list (`agent::tool_exec::get_agent_tool_definitions`) and the
+/// `Tool` registry (`coding_agent::tool_exec::create_coding_tools`) source
+/// playbooks from, so filtering there — rather than in each caller — closes
+/// both problems a same-named playbook would otherwise cause with one check:
+/// a literal duplicate `"name"` entry in the JSON array sent to the model,
+/// and a playbook that can never actually run because the registry lookup
+/// returns the built-in with the same name first and stops looking.
+pub(crate) fn reserved_tool_names() -> std::collections::HashSet<String> {
+    let mut names: std::collections::HashSet<String> =
+        static_tool_definitions().iter().filter_map(|d| d.get("name").and_then(|v| v.as_str())).map(String::from).collect();
+    names.insert("computer".to_string());
+    names
+}
+
+/// The `powershell` tool's description, which has to tell the truth about the
+/// host it is running on.
+///
+/// Windows always has `powershell.exe`. Everywhere else the executor shells
+/// out to `pwsh` (PowerShell Core), which is an optional install almost nobody
+/// has on a Mac — so advertising it as a peer of `bash` there just invites the
+/// model to spend a turn discovering it does not exist. When it IS installed,
+/// it works fine and is described normally; the probe is cached for the
+/// process, since a shell does not appear or vanish mid-session.
+fn powershell_description() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "Execute a PowerShell command. Preferred on Windows for shell operations. Streams live output to the GUI as it runs, same as bash."
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::sync::OnceLock;
+        static AVAILABLE: OnceLock<bool> = OnceLock::new();
+        if *AVAILABLE.get_or_init(|| which::which("pwsh").is_ok()) {
+            "Execute a PowerShell (Core) command via `pwsh`. This is not Windows, so `bash` is the native shell here and is what you should reach for by default; use this only when a task genuinely calls for PowerShell. Streams live output to the GUI as it runs."
+        } else {
+            "UNAVAILABLE on this machine: PowerShell Core (`pwsh`) is not installed and this is not Windows. Use `bash` instead — it is the native shell here. Calling this tool will fail."
+        }
+    }
+}
+
+/// The Windows-only half of the `dip` tool description — appended to the
+/// shared pixel-mode text only where `uiautomation` actually compiles.
+#[cfg(target_os = "windows")]
+/// Documents the narration cursor, which is not control and is easy to
+/// mistake for it. Appended to the `computer` tool description on every
+/// platform, unlike `STRUCTURED_MODE_DOC`, because it is only a window.
+const NARRATION_DOC: &str = "
+
+SHOWING THE USER (point_at / highlight / clear_pointer) — draws a second, decorative cursor. It does NOT move the real mouse, click, or steal focus, so it is always safe. Use it when you are explaining rather than doing: point_at{x,y,text} puts a pulsing marker with a caption at a screen coordinate, highlight{x,y,width,height,text} rings a region, clear_pointer removes it. Reach for it when the user asks where something is, or just before an action they would want to see coming. Clear it when the answer no longer applies. Coordinates are the same screen coordinates screenshot and snapshot report.";
+
+const STRUCTURED_MODE_DOC: &str = "\n\nSTRUCTURED MODE (snapshot / interact / list_windows / focus_window / window_action / launch_app) — Windows only, PREFERRED for real application UI over guessing pixels. snapshot reads a window's actual UI Automation tree (buttons, fields, text, each with a reliable numeric id) and briefly highlights every found element on screen. PASS THE WINDOW ID from list_windows to snapshot — it raises that window and reads it. Without an id, snapshot falls back to whatever currently has keyboard focus, which is almost always Vivianne's own window rather than the app you meant. interact then acts on one element by id — the real cursor visibly moves there first, then clicks/types, exactly like a person would. list_windows/focus_window/window_action manage which window is in front; launch_app starts a new process. Typical flow: list_windows -> snapshot with that window's id (or launch_app then list_windows if it isn't open yet) -> interact -> snapshot again (ids only last one snapshot call, so re-snapshot after anything that could have changed the UI). Fall back to pixel mode only when snapshot finds nothing useful (canvas/game UI).";
+
 #[allow(unused_mut)] // `mut` on `computer_actions` only needed on Windows, extended below
 pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
     // The `computer` tool's action list — cross-platform "pixel mode" plus,
@@ -13,9 +71,21 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
     let mut computer_actions = vec![
         "screenshot", "mouse_move", "left_click", "left_click_drag", "right_click",
         "middle_click", "double_click", "type", "key", "cursor_position",
+        // Narration, not control: these draw a marker on screen and move
+        // nothing. Cross-platform, because they are only a Tauri window.
+        "point_at", "highlight", "clear_pointer",
     ];
     #[cfg(target_os = "windows")]
     computer_actions.extend(["snapshot", "interact", "list_windows", "focus_window", "window_action", "launch_app"]);
+
+    // The description has to be gated the same way the `enum` above is. It
+    // was not, so on macOS and Linux the model was told at length to prefer
+    // structured mode, then rejected for calling an action the schema does
+    // not list — an unforced error loop on every non-Windows host.
+    #[cfg(target_os = "windows")]
+    let structured_mode = STRUCTURED_MODE_DOC;
+    #[cfg(not(target_os = "windows"))]
+    let structured_mode = "\n\nSTRUCTURED MODE (reading an app's real UI tree instead of guessing pixels) is Windows-only and unavailable on this machine, so pixel mode is the only option here. Take a screenshot, act on what you see in it, then screenshot again to confirm the action landed.";
 
     let mut defs = vec![
         serde_json::json!({
@@ -108,8 +178,8 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
             }
         }),
         serde_json::json!({
-            "name": "computer",
-            "description": "Control the computer: mouse, keyboard, and screen. Read the 'computer-use' skill before your first call if you haven't already — it has the full decision process and worked examples. Two modes, pick per situation:\n\nPIXEL MODE (screenshot / mouse_move / left_click / left_click_drag / right_click / middle_click / double_click / type / key / cursor_position) — cross-platform. Take a screenshot first to see what's on screen, then act on pixel coordinates read off it. left_click/right_click/double_click accept an optional 'coordinate' to move-then-click in one call. Works on anything, including canvas-rendered apps and games, but coordinates are a guess you verify visually with another screenshot.\n\nSTRUCTURED MODE (snapshot / interact / list_windows / focus_window / window_action / launch_app) — Windows only, PREFERRED for real application UI over guessing pixels. snapshot reads the focused window's actual UI Automation tree (buttons, fields, text, each with a reliable numeric id) and briefly highlights every found element on screen. interact then acts on one element by id — the real cursor visibly moves there first, then clicks/types, exactly like a person would. list_windows/focus_window/window_action manage which window is in front (snapshot/interact only ever act on whichever window is currently focused); launch_app starts a new process. Typical flow: list_windows -> focus_window (or launch_app if it isn't open yet) -> snapshot -> interact -> snapshot again (ids only last one snapshot call, so re-snapshot after anything that could have changed the UI). Fall back to pixel mode only when snapshot finds nothing useful (canvas/game UI).",
+            "name": "dip",
+            "description": "Control the computer: mouse, keyboard, and screen. Read the 'dip' skill before your first call if you haven't already — it has the full decision process and worked examples. Two modes, pick per situation:\n\nPIXEL MODE (screenshot / mouse_move / left_click / left_click_drag / right_click / middle_click / double_click / type / key / cursor_position) — cross-platform. Take a screenshot first to see what's on screen, then act on pixel coordinates read off it. left_click/right_click/double_click accept an optional 'coordinate' to move-then-click in one call. Works on anything, including canvas-rendered apps and games, but coordinates are a guess you verify visually with another screenshot.".to_string() + structured_mode + NARRATION_DOC,
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -124,7 +194,7 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
                         "description": "X,Y screen coordinates. Required for mouse_move and left_click_drag; optional for left_click/right_click/double_click (moves the cursor there first, then clicks)."
                     },
                     "text": { "type": "string", "description": "Text to type (action=type), or a key combination such as 'Control+C' (action=key)." },
-                    "id": { "type": "number", "description": "Element id from the last snapshot (action=interact), or window id from the last list_windows (action=focus_window, action=window_action)." },
+                    "id": { "type": "number", "description": "Element id from the last snapshot (action=interact), or window id from the last list_windows (action=snapshot, action=focus_window, action=window_action). For action=snapshot this is optional but strongly recommended: it picks which window to read instead of falling back to the focused one." },
                     "element_action": {
                         "type": "string",
                         "enum": ["click", "focus", "set_value", "scroll_into_view"],
@@ -137,9 +207,44 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
                     },
                     "value": { "type": "string", "description": "Text to type into the element — required when action=interact and element_action=set_value." },
                     "command": { "type": "string", "description": "Executable name (resolved via PATH) or full path — required for action=launch_app." },
-                    "args": { "type": "array", "items": { "type": "string" }, "description": "Command-line arguments, if any — for action=launch_app." }
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "Command-line arguments, if any — for action=launch_app." },
+                    "x": { "type": "number", "description": "Screen X — required for action=point_at and action=highlight." },
+                    "y": { "type": "number", "description": "Screen Y — required for action=point_at and action=highlight." },
+                    "width": { "type": "number", "description": "Region width — required for action=highlight." },
+                    "height": { "type": "number", "description": "Region height — required for action=highlight." }
                 },
                 "required": ["action"]
+            }
+        }),
+        serde_json::json!({
+            "name": "inspect_document",
+            "description": "List the addressable parts of an existing PDF, Word, Excel or PowerPoint file, each with a stable id you can pass to edit_document. Call this FIRST whenever you need to change part of a document that already exists — the ids are positional, so guessing one edits the wrong thing. Part ids: docx \"p:3\" (4th paragraph), xlsx \"Sheet1!B4\" (one cell), pptx \"slide:2:1\" (2nd text box on slide 2), pdf \"page:5\". Each part reports whether it is editable — PDF pages are listed so you can read them but their text cannot be edited in place.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to the .pdf/.docx/.xlsx/.pptx file" }
+                },
+                "required": ["path"]
+            }
+        }),
+        serde_json::json!({
+            "name": "edit_document",
+            "description": "Change one part of an EXISTING document in place, leaving the rest of the file byte-identical — styles, formulas, charts and images all survive. Use this instead of regenerating with create_document whenever the file already exists, because regenerating discards every change the user made by hand.
+
+Always call inspect_document first to get the part id. Pass 'part' plus the replacement 'text'.
+
+PDF: text CANNOT be edited — a PDF stores positioned glyphs rather than sentences, so there is nothing to rewrite. Page deletion works via 'delete_pages'; for new wording, regenerate with create_document.
+
+XLSX edits existing cells only; use create_document to build a sheet with new ones.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to the existing document" },
+                    "part": { "type": "string", "description": "Part id from inspect_document, e.g. \"p:3\", \"Sheet1!B4\", \"slide:2:1\"" },
+                    "text": { "type": "string", "description": "Replacement text for that part" },
+                    "delete_pages": { "type": "array", "items": { "type": "number" }, "description": "PDF only: page numbers to delete. Use instead of part/text." }
+                },
+                "required": ["path"]
             }
         }),
         serde_json::json!({
@@ -201,7 +306,7 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
         }),
         serde_json::json!({
             "name": "powershell",
-            "description": "Execute a PowerShell command. Preferred on Windows for shell operations. Streams live output to the GUI as it runs, same as bash.",
+            "description": powershell_description(),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -372,6 +477,31 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
             "parameters": { "type": "object", "properties": {} }
         }),
         serde_json::json!({
+            "name": "browser_start",
+            "description": "Start the browser and report its state. CALL THIS FIRST, before any other browser tool, at the start of a browsing task.
+
+The other browser tools do start it themselves, so this is not required for them to work — but a cold start can mean an npm install, a native rebuild and a ~300MB engine download, and folded into a web_preview call that looks like a hang. Doing it as its own step makes the wait attributable, reports a failure once with the server's own reason attached, and tells you which sites you are already signed in to before you plan around a login wall.",
+            "parameters": { "type": "object", "properties": {} }
+        }),
+        serde_json::json!({
+            "name": "browser_session_status",
+            "description": "List which sites the browser is currently signed in to. Call this BEFORE telling the user a site needs a login — the session persists across restarts, so you may already have access from a previous day.",
+            "parameters": { "type": "object", "properties": {} }
+        }),
+        serde_json::json!({
+            "name": "browser_import_cookies",
+            "description": "Import a Netscape-format cookies.txt file to sign the browser in to a site. The user exports cookies from the browser they are already signed in with; you never handle their password. Once imported the sign-in persists across restarts.
+
+When you hit a login wall: call browser_session_status first, and if there is genuinely no session, use `question` to ask the user to export cookies for that site into the cookies folder, then call this with the file name. Do NOT try to type credentials into the page, and do not offer to create an account.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file": { "type": "string", "description": "File name inside ~/.camofox/cookies/, or an absolute path" }
+                },
+                "required": ["file"]
+            }
+        }),
+        serde_json::json!({
             "name": "web_search",
             "description": "Search the web and return result titles and URLs. Follow up with web_fetch to read a result.",
             "parameters": {
@@ -502,14 +632,14 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
         }),
         serde_json::json!({
             "name": "generate_image",
-            "description": "Generate a new image from a text description using an image-generation model. Defaults to OpenAI's gpt-image-1; pass provider=\"google\" to use Google's Imagen instead. Requires an API key for whichever provider is used, configured in Settings → API Keys — if none is set, this returns an error saying so. Use for creating original images (illustrations, mockups, icons), not for analysing an existing image (that's just done by looking at it, no tool needed).",
+            "description": "Generate a new image from a text description using an image-generation model. Defaults to OpenAI's gpt-image-2; pass provider=\"google\" to use Google's Imagen instead. Requires an API key for whichever provider is used, configured in Settings → API Keys — if none is set, this returns an error saying so. Use for creating original images (illustrations, mockups, icons), not for analysing an existing image (that's just done by looking at it, no tool needed).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "prompt": { "type": "string", "description": "Description of the image to generate" },
                     "size": { "type": "string", "description": "OpenAI only. Image size, e.g. \"1024x1024\", \"1536x1024\", \"1024x1536\" (default \"1024x1024\")" },
                     "provider": { "type": "string", "enum": ["openai", "google"], "description": "Which provider to generate with (default \"openai\")" },
-                    "model": { "type": "string", "description": "Override the default model for the chosen provider, e.g. \"dall-e-3\" for openai or \"imagen-4.0-generate-001\" for google" }
+                    "model": { "type": "string", "description": "Override the default model for the chosen provider, e.g. \"gpt-image-1-mini\" (cheaper) for openai, or \"imagen-4.0-ultra-generate-001\" for google" }
                 },
                 "required": ["prompt"]
             }
@@ -542,7 +672,7 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "panel": { "type": "string", "description": "One of: review (diff/review panel), files (workspace file tree), preview_dev (the Preview panel in dev-server mode), preview_browser (the Preview panel in browser mode — web_preview/browser_* activity), tasks (background subagent tasks), terminal (the bottom terminal panel). Or \"custom:<name>\" for a panel-type playbook (see list_tools for what's installed — Settings → Mods → Playbooks)." },
+                    "panel": { "type": "string", "description": "One of: review (diff/review panel), files (workspace file tree), preview_dev (the Preview panel in dev-server mode), preview_browser (the Preview panel in browser mode — web_preview/browser_* activity), documents (the Preview panel in Documents mode — where the user views and edits pdf/docx/xlsx/pptx files; open it when working on a document with them), tasks (background subagent tasks), terminal (the bottom terminal panel). Or \"custom:<name>\" for a panel-type playbook (see list_tools for what's installed — Settings → Mods → Playbooks)." },
                     "action": { "type": "string", "enum": ["open", "close"] }
                 },
                 "required": ["panel", "action"]
@@ -686,7 +816,7 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
         }),
         serde_json::json!({
             "name": "task",
-            "description": "Launch a subagent. By default (run_in_background=true) this returns a task_id immediately — poll or block on it with task_output/wait_tasks — instead of blocking your own turn, and it shows up live in the Background Tasks panel so the user can see it running. Call this once per subagent — spawn multiple concurrently rather than looping serial blocking calls, and keep making progress yourself (other tool calls, or delegating more independent chunks) instead of idling on task_output while one runs. Set run_in_background=false only for a single one-off subtask where you have nothing else to do until it returns. Single-level depth cap — a subagent spawned by task cannot itself call task again. Call list_subagent_profiles first if you're not sure whether a profile with a preset prompt already exists for this — pointing at one (subagent_type + a short context) costs far fewer tokens than writing the full prompt yourself.",
+            "description": "Launch a subagent. By default (run_in_background=true) this returns a task_id immediately — poll or block on it with task_output/wait_tasks — instead of blocking your own turn, and it shows up live in the Background Tasks panel so the user can see it running. Call this once per subagent — spawn multiple concurrently rather than looping serial blocking calls, and keep making progress yourself (other tool calls, or delegating more independent chunks) instead of idling on task_output while one runs. Set run_in_background=false only for a single one-off subtask where you have nothing else to do until it returns. Delegation is at most three tiers: you, then the agents you spawn; a project employee may spawn plain subagents of its own, and those cannot delegate further. Call list_subagent_profiles first if you're not sure whether a profile with a preset prompt already exists for this — pointing at one (subagent_type + a short context) costs far fewer tokens than writing the full prompt yourself.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -698,6 +828,23 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
                     "run_in_background": { "type": "boolean", "description": "If true (default), return a task_id immediately instead of blocking", "default": true }
                 },
                 "required": ["description"]
+            }
+        }),
+        serde_json::json!({
+            "name": "hire_agent",
+            "description": "Propose a specialist agent for this project's team. It is saved as a proposal in .viv/agents/ and the user approves or declines it; once approved you delegate to it with task (subagent_type = its id). Hire for a lasting area of responsibility (e.g. frontend, API, tests), not a one-off task. Only works in a project with a master agent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Short display name, e.g. 'Frontend Engineer'" },
+                    "role": { "type": "string", "description": "One sentence: what this agent is responsible for" },
+                    "instructions": { "type": "string", "description": "Standing instructions it receives on every task: conventions, the charter decisions that apply to its area, how to verify its work" },
+                    "reason": { "type": "string", "description": "Why the project needs this hire now — shown to the user when they decide" },
+                    "owns": { "type": "array", "items": { "type": "string" }, "description": "Project-relative paths it is responsible for, e.g. ['src/ui/', 'styles/']. Keep specialists' paths from overlapping." },
+                    "allowed_tools": { "type": "array", "items": { "type": "string" }, "description": "Optional tool allowlist; omit for full access" },
+                    "reports_to": { "type": "string", "description": "Id of the agent it reports to; omit to report to the master" }
+                },
+                "required": ["name", "role", "instructions", "reason"]
             }
         }),
         serde_json::json!({
@@ -758,9 +905,10 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
                 "required": ["language", "code"]
             }
         }),
+        crate::agent::math::schema(),
         serde_json::json!({
             "name": "run_script",
-            "description": "Experimental. Run a short JavaScript script that can call several of your own tools directly, in one turn, instead of one tool call per round-trip — use it to chain several reads/searches before a write, or to loop over a list of files, in a single call. Available async functions inside the script (all return Promises — use await):\n  bash(command, timeoutSeconds?) -> string\n  read(path, opts?: {offset?, limit?, pages?, ocr?}) -> string\n  write(path, content) -> string\n  edit(path, oldString, newString) -> string\n  ls(path?, opts?: {depth?, show_hidden?}) -> string\n  grep(pattern, path?) -> string\n  glob(pattern, path?) -> string\nEach call goes through the same approval/gating as calling the tool directly. A failed call throws a catchable JS exception — wrap calls in try/catch if the script should recover instead of aborting. Only use this for genuine multi-step chains; call a tool directly for a single step.",
+            "description": "Run a short JavaScript script that calls your own tools directly, in one turn, instead of one tool call per round-trip — chain several reads/searches before a write, loop over a list of files, fan out web searches, or post-process results before you see them. EVERY tool you have is callable from the script (all async — use await; each returns the tool's text output):\n  callTool(name, args) — any tool by name with its normal JSON arguments, e.g. callTool(\"web_search\", {query: \"...\"})\n  tools.<name>(args) — same thing, e.g. tools.web_fetch({url})\n  <name>(args) — tools whose names are plain identifiers are also globals, e.g. await todo_write({todos})\n  listTools() — the names available\nShorthands with positional arguments:\n  bash(command, timeoutSeconds?)  read(path, opts?)  write(path, content)  edit(path, oldString, newString)  ls(path?, opts?)  grep(pattern, path?)  glob(pattern, path?)\nconsole.log output is returned above the script's return value. Each call goes through the same approval/gating as calling the tool directly. A failed call throws a catchable JS exception. A script cannot start another run_script. Use this for genuine multi-step work; call a tool directly for a single step.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -772,5 +920,8 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
         }),
     ];
 
+    let mut defs = defs;
+    defs.extend(crate::coding_agent::github::schemas());
+    defs.push(crate::multiplayer::collab::pair_activity_schema());
     defs
 }

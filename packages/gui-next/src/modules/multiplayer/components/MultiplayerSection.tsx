@@ -1,13 +1,5 @@
 import { useEffect, useState } from 'react'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import TextField from '@mui/material/TextField'
-import Button from '@mui/material/Button'
-import IconButton from '@mui/material/IconButton'
-import CircularProgress from '@mui/material/CircularProgress'
-import Divider from '@mui/material/Divider'
-import Chip from '@mui/material/Chip'
-import Tooltip from '@mui/material/Tooltip'
+import { Stack, Typography, TextField, Button, IconButton, CircularProgress, Divider, Chip, Tooltip } from '../../../ui'
 import { CopyLinear, Link2Linear, CloseCircleLinear } from '../../../icons'
 import { useMultiplayerStore } from '../store/multiplayerStore'
 
@@ -25,7 +17,7 @@ function StatusChip() {
   }
 }
 
-function MyCode() {
+export function MyCode() {
   const myId = useMultiplayerStore((s) => s.myId)
   const [copied, setCopied] = useState(false)
   if (!myId) return null
@@ -39,7 +31,7 @@ function MyCode() {
           size="small"
           fullWidth
           value={myId}
-          slotProps={{ input: { readOnly: true, sx: { fontFamily: '"JetBrains Mono", ui-monospace, monospace', fontSize: '0.75rem' } } }}
+          slotProps={{ input: { readOnly: true, sx: { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem' } } }}
         />
         <Tooltip title={copied ? 'Copied' : 'Copy'}>
           <IconButton
@@ -84,7 +76,7 @@ function ConnectForm() {
           value={peerId}
           onChange={(e) => setPeerId(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && submit()}
-          slotProps={{ input: { sx: { fontFamily: '"JetBrains Mono", ui-monospace, monospace', fontSize: '0.75rem' } } }}
+          slotProps={{ input: { sx: { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem' } } }}
         />
         <Button
           variant="contained"

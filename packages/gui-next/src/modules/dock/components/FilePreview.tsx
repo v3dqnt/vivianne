@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
+import { Box, Stack, Typography } from '../../../ui'
 import { call } from '../../../ipc'
 import { CodeBlock } from '../../ai/components/CodeBlock'
 
@@ -166,14 +164,14 @@ export function FileContent({
     return (
       <Box sx={{ minWidth: 0 }}>
         <Box
-          // Rendered from source rather than rasterised: an SVG stays sharp
-          // at any size, and this is a preview panel that can be resized.
-          dangerouslySetInnerHTML={{ __html: data.source }}
-          sx={{
-            maxHeight: 320,
-            overflow: 'auto',
-            '& svg': { maxWidth: '100%', height: 'auto', display: 'block' },
-          }}
+          // Drawn through <img>, never inlined: an SVG is a document that can
+          // carry scripts and event handlers, and inlined into this window it
+          // would run with the app's full backend access. As an image it
+          // can't run anything — and it still stays sharp at any size.
+          component="img"
+          alt=""
+          src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(data.source)}`}
+          sx={{ maxHeight: 320, maxWidth: '100%', height: 'auto', display: 'block' }}
         />
         {meta('SVG · rendered from source')}
       </Box>
@@ -205,7 +203,7 @@ export function FileContent({
           sx={{
             m: 0,
             p: 0,
-            fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+            fontFamily: '"Geist Mono", ui-monospace, monospace',
             fontSize: '0.6875rem',
             lineHeight: 1.5,
             color: 'text.disabled',
@@ -232,7 +230,7 @@ export function FileContent({
           m: 0,
           p: bare ? 0 : 1.5,
           ...(bare ? { color: 'text.secondary' } : { borderRadius: 1, bgcolor: '#0d1117', color: '#c9d1d9' }),
-          fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+          fontFamily: '"Geist Mono", ui-monospace, monospace',
           fontSize: '0.75rem',
           lineHeight: 1.5,
           whiteSpace: wrap ? 'pre-wrap' : 'pre',

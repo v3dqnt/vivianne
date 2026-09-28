@@ -30,7 +30,7 @@ fn now_secs() -> u64 {
 }
 
 fn tokens_path() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".vivianne").join("mcp_oauth.json")
+    crate::agent::paths::viv_home_path(&["mcp_oauth.json"])
 }
 
 async fn load_all_tokens() -> serde_json::Value {

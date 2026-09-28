@@ -1,6 +1,4 @@
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import Box from '@mui/material/Box'
+import { Stack, Typography, Box } from '../../../ui'
 import { MonitorLinear } from '../../../icons'
 import { useAgentStore } from '../store/agentStore'
 

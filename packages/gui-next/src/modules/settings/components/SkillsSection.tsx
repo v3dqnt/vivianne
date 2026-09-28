@@ -1,9 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import Divider from '@mui/material/Divider'
-import Button from '@mui/material/Button'
-import InputBase from '@mui/material/InputBase'
+import { Stack, Typography, Divider, Button, InputBase } from '../../../ui'
 import { MagicpenLinear, DocumentUploadLinear, SearchNormalLinear } from '../../../icons'
 import { call } from '../../../ipc'
 
@@ -131,7 +127,7 @@ export function SkillsSection() {
                 </Typography>
               )}
               {s.path && (
-                <Typography variant="caption" noWrap sx={{ display: 'block', fontFamily: '"JetBrains Mono", ui-monospace, monospace', fontSize: '0.625rem', color: 'text.secondary' }}>
+                <Typography variant="caption" noWrap sx={{ display: 'block', fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.625rem', color: 'text.secondary' }}>
                   {s.path}
                 </Typography>
               )}

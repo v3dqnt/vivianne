@@ -1,11 +1,4 @@
-import Dialog from '@mui/material/Dialog'
-import DialogTitle from '@mui/material/DialogTitle'
-import DialogContent from '@mui/material/DialogContent'
-import DialogActions from '@mui/material/DialogActions'
-import Button from '@mui/material/Button'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, Stack, Typography } from '../../../ui'
 import { ShieldTickLinear } from '../../../icons'
 import { useAgentStore } from '../store/agentStore'
 
@@ -55,7 +48,7 @@ export function PermissionDialog() {
             p: 1.5,
             borderRadius: 2,
             bgcolor: 'action.hover',
-            fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+            fontFamily: '"Geist Mono", ui-monospace, monospace',
             fontSize: '0.75rem',
             lineHeight: 1.5,
             whiteSpace: 'pre-wrap',

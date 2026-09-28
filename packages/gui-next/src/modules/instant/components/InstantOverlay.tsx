@@ -1,0 +1,374 @@
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Box, Stack, Typography, Button, alpha, useTheme } from '../../../ui'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import { call, on } from '../../../ipc'
+import { useTransparentWindowBody } from '../../../lib/transparentWindow'
+import { useInstantStore, type InstantStep } from '../store/instantStore'
+import { useInstantMic } from '../lib/useInstantMic'
+import { speak, stopSpeaking } from '../lib/instantTts'
+import { InstantCharacterSlot } from './InstantCharacterSlot'
+import { InstantStepLog } from './InstantStepLog'
+import { InstantRiskBar } from './InstantRiskBar'
+
+/**
+ * What counts as "stop" during a destructive step's countdown.
+ *
+ * Kept broad and anchored loosely rather than to whole-string equality, because
+ * whisper returns punctuation and filler ("Stop!", "no, stop") and three
+ * seconds is not long enough to say it twice. Over-matching here costs a
+ * skipped destructive step, which is the direction the error should fall.
+ */
+const CANCEL_PHRASE = /\b(stop|cancel|no|wait|dont|don't|abort)\b/i
+
+/** Matches `instant::window::COLLAPSED_W`. */
+const COLLAPSED_W = 260
+
+/** What the status line says for each phase. */
+function statusFor(phase: string, hasSteps: boolean): string {
+  switch (phase) {
+    case 'listening':
+      return 'Listening'
+    case 'transcribing':
+      return 'One moment'
+    case 'working':
+      return hasSteps ? 'Working' : 'Thinking'
+    case 'done':
+      return 'Done'
+    case 'error':
+      return 'Failed'
+    default:
+      return 'Viv'
+  }
+}
+
+/**
+ * The Viv Instant notch — the entire UI of the `viv_instant` window.
+ *
+ * Hangs from the top-centre of the screen as a small pill and grows downward as
+ * it has something to show. Two constraints shape it:
+ *
+ * - **It never holds keyboard focus.** The Rust side never calls `set_focus`,
+ *   because every keystroke Viv Instant sends is meant for whatever application
+ *   the user was already in — a focused overlay would swallow exactly the input
+ *   it is trying to deliver. That is also why Escape is a global shortcut on
+ *   the Rust side rather than a key handler here.
+ * - **The window is resized to the content whenever it changes.** The window is
+ *   transparent but not click-through, so any pixel it occupies swallows mouse
+ *   events from the app underneath. Slack space would punch an invisible hole
+ *   in the user's screen — and at the top of the display, that means other
+ *   apps' title bars and tab strips.
+ */
+export function InstantOverlay() {
+  const theme = useTheme()
+  // Without this the window paints an opaque rectangle over the screen:
+  // CssBaseline gives every window a solid body background, which is right for
+  // the main window and wrong for a transparent overlay.
+  useTransparentWindowBody()
+
+  const phase = useInstantStore((s) => s.phase)
+  const transcript = useInstantStore((s) => s.transcript)
+  const interim = useInstantStore((s) => s.interim)
+  const steps = useInstantStore((s) => s.steps)
+  const summary = useInstantStore((s) => s.summary)
+  const error = useInstantStore((s) => s.error)
+  const risk = useInstantStore((s) => s.risk)
+  const download = useInstantStore((s) => s.download)
+  const store = useInstantStore
+
+  // One controller per run, so a new activation cuts off the previous reply
+  // mid-sentence rather than letting it talk over the new one.
+  const speechRef = useRef<AbortController | null>(null)
+
+  // True while Viv Instant is talking out loud.
+  //
+  // The microphone hears the speakers, so without this the overlay transcribes
+  // its own voice and acts on it — and during a destructive step's countdown
+  // that means cancelling itself. Barge-in is what makes a plain flag
+  // sufficient: `onSpeechStart` aborts the utterance the moment the user
+  // actually speaks, which clears this before their words are transcribed.
+  const talkingRef = useRef(false)
+
+  const say = useCallback((text: string, signal?: AbortSignal) => {
+    talkingRef.current = true
+    return speak(text, { signal }).finally(() => {
+      talkingRef.current = false
+    })
+  }, [])
+
+  // Re-read on every activation rather than once at mount: the overlay window
+  // is created at app start and then lives for the whole session, so a model
+  // changed in Settings would otherwise not take effect until a restart.
+  const [sttModel, setSttModel] = useState<string | undefined>(undefined)
+
+  const onUtterance = useCallback(
+    (text: string) => {
+      // Anything captured while the overlay itself is talking is its own voice
+      // coming back through the microphone, not an instruction.
+      if (talkingRef.current) return
+
+      const s = store.getState()
+
+      // During a destructive step's countdown, speech is the affordance that
+      // actually fits: the premise is that the user is looking at the app being
+      // driven, not at this notch, so requiring them to find and click a button
+      // in three seconds would make Cancel decorative.
+      if (s.risk && CANCEL_PHRASE.test(text)) {
+        void call('cmd_instant_cancel_step', {})
+        return
+      }
+
+      // Otherwise ignore speech that arrives while a run is already going.
+      // Barge-in that re-plans mid-execution is a much bigger design than this,
+      // and silently starting a second run would be worse than ignoring it.
+      if (s.phase === 'working') return
+      s.setTranscript(text)
+      s.setPhase('working')
+      void call('cmd_instant_run', { instruction: text }).catch((e) => {
+        store.getState().fail(e instanceof Error ? e.message : String(e))
+      })
+    },
+    [store],
+  )
+
+  const { start, stop } = useInstantMic({
+    onUtterance,
+    onSpeechStart: () => {
+      // Barge-in: stop talking the moment the user does.
+      speechRef.current?.abort()
+      stopSpeaking()
+      talkingRef.current = false
+    },
+    onInterim: (text) => {
+      if (talkingRef.current) return
+      const s = store.getState()
+      if (s.phase === 'listening') s.setInterim(text)
+    },
+    onError: (message) => store.getState().fail(message),
+    model: sttModel,
+  })
+
+  useEffect(() => {
+    const offs: Array<() => void> = []
+    const subscribed: Array<Promise<void>> = []
+    const track = (p: Promise<() => void>) => subscribed.push(p.then((off) => void offs.push(off)))
+
+    track(on('instant:activate', () => {
+      store.getState().activate()
+      void (async () => {
+        const cfg = await call<{ instantSttModel?: string }>('cmd_get_settings').catch(() => null)
+        const chosen = cfg?.instantSttModel
+        setSttModel(chosen)
+        // Preloaded here rather than at app start: a user who never presses the
+        // chord should never pay the model download or its ~190MB of buffers.
+        await call('cmd_instant_stt_preload', { model: chosen }).catch(() => {})
+      })()
+      void start()
+    }))
+
+    track(on('instant:dismiss', () => {
+      speechRef.current?.abort()
+      stopSpeaking()
+      talkingRef.current = false
+      stop()
+      store.getState().dismiss()
+      void getCurrentWindow().hide()
+    }))
+
+    track(on<InstantStep>('instant:step', (step) => {
+      store.getState().upsertStep(step)
+    }))
+
+    track(on<{ summary: string; ms: number }>('instant:risky', ({ summary, ms }) => {
+      // The deadline is derived here rather than sent, because the two sides
+      // have different clocks — a timestamp from Rust would be compared against
+      // the webview's `Date.now()` and could start the bar already expired.
+      store.getState().setRisk({ summary, ms, deadline: Date.now() + ms })
+      // Deliberately contains no cancel word: this sentence is played into a
+      // room with a live microphone, and "say stop to cancel" transcribed back
+      // would cancel the very step it is announcing. The bar on screen carries
+      // the wording; the voice carries the warning.
+      void say(`Careful — about to ${summary}.`)
+    }))
+
+    track(on<{ received: number; total: number; index: number; count: number }>(
+      'instant:stt_download',
+      ({ received, total, index, count }) => {
+        store.getState().setDownload({
+          percent: total > 0 ? Math.round((received / total) * 100) : 0,
+          index,
+          count,
+        })
+      },
+    ))
+
+    track(on('instant:stt_download_done', () => {
+      store.getState().setDownload(null)
+    }))
+
+    track(on('instant:risky_done', () => {
+      store.getState().setRisk(null)
+    }))
+
+    track(on<string>('instant:done', (text) => {
+      store.getState().finish(text)
+      const controller = new AbortController()
+      speechRef.current = controller
+      void say(text, controller.signal)
+    }))
+
+    track(on<string>('instant:error', (message) => {
+      store.getState().fail(message)
+    }))
+
+    track(on('instant:aborted', () => {
+      speechRef.current?.abort()
+      stopSpeaking()
+      talkingRef.current = false
+      store.getState().setPhase('done')
+    }))
+
+    // Every listener attached: the backend now delivers anything it queued
+    // while this window was still loading — on a first summon, the
+    // `instant:activate` that opened it (see `overlays.rs`).
+    void Promise.all(subscribed).then(() => call('cmd_overlay_ready'))
+
+    return () => {
+      offs.forEach((off) => off())
+      stop()
+      stopSpeaking()
+      talkingRef.current = false
+    }
+  }, [say, start, stop, store])
+
+  const working = phase === 'working'
+  const heard = interim || transcript
+  // Expanded by CONTENT rather than phase, so the notch never grows to show
+  // nothing.
+  const expanded = Boolean(summary || error || steps.length || risk)
+
+  // Size the window to the card.
+  //
+  // `useLayoutEffect` + `ResizeObserver` rather than a phase-keyed table of
+  // sizes: the height depends on how much text wrapped and how many steps have
+  // arrived, which only the laid-out DOM knows. Measuring after paint would
+  // show a frame of clipped content on every growth.
+  const cardRef = useRef<HTMLDivElement | null>(null)
+  useLayoutEffect(() => {
+    const el = cardRef.current
+    if (!el) return
+    let last = ''
+    const sync = () => {
+      const r = el.getBoundingClientRect()
+      // Rounded up, plus a couple of pixels for the shadow's bleed — a
+      // fractional device-pixel ratio otherwise rounds down and clips.
+      const width = Math.ceil(Math.max(r.width, COLLAPSED_W)) + 2
+      const height = Math.ceil(r.height) + 2
+      const key = `${width}x${height}`
+      if (key === last) return
+      last = key
+      void call('cmd_instant_set_size', { width, height }).catch(() => {})
+    }
+    sync()
+    const ro = new ResizeObserver(sync)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const accent =
+    phase === 'error'
+      ? theme.palette.error.main
+      : phase === 'done'
+        ? theme.palette.success.main
+        : theme.palette.primary.main
+
+  return (
+    <Box sx={{ display: 'inline-flex', p: '1px' }}>
+      <Stack
+        ref={cardRef}
+        sx={{
+          // `fit-content` is what makes the measurement meaningful: the card
+          // must size to its own text, not to the window, or the
+          // ResizeObserver would only ever report back the size it was last
+          // given.
+          width: 'fit-content',
+          minWidth: COLLAPSED_W - 2,
+          maxWidth: 560,
+          gap: expanded ? 0.75 : 0,
+          px: 1.25,
+          py: expanded ? 1 : 0.625,
+          // A true pill when collapsed; a softened rectangle once it has body.
+          borderRadius: expanded ? '20px' : '999px',
+          bgcolor: alpha(theme.palette.background.paper, 0.94),
+          border: 1,
+          borderColor: alpha(accent, 0.3),
+          backdropFilter: 'blur(20px)',
+          boxShadow: '0 10px 32px rgba(0,0,0,0.42)',
+          transition: 'border-radius 160ms ease',
+        }}
+      >
+        <Stack direction="row" sx={{ alignItems: 'center', gap: 1, minWidth: 0 }}>
+          <InstantCharacterSlot phase={phase} compact />
+          <Typography
+            variant="caption"
+            sx={{ fontWeight: 700, letterSpacing: 0.3, color: accent, flexShrink: 0, fontSize: '0.6875rem' }}
+          >
+            {/* The download takes over the status word entirely: on a first
+                run it is several minutes of otherwise unexplained silence,
+                and "Listening" during it would be a lie. */}
+            {download
+              ? `Downloading speech model ${download.index}/${download.count} — ${download.percent}%`
+              : statusFor(phase, steps.length > 0)}
+          </Typography>
+          {/* The heard text sits on the collapsed row, not behind an expansion:
+              confirming it heard you correctly is the single most useful thing
+              this window can show, and the interim is worthless once it is
+              stale. */}
+          {heard && (
+            <Typography
+              variant="caption"
+              sx={{
+                minWidth: 0,
+                flex: 1,
+                color: interim ? 'text.secondary' : 'text.primary',
+                fontStyle: interim ? 'italic' : 'normal',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {heard}
+            </Typography>
+          )}
+          {working && (
+            <Button
+              size="small"
+              variant="text"
+              color="error"
+              onClick={() => void call('cmd_instant_abort', {})}
+              sx={{ textTransform: 'none', fontSize: '0.6875rem', py: 0, px: 0.75, minWidth: 0, flexShrink: 0 }}
+            >
+              Stop
+            </Button>
+          )}
+        </Stack>
+
+        {(summary || error) && (
+          <Typography
+            variant="body2"
+            sx={{ color: error ? 'error.main' : 'text.primary', fontSize: '0.8125rem', lineHeight: 1.45 }}
+          >
+            {error ?? summary}
+          </Typography>
+        )}
+
+        {steps.length > 0 && (
+          <Box sx={{ maxHeight: 220, display: 'flex', minHeight: 0 }}>
+            <InstantStepLog steps={steps} />
+          </Box>
+        )}
+
+        {risk && <InstantRiskBar risk={risk} />}
+      </Stack>
+    </Box>
+  )
+}

@@ -1,16 +1,18 @@
 //! DIP (Direct Interaction Protocol) — Windows UI Automation + window
-//! management, driving the same mouse/keyboard a user would. The model
-//! never calls these functions by a `dip_*` tool name any more — they're
-//! the Windows-only "structured mode" half of the single merged `computer`
-//! tool (see `computer::execute_computer_tool`, which routes
-//! `action: "snapshot"`/`"interact"`/`"list_windows"`/`"focus_window"`/
-//! `"window_action"`/`"launch_app"` here). The `execute_dip_*_tool` names
-//! below are kept only as internal implementation-function names.
+//! management, driving the same mouse/keyboard a user would. These are the
+//! Windows-only "structured mode" half of the single `dip` tool (see
+//! `computer::execute_computer_tool`, which routes `action: "snapshot"`/
+//! `"interact"`/`"list_windows"`/`"focus_window"`/`"window_action"`/
+//! `"launch_app"` here). The `execute_dip_*_tool` names below are internal
+//! implementation-function names, not tool names the model ever calls.
 //!
-//! - `execute_dip_snapshot_tool` (`action: "snapshot"`) reads the focused
-//!   window's element tree (name, role, bounding rect) and briefly
-//!   highlights every found element on screen via a transparent overlay
-//!   window, so what the model "sees" is visible to the person watching too.
+//! - `execute_dip_snapshot_tool` (`action: "snapshot"`) reads a window's
+//!   element tree (name, role, bounding rect) and briefly highlights every
+//!   found element on screen via a transparent overlay window, so what the
+//!   model "sees" is visible to the person watching too. Pass the window `id`
+//!   from `list_windows` to choose the window; without one it falls back to
+//!   whatever has keyboard focus, which during an agent turn is normally
+//!   Vivianne's own window rather than the app the model meant.
 //! - `execute_dip_interact_tool` (`action: "interact"`) acts on one of those
 //!   elements by id — the real OS cursor visibly moves to it and
 //!   clicks/types, rather than invoking it invisibly through UI Automation's
@@ -18,11 +20,10 @@
 //!   happening instead of a control changing state with no visible cause.
 //! - `execute_dip_list_windows_tool`/`execute_dip_focus_window_tool`/
 //!   `execute_dip_window_action_tool` (`action: "list_windows"`/
-//!   `"focus_window"`/`"window_action"`) let the model see what's open,
-//!   switch to something that isn't already focused, and
-//!   minimize/maximize/restore/close it — snapshot/interact only ever act on
-//!   whatever window is focused, so without these the model could only ever
-//!   control whatever the user already had in front.
+//!   `"focus_window"`/`"window_action"`) let the model see what's open, bring
+//!   one forward, and minimize/maximize/restore/close it. `list_windows` is
+//!   also where snapshot's window ids come from, so it is the entry point to
+//!   everything else here.
 //! - `execute_dip_launch_app_tool` (`action: "launch_app"`) starts a new
 //!   process, closing the loop: launch → find the window → focus it →
 //!   snapshot → interact.
@@ -54,8 +55,10 @@ use enigo::{Button, Coordinate, Direction, Enigo, Keyboard, Mouse, Settings};
 use serde_json::json;
 use std::sync::Mutex;
 use std::time::Duration;
+use uiautomation::errors::{ERR_NOTFOUND, ERR_TIMEOUT};
 use uiautomation::patterns::UIWindowPattern;
-use uiautomation::types::{ControlType, Handle, Point, WindowVisualState};
+use uiautomation::types::{ControlType, Handle, Point, TreeScope, UIProperty, WindowVisualState};
+use uiautomation::variants::Variant;
 use uiautomation::{UIAutomation, UIElement};
 
 use super::tool_exec::ToolResult;
@@ -100,6 +103,12 @@ struct ElementInfo {
 static LAST_SNAPSHOT: Mutex<Vec<ElementInfo>> = Mutex::new(Vec::new());
 
 const MAX_ELEMENTS: usize = 200;
+/// Levels of descendants under the target window to walk.
+///
+/// `UIMatcher::depth` counts the starting element itself as depth 1, so the
+/// matcher is given `MAX_DEPTH + 1` to actually reach this many levels below
+/// the window. Passing the bare value searched one level shallower than the
+/// name promises — the same off-by-one that made `list_windows` fail outright.
 const MAX_DEPTH: u32 = 12;
 /// How long the overlay stays visible — long enough to register, short
 /// enough not to linger over whatever the user does next.
@@ -107,6 +116,10 @@ const OVERLAY_MS: u64 = 2500;
 /// Paced so the cursor's motion and the click are both actually perceivable,
 /// not so slow that a multi-step task feels broken.
 const CURSOR_SETTLE_MS: u64 = 220;
+/// Time given to a raised window to finish coming forward before its tree is
+/// read. Raising is asynchronous — the call returns before the window has
+/// actually repainted or taken focus.
+const FOREGROUND_SETTLE_MS: u64 = 180;
 
 /// Walks up from the focused element to the top-level window containing it
 /// (or the desktop root, if focus can't be resolved to a window) — a
@@ -133,16 +146,67 @@ struct Snapshot {
     window_rect: (i32, i32, i32, i32), // left, top, width, height
 }
 
-fn take_snapshot() -> uiautomation::Result<Snapshot> {
+/// Carries a window handle across a `spawn_blocking` boundary.
+///
+/// `Handle` wraps a raw `HWND` pointer, so it isn't `Send`. An HWND is an
+/// opaque numeric window id that Windows documents as valid from any thread —
+/// the same reasoning `WindowInfo` below already relies on — so moving one to
+/// a blocking worker is sound; only the pointer type says otherwise.
+#[derive(Clone, Copy)]
+struct SendHandle(Handle);
+// SAFETY: see above — an HWND is a thread-agnostic window id, not a COM
+// interface pointer.
+unsafe impl Send for SendHandle {}
+
+impl SendHandle {
+    /// Takes `self` by value on purpose. Writing `handle.0` inside a `move`
+    /// closure captures the inner non-`Send` `Handle` field directly under
+    /// edition-2021 disjoint capture, which defeats the wrapper; calling a
+    /// method captures the whole `SendHandle` instead.
+    fn get(self) -> Handle {
+        self.0
+    }
+}
+
+/// Reads one window's element tree.
+///
+/// `target` is a window handle from the `list_windows` cache; `None` falls
+/// back to whatever currently has keyboard focus.
+///
+/// The fallback used to be the ONLY behaviour, and that made snapshot close to
+/// useless for its actual purpose: the agent runs while the user is looking at
+/// Vivianne, so Vivianne is the focused window, so every snapshot came back
+/// describing Vivianne's own UI no matter which app the model meant. Even
+/// `focus_window` first didn't reliably fix it — `SetForegroundWindow` raising
+/// a window doesn't guarantee keyboard focus has moved by the time the next
+/// tool call runs, so `get_focused_element` could still answer with the old
+/// window. Addressing the window by handle removes the race and the ambiguity.
+fn take_snapshot(target: Option<Handle>) -> uiautomation::Result<Snapshot> {
     let automation = UIAutomation::new()?;
-    let window = focused_window(&automation)?;
+    let window = match target {
+        Some(handle) => automation.element_from_handle(handle)?,
+        None => focused_window(&automation)?,
+    };
     let win_rect = window.get_bounding_rectangle()?;
     let (win_left, win_top) = (win_rect.get_left(), win_rect.get_top());
 
     // No filters: the matcher's default `Control` mode already limits this to
     // the "control view" (interactive/structural elements), not every raw
     // accessibility node — exactly the subset worth exposing to the model.
-    let found = automation.create_matcher().from(window).depth(MAX_DEPTH).find_all()?;
+    // "Nothing matched" is a normal outcome here, not a failure: a
+    // canvas-rendered app or game exposes no addressable elements, and the
+    // documented answer is to fall through to pixel mode. The matcher reports
+    // that case as ERR_NOTFOUND, or as ERR_TIMEOUT once it has burned its full
+    // retry budget waiting for elements that will never appear — so both are
+    // mapped to an empty snapshot, which `execute_dip_snapshot_tool` already
+    // turns into "try action=screenshot instead". Left as an `?`, they instead
+    // surfaced as "UI Automation snapshot failed: find element time out", which
+    // reads like a broken tool rather than an unsupported window.
+    let found = match automation.create_matcher().from(window).depth(MAX_DEPTH + 1).find_all() {
+        Ok(found) => found,
+        Err(e) if matches!(e.code(), ERR_NOTFOUND | ERR_TIMEOUT) => Vec::new(),
+        Err(e) => return Err(e),
+    };
 
     let mut elements = Vec::new();
     for el in found {
@@ -187,8 +251,14 @@ fn take_snapshot() -> uiautomation::Result<Snapshot> {
 /// frontend owns hiding itself again after `OVERLAY_MS` — same
 /// self-managed-window pattern the voice notch window already uses.
 fn show_overlay(app: &tauri::AppHandle, rect: (i32, i32, i32, i32), elements: &[ElementInfo]) {
-    use tauri::{Emitter, Manager};
-    let Some(win) = app.get_webview_window("dip_overlay") else { return };
+    // Created on first use and closed when idle — see `crate::overlays`.
+    let win = match crate::overlays::ensure(app, "dip_overlay") {
+        Ok(w) => w,
+        Err(e) => {
+            log::warn!("[dip] {e}");
+            return;
+        }
+    };
     let (left, top, width, height) = rect;
     let _ = win.set_position(tauri::PhysicalPosition::new(left, top));
     let _ = win.set_size(tauri::PhysicalSize::new(width.max(1) as u32, height.max(1) as u32));
@@ -196,12 +266,35 @@ fn show_overlay(app: &tauri::AppHandle, rect: (i32, i32, i32, i32), elements: &[
         .iter()
         .map(|e| json!({ "x": e.rel_x, "y": e.rel_y, "w": e.w, "h": e.h, "name": e.name, "role": e.role }))
         .collect();
-    let _ = win.emit("dip_overlay_show", json!({ "boxes": boxes, "durationMs": OVERLAY_MS }));
+    crate::overlays::emit(app, "dip_overlay", "dip_overlay_show", json!({ "boxes": boxes, "durationMs": OVERLAY_MS }));
     let _ = win.show();
+    // The page hides itself after OVERLAY_MS; the window closes a while later.
+    crate::overlays::schedule_close(app, "dip_overlay");
 }
 
-pub(crate) async fn execute_dip_snapshot_tool(app: &tauri::AppHandle) -> ToolResult {
-    let snapshot = match tokio::task::spawn_blocking(take_snapshot).await {
+pub(crate) async fn execute_dip_snapshot_tool(app: &tauri::AppHandle, args: &serde_json::Value) -> ToolResult {
+    // Optional `id` targets a specific window from the last list_windows call.
+    // Without it we fall back to the focused window, which in practice is
+    // almost always Vivianne itself — see `take_snapshot`.
+    let requested = args.get("id").and_then(|v| v.as_u64()).map(|v| v as usize);
+    let (target, label) = match requested {
+        Some(id) => match resolve_cached_window(id) {
+            Ok((handle, title)) => (Some(SendHandle(handle)), format!("'{title}'")),
+            Err(e) => return err(e),
+        },
+        None => (None, "the focused window".to_string()),
+    };
+
+    // Raise the target first: `interact` acts by moving the real cursor to
+    // screen coordinates, so the window has to actually be on top for those
+    // clicks to reach it. The snapshot itself reads by handle and does not
+    // depend on this succeeding, so a refused foreground change is not fatal.
+    if let Some(handle) = target {
+        let _ = tokio::task::spawn_blocking(move || focus_window_by_handle(handle.get())).await;
+        tokio::time::sleep(Duration::from_millis(FOREGROUND_SETTLE_MS)).await;
+    }
+
+    let snapshot = match tokio::task::spawn_blocking(move || take_snapshot(target.map(SendHandle::get))).await {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => return err(format!("UI Automation snapshot failed: {e}")),
         Err(e) => return err(format!("snapshot task panicked: {e}")),
@@ -209,7 +302,9 @@ pub(crate) async fn execute_dip_snapshot_tool(app: &tauri::AppHandle) -> ToolRes
 
     if snapshot.elements.is_empty() {
         return ok(
-            "No addressable UI elements found in the focused window (it may be canvas-rendered — try action=screenshot instead).",
+            format!(
+                "No addressable UI elements found in {label} (it may be canvas-rendered — try action=screenshot instead)."
+            ),
             None,
         );
     }
@@ -333,7 +428,26 @@ static LAST_WINDOWS: Mutex<Vec<WindowInfo>> = Mutex::new(Vec::new());
 fn list_windows() -> uiautomation::Result<Vec<WindowInfo>> {
     let automation = UIAutomation::new()?;
     let root = automation.get_root_element()?;
-    let found = automation.create_matcher().from(root).control_type(ControlType::Window).depth(1).find_all()?;
+    // Ask the desktop root directly for its Window children.
+    //
+    // This used to be `create_matcher().control_type(Window).depth(1)`, which
+    // silently found NOTHING and then failed with "find element time out"
+    // after the matcher's full 3s retry budget — so every `action:
+    // "list_windows"` call errored, and the model reasonably concluded from
+    // that error that no windows (and therefore no app) were open.
+    //
+    // `UIMatcher::depth` counts the starting element as depth 1, so `depth(1)`
+    // searches the desktop root and none of its children; the windows are at
+    // depth 2. Verified against uiautomation 0.25 on this machine: depth(1)
+    // finds 0, depth(2) finds all 8 open windows. Going through the condition
+    // API instead of the matcher states "children of the desktop" outright, so
+    // it can't be re-broken by that off-by-one.
+    let condition = automation.create_property_condition(
+        UIProperty::ControlType,
+        Variant::from(ControlType::Window as i32),
+        None,
+    )?;
+    let found = root.find_all(TreeScope::Children, &condition)?;
 
     let mut out = Vec::new();
     for el in found {
@@ -371,16 +485,23 @@ fn resolve_cached_window(id: usize) -> Result<(Handle, String), String> {
     Ok((w.handle, w.title.clone()))
 }
 
-fn focus_window(id: usize) -> Result<String, String> {
-    let (handle, title) = resolve_cached_window(id)?;
+/// Raise a window by handle. Split out of `focus_window` so `snapshot` can
+/// reuse it without going back through the id cache twice.
+fn focus_window_by_handle(handle: Handle) -> Result<(), String> {
     let automation = UIAutomation::new().map_err(|e| e.to_string())?;
     let element = automation.element_from_handle(handle).map_err(|e| e.to_string())?;
     let window: uiautomation::controls::WindowControl =
-        element.try_into().map_err(|_| format!("'{title}' is no longer a valid window."))?;
-    let focused = window.set_foregrand().map_err(|e| e.to_string())?;
-    if !focused {
-        return Err(format!("Windows declined to bring '{title}' to the foreground (it may be blocked by a modal dialog)."));
+        element.try_into().map_err(|_| "no longer a valid window".to_string())?;
+    if !window.set_foregrand().map_err(|e| e.to_string())? {
+        return Err("Windows declined the foreground change".to_string());
     }
+    Ok(())
+}
+
+fn focus_window(id: usize) -> Result<String, String> {
+    let (handle, title) = resolve_cached_window(id)?;
+    focus_window_by_handle(handle)
+        .map_err(|e| format!("Could not focus '{title}': {e} (it may be blocked by a modal dialog)."))?;
     Ok(format!("Focused '{title}'."))
 }
 

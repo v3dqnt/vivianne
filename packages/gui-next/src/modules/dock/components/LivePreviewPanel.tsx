@@ -1,12 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import IconButton from '@mui/material/IconButton'
-import InputBase from '@mui/material/InputBase'
-import Button from '@mui/material/Button'
-import Tooltip from '@mui/material/Tooltip'
-import CircularProgress from '@mui/material/CircularProgress'
+import { Box, Stack, Typography, IconButton, InputBase, Button, Tooltip, CircularProgress } from '../../../ui'
 import { RefreshLinear, MonitorLinear, StopCircleLinear, PlayCircleLinear, GlobalLinear } from '../../../icons'
 import { useActiveWorkspaceRoot } from '../useActiveWorkspace'
 import { useDevServerStore } from '../store/devServerStore'
@@ -82,7 +75,7 @@ export function LivePreviewPanel() {
             </Tooltip>
             <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, flex: 1, minWidth: 0, px: 1, py: 0.375, bgcolor: 'action.hover', borderRadius: 999 }}>
               <GlobalLinear size={12} color="currentColor" />
-              <Typography variant="caption" sx={{ fontFamily: '"JetBrains Mono", ui-monospace, monospace' }} noWrap>
+              <Typography variant="caption" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace' }} noWrap>
                 {status.url}
               </Typography>
             </Stack>
@@ -117,7 +110,7 @@ export function LivePreviewPanel() {
               value={command}
               onChange={(e) => setCommand(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && void doStart()}
-              sx={{ fontSize: '0.8125rem', fontFamily: '"JetBrains Mono", ui-monospace, monospace', bgcolor: 'action.hover', borderRadius: 999, px: 1.5, py: 0.5 }}
+              sx={{ fontSize: '0.8125rem', fontFamily: '"Geist Mono", ui-monospace, monospace', bgcolor: 'action.hover', borderRadius: 999, px: 1.5, py: 0.5 }}
             />
             <Button
               size="small"
@@ -146,7 +139,7 @@ export function LivePreviewPanel() {
           </Box>
         ) : status.kind === 'crashed' ? (
           <Stack sx={{ p: 2, gap: 0.5, alignSelf: 'flex-start', maxWidth: '100%' }}>
-            <Typography variant="caption" color="error.main" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
+            <Typography variant="caption" color="error.main" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', whiteSpace: 'pre-wrap' }}>
               {status.error}
             </Typography>
           </Stack>

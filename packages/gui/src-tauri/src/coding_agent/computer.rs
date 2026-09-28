@@ -1,7 +1,9 @@
-//! Computer tool — one merged surface for controlling the machine.
+//! The `dip` tool — one merged surface for controlling the machine.
 //!
-//! Two complementary halves, both reachable through the single `computer`
-//! tool (see `agent/tool_schemas.rs` for the schema the model sees):
+//! Two complementary halves, both reachable through the single `dip` tool
+//! (see `agent/tool_schemas.rs` for the schema the model sees). The file is
+//! still named `computer.rs` because pixel mode lives here; the module is the
+//! dispatcher, and `dip.rs` holds the structured half.
 //!
 //! - **Pixel mode** (this file, `execute_pointer_action` — cross-platform):
 //!   move/click the mouse, type text, press keys, read the cursor position,
@@ -18,11 +20,17 @@
 //! They were merged into one because the split itself was the problem: the
 //! model had to pick the right tool out of seven before it could even start,
 //! with no guidance on when to reach for which. One tool with an `action`
-//! enum, plus the `computer-use` skill (`~/.viv/skills/computer-use/SKILL.md`
-//! — same live-loaded, no-restart skill mechanism as every other skill; see
+//! enum, plus the `dip` skill (`~/.viv/skills/dip/SKILL.md` — same
+//! live-loaded, no-restart skill mechanism as every other skill; see
 //! `coding_agent::skills`) documenting the actual decision process, replaces
 //! that guesswork with one flow to learn. `execute_computer_tool` below is
 //! the merged dispatch point.
+//!
+//! The merged tool is named `dip`, so that the tool, this module pair, the
+//! skill, and the overlay window all say the same word. `agent/tool_exec.rs`
+//! still accepts `computer` as a silent alias: a tool called "computer" with
+//! these exact action names is a strong prior for most models, and answering
+//! it is cheaper than making a model recover from an unknown-tool error.
 
 use base64::Engine;
 use enigo::{
@@ -46,19 +54,63 @@ pub(crate) async fn execute_computer_tool(args: &serde_json::Value, app: &tauri:
         None => return err("'action' is required"),
     };
     match action {
-        "snapshot" => super::dip::execute_dip_snapshot_tool(app).await,
+        "snapshot" => super::dip::execute_dip_snapshot_tool(app, args).await,
         "interact" => super::dip::execute_dip_interact_tool(args).await,
         "list_windows" => super::dip::execute_dip_list_windows_tool().await,
         "focus_window" => super::dip::execute_dip_focus_window_tool(args).await,
         "window_action" => super::dip::execute_dip_window_action_tool(args).await,
         "launch_app" => super::dip::execute_dip_launch_app_tool(args).await,
+        "point_at" | "highlight" | "clear_pointer" => execute_narration_action(action, args, app),
         _ => execute_pointer_action(args).await,
     }
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(crate) async fn execute_computer_tool(args: &serde_json::Value, _app: &tauri::AppHandle) -> ToolResult {
+pub(crate) async fn execute_computer_tool(args: &serde_json::Value, app: &tauri::AppHandle) -> ToolResult {
+    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or_default();
+    if matches!(action, "point_at" | "highlight" | "clear_pointer") {
+        return execute_narration_action(action, args, app);
+    }
     execute_pointer_action(args).await
+}
+
+/// The narration cursor: point at something, ring a region, or clear it.
+///
+/// Separate from `execute_pointer_action` (which drives the REAL mouse) because
+/// these move nothing and click nothing — they only draw. Keeping them apart is
+/// what guarantees a narration call can never have a side effect on the system
+/// cursor, focus, or hover state.
+///
+/// Synchronous: it only positions a window and emits an event, so there is
+/// nothing to await, and the model should not be made to wait on a drawing.
+fn execute_narration_action(action: &str, args: &serde_json::Value, app: &tauri::AppHandle) -> ToolResult {
+    let num = |k: &str| args.get(k).and_then(|v| v.as_f64());
+    let label = args.get("text").and_then(|v| v.as_str()).map(str::to_string);
+
+    let outcome = match action {
+        "clear_pointer" => {
+            crate::instant::pointer::hide(app);
+            Ok("Pointer hidden.".to_string())
+        }
+        "point_at" => match (num("x"), num("y")) {
+            (Some(x), Some(y)) => crate::instant::pointer::point(app, x, y, label)
+                .map(|()| format!("Pointing at ({x:.0}, {y:.0}).")),
+            _ => return err("'point_at' needs 'x' and 'y' screen coordinates."),
+        },
+        "highlight" => match (num("x"), num("y"), num("width"), num("height")) {
+            (Some(x), Some(y), Some(w), Some(h)) => {
+                crate::instant::pointer::highlight(app, x, y, w, h, label)
+                    .map(|()| format!("Highlighting {w:.0}x{h:.0} at ({x:.0}, {y:.0})."))
+            }
+            _ => return err("'highlight' needs 'x', 'y', 'width' and 'height'."),
+        },
+        _ => return err(format!("unknown narration action '{action}'")),
+    };
+
+    match outcome {
+        Ok(msg) => ok(msg),
+        Err(e) => err(e),
+    }
 }
 
 fn err(msg: impl Into<String>) -> ToolResult {

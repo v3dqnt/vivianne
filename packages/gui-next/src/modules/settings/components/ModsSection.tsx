@@ -1,19 +1,5 @@
-import { useEffect, useState } from 'react'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import Divider from '@mui/material/Divider'
-import Switch from '@mui/material/Switch'
-import Button from '@mui/material/Button'
-import IconButton from '@mui/material/IconButton'
-import CircularProgress from '@mui/material/CircularProgress'
-import Dialog from '@mui/material/Dialog'
-import DialogTitle from '@mui/material/DialogTitle'
-import DialogContent from '@mui/material/DialogContent'
-import DialogActions from '@mui/material/DialogActions'
-import TextField from '@mui/material/TextField'
-import Checkbox from '@mui/material/Checkbox'
-import MenuItem from '@mui/material/MenuItem'
-import ButtonGroup from '@mui/material/ButtonGroup'
+import { useEffect, useMemo, useState } from 'react'
+import { Stack, Typography, Divider, Switch, Button, IconButton, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Checkbox, MenuItem, ButtonGroup } from '../../../ui'
 import { FlashLinear, ImportLinear, TrashLinear, BookLinear, LayerLinear, AddLinear, EditLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { usePlaybookStore } from '../store/playbookStore'
@@ -201,7 +187,7 @@ function PlaybookDialog({ playbook, open, onClose }: { playbook: PlaybookDef | n
                 fullWidth
                 placeholder={'echo "Hello {{name}}"'}
                 helperText={<>Shell command run via bash. Use <code>{'{{param}}'}</code> to substitute each parameter above.</>}
-                slotProps={{ input: { sx: { fontFamily: '"JetBrains Mono", ui-monospace, monospace', fontSize: '0.8125rem' } } }}
+                slotProps={{ input: { sx: { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.8125rem' } } }}
               />
             </>
           ) : (
@@ -213,7 +199,7 @@ function PlaybookDialog({ playbook, open, onClose }: { playbook: PlaybookDef | n
               fullWidth
               placeholder="http://localhost:3000"
               helperText="Must start with http://localhost: or http://127.0.0.1: — the app's CSP won't frame anything else. Point it at a local dev server and it opens as a dock panel."
-              slotProps={{ input: { sx: { fontFamily: '"JetBrains Mono", ui-monospace, monospace', fontSize: '0.8125rem' } } }}
+              slotProps={{ input: { sx: { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.8125rem' } } }}
             />
           )}
 
@@ -239,6 +225,10 @@ function PlaybookDialog({ playbook, open, onClose }: { playbook: PlaybookDef | n
 interface ToolInfo {
   name: string
   description?: string
+  /** Capability group from the backend's own `capabilities::GROUPS` — the
+   * same map the model's system prompt is built from, so this list can't
+   * drift from what the agent is actually told it can do. */
+  group?: string
 }
 
 /** Built-in tools — the real list read from the backend's own schema
@@ -270,6 +260,22 @@ function ToolsSubsection() {
     await call('cmd_save_settings', { settings: { ...(settings ?? {}), disabledTools: next } })
   }
 
+  // Preserve the backend's own group ordering (capability map order, which is
+  // deliberately flow-ordered rather than alphabetical) instead of re-sorting.
+  const grouped = useMemo(() => {
+    const order: string[] = []
+    const byGroup = new Map<string, ToolInfo[]>()
+    for (const tool of tools) {
+      const key = tool.group || 'Other'
+      if (!byGroup.has(key)) {
+        byGroup.set(key, [])
+        order.push(key)
+      }
+      byGroup.get(key)?.push(tool)
+    }
+    return order.map((label) => ({ label, items: byGroup.get(label) ?? [] }))
+  }, [tools])
+
   return (
     <Stack sx={{ gap: 0.5 }}>
       <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
@@ -283,7 +289,24 @@ function ToolsSubsection() {
           Loading…
         </Typography>
       ) : (
-        tools.map((tool) => (
+        grouped.map((group) => (
+          <Stack key={group.label} sx={{ gap: 0.25, mb: 1.5 }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                letterSpacing: '0.08em',
+                fontSize: '0.6875rem',
+                px: 1,
+                pt: 1,
+                pb: 0.5,
+              }}
+            >
+              {group.label}
+            </Typography>
+            {group.items.map((tool) => (
           <Stack
             key={tool.name}
             direction="row"
@@ -301,6 +324,8 @@ function ToolsSubsection() {
               )}
             </Stack>
             <Switch size="small" checked={!disabled.includes(tool.name)} onChange={(e) => void toggle(tool.name, e.target.checked)} />
+              </Stack>
+            ))}
           </Stack>
         ))
       )}
@@ -308,12 +333,11 @@ function ToolsSubsection() {
   )
 }
 
-/** Dedicated toggle for `run_script` (Programmatic Tool Calling) — kept
- * separate from the generic per-tool switches above because this one needs
- * to default OFF (it's a new, experimental code-execution tool), while every
- * tool in `ToolsSubsection` defaults to enabled unless explicitly disabled. */
+/** Dedicated toggle for `run_script` (Programmatic Tool Calling). It lives
+ * in its own setting rather than the per-tool switches above; on unless the
+ * user has switched it off, matching the backend's default. */
 function ExperimentalSubsection() {
-  const [enabled, setEnabled] = useState(false)
+  const [enabled, setEnabled] = useState(true)
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null)
   const [loaded, setLoaded] = useState(false)
 
@@ -321,7 +345,7 @@ function ExperimentalSubsection() {
     void call<Record<string, unknown> & { enableProgrammaticToolCalling?: boolean }>('cmd_get_settings').then((s) => {
       if (s) {
         setSettings(s)
-        setEnabled(Boolean(s.enableProgrammaticToolCalling))
+        setEnabled(s.enableProgrammaticToolCalling !== false)
       }
       setLoaded(true)
     })
@@ -335,7 +359,7 @@ function ExperimentalSubsection() {
   return (
     <Stack sx={{ gap: 0.5 }}>
       <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-        Experimental
+        Scripting
       </Typography>
       {loaded && (
         <Stack
@@ -348,8 +372,8 @@ function ExperimentalSubsection() {
               Programmatic tool calling
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              Lets the agent write a short script (run_script) that calls several of its own tools in one turn instead
-              of one round-trip each — faster on multi-step chains, but a newer code path.
+              Lets the agent write a short script (run_script) that calls any of its tools — built-in, MCP or
+              playbook — in one turn instead of one round-trip each. Every call still goes through the usual approvals.
             </Typography>
           </Stack>
           <Switch size="small" checked={enabled} onChange={(e) => void toggle(e.target.checked)} />

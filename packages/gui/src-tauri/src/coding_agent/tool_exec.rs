@@ -50,8 +50,14 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         // reasoning as `run_script`/PTC. See `coding_agent::computer`.
         Box::new(super::apply_patch::ApplyPatchTool::new(cwd.clone())),
         Box::new(super::documents::CreateDocumentTool::new(cwd.clone())),
+        Box::new(super::document_edit::InspectDocumentTool::new(cwd.clone())),
+        Box::new(super::document_edit::EditDocumentTool::new(cwd.clone())),
         Box::new(super::repo_tools::RepoCloneTool::new()),
         Box::new(super::repo_tools::RepoOverviewTool::new(cwd.clone())),
+        Box::new(super::github::GithubTool::new(cwd.clone())),
+        Box::new(super::github::GithubActTool::new(cwd.clone())),
+        Box::new(super::github::GithubApiTool::new()),
+        Box::new(crate::multiplayer::collab::PairActivityTool::new(cwd.clone())),
         // ── Extra tools ported from claude-code-gg (src/tools/*) ──────────
         Box::new(super::tools_ext::GlobTool::new(cwd.clone())),
         Box::new(super::tools_ext::PowerShellTool::new(cwd.clone())),
@@ -622,6 +628,7 @@ impl Tool for GrepTool {
             }
         };
 
+        let base = PathBuf::from(&self.cwd);
         let result = tokio::task::spawn_blocking(move || -> (Vec<String>, usize, bool) {
             let mut matches = Vec::new();
             let mut total_matches = 0usize;
@@ -629,14 +636,14 @@ impl Tool for GrepTool {
             let mut scan_capped = false;
 
             if search_path.is_file() {
-                grep_one_file(&search_path, &regex, &mut matches, &mut total_matches, &mut output_bytes);
+                grep_one_file(&search_path, &base, &regex, &mut matches, &mut total_matches, &mut output_bytes);
             } else {
                 // Capped like `code_search`'s walk — a sparse-match search on
                 // a huge repo previously still touched every file under root
                 // (only the match/byte counters broke out early, not the walk
                 // itself).
                 scan_capped = walk_files(&search_path, MAX_SEARCH_FILES_SCANNED, |file_path| {
-                    grep_one_file(file_path, &regex, &mut matches, &mut total_matches, &mut output_bytes);
+                    grep_one_file(file_path, &base, &regex, &mut matches, &mut total_matches, &mut output_bytes);
                     total_matches < MAX_GREP_MATCHES && output_bytes < MAX_GREP_BYTES
                 });
             }
@@ -677,6 +684,7 @@ impl Tool for GrepTool {
 
 fn grep_one_file(
     path: &Path,
+    base: &Path,
     regex: &regex::Regex,
     matches: &mut Vec<String>,
     total_matches: &mut usize,
@@ -699,47 +707,29 @@ fn grep_one_file(
             display_line.truncate(MAX_GREP_LINE_CHARS);
             display_line.push_str("...");
         }
-        let entry = format!("{}:{}:{}", path.display(), idx + 1, display_line);
+        let entry = format!("{}:{}:{}", display_path(path, base), idx + 1, display_line);
         *output_bytes += entry.len();
         matches.push(entry);
     }
 }
 
-// ── Code search ──────────────────────────────────────────────────────────
-// Ported from kilocode's `kilo-indexing` (embedding-based semantic search).
-// A real vector index needs an embedding model — a new local model download
-// (like Kokoro/Whisper) plus persistent index storage, well beyond a one-file
-// addition. This is the lexical-relevance version instead: rank files by
-// keyword overlap against the query (same scoring shape as
-// `agent::memory::recall`'s naive keyword search), so a loose/related-terms
-// query ("where do we handle auth") still finds relevant files by ranking
-// instead of grep's all-or-nothing exact regex match.
-// ponytail: lexical overlap, not embeddings — won't connect a query word to
-// an unrelated synonym in the code (e.g. "auth" won't find a file that only
-// says "credentials" with zero shared words). Upgrade path: swap the scorer
-// for a real embedding index if that gap shows up in practice.
-
-const MAX_SEARCH_FILES_SCANNED: usize = 4000;
-const MAX_SEARCH_FILE_BYTES: u64 = 512_000;
-const MAX_SEARCH_RESULTS: usize = 15;
-const SEARCH_STOPWORDS: &[&str] = &[
-    "the", "a", "an", "is", "are", "of", "to", "in", "on", "for", "and", "or", "do", "does",
-    "where", "what", "how", "find", "code", "that", "this", "with", "we", "handle", "handles",
-];
-
-/// Extensions worth scanning — skips binaries, images, lockfiles, etc.
-const SEARCHABLE_EXTS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "kt", "swift", "c", "cpp", "h", "hpp",
-    "cs", "rb", "php", "toml", "yaml", "yml", "json", "md", "css", "html", "sql", "sh",
-];
-
-fn tokenize(text: &str) -> Vec<String> {
-    text.to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.len() > 2 && !SEARCH_STOPWORDS.contains(w))
-        .map(String::from)
-        .collect()
+/// A path as the model should see it: relative to the workspace when it's
+/// inside it (with forward slashes), absolute otherwise. An absolute Windows
+/// path on every result line cost the model tens of characters per match and
+/// told it nothing it didn't already know.
+pub(crate) fn display_path(path: &Path, base: &Path) -> String {
+    match path.strip_prefix(base) {
+        Ok(rel) if !rel.as_os_str().is_empty() => rel.to_string_lossy().replace('\\', "/"),
+        _ => path.display().to_string(),
+    }
 }
+
+/// How many files grep scans before stopping and saying its result is partial.
+const MAX_SEARCH_FILES_SCANNED: usize = 4000;
+
+// ── Code search ──────────────────────────────────────────────────────────
+// Semantic + BM25 hybrid search over a per-project embedding index — see
+// `coding_agent::semantic_index` for how it works and why.
 
 pub struct CodeSearchTool {
     cwd: String,
@@ -758,123 +748,59 @@ impl Tool for CodeSearchTool {
     }
 
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        let query = args["query"].as_str().unwrap_or("").to_string();
+        let query = args["query"].as_str().unwrap_or("").trim().to_string();
+        if super::semantic_index::tokens(&query).is_empty() && query.len() < 3 {
+            return ToolResult { content: "'query' must describe what to look for".to_string(), is_error: true, details: None };
+        }
         let path = args["path"].as_str().unwrap_or(".").to_string();
-        let search_root = resolve_path(&self.cwd, &path);
-
-        let query_words = tokenize(&query);
-        if query_words.is_empty() {
-            return ToolResult {
-                content: "'query' must contain at least one meaningful word".to_string(),
-                is_error: true,
-                details: None,
-            };
+        let root = resolve_path(&self.cwd, &path);
+        if !root.is_dir() {
+            return ToolResult { content: format!("Not a folder: {}", root.display()), is_error: true, details: None };
         }
 
-        let result = tokio::task::spawn_blocking(move || -> (Vec<(f64, String, String)>, bool) {
-            let mut scored: Vec<(f64, String, String)> = Vec::new();
+        let (hits, status) = super::semantic_index::search(&root, &query, 10).await;
+        let mode = match status.embedder {
+            Some(e) => format!("semantic ({}) + keyword", e.label()),
+            None => "keyword only".to_string(),
+        };
+        let mut notes = Vec::new();
+        if let Some(err) = &status.embed_error {
+            notes.push(format!("embedding failed ({err}); ranked by keywords"));
+        }
+        if status.incomplete {
+            notes.push("the index is still being built — results cover part of the project; search again to include the rest".to_string());
+        }
+        if status.embedder.is_none() && status.embed_error.is_none() {
+            notes.push("no embedding key (OpenAI or NVIDIA) is set, so this is keyword ranking; exact names still work best with grep".to_string());
+        }
 
-            let scan_capped = walk_files(&search_root, MAX_SEARCH_FILES_SCANNED, |file_path| {
-                let has_ext = file_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| SEARCHABLE_EXTS.contains(&e));
-                if !has_ext {
-                    return true;
-                }
-                let Ok(meta) = std::fs::metadata(file_path) else { return true };
-                if meta.len() > MAX_SEARCH_FILE_BYTES {
-                    return true;
-                }
-                let Ok(content) = std::fs::read_to_string(file_path) else { return true };
-
-                let name_words = tokenize(&file_path.to_string_lossy());
-                let body_words = tokenize(&content);
-
-                // Filename hits count for more — a match in the path is a strong signal.
-                let name_score: f64 =
-                    query_words.iter().filter(|w| name_words.contains(w)).count() as f64 * 3.0;
-                let body_score: f64 =
-                    query_words.iter().filter(|w| body_words.contains(w)).count() as f64;
-                let score = name_score + body_score;
-                if score <= 0.0 {
-                    return true;
-                }
-
-                // Best snippet: the line with the most query-word hits.
-                let snippet = content
-                    .lines()
-                    .enumerate()
-                    .map(|(i, line)| {
-                        let lw = tokenize(line);
-                        let hits = query_words.iter().filter(|w| lw.contains(w)).count();
-                        (hits, i, line)
-                    })
-                    .filter(|(hits, ..)| *hits > 0)
-                    .max_by_key(|(hits, ..)| *hits)
-                    .map(|(_, i, line)| {
-                        let mut l = line.trim().to_string();
-                        if l.len() > MAX_GREP_LINE_CHARS {
-                            l.truncate(MAX_GREP_LINE_CHARS);
-                            l.push_str("...");
-                        }
-                        format!("{}: {}", i + 1, l)
-                    })
-                    .unwrap_or_default();
-
-                scored.push((score, file_path.display().to_string(), snippet));
-                true
-            });
-
-            scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-            scored.truncate(MAX_SEARCH_RESULTS);
-            (scored, scan_capped)
-        })
-        .await;
-
-        match result {
-            Ok((hits, scan_capped)) if !hits.is_empty() => {
-                let mut body = hits
-                    .iter()
-                    .map(|(score, path, snippet)| {
-                        if snippet.is_empty() {
-                            format!("{} (relevance {:.0})", path, score)
-                        } else {
-                            format!("{} (relevance {:.0})\n  {}", path, score, snippet)
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                if scan_capped {
-                    body.push_str(&format!(
-                        "\n\n[WARNING: scan stopped after {MAX_SEARCH_FILES_SCANNED} files — results are PARTIAL, \
-                         not exhaustive. Narrow `path` and retry to search the rest of the tree.]"
-                    ));
-                }
-                ToolResult {
-                    content: body,
-                    is_error: false,
-                    details: Some(json!({ "query": query, "results": hits.len(), "scan_capped": scan_capped })),
-                }
+        if hits.is_empty() {
+            let mut msg = format!("No relevant code found for: {query} [{mode}, {} files indexed]", status.files);
+            for n in &notes {
+                msg.push_str(&format!("\n({n})"));
             }
-            Ok((_, scan_capped)) => ToolResult {
-                content: if scan_capped {
-                    format!(
-                        "No relevant files found for: {query}\n\n\
-                         [WARNING: scan stopped after {MAX_SEARCH_FILES_SCANNED} files — this is a PARTIAL result, \
-                         not proof the term is absent. Narrow `path` and retry to search the rest of the tree.]"
-                    )
-                } else {
-                    format!("No relevant files found for: {}", query)
-                },
-                is_error: false,
-                details: Some(json!({ "scan_capped": scan_capped })),
-            },
-            Err(e) => ToolResult {
-                content: format!("Internal error running code_search: {}", e),
-                is_error: true,
-                details: None,
-            },
+            return ToolResult { content: msg, is_error: false, details: None };
+        }
+
+        let mut out = format!("{} results for: {query} [{mode}, {} files indexed]\n", hits.len(), status.files);
+        for h in &hits {
+            out.push_str(&format!("\n{}:{}-{}  (score {:.2})\n", h.path, h.start, h.end, h.score));
+            for line in h.preview.lines() {
+                let mut l = line.to_string();
+                if l.len() > MAX_GREP_LINE_CHARS {
+                    l.truncate(MAX_GREP_LINE_CHARS);
+                    l.push_str("...");
+                }
+                out.push_str(&format!("    {l}\n"));
+            }
+        }
+        for n in &notes {
+            out.push_str(&format!("\n({n})"));
+        }
+        ToolResult {
+            content: out.trim_end().to_string(),
+            is_error: false,
+            details: Some(json!({ "query": query, "results": hits.len(), "semantic": status.embedder.is_some() })),
         }
     }
 }

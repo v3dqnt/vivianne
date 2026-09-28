@@ -151,12 +151,7 @@ fn build_messages(context: &Context) -> Vec<Value> {
     }
 
     for msg in &context.messages {
-        let role = match msg.role.as_str() {
-            "user" => "user",
-            "assistant" => "assistant",
-            "tool" => "tool",
-            other => other,
-        };
+        let role = msg.role.as_str();
 
         if !msg.content_blocks.is_empty() {
             let content: Vec<Value> = msg.content_blocks.iter().filter_map(|b| match b {
@@ -480,11 +475,10 @@ pub async fn stream_azure_openai(
         }
 
         // If tool calls present, set stop reason
-        if output.content.iter().any(|c| matches!(c, MessageContent::ToolCall(_))) {
-            if output.stop_reason == "stop" {
+        if output.content.iter().any(|c| matches!(c, MessageContent::ToolCall(_)))
+            && output.stop_reason == "stop" {
                 output.stop_reason = "toolUse".to_string();
             }
-        }
 
         emit_done(&app, &stream_id, output);
     });

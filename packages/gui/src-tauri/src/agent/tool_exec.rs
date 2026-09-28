@@ -11,7 +11,7 @@ use tokio::sync::oneshot;
 /// ls, grep, find, glob, sleep, todo_write) are never gated — only tools with
 /// real side effects or that reach outside the sandboxed workspace.
 const GATED_TOOLS: &[&str] = &[
-    "bash", "powershell", "write", "edit", "apply_patch", "computer", "web_fetch", "web_search", "generate_image",
+    "bash", "powershell", "write", "edit", "apply_patch", "dip", "computer", "web_fetch", "web_search", "generate_image",
     // Same real-shell-execution risk as bash/powershell, just persistent and
     // interactive rather than one-shot. `terminal_signal`/`terminal_close`
     // are here because the registry is shared with the GUI: they can stop or
@@ -30,6 +30,12 @@ const GATED_TOOLS: &[&str] = &[
     // even though it's network-isolated — the isolation narrows the blast
     // radius, it doesn't make the call free to approve.
     "sandbox_execute",
+    // Runs a Python snippet on the user's machine — the same reach as bash,
+    // however mathematical the intent.
+    "math",
+    // GitHub writes (issues, PRs, merges, releases, workflow runs) and the raw
+    // API. Reads (`github`) stay ungated.
+    "github_act", "github_api",
 ];
 
 /// Mutating tools refused outright while plan mode is active (see
@@ -154,6 +160,14 @@ pub(crate) struct Restrictions {
 /// prompt's capability section (which must describe exactly the same set) —
 /// if these two ever disagreed, the prompt would either advertise a tool the
 /// agent gets refused for calling or hide one it actually has.
+/// Whether a `docker` CLI is on PATH — checked once per process; installing
+/// Docker mid-session is covered by `cmd_install_docker`, which is followed by
+/// an app restart anyway.
+fn docker_installed() -> bool {
+    static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| which::which("docker").is_ok())
+}
+
 pub(crate) async fn compute_restrictions(state: &AgentState) -> Restrictions {
     let settings_disabled_tools = read_disabled_tools().await;
     let persona_mode = state.persona_mode().await;
@@ -167,6 +181,11 @@ pub(crate) async fn compute_restrictions(state: &AgentState) -> Restrictions {
     let ptc_enabled = read_ptc_enabled().await;
     if !ptc_enabled && !disabled_tools.iter().any(|d| d == "run_script") {
         disabled_tools.push("run_script".to_string());
+    }
+    // A tool that needs Docker is only offered where Docker is installed —
+    // otherwise every call is a guaranteed failure the model has to discover.
+    if !docker_installed() && !disabled_tools.iter().any(|d| d == "sandbox_execute") {
+        disabled_tools.push("sandbox_execute".to_string());
     }
     if workspace_read_only {
         for t in WORKSPACE_MUTATING_TOOLS {
@@ -333,7 +352,13 @@ pub async fn execute_tool_calls(
     let workspace_folders = state.workspace_folders().await;
     let cwd = workspace_folders.first().cloned().unwrap_or_else(|| ".".to_string());
     let tools = crate::coding_agent::tool_exec::create_coding_tools(cwd.clone());
-    let bypass_mode = read_bypass_mode().await;
+    // Global setting OR this session's own unattended flag. Viv Instant sets
+    // the latter because it is spoken to rather than watched — there is no one
+    // at the keyboard to answer an approval prompt — and it must not have to
+    // flip the global setting to get that, which would silently disarm the
+    // user's main chat too. Defaults to `false`, so main-chat behaviour is
+    // unchanged.
+    let bypass_mode = read_bypass_mode().await || state.auto_approve().await;
 
     // Whether the active model can take image input at all. Gates whether
     // `read`/`computer` results attach real pixels (`tool_result_to_agent_result`)
@@ -345,6 +370,65 @@ pub async fn execute_tool_calls(
         crate::ai::model_discovery::model_supports_vision(&m.provider, &m.id)
     };
     let mut tool_calls = tool_calls;
+    // Resolve near-miss tool names BEFORE anything dispatches or gates on
+    // them, so gating, events and the registry all see one canonical name.
+    for tc in &mut tool_calls {
+        normalize_tool_name(tc);
+    }
+
+    // PreToolUse hooks. Placed after name normalization so a hook matcher sees
+    // the canonical tool name rather than whichever alias the model guessed,
+    // and before every gate below so a hook denial short-circuits approval
+    // prompts, workspace checks and dispatch alike.
+    //
+    // A denied call is not dropped: the model gets an error result carrying the
+    // hook's reason, exactly as it would for any other refusal. Dropping it
+    // would leave a tool_use block with no tool_result, which most providers
+    // reject outright.
+    let mut hook_denials: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for tc in &mut tool_calls {
+        let outcome = crate::agent::hooks::run(
+            crate::agent::hooks::HookEvent::PreToolUse,
+            Some(&tc.name),
+            serde_json::json!({
+                "event": "PreToolUse",
+                "toolName": tc.name,
+                "toolInput": tc.arguments,
+                "cwd": cwd,
+            }),
+        )
+        .await;
+        if let Some(reason) = outcome.denied {
+            hook_denials.insert(tc.id.clone(), reason);
+            continue;
+        }
+        if let Some(updated) = outcome.updated_input {
+            log::info!("[hooks] rewrote arguments for '{}'", tc.name);
+            tc.arguments = updated;
+        }
+    }
+
+    // The unattended-run risk gate. Only `auto_approve` sessions reach it —
+    // today that is Viv Instant alone — so main chat is untouched and keeps its
+    // real approval prompts.
+    //
+    // Placed here, after hooks and argument rewriting but before every dispatch
+    // path below, because it has to see the FINAL arguments and it has to cover
+    // the concurrent read-only fast path as well as the sequential loop. It
+    // reuses `hook_denials` deliberately: a cancelled step and a hook-denied
+    // step need identical handling downstream — an error result the model can
+    // read, not a dropped call, which would leave a `tool_use` block with no
+    // matching `tool_result`.
+    if state.auto_approve().await {
+        for tc in &tool_calls {
+            if hook_denials.contains_key(&tc.id) {
+                continue;
+            }
+            if let Some(reason) = crate::instant::session::gate_step(app, &tc.name, &tc.arguments).await {
+                hook_denials.insert(tc.id.clone(), reason);
+            }
+        }
+    }
     if !vision_capable {
         for tc in &mut tool_calls {
             if tc.name == "read" {
@@ -406,9 +490,62 @@ pub async fn execute_tool_calls(
                     .unwrap_or(false))
     };
 
+    // Checkpoint every file a mutating tool is about to overwrite, before any
+    // of them run. Done here rather than inside each tool so a turn that edits
+    // three files produces three restorable points with no tool needing to know
+    // checkpoints exist. Only tools with a knowable target path qualify — see
+    // `checkpoints`' module doc for why shell commands deliberately do not.
+    {
+        let session_id = app
+            .state::<std::sync::Arc<crate::agent::commands::AppState>>()
+            .session_id
+            .lock()
+            .await
+            .clone()
+            .unwrap_or_default();
+        if !session_id.is_empty() {
+            for tc in &tool_calls {
+                if hook_denials.contains_key(&tc.id) {
+                    continue;
+                }
+                if let Some(path) = crate::agent::checkpoints::target_path(&tc.name, &tc.arguments, &cwd) {
+                    crate::agent::checkpoints::capture(&session_id, &tc.id, &tc.name, &[path]);
+                }
+            }
+        }
+    }
+
     let mut fast_path: Vec<(usize, AgentToolCall)> = Vec::new();
     let mut sequential: Vec<(usize, AgentToolCall)> = Vec::new();
     for (idx, tc) in tool_calls.into_iter().enumerate() {
+        // Hook-denied calls never reach either path — they are answered here
+        // with the hook's own reason, which is what lets the model correct
+        // course instead of retrying the same blocked call.
+        if let Some(reason) = hook_denials.get(&tc.id).cloned() {
+            let denied = AgentToolResult {
+                content: vec![MessageContent::Text {
+                    text: format!("Error: '{}' was blocked by a hook. {reason}", tc.name),
+                }],
+                details: serde_json::Value::Null,
+                terminate: None,
+            };
+            emit.emit(AgentEvent::ToolExecutionEnd {
+                tool_call_id: tc.id.clone(),
+                tool_name: tc.name.clone(),
+                result: denied.clone(),
+                is_error: true,
+            });
+            slots[idx] = Some(AgentMessage::ToolResult {
+                tool_call_id: tc.id,
+                tool_name: tc.name,
+                content: denied.content,
+                details: Some(denied.details),
+                is_error: Some(true),
+                timestamp: now_ms(),
+                arguments: Some(tc.arguments),
+            });
+            continue;
+        }
         if is_fast_path_eligible(&tc) {
             fast_path.push((idx, tc));
         } else {
@@ -442,7 +579,7 @@ pub async fn execute_tool_calls(
         });
         let batch_results = futures::future::join_all(batch_futures).await;
 
-        for ((idx, tc), tool_result) in fast_path.iter().zip(batch_results.into_iter()) {
+        for ((idx, tc), tool_result) in fast_path.iter().zip(batch_results) {
             let is_error = tool_result.content.iter().any(|c| {
                 if let MessageContent::Text { text } = c {
                     text.starts_with("Error") || text.starts_with("FileNotFound")
@@ -601,7 +738,7 @@ pub async fn execute_tool_calls(
         // see `schema_registry_consistency_tests::DISPATCH_CHAIN_TOOLS` for
         // the full list this chain has to match.
         } else if tool_call.name == "remember" || tool_call.name == "recall" {
-            execute_memory_tool(&tool_call.name, &tool_call.arguments, app).await
+            execute_memory_tool(&tool_call.name, &tool_call.arguments, state, app).await
         } else if tool_call.name == "read_skill" {
             execute_read_skill_tool(&tool_call.arguments).await
         } else if tool_call.name == "question" {
@@ -613,27 +750,51 @@ pub async fn execute_tool_calls(
         } else if tool_call.name == "present_snippet" {
             execute_present_snippet_tool(&tool_call.arguments)
         } else if tool_call.name == "web_preview" {
-            execute_web_preview_tool(&tool_call.arguments, emit).await
+            execute_web_preview_tool(&tool_call.arguments, emit, app).await
         } else if tool_call.name == "browser_snapshot" {
-            execute_browser_snapshot_tool(&tool_call.arguments).await
+            execute_browser_snapshot_tool(&tool_call.arguments, emit, app).await
         } else if tool_call.name == "browser_click" {
-            execute_browser_click_tool(&tool_call.arguments, emit).await
+            execute_browser_click_tool(&tool_call.arguments, emit, app).await
         } else if tool_call.name == "browser_type" {
-            execute_browser_type_tool(&tool_call.arguments, emit).await
+            execute_browser_type_tool(&tool_call.arguments, emit, app).await
         } else if tool_call.name == "browser_press_key" {
-            execute_browser_press_key_tool(&tool_call.arguments, emit).await
+            execute_browser_press_key_tool(&tool_call.arguments, emit, app).await
         } else if tool_call.name == "browser_scroll" {
-            execute_browser_scroll_tool(&tool_call.arguments, emit).await
+            execute_browser_scroll_tool(&tool_call.arguments, emit, app).await
         } else if tool_call.name == "browser_evaluate" {
             execute_browser_evaluate_tool(&tool_call.arguments).await
         } else if tool_call.name == "browser_read_console" {
             execute_browser_read_console_tool().await
         } else if tool_call.name == "browser_read_network" {
             execute_browser_read_network_tool().await
+        } else if tool_call.name == "browser_start" {
+            match crate::browser_sessions::start_and_report().await {
+                Ok(msg) => text_result(msg),
+                Err(e) => text_result(format!("Error: {e}")),
+            }
+        } else if tool_call.name == "browser_session_status" {
+            match crate::browser_sessions::session_status().await {
+                Ok(v) => text_result(serde_json::to_string_pretty(&v).unwrap_or_default()),
+                Err(e) => text_result(format!("Error: {e}")),
+            }
+        } else if tool_call.name == "browser_import_cookies" {
+            let file = tool_call.arguments.get("file").and_then(|v| v.as_str()).unwrap_or("");
+            if file.is_empty() {
+                text_result("Error: 'file' is required.".to_string())
+            } else {
+                match crate::browser_sessions::import_cookies(file).await {
+                    Ok(msg) => text_result(msg),
+                    Err(e) => text_result(format!("Error: {e}")),
+                }
+            }
+        } else if tool_call.name == "math" {
+            crate::agent::math::execute(&tool_call.arguments, state.primary_workspace_folder().await, vision_capable).await
         } else if tool_call.name == "task" {
             execute_task_tool(&tool_call.arguments, context.delegate_depth, state, app).await
         } else if tool_call.name == "list_subagent_profiles" {
-            execute_list_subagent_profiles_tool().await
+            execute_list_subagent_profiles_tool(state.primary_workspace_folder().await).await
+        } else if tool_call.name == "hire_agent" {
+            text_result(crate::agent::team::execute_hire_tool(&tool_call.arguments, state.primary_workspace_folder().await, app).await)
         } else if tool_call.name == "generate_image" {
             execute_generate_image_tool(&tool_call.arguments, app).await
         } else if tool_call.name == "connect_mcp_server" {
@@ -674,7 +835,14 @@ pub async fn execute_tool_calls(
             execute_sandbox_tool(&tool_call.arguments).await
         } else if tool_call.name == "run_script" {
             crate::agent::ptc::execute_ptc_tool(&tool_call.arguments, context.delegate_depth, state, emit, app, &tool_call.id).await
-        } else if tool_call.name == "computer" {
+        } else if tool_call.name == "dip" || tool_call.name == "computer" {
+            // The tool is named `dip`; `computer` is accepted as a silent
+            // alias. Both the schema and the capability map advertise `dip`
+            // only, but "computer" with these exact action names (screenshot,
+            // left_click, type, key, ...) is a strong prior for most models,
+            // so a model that reaches for it by that name gets the same tool
+            // instead of an "unknown tool" error it has to recover from.
+            //
             // Merged pixel-mode + (Windows-only) structured-mode tool — see
             // `coding_agent::computer::execute_computer_tool`. Needs
             // `&tauri::AppHandle` (structured mode drives the highlight
@@ -698,9 +866,15 @@ pub async fn execute_tool_calls(
                 },
             }
         } else {
+            // A bare "Tool not found" costs the model a whole turn to recover
+            // from by guessing again. Where the guess is a known ambiguous one,
+            // name the real candidates instead.
+            let hint = unknown_tool_hint(&tool_call.name)
+                .map(|h| format!(" {h}"))
+                .unwrap_or_else(|| " Call `list_tools` to see everything available.".to_string());
             AgentToolResult {
                 content: vec![MessageContent::Text {
-                    text: format!("Tool not found: {}", tool_call.name),
+                    text: format!("Tool not found: {}.{hint}", tool_call.name),
                 }],
                 details: serde_json::Value::Null,
                 terminate: None,
@@ -735,7 +909,44 @@ pub async fn execute_tool_calls(
         slots[slot_idx] = Some(tool_result_message);
     }
 
-    slots.into_iter().map(|s| s.expect("every tool_call index is filled by either the fast or sequential path")).collect()
+    let mut results: Vec<AgentMessage> = slots
+        .into_iter()
+        .map(|s| s.expect("every tool_call index is filled by either the fast or sequential path"))
+        .collect();
+
+    // PostToolUse hooks. These run after the result exists, so they cannot
+    // block anything — their power is to append to what the model reads next,
+    // which is how a linter or policy note reaches the model as feedback on the
+    // edit it just made rather than as a rule it was asked to remember.
+    for msg in &mut results {
+        let AgentMessage::ToolResult { tool_name, content, is_error, .. } = msg else { continue };
+        let outcome = crate::agent::hooks::run(
+            crate::agent::hooks::HookEvent::PostToolUse,
+            Some(tool_name),
+            serde_json::json!({
+                "event": "PostToolUse",
+                "toolName": tool_name,
+                "isError": is_error.unwrap_or(false),
+                // Text blocks only: a hook reads a tool's output as text, and
+                // piping a base64 screenshot through a shell pipe would be
+                // megabytes of stdin for no benefit.
+                "output": content
+                    .iter()
+                    .filter_map(|c| match c {
+                        MessageContent::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                "cwd": cwd,
+            }),
+        )
+        .await;
+        if let Some(extra) = outcome.context_block() {
+            content.push(MessageContent::Text { text: format!("\n[hook] {extra}") });
+        }
+    }
+    results
 }
 
 async fn execute_question_tool(tool_call_id: &str, args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
@@ -925,11 +1136,35 @@ fn normalize_preview_url(url: &str) -> String {
 /// (unlike a fire-and-forget event) so the model actually knows whether it
 /// worked, since "camoufox-browser isn't running" is a real, common
 /// failure mode worth surfacing rather than silently swallowing.
-async fn execute_web_preview_tool(args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
+/// Open a page.
+///
+/// Prefers the embedded live webview — the one the user can actually see and
+/// click — so that agent and human are looking at one browser with one session
+/// rather than two that silently diverge on login state. camofox remains the
+/// fallback for when the webview can't be created, and for its stealth profile
+/// on sites that block a plain WebView2.
+async fn execute_web_preview_tool(args: &serde_json::Value, emit: &EventSender, app: &tauri::AppHandle) -> AgentToolResult {
     let Some(raw_url) = args.get("url").and_then(|v| v.as_str()) else {
         return image_tool_err("Error: 'url' is required.");
     };
     let url = normalize_preview_url(raw_url);
+
+    if crate::live_browser::ensure_at(app, &url).is_ok() {
+        // Tell the UI to show it. The panel owns the on-screen rectangle, so
+        // this is a request to reveal, not a position.
+        emit.emit(AgentEvent::WebPreviewRequested {
+            url: url.clone(),
+            screenshot_base64: None,
+            error: None,
+        });
+        return AgentToolResult {
+            content: vec![MessageContent::Text {
+                text: format!("Opened {url} in the live browser. It renders continuously and the user can interact with it directly."),
+            }],
+            details: serde_json::json!({ "url": url, "surface": "live" }),
+            terminate: None,
+        };
+    }
 
     match crate::camoufox::navigate(&url).await {
         Ok(result) => {
@@ -977,10 +1212,33 @@ async fn browser_action_result(
     }
 }
 
-async fn execute_browser_snapshot_tool(args: &serde_json::Value) -> AgentToolResult {
+/// Unlike the interaction tools, a snapshot changes nothing on the page — but
+/// it is the tool called most often during a browsing flow (the skill tells the
+/// model to re-snapshot after anything that could have changed the UI), and it
+/// was the only browser tool that left the preview panel untouched. So the
+/// panel went stale during exactly the sequences the user most wants to watch.
+async fn execute_browser_snapshot_tool(args: &serde_json::Value, emit: &EventSender, app: &tauri::AppHandle) -> AgentToolResult {
     let offset = args.get("offset").and_then(|v| v.as_u64()).map(|v| v as u32);
+    // Read whichever surface is actually showing the page.
+    if crate::live_browser_agent::is_live(app).await {
+        return match crate::live_browser_agent::snapshot(app).await {
+            Ok(s) => text_result(format!("{} — {} interactive element(s)
+
+{}", s.url, s.refs_count, s.text)),
+            Err(e) => image_tool_err(e),
+        };
+    }
     match crate::camoufox::snapshot(offset).await {
         Ok(s) => {
+            // Best-effort: a failed screenshot must not fail the snapshot the
+            // model actually asked for.
+            if let Ok(shot) = crate::camoufox::live_screenshot().await {
+                emit.emit(AgentEvent::WebPreviewRequested {
+                    url: s.url.clone(),
+                    screenshot_base64: shot,
+                    error: None,
+                });
+            }
             let mut header = format!("{} — {} interactive element(s)", s.url, s.refs_count);
             if s.truncated {
                 header.push_str(", truncated");
@@ -996,15 +1254,21 @@ async fn execute_browser_snapshot_tool(args: &serde_json::Value) -> AgentToolRes
     }
 }
 
-async fn execute_browser_click_tool(args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
+async fn execute_browser_click_tool(args: &serde_json::Value, emit: &EventSender, app: &tauri::AppHandle) -> AgentToolResult {
     let Some(r) = args.get("ref").and_then(|v| v.as_str()) else {
         return image_tool_err("Error: 'ref' is required — call browser_snapshot first to get one.");
     };
+    if crate::live_browser_agent::is_live(app).await {
+        return match crate::live_browser_agent::click(app, r).await {
+            Ok(msg) => text_result(msg),
+            Err(e) => image_tool_err(e),
+        };
+    }
     let result = crate::camoufox::click(r).await;
     browser_action_result(format!("Clicked {r}."), result, emit).await
 }
 
-async fn execute_browser_type_tool(args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
+async fn execute_browser_type_tool(args: &serde_json::Value, emit: &EventSender, app: &tauri::AppHandle) -> AgentToolResult {
     let Some(r) = args.get("ref").and_then(|v| v.as_str()) else {
         return image_tool_err("Error: 'ref' is required — call browser_snapshot first to get one.");
     };
@@ -1012,21 +1276,39 @@ async fn execute_browser_type_tool(args: &serde_json::Value, emit: &EventSender)
         return image_tool_err("Error: 'text' is required.");
     };
     let submit = args.get("submit").and_then(|v| v.as_bool()).unwrap_or(false);
+    if crate::live_browser_agent::is_live(app).await {
+        return match crate::live_browser_agent::type_text(app, r, text, submit).await {
+            Ok(msg) => text_result(msg),
+            Err(e) => image_tool_err(e),
+        };
+    }
     let result = crate::camoufox::type_text(r, text, submit).await;
     browser_action_result(format!("Typed into {r}{}.", if submit { " and pressed Enter" } else { "" }), result, emit).await
 }
 
-async fn execute_browser_press_key_tool(args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
+async fn execute_browser_press_key_tool(args: &serde_json::Value, emit: &EventSender, app: &tauri::AppHandle) -> AgentToolResult {
     let Some(key) = args.get("key").and_then(|v| v.as_str()) else {
         return image_tool_err("Error: 'key' is required.");
     };
+    if crate::live_browser_agent::is_live(app).await {
+        return match crate::live_browser_agent::press_key(app, key).await {
+            Ok(msg) => text_result(msg),
+            Err(e) => image_tool_err(e),
+        };
+    }
     let result = crate::camoufox::press_key(key).await;
     browser_action_result(format!("Pressed {key}."), result, emit).await
 }
 
-async fn execute_browser_scroll_tool(args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
+async fn execute_browser_scroll_tool(args: &serde_json::Value, emit: &EventSender, app: &tauri::AppHandle) -> AgentToolResult {
     let direction = args.get("direction").and_then(|v| v.as_str()).unwrap_or("down").to_string();
     let amount = args.get("amount").and_then(|v| v.as_i64()).unwrap_or(500);
+    if crate::live_browser_agent::is_live(app).await {
+        return match crate::live_browser_agent::scroll(app, &direction, amount).await {
+            Ok(msg) => text_result(msg),
+            Err(e) => image_tool_err(e),
+        };
+    }
     let result = crate::camoufox::scroll(&direction, amount).await;
     browser_action_result(format!("Scrolled {direction} by {amount}px."), result, emit).await
 }
@@ -1243,9 +1525,12 @@ async fn subagent_source_tag(app: &tauri::AppHandle, kind: &str) -> String {
 /// `task` — spawns a subagent to handle a delegated piece of work: pollable
 /// in the background via `task_id` + `task_output`/`wait_tasks`, or blocking
 /// inline when `run_in_background` is false. Supports multiple concurrent
-/// subagents, unlike a single blocking call. Depth-capped at one level
-/// (`AgentContext::delegate_depth`) — a subagent spawned by `task` cannot
-/// itself call `task` again. Registers into the same `SubagentRegistry` that
+/// subagents, unlike a single blocking call.
+///
+/// Delegation is three tiers deep at most, matching the project hierarchy:
+/// the top level (the master) delegates to employees or plain subagents; an
+/// employee (`AgentState::delegation_allowed`) may fan out to plain
+/// subagents of its own; nothing below that may delegate. Registers into the same `SubagentRegistry` that
 /// `task_output`/`wait_tasks`/`kill_task` (ordinary `Tool` impls in
 /// `coding_agent::orchestration`, dispatched through the generic fallback
 /// below) read from — only the *spawn* side needs direct access to
@@ -1258,14 +1543,14 @@ async fn execute_task_tool(
 ) -> AgentToolResult {
     use crate::coding_agent::orchestration::{SubagentHandle, SubagentRegistry, SubagentStatus};
 
-    if depth >= 1 {
-        return AgentToolResult {
-            content: vec![MessageContent::Text {
-                text: "Error: task cannot be called from within a subagent (single-level only — do the work directly instead).".to_string(),
-            }],
-            details: serde_json::Value::Null,
-            terminate: None,
-        };
+    let refuse = |text: &str| AgentToolResult {
+        content: vec![MessageContent::Text { text: text.to_string() }],
+        details: serde_json::Value::Null,
+        terminate: None,
+    };
+    let employee = depth == 1 && parent_state.delegation_allowed().await;
+    if depth >= 1 && !employee {
+        return refuse("Error: task can't be called from here — you are already a subagent at the bottom of the hierarchy. Do the work directly.");
     }
     let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     if description.is_empty() {
@@ -1287,12 +1572,48 @@ async fn execute_task_tool(
     // free-text label, which keeps every pre-existing (unrestricted,
     // parent-model) subagent call behaving exactly as before profiles
     // existed.
-    let profile = crate::agent::paths::viv_subagents_dir()
-        .ok()
-        .and_then(|dir| {
-            crate::coding_agent::subagent_profiles::load_profiles_from_dir(&dir.to_string_lossy())
-                .into_iter()
-                .find(|p| p.name == subagent_type)
+    //
+    // The project's own specialists (`.viv/agents`, see `agent::team`) are
+    // checked before either: they are the team the master was told about.
+    let project_root = parent_state.primary_workspace_folder().await;
+    let team_agent = project_root
+        .as_deref()
+        .and_then(|root| crate::agent::team::find_active(std::path::Path::new(root), &subagent_type));
+    // Employees don't hand work to each other — routing between areas is the
+    // master's job. They spawn plain subagents for their own work.
+    if employee && team_agent.is_some() {
+        return refuse(
+            "Error: an employee can't delegate to another employee — routing work between areas is the master's job. \
+             Spawn a plain subagent (e.g. subagent_type \"general-purpose\") for parallel work in your own area, or say in \
+             your report what the other area needs.",
+        );
+    }
+    if team_agent.is_none() {
+        if let Some(p) = project_root
+            .as_deref()
+            .and_then(|root| crate::agent::team::find_proposed(std::path::Path::new(root), &subagent_type))
+        {
+            return AgentToolResult {
+                content: vec![MessageContent::Text {
+                    text: format!(
+                        "Error: {} is a proposed hire the user hasn't approved yet, so it can't take work. Do this yourself, or wait for approval.",
+                        p.name
+                    ),
+                }],
+                details: serde_json::Value::Null,
+                terminate: None,
+            };
+        }
+    }
+    let profile = team_agent
+        .as_ref()
+        .map(crate::agent::team::to_profile)
+        .or_else(|| {
+            crate::agent::paths::viv_subagents_dir().ok().and_then(|dir| {
+                crate::coding_agent::subagent_profiles::load_profiles_from_dir(&dir.to_string_lossy())
+                    .into_iter()
+                    .find(|p| p.name == subagent_type)
+            })
         })
         .or_else(|| crate::coding_agent::subagent_profiles::find_builtin(&subagent_type));
 
@@ -1341,8 +1662,14 @@ async fn execute_task_tool(
         cancelled: false,
         notify: std::sync::Arc::new(tokio::sync::Notify::new()),
         messages: std::sync::Mutex::new(Vec::new()),
+        steering: None,
     };
     let arc = SubagentRegistry::global().register(handle);
+    // A project specialist's work is kept, and can be commented on.
+    let run_record = team_agent.as_ref().zip(project_root.as_deref()).map(|(agent, root)| {
+        crate::agent::runs::start(app, &id, root, &agent.id, &agent.name, &description, &prompt);
+        id.clone()
+    });
 
     let sub_state = AgentState::new();
     match profile.as_ref().and_then(|p| p.model.as_ref()) {
@@ -1366,6 +1693,8 @@ async fn execute_task_tool(
         None => sub_state.set_model(parent_state.model().await).await,
     }
     sub_state.set_subagent_allowed_tools(profile.as_ref().and_then(|p| p.allowed_tools.clone())).await;
+    // An employee spawned by the top level may run subagents of its own.
+    sub_state.set_delegation_allowed(depth == 0 && team_agent.is_some()).await;
     sub_state.set_thinking_level(parent_state.thinking_level().await).await;
     sub_state.set_workspace(parent_state.workspace_folders().await, parent_state.access_mode().await).await;
     let mut role_framing = format!(
@@ -1379,10 +1708,10 @@ async fn execute_task_tool(
         }
     }
     let inject_agents_md = profile.as_ref().map(|p| p.inject_agents_md).unwrap_or(true);
-    let auth = app.state::<std::sync::Arc<crate::ai::auth::AuthState>>().inner().clone();
+    let auth = crate::ai::auth::wait_for_state(app).await;
     let persona_section = persona.map(|p| p.prompt_section);
     let capability_blocks =
-        crate::agent::directive::assemble_capability_blocks(parent_state, persona_section, &prompt, Some(&auth), inject_agents_md).await;
+        crate::agent::directive::assemble_capability_blocks(parent_state, persona_section, &prompt, Some(&auth), inject_agents_md, false).await;
     let sub_system_prompt = format!("{role_framing}\n\n{capability_blocks}");
     let source_tag = subagent_source_tag(app, "task").await;
 
@@ -1411,13 +1740,16 @@ async fn execute_task_tool(
                 }
             };
             let (output, tool_calls, turns) =
-                rt.block_on(drive_subagent(app, sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc_bg));
+                rt.block_on(drive_subagent(app.clone(), sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc_bg));
             let mut g = arc_bg.lock().unwrap_or_else(|e| e.into_inner());
             if !g.cancelled {
                 g.status = SubagentStatus::Completed { output, tool_calls, turns };
             }
             let notify = g.notify.clone();
             drop(g);
+            if let Some(run_id) = &run_record {
+                crate::agent::runs::finish(&app, run_id);
+            }
             notify.notify_waiters();
         });
         return AgentToolResult {
@@ -1438,6 +1770,9 @@ async fn execute_task_tool(
         g.status = SubagentStatus::Completed { output: output.clone(), tool_calls, turns };
         let notify = g.notify.clone();
         drop(g);
+        if let Some(run_id) = &run_record {
+            crate::agent::runs::finish(app, run_id);
+        }
         notify.notify_waiters();
     }
     AgentToolResult {
@@ -1489,6 +1824,7 @@ async fn drive_subagent(
     };
     let abort_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let steer_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    handle.lock().unwrap_or_else(|e| e.into_inner()).steering = Some((queues.steering_queue.clone(), steer_flag.clone()));
 
     let (tx, mut rx) = crate::agent::events::event_bus();
     let handle_for_events = handle.clone();
@@ -1689,17 +2025,44 @@ async fn execute_list_tools_tool(disabled_tools: &[String]) -> AgentToolResult {
 }
 
 /// List every subagent profile `task` can resolve `subagent_type` against —
-/// the two hardcoded built-ins plus whatever's saved in `~/.viv/subagents` —
+/// the built-ins plus whatever's saved in `~/.viv/subagents` —
 /// so the model can check whether a "pointer" call (subagent_type + context,
 /// no prompt) is available before deciding it has to write a full prompt
 /// itself. Same data source `cmd_list_subagent_profiles` (Settings UI) reads,
 /// so this never drifts from what `task` actually resolves.
-async fn execute_list_subagent_profiles_tool() -> AgentToolResult {
+async fn execute_list_subagent_profiles_tool(project_root: Option<String>) -> AgentToolResult {
     let custom = crate::agent::paths::viv_subagents_dir()
         .ok()
         .map(|dir| crate::coding_agent::subagent_profiles::load_profiles_from_dir(&dir.to_string_lossy()))
         .unwrap_or_default();
-    let all = crate::coding_agent::subagent_profiles::builtin_profiles().into_iter().chain(custom);
+    // A custom profile whose name matches a built-in SHADOWS it: `task`
+    // resolves `subagent_type` by checking `~/.viv/subagents` first and only
+    // falling back to the built-in. Chaining the two lists without applying
+    // that same precedence listed the shadowed name twice, with different
+    // descriptions and tool restrictions, and no way for the model to tell
+    // which one it would actually get. Settings already de-duplicates this
+    // way (`shadowByName`); this is what made the two surfaces disagree.
+    let team: Vec<_> = project_root
+        .as_deref()
+        .map(|root| crate::agent::team::list(std::path::Path::new(root)))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| a.status == crate::agent::team::STATUS_ACTIVE)
+        .map(|a| crate::agent::team::to_profile(&a))
+        .collect();
+    // Same precedence as `task`: a project specialist shadows a custom
+    // profile of that name, which shadows a built-in.
+    let team_ids: std::collections::HashSet<String> = team.iter().map(|p| p.id.clone()).collect();
+    let mut shadowed: std::collections::HashSet<String> = custom.iter().map(|p| p.name.clone()).collect();
+    shadowed.extend(team_ids.iter().cloned());
+    let all = team
+        .into_iter()
+        .chain(custom.clone().into_iter().filter(|p| !team_ids.contains(&p.name)))
+        .chain(
+            crate::coding_agent::subagent_profiles::builtin_profiles()
+                .into_iter()
+                .filter(|b| !shadowed.contains(&b.name)),
+        );
 
     let mut lines = Vec::new();
     let mut details = Vec::new();
@@ -1748,7 +2111,7 @@ fn goal_json(g: &Goal) -> serde_json::Value {
 /// Panel names the `set_panel` tool accepts — must stay in sync with the
 /// `panel` enum in its schema and the `RIGHT_PANEL_KINDS` list the frontend
 /// checks in `agentStore.ts`'s `panel_focus_requested` handler.
-const SETTABLE_PANELS: &[&str] = &["review", "files", "preview_dev", "preview_browser", "tasks", "terminal"];
+const SETTABLE_PANELS: &[&str] = &["review", "files", "preview_dev", "preview_browser", "documents", "tasks", "terminal"];
 
 fn execute_set_panel_tool(args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
     let Some(panel) = args.get("panel").and_then(|v| v.as_str()) else {
@@ -2031,8 +2394,10 @@ async fn execute_sandbox_tool(args: &serde_json::Value) -> AgentToolResult {
         .clamp(1, 120);
 
     let (image, filename, run_cmd): (&str, &str, [&str; 2]) = match language {
-        "python" => ("python:3.12-slim", "main.py", ["python3", "/sandbox/main.py"]),
-        "node" => ("node:20-slim", "main.js", ["node", "/sandbox/main.js"]),
+        // Current supported releases: Node 20 reached end-of-life in April
+        // 2026, and 24 is the active LTS.
+        "python" => ("python:3.13-slim", "main.py", ["python3", "/sandbox/main.py"]),
+        "node" => ("node:24-slim", "main.js", ["node", "/sandbox/main.js"]),
         "bash" => ("bash:5.2", "main.sh", ["bash", "/sandbox/main.sh"]),
         other => return image_tool_err(format!("Error: 'language' must be \"python\", \"node\", or \"bash\", got \"{other}\".")),
     };
@@ -2127,7 +2492,7 @@ async fn resolve_provider_api_key(app: &tauri::AppHandle, provider: &str) -> Opt
             crate::ai::auth::Credential::OAuth(oauth_cred) => Some(oauth_cred.access_token),
         }
     }
-    let auth_state = app.state::<std::sync::Arc<crate::ai::auth::AuthState>>();
+    let auth_state = crate::ai::auth::wait_for_state(app).await;
     let mut api_key = auth_state.store.read(provider).await.ok().flatten().and_then(credential_to_key);
     if api_key.is_none() {
         api_key = crate::ai::env_api_keys::get_env_api_key(provider, None);
@@ -2150,8 +2515,8 @@ async fn execute_generate_image_tool(args: &serde_json::Value, app: &tauri::AppH
     let model = args.get("model").and_then(|v| v.as_str());
 
     match provider {
-        "openai" => generate_image_openai(app, &prompt, &size, model.unwrap_or("gpt-image-1")).await,
-        "google" => generate_image_google(app, &prompt, model.unwrap_or("imagen-3.0-generate-002")).await,
+        "openai" => generate_image_openai(app, &prompt, &size, model.unwrap_or("gpt-image-2")).await,
+        "google" => generate_image_google(app, &prompt, model.unwrap_or("imagen-4.0-generate-001")).await,
         other => image_tool_err(format!("Error: 'provider' must be \"openai\" or \"google\", got \"{other}\".")),
     }
 }
@@ -2307,10 +2672,9 @@ async fn execute_read_skill_tool(args: &serde_json::Value) -> AgentToolResult {
     }
 }
 
-async fn execute_memory_tool(name: &str, args: &serde_json::Value, app: &tauri::AppHandle) -> AgentToolResult {
-    use tauri::Manager;
-    let root = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_else(|_| ".".to_string());
-    let auth = app.state::<std::sync::Arc<crate::ai::auth::AuthState>>().inner().clone();
+async fn execute_memory_tool(name: &str, args: &serde_json::Value, state: &AgentState, app: &tauri::AppHandle) -> AgentToolResult {
+    let root = crate::agent::commands::memory_root_for(state).await;
+    let auth = crate::ai::auth::wait_for_state(app).await;
     let text_result = match name {
         "remember" => {
             let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
@@ -2325,10 +2689,17 @@ async fn execute_memory_tool(name: &str, args: &serde_json::Value, app: &tauri::
 
             // Read settings for the sidecar reranker model
             let settings = read_settings_json().await;
-            let sidecar_model: Option<crate::agent::types::ModelRef> = settings
+            let mut sidecar_model: Option<crate::agent::types::ModelRef> = settings
                 .get("sidecarModel")
                 .filter(|v| !v.is_null())
                 .and_then(|v| serde_json::from_value(v.clone()).ok());
+            // A reranker whose provider has no key can only fail; skip it
+            // rather than spend a round trip on every recall finding that out.
+            if let Some(m) = &sidecar_model {
+                if m.provider != "local" && resolve_provider_api_key(app, &m.provider).await.is_none() {
+                    sidecar_model = None;
+                }
+            }
 
             let reranker: Option<crate::agent::memory::RerankerOptions<'_>> = sidecar_model.as_ref().map(|model| {
                 crate::agent::memory::RerankerOptions {
@@ -2373,7 +2744,7 @@ pub(crate) fn invalidate_settings_cache() {
 /// Read `~/.viv/agent/settings.json` (written by the Settings panel).
 /// Missing file/parse failure resolve to an empty object rather than
 /// erroring the turn.
-pub(crate) async fn read_settings_json() -> serde_json::Value {
+pub async fn read_settings_json() -> serde_json::Value {
     if let Ok(cache) = SETTINGS_CACHE.read() {
         if let Some(cached) = cache.as_ref() {
             return cached.clone();
@@ -2406,12 +2777,90 @@ async fn read_bypass_mode() -> bool {
     read_settings_json().await.get("bypassMode").and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
-/// Read the `enableProgrammaticToolCalling` flag from settings.json. Off
-/// (false) by default — `run_script` is an experimental feature gated the
+/// Rewrites tool names models reliably guess wrong.
+///
+/// Measured across 137 real sessions in `~/.viv/agent/sessions`: about 60 tool
+/// calls failed for no reason other than the name. The three sources were
+/// (a) this app's own INTERNAL struct names leaking into the model's guesses
+/// (`ReadFileTool`/`ListDirTool` are named `read_file`/`list_dir` internally,
+/// and those are exactly the names it reached for), (b) tool names from before
+/// a rename that the model still remembers (`dip_snapshot`, `wait_tasks`), and
+/// (c) generic synonyms (`open_file`, `delegate`).
+///
+/// Only UNAMBIGUOUS mappings are rewritten. Genuinely ambiguous guesses like
+/// `find` or `search` are deliberately left alone to fail: silently running
+/// the wrong tool is worse than an error, and `unknown_tool_hint` turns those
+/// into a message that names the real candidates instead.
+fn normalize_tool_name(tc: &mut AgentToolCall) {
+    // The six pre-merge `dip_*` tools are now one `dip` tool with an `action`.
+    // The mapping is exact, so the old name can be honoured in full.
+    if let Some(action) = tc.name.strip_prefix("dip_") {
+        const ACTIONS: &[&str] =
+            &["snapshot", "interact", "list_windows", "focus_window", "window_action", "launch_app"];
+        if ACTIONS.contains(&action) {
+            if tc.arguments.get("action").is_none() {
+                if !tc.arguments.is_object() {
+                    tc.arguments = serde_json::json!({});
+                }
+                tc.arguments["action"] = serde_json::json!(action);
+            }
+            tc.name = "dip".to_string();
+            return;
+        }
+    }
+
+    let canonical = match tc.name.as_str() {
+        "list_dir" | "print_tree" | "list_files" => "ls",
+        "read_file" | "open_file" | "cat" => "read",
+        "write_file" | "create_file" => "write",
+        "streaming_powershell" | "pwsh" => "powershell",
+        "shell" | "run_command" | "execute" => "bash",
+        // `wait_tasks` was folded into `task_output`'s `mode` param.
+        "wait_tasks" => "task_output",
+        "delegate" | "spawn_agent" | "subagent" => "task",
+        _ => return,
+    };
+    tc.name = canonical.to_string();
+}
+
+/// A pointed message for an unknown tool name, so the model can correct itself
+/// in one step instead of guessing again. Ambiguous names get their candidates
+/// named rather than being silently resolved to one of them.
+fn unknown_tool_hint(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "find" => "Did you mean `glob` (find files by name pattern) or `grep` (find text inside files)?",
+        "search" | "search_files" => {
+            "Did you mean `grep` (exact text), `code_search` (by meaning), or `web_search` (the internet)?"
+        }
+        "run_script" => "`run_script` is switched off in Settings → Mods.",
+        _ => return None,
+    })
+}
+
+/// Read the `enableProgrammaticToolCalling` flag from settings.json. On by
+/// default; switching it off in Settings → Mods disables `run_script` the
 /// same way any other disabled tool is (see the `disabled_tools` push in
-/// `execute_tool_calls`), not hidden from the model's schema.
+/// `execute_tool_calls`).
 async fn read_ptc_enabled() -> bool {
-    read_settings_json().await.get("enableProgrammaticToolCalling").and_then(|v| v.as_bool()).unwrap_or(false)
+    read_settings_json().await.get("enableProgrammaticToolCalling").and_then(|v| v.as_bool()).unwrap_or(true)
+}
+
+/// Every tool name a `run_script` script may call: all registered tools
+/// (built-ins, MCP, playbooks), minus the ones this agent is not allowed to
+/// use. Calls still go through `execute_tool_calls`, so restrictions and
+/// approvals are enforced there regardless; this list only decides which
+/// names show up as script globals.
+pub(crate) async fn tool_names_for_scripts(state: &AgentState) -> Vec<String> {
+    let Restrictions { disabled_tools, .. } = compute_restrictions(state).await;
+    let mut names: Vec<String> = get_agent_tool_definitions()
+        .await
+        .iter()
+        .filter_map(|d| d.get("name").and_then(|v| v.as_str()).map(String::from))
+        .filter(|n| n != "run_script" && !disabled_tools.contains(n))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// Extract tool calls from message content.
@@ -2500,11 +2949,11 @@ mod schema_registry_consistency_tests {
         "remember", "recall", "read_skill", "question", "confirm_action", "present_plan",
         "present_snippet", "web_preview", "browser_snapshot", "browser_click", "browser_type",
         "browser_press_key", "browser_scroll", "browser_evaluate", "browser_read_console",
-        "browser_read_network", "task", "list_subagent_profiles", "generate_image", "connect_mcp_server",
+        "browser_read_network", "browser_start", "browser_session_status", "browser_import_cookies", "task", "list_subagent_profiles", "hire_agent", "generate_image", "connect_mcp_server",
         "get_current_time", "list_tools", "set_panel", "get_goal", "create_goal", "update_goal",
         "terminal_open", "terminal_send", "terminal_read", "terminal_signal", "terminal_close",
         "terminal_list", "create_automation", "list_automations", "delete_automation",
-        "set_automation_enabled", "sandbox_execute", "run_script", "computer",
+        "set_automation_enabled", "sandbox_execute", "run_script", "math", "dip", "computer",
     ];
 
     #[test]

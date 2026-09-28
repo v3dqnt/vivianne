@@ -219,7 +219,7 @@ fn now_ms() -> u64 {
 }
 
 fn memory_dir(root: &str) -> PathBuf {
-    Path::new(root).join(".vivianne").join("memory")
+    crate::agent::paths::project_viv_path(Path::new(root), &["memory"])
 }
 
 fn state_path(root: &str) -> PathBuf {
@@ -815,7 +815,7 @@ pub async fn run_l1_extraction(app: tauri::AppHandle, root: String, model: crate
         };
         if super::memory_store::insert_entry_with_scene(&root, &entry, scene_name).await.is_ok() {
             stored += 1;
-            let auth = { use tauri::Manager; app.state::<std::sync::Arc<crate::ai::auth::AuthState>>().inner().clone() };
+            let auth = crate::ai::auth::wait_for_state(&app).await;
             spawn_background_embed(&root, &entry, Some(auth));
         }
     }

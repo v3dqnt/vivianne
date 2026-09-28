@@ -158,7 +158,10 @@ async fn fetch_openai_style(
                 .and_then(|a| a.get("input_modalities"))
                 .and_then(|v| v.as_array())
                 .map(|mods| mods.iter().any(|x| x.as_str() == Some("image")));
-            let max_output = json_u32(&m, &["max_completion_tokens", "max_output_tokens"]);
+            // OpenRouter nests the real limit under `top_provider`; reading only
+            // the top level left every OpenRouter model at the generic default.
+            let max_output = json_u32(&m, &["max_completion_tokens", "max_output_tokens"])
+                .or_else(|| m.get("top_provider").and_then(|t| json_u32(t, &["max_completion_tokens"])));
 
             // OpenRouter includes per-token pricing as decimal strings (USD/token).
             let (input_cost, output_cost) = m

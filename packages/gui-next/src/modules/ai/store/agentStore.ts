@@ -7,6 +7,8 @@ import { useSubagentStore } from './subagentStore'
 import { useShellTaskStore, isShellTool } from '../../dock/store/shellTaskStore'
 import { useWebPreviewStore } from './webPreviewStore'
 import { usePanelStore, type RightPanelKind } from '../../dock/store/panelStore'
+import { notifyFileChanged, resolveAgentPath } from '../../ide/lib/fileChangeBus'
+import { useWorkspaceStore } from './workspaceStore'
 
 /** Wall-clock start of the current streaming assistant message — set on
  * `message_start`, consumed on `message_end` to compute tokens/sec. Plain
@@ -19,6 +21,17 @@ const streamStartedAt = new Map<string, number>()
  * (the one place already subscribed to every tool event) can just forward
  * instead of every panel needing its own duplicate listener. */
 const PLAN_MODE_TOOLS = new Set(['enter_plan_mode', 'exit_plan_mode'])
+
+/** Computer-use tool names that should light the "Vivianne is driving the
+ * screen" indicator. The tool is `dip`; `computer` is still accepted by the
+ * backend as an alias for it (see `agent/tool_exec.rs`), so a model that calls
+ * it by that name must light the indicator too — otherwise the agent takes
+ * over the mouse with nothing on screen saying so. */
+const COMPUTER_USE_TOOLS = new Set(['dip', 'computer'])
+
+function isComputerUseTool(name: string): boolean {
+  return COMPUTER_USE_TOOLS.has(name)
+}
 
 export interface PendingPermission {
   requestId: string
@@ -284,7 +297,7 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             break
           }
           case 'tool_execution_start': {
-            if (event.payload.tool_name === 'computer') set({ computerUseActive: true })
+            if (isComputerUseTool(event.payload.tool_name)) set({ computerUseActive: true })
             if (isPrimary(threadId) && event.payload.tool_name === 'task') void useSubagentStore.getState().refresh()
             // Shell tools run as one-shot processes, not PTY sessions, so the
             // Background Tasks panel (which lists terminal sessions) can only
@@ -320,7 +333,7 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             break
           }
           case 'tool_execution_end': {
-            if (event.payload.tool_name === 'computer') set({ computerUseActive: false })
+            if (isComputerUseTool(event.payload.tool_name)) set({ computerUseActive: false })
             if (isShellTool(event.payload.tool_name)) {
               useShellTaskStore.getState().finish(event.payload.tool_call_id, !!event.payload.is_error)
             }
@@ -334,6 +347,22 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
               const messages = [...s.messages]
               const prev = messages[idx]
               if (prev.type !== 'toolResult') return s
+              // Tell any open IDE tab for this file that it just changed on
+              // disk. `write`/`edit`/`apply_patch` all use `path`;
+              // `notebook_edit` uses `notebook_path`. Skipped on error — a
+              // failed edit didn't touch the file, so there's nothing to warn
+              // the editor about.
+              if (
+                !event.payload.is_error &&
+                ['write', 'edit', 'apply_patch', 'notebook_edit'].includes(event.payload.tool_name)
+              ) {
+                const args = prev.arguments as Record<string, unknown> | undefined
+                const rawPath = (args?.path ?? args?.notebook_path) as string | undefined
+                if (rawPath) {
+                  const root = useWorkspaceStore.getState().folders[0] ?? null
+                  notifyFileChanged(resolveAgentPath(rawPath, root))
+                }
+              }
               messages[idx] = {
                 ...prev,
                 content: event.payload.result.content,
@@ -421,7 +450,12 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             // browsing (web_preview, or any browser_* interaction tool) is
             // actually visible without the user having to go find it.
             usePanelStore.getState().openRight('preview')
-            usePanelStore.getState().setPreviewMode('browser')
+            // 'live', not 'browser'. The agent now drives the embedded webview,
+            // so this is the same page and the same session the user can click
+            // — not a parallel screenshot feed of a second browser. Sending them
+            // to 'browser' here is what kept the live view unreachable in
+            // practice, however many times it was built.
+            usePanelStore.getState().setPreviewMode('live')
             break
           }
           case 'panel_focus_requested': {
@@ -438,6 +472,14 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             } else if (p.panel === 'terminal') {
               if (p.action === 'open') usePanelStore.getState().openBottom()
               else usePanelStore.getState().closeBottom()
+            } else if (p.panel === 'documents') {
+              // Documents are a mode of the Preview panel.
+              if (p.action === 'open') {
+                usePanelStore.getState().openRight('preview')
+                usePanelStore.getState().setPreviewMode('documents')
+              } else {
+                usePanelStore.getState().closeRight('preview')
+              }
             } else if (p.panel === 'preview_dev' || p.panel === 'preview_browser') {
               if (p.action === 'open') {
                 usePanelStore.getState().openRight('preview')
@@ -609,8 +651,10 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
   }))
 }
 
-/** The default/primary chat thread — unchanged name and shape, so every
- * existing `useAgentStore(s => ...)` call site keeps working exactly as
- * before. Secondary threads (opened via drag-to-dock) get their own instance
- * from `threadRegistry.ts` instead of sharing this one. */
+/** The app's one live conversation — the active project's today.
+ *
+ * `createAgentStore` still takes a thread id because the backend's
+ * `AgentRegistry` is keyed that way (Viv Instant runs on its own id), but the
+ * frontend no longer opens secondary threads: split panes and tabs went away
+ * with daily conversations. */
 export const useAgentStore = createAgentStore(PRIMARY_THREAD_ID)

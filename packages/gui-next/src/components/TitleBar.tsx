@@ -1,14 +1,9 @@
 import { useEffect, useState } from 'react'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import IconButton from '@mui/material/IconButton'
-import Tooltip from '@mui/material/Tooltip'
-import Menu from '@mui/material/Menu'
-import MenuItem from '@mui/material/MenuItem'
-import { hasTauri } from '../ipc'
-import { FolderLinear, CommandSquareLinear } from '../icons'
-import { usePanelStore } from '../modules/dock/store/panelStore'
+import { Box, Stack, Typography, IconButton, Tooltip, Menu, MenuItem, Divider, ListItemIcon } from '../ui'
+import { call, hasTauri } from '../ipc'
+import { fileManagerName, terminalAppName } from '../lib/platform'
+import { FolderLinear, CommandSquareLinear, TickCircleLinear, PanelsLinear, LayoutLinear } from '../icons'
+import { PRESET_LABELS, ZONE_LABELS, applyPreset, resetLayout, toggleZone, useWorkspace, type Preset, type Zone } from '../modules/workspace/layout'
 import { usePlaybookStore } from '../modules/settings/store/playbookStore'
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
 
@@ -18,9 +13,9 @@ const TRAFFIC_LIGHT_SIZE = 12
  * used to be a permanent vertical icon rail pinned to the window's right
  * edge; moving them here gives that column back to actual content. */
 function TitleBarActions() {
-  const rightOpen = usePanelStore((s) => s.right.open)
-  const bottomOpen = usePanelStore((s) => s.bottom.open)
-  const toggleDock = usePanelStore((s) => s.toggleDock)
+  const zones = useWorkspace((s) => s.zones)
+  const [panelsAnchor, setPanelsAnchor] = useState<HTMLElement | null>(null)
+  const [layoutAnchor, setLayoutAnchor] = useState<HTMLElement | null>(null)
   // Panel playbooks are listed in each dock's own "add a view" menu now, but
   // this is still where they get loaded — the docks read the same store.
   const refreshCustomPanels = usePlaybookStore((s) => s.refresh)
@@ -32,11 +27,12 @@ function TitleBarActions() {
   const hasFolder = !!projects.find((p) => p.id === activeProjectId)?.path
   const noFolderHint = hasFolder ? '' : ' (set a folder on this project first)'
 
+  // Terax header buttons: 28px, rounded-md, muted at rest, ink on hover.
   const iconSx = (active: boolean) => ({
-    width: 26,
-    height: 26,
-    borderRadius: 1.5,
-    color: active ? 'primary.main' : 'text.secondary',
+    width: 28,
+    height: 28,
+    borderRadius: 0.8,
+    color: active ? 'text.primary' : 'text.secondary',
     bgcolor: active ? 'action.selected' : 'transparent',
     transition: 'background-color 0.15s, color 0.15s',
     '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
@@ -64,7 +60,7 @@ function TitleBarActions() {
           sx={{ gap: 1, fontSize: '0.8125rem' }}
         >
           <FolderLinear size={14} color="currentColor" />
-          Open in File Explorer
+          Open in {fileManagerName}
         </MenuItem>
         <MenuItem
           onClick={() => {
@@ -74,49 +70,73 @@ function TitleBarActions() {
           sx={{ gap: 1, fontSize: '0.8125rem' }}
         >
           <CommandSquareLinear size={14} color="currentColor" />
-          Open in PowerShell
+          Open in {terminalAppName}
         </MenuItem>
       </Menu>
 
-      {/* Two dock toggles, replacing the old terminal button + Panels menu.
-          Choosing WHICH views are open now lives inside each dock's own tab
-          strip (see `Dock.tsx`), so the title bar only has to expand and
-          collapse them. */}
-      <Tooltip title={bottomOpen ? 'Hide bottom bar' : 'Show bottom bar'}>
-        <IconButton size="small" onClick={() => toggleDock('bottom')} sx={iconSx(bottomOpen)}>
-          <PanelBottomGlyph />
+      {/* Panels live wherever the user docks them now, so the title bar no
+          longer toggles "the right dock" — it shows or hides panels by name,
+          and offers starting arrangements. */}
+      <Tooltip title="Panels">
+        <IconButton size="small" aria-label="Panels" onClick={(e) => setPanelsAnchor(e.currentTarget)} sx={iconSx(!!panelsAnchor)}>
+          <PanelsLinear size={14} color="currentColor" />
         </IconButton>
       </Tooltip>
+      {/* Just the two panels. What goes IN them is chosen from each panel's
+          own "+" and its empty state, where you are already looking. */}
+      <Menu anchorEl={panelsAnchor} open={!!panelsAnchor} onClose={() => setPanelsAnchor(null)}>
+        {(['right', 'bottom'] as Zone[]).map((zone) => (
+          <MenuItem
+            key={zone}
+            onClick={() => {
+              toggleZone(zone)
+              setPanelsAnchor(null)
+            }}
+            sx={{ gap: 1, fontSize: '0.8125rem', minWidth: 190 }}
+          >
+            <Box sx={{ flex: 1 }}>{ZONE_LABELS[zone]}</Box>
+            {zones[zone] && (
+              <ListItemIcon sx={{ minWidth: 0, color: 'primary.main' }}>
+                <TickCircleLinear size={13} color="currentColor" />
+              </ListItemIcon>
+            )}
+          </MenuItem>
+        ))}
+      </Menu>
 
-      <Tooltip title={rightOpen ? 'Hide right sidebar' : 'Show right sidebar'}>
-        <IconButton size="small" onClick={() => toggleDock('right')} sx={iconSx(rightOpen)}>
-          <PanelRightGlyph />
+      <Tooltip title="Layout">
+        <IconButton size="small" aria-label="Layout" onClick={(e) => setLayoutAnchor(e.currentTarget)} sx={iconSx(!!layoutAnchor)}>
+          <LayoutLinear size={14} color="currentColor" />
         </IconButton>
       </Tooltip>
+      <Menu anchorEl={layoutAnchor} open={!!layoutAnchor} onClose={() => setLayoutAnchor(null)}>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 2, pt: 0.5, pb: 0.75, maxWidth: 260 }}>
+          Start from an arrangement — then drag tabs anywhere to rearrange.
+        </Typography>
+        {(Object.keys(PRESET_LABELS) as Preset[]).map((preset) => (
+          <MenuItem
+            key={preset}
+            onClick={() => {
+              applyPreset(preset)
+              setLayoutAnchor(null)
+            }}
+            sx={{ fontSize: '0.8125rem' }}
+          >
+            {PRESET_LABELS[preset]}
+          </MenuItem>
+        ))}
+        <Divider />
+        <MenuItem
+          onClick={() => {
+            resetLayout()
+            setLayoutAnchor(null)
+          }}
+          sx={{ fontSize: '0.8125rem', color: 'text.secondary' }}
+        >
+          Reset to default
+        </MenuItem>
+      </Menu>
     </Stack>
-  )
-}
-
-/** Right-sidebar glyph — a rounded rect with its right column filled. No icon
- * in the set draws a dock-panel affordance. */
-function PanelRightGlyph() {
-  return (
-    <Box component="svg" viewBox="0 0 24 24" sx={{ width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.8 }}>
-      <rect x="3" y="4" width="18" height="16" rx="2.5" />
-      <path d="M15 4v16" />
-      <rect x="15" y="4" width="6" height="16" rx="2.5" fill="currentColor" stroke="none" opacity="0.35" />
-    </Box>
-  )
-}
-
-/** Bottom-bar glyph — same rect, bottom row filled. */
-function PanelBottomGlyph() {
-  return (
-    <Box component="svg" viewBox="0 0 24 24" sx={{ width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.8 }}>
-      <rect x="3" y="4" width="18" height="16" rx="2.5" />
-      <path d="M3 14h18" />
-      <rect x="3" y="14" width="18" height="6" rx="2.5" fill="currentColor" stroke="none" opacity="0.35" />
-    </Box>
   )
 }
 
@@ -124,7 +144,10 @@ function PanelBottomGlyph() {
  * Custom title bar for the frameless window (`decorations: false` in
  * tauri.conf.json — there is no OS chrome to replace, this IS the chrome).
  * Styled as macOS traffic lights regardless of host OS, since that's the
- * explicit design choice here, not an OS-detection branch.
+ * explicit design choice here, not an OS-detection branch. On macOS this
+ * happens to match the platform's own controls, which is why the native
+ * ones stay off (`decorations: false`) there too rather than being
+ * re-enabled — two sets of traffic lights would be worse than one.
  */
 export function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false)
@@ -164,7 +187,18 @@ export function TitleBar() {
       await fn(getCurrentWindow())
     }
 
-  const close = withWindow((win) => win.close())
+  // Closing the MAIN window hides it instead of destroying it, so Vivianne
+  // keeps running in the tray and Viv Instant's global chord still works —
+  // and so the main window's provider dispatcher, which answers every LLM
+  // call Viv Instant makes, stays alive. Secondary windows still really close:
+  // nothing depends on them surviving.
+  const close = withWindow(async (win) => {
+    if (win.label === 'main') {
+      await call('cmd_hide_to_background', {})
+    } else {
+      await win.close()
+    }
+  })
   const minimize = withWindow((win) => win.minimize())
   const toggleMaximize = withWindow((win) => win.toggleMaximize())
 
@@ -176,7 +210,8 @@ export function TitleBar() {
       data-tauri-drag-region=""
       sx={{
         position: 'relative',
-        height: 32,
+        // Terax's header: 40px.
+        height: 40,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',

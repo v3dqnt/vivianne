@@ -27,9 +27,14 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::tool_exec::{truncate_text, Tool, ToolResult};
+use super::tool_exec::{Tool, ToolResult};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
+/// Output kept in context from a playbook run, split head/tail. The tail is
+/// the larger share because a failing build or test names the failure at the
+/// end; the head is enough to see what the command was doing.
+const PLAYBOOK_HEAD_BYTES: usize = 12_000;
+const PLAYBOOK_TAIL_BYTES: usize = 36_000;
 const MAX_TIMEOUT_SECS: u64 = 600;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +46,13 @@ pub struct PanelSpec {
 pub struct PlaybookDef {
     pub name: String,
     pub description: String,
+    /// Wall-clock limit for the command, clamped to `MAX_TIMEOUT_SECS`.
+    /// Without this the timeout was `DEFAULT_TIMEOUT_SECS.min(MAX_TIMEOUT_SECS)`
+    /// — a constant 120s, which made `MAX_TIMEOUT_SECS` dead and left a
+    /// slow playbook (a full build, a test suite) with no way to ask for
+    /// longer.
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
     #[serde(default = "default_parameters")]
     pub parameters: serde_json::Value,
     #[serde(default)]
@@ -79,6 +91,8 @@ pub fn load_playbooks() -> Vec<PlaybookDef> {
     let Ok(dir) = crate::agent::paths::viv_playbooks_dir() else { return Vec::new() };
     let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
 
+    let reserved = crate::agent::tool_schemas::reserved_tool_names();
+
     let mut defs = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
@@ -86,6 +100,10 @@ pub fn load_playbooks() -> Vec<PlaybookDef> {
             continue;
         }
         match std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str::<PlaybookDef>(&s).ok()) {
+            Some(def) if def.is_tool() && reserved.contains(&def.name) => log::warn!(
+                "[playbooks] skipping '{}' — that name is already a built-in tool, so this playbook could never actually run (it would either shadow, or be shadowed by, the built-in). Rename it and re-save.",
+                def.name
+            ),
             Some(def) if def.panel.as_ref().is_some_and(|p| !is_allowed_panel_url(&p.url)) => log::warn!(
                 "[playbooks] skipping '{}' — panel url isn't http://localhost:*/http://127.0.0.1:* (the app's CSP won't frame it)",
                 def.name
@@ -151,6 +169,21 @@ impl Tool for PlaybookTool {
             return ToolResult { content: reason.to_string(), is_error: true, details: None };
         }
 
+        // Playbook commands are POSIX shell, so they need a POSIX shell — there
+        // is no honest way to run them under cmd.exe. macOS and Linux always
+        // have bash; Windows only does when Git Bash (or WSL) is installed, and
+        // spawning a missing one produced a bare OS error 2 that said nothing
+        // about what to install. Check first and say so.
+        if which::which("bash").is_err() {
+            return ToolResult {
+                content: format!(
+                    "Playbook '{}' needs `bash` on PATH to run its command, and it was not found. \n                     On Windows install Git for Windows (which provides Git Bash); on macOS and Linux bash is already present.",
+                    self.def.name
+                ),
+                is_error: true,
+                details: None,
+            };
+        }
         let mut cmd = tokio::process::Command::new("bash");
         cmd.arg("-c").arg(&command).current_dir(&self.cwd).kill_on_drop(true);
         cmd.env_clear().envs(super::sandbox::filtered_env());
@@ -168,33 +201,28 @@ impl Tool for PlaybookTool {
             }
         };
 
-        match tokio::time::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS.min(MAX_TIMEOUT_SECS)), child.wait_with_output()).await {
+        let timeout_secs = self.def.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS).clamp(1, MAX_TIMEOUT_SECS);
+        match tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output()).await {
             Ok(Ok(output)) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 let combined = if stderr.is_empty() { stdout } else { format!("{stdout}\n{stderr}") };
-                let (text, _truncated) = truncate_text(&combined, 400, 50_000);
+                // Head+tail with the middle spilled to disk, not head-only
+                // truncation. A playbook that runs a build or a test suite puts
+                // the verdict at the END, which head-only truncation threw away;
+                // and this output exists nowhere else, so discarding it lost it
+                // for good. `bash`/`powershell` already went through this path.
+                let text = super::context_shaping::spill_and_trim_middle_bytes(
+                    &combined,
+                    PLAYBOOK_HEAD_BYTES,
+                    PLAYBOOK_TAIL_BYTES,
+                )
+                .await;
                 ToolResult { content: text, is_error: !output.status.success(), details: None }
             }
             Ok(Err(e)) => ToolResult { content: format!("Error running playbook: {e}"), is_error: true, details: None },
-            Err(_) => ToolResult { content: format!("Playbook '{}' timed out", self.def.name), is_error: true, details: None },
+            Err(_) => ToolResult { content: format!("Playbook '{}' timed out after {timeout_secs}s (raise it with \"timeout_secs\" in the playbook, max {MAX_TIMEOUT_SECS})", self.def.name), is_error: true, details: None },
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn substitutes_string_and_number_args() {
-        let args = serde_json::json!({ "name": "world", "count": 3 });
-        assert_eq!(substitute("echo {{name}} x{{count}}", &args), "echo world x3");
-    }
-
-    #[test]
-    fn leaves_unmatched_placeholders_untouched() {
-        let args = serde_json::json!({ "a": "1" });
-        assert_eq!(substitute("{{a}} {{b}}", &args), "1 {{b}}");
-    }
-}

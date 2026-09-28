@@ -180,6 +180,17 @@ export interface SessionStats {
   modelName: string
   provider: string
   maxTokens: number
+  breakdown: ContextBreakdown
+}
+
+/** `agent::commands::ContextBreakdown` — where the context window is going.
+ * Same char/4 estimate as `contextTokens`, so the parts sum to the whole. */
+export interface ContextBreakdown {
+  systemPrompt: number
+  toolSchemas: number
+  user: number
+  assistant: number
+  toolResults: number
 }
 
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const

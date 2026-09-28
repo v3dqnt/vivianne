@@ -1,11 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import IconButton from '@mui/material/IconButton'
-import Divider from '@mui/material/Divider'
-import CircularProgress from '@mui/material/CircularProgress'
-import Tooltip from '@mui/material/Tooltip'
+import { Box, Stack, Typography, IconButton, Divider, CircularProgress, Tooltip } from '../../../ui'
 import { CommandSquareLinear, AddLinear, StopCircleLinear, UserOctagonLinear, CloseCircleLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { useSubagentStore } from '../../ai/store/subagentStore'
@@ -198,7 +192,7 @@ export function BackgroundTasksPanel() {
                       title={t.command}
                       sx={{
                         fontSize: '0.6875rem',
-                        fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+                        fontFamily: '"Geist Mono", ui-monospace, monospace',
                         color: t.isError ? 'error.main' : running ? 'text.primary' : 'text.secondary',
                       }}
                     >

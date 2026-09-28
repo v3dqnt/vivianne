@@ -43,7 +43,7 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
 
     let mut h_outer = Sha256::new();
     h_outer.update(&o_pad);
-    h_outer.update(&inner_hash);
+    h_outer.update(inner_hash);
     h_outer.finalize().to_vec()
 }
 
@@ -302,7 +302,7 @@ fn build_messages(context: &Context) -> Vec<Value> {
                         if let (Some(b64), Some(mt)) = (base64, media_type) {
                             Some(json!({
                                 "image": {
-                                    "format": mt.split('/').last().unwrap_or("jpeg"),
+                                    "format": mt.split('/').next_back().unwrap_or("jpeg"),
                                     "source": {"bytes": b64}
                                 }
                             }))

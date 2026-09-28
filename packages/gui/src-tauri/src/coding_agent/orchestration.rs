@@ -60,6 +60,9 @@ pub struct SubagentHandle {
     /// not just a finished one's. In-memory only, same process-scoped
     /// lifetime as the rest of this registry (no disk persistence).
     pub messages: Mutex<Vec<AgentMessage>>,
+    /// The running loop's steering queue and flag, set once it starts, so a
+    /// user comment can redirect a live run (`agent::runs`).
+    pub steering: Option<(Arc<tokio::sync::RwLock<Vec<AgentMessage>>>, Arc<std::sync::atomic::AtomicBool>)>,
 }
 
 /// Process-wide registry of subagents. In-process only — no cross-window,
@@ -98,6 +101,12 @@ impl SubagentRegistry {
 // ── task_output ─────────────────────────────────────────────────────────────
 
 pub struct TaskOutputTool;
+impl Default for TaskOutputTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskOutputTool { pub fn new() -> Self { Self } }
 
 #[async_trait]
@@ -215,6 +224,12 @@ fn indent_lines(text: &str, prefix: &str) -> String {
 // ── kill_task ───────────────────────────────────────────────────────────────
 
 pub struct KillTaskTool;
+impl Default for KillTaskTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KillTaskTool { pub fn new() -> Self { Self } }
 
 #[async_trait]
@@ -305,6 +320,12 @@ impl PlanModeState {
 }
 
 pub struct EnterPlanModeTool;
+impl Default for EnterPlanModeTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EnterPlanModeTool { pub fn new() -> Self { Self } }
 
 #[async_trait]
@@ -329,6 +350,12 @@ impl Tool for EnterPlanModeTool {
 }
 
 pub struct ExitPlanModeTool;
+impl Default for ExitPlanModeTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExitPlanModeTool { pub fn new() -> Self { Self } }
 
 #[async_trait]

@@ -93,7 +93,13 @@ fn now_ms() -> u64 {
 }
 
 fn default_display_name() -> Option<String> {
-    std::env::var("USERNAME").or_else(|_| std::env::var("USER")).ok()
+    // VIV_DISPLAY_NAME names a second instance on the same machine (a test
+    // partner), which would otherwise introduce itself with the same OS
+    // username as the first.
+    std::env::var("VIV_DISPLAY_NAME")
+        .or_else(|_| std::env::var("USERNAME"))
+        .or_else(|_| std::env::var("USER"))
+        .ok()
 }
 
 fn cap_display_name(name: Option<String>) -> Option<String> {
@@ -260,8 +266,9 @@ impl MultiplayerState {
 
         *self.status.write().await = ConnectionStatus::Connected { peer_id: peer_id.clone(), peer_display_name };
         let _ = app.emit("multiplayer_status", self.status().await);
+        tokio::spawn(super::collab::on_connected(app.clone(), peer_id.clone()));
 
-        self.run_read_loop(recv, generation, app).await;
+        self.run_read_loop(recv, generation, app, peer_id).await;
     }
 
     /// Owns the `SendStream` for this connection's lifetime, draining
@@ -293,7 +300,7 @@ impl MultiplayerState {
         });
     }
 
-    async fn run_read_loop(self: Arc<Self>, mut recv: RecvStream, generation: u64, app: AppHandle) {
+    async fn run_read_loop(self: Arc<Self>, mut recv: RecvStream, generation: u64, app: AppHandle, peer_id: String) {
         loop {
             match protocol::read_frame(&mut recv).await {
                 Ok(Some(WireMessage::SessionMessage { message })) => {
@@ -310,6 +317,11 @@ impl MultiplayerState {
                     let _ = app.emit("multiplayer_chat", &entry);
                 }
                 Ok(Some(WireMessage::Hello { .. })) => {} // only expected once, at handshake
+                Ok(Some(msg @ (WireMessage::Activity { .. } | WireMessage::Usage { .. } | WireMessage::GitBundle { .. } | WireMessage::GitHead { .. }))) => {
+                    // Off the read loop: merging commits runs git, which
+                    // must not stall the next frame.
+                    tokio::spawn(super::collab::on_message(app.clone(), peer_id.clone(), msg));
+                }
                 Ok(None) => break,
                 Err(e) => {
                     log::warn!("[multiplayer] connection lost: {e}");
@@ -346,11 +358,61 @@ impl MultiplayerState {
         }
     }
 
+    /// Queue any frame for the peer. Non-blocking, like every send here;
+    /// `false` when there's no connection or the queue is full.
+    pub async fn send(&self, msg: WireMessage) -> bool {
+        let Some(tx) = self.outbound_tx.read().await.clone() else { return false };
+        tx.try_send(msg).is_ok()
+    }
+
     pub async fn send_chat(&self, text: String) -> Result<(), String> {
         let tx = self.outbound_tx.read().await.clone().ok_or_else(|| "Not connected to a peer.".to_string())?;
         tx.try_send(WireMessage::Chat { text: text.clone() }).map_err(|_| "Connection is busy, try again.".to_string())?;
         let mut log = self.chat_log.write().await;
         push_bounded(&mut log, ChatEntry { from_peer: false, text, timestamp: now_ms() });
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+
+    /// Two endpoints on this machine reach each other by id and trade the
+    /// protocol's Hello frames — the path two Vivianne windows take.
+    /// `cargo test --lib two_endpoints_pair -- --ignored --nocapture`
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn two_endpoints_pair() {
+        let make = || async {
+            Endpoint::builder(iroh::endpoint::presets::N0)
+                .secret_key(iroh::SecretKey::generate())
+                .alpns(vec![ALPN.to_vec()])
+                .bind()
+                .await
+                .unwrap()
+        };
+        let (a, b) = (make().await, make().await);
+        let b_id = b.id();
+        let server = tokio::spawn(async move {
+            let conn = b.accept().await.unwrap().await.unwrap();
+            let (mut send, mut recv) = conn.accept_bi().await.unwrap();
+            let hello = protocol::read_frame(&mut recv).await.unwrap();
+            protocol::write_frame(&mut send, &WireMessage::Hello { protocol_version: PROTOCOL_VERSION, display_name: Some("B".into()) }).await.unwrap();
+            send.finish().unwrap();
+            let _ = conn.closed().await;
+            hello
+        });
+        let started = std::time::Instant::now();
+        let conn = tokio::time::timeout(CONNECT_TIMEOUT, a.connect(b_id, ALPN)).await.expect("connect timed out").expect("connect failed");
+        println!("connected in {:?}", started.elapsed());
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        protocol::write_frame(&mut send, &WireMessage::Hello { protocol_version: PROTOCOL_VERSION, display_name: Some("A".into()) }).await.unwrap();
+        let reply = protocol::read_frame(&mut recv).await.unwrap();
+        println!("handshake done in {:?}: {reply:?}", started.elapsed());
+        conn.close(0u32.into(), b"done");
+        let got = server.await.unwrap();
+        assert!(matches!(got, Some(WireMessage::Hello { .. })));
+        assert!(matches!(reply, Some(WireMessage::Hello { .. })));
     }
 }

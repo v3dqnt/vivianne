@@ -73,7 +73,7 @@ fn with_conn<T>(root: &str, f: impl FnOnce(&Connection) -> Result<T, String>) ->
 }
 
 fn memory_dir(root: &str) -> PathBuf {
-    Path::new(root).join(".vivianne").join("memory")
+    crate::agent::paths::project_viv_path(Path::new(root), &["memory"])
 }
 
 fn db_path(root: &str) -> PathBuf {

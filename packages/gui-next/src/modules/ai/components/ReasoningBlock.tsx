@@ -1,6 +1,5 @@
 import { memo, useState } from 'react'
-import Box from '@mui/material/Box'
-import Typography from '@mui/material/Typography'
+import { Box, Typography } from '../../../ui'
 import { ArrowDownLinear } from '../../../icons'
 import { useThrottledValue } from '../../../lib/useThrottledValue'
 

@@ -3,7 +3,7 @@ use crate::agent::state::*;
 use crate::agent::tool_exec::*;
 use crate::agent::types::*;
 use crate::ai::types::{Context, StreamTokenEvent, Message, MessageContent as AiMessageContent};
-use crate::ai::auth::{AuthState, Credential};
+use crate::ai::auth::Credential;
 use std::sync::Arc;
 use tauri::{Manager, Listener, Emitter};
 use tokio::sync::RwLock;
@@ -68,6 +68,29 @@ fn system_reminder(text: &str) -> AgentMessage {
     }
 }
 
+/// Said to a model whose reply hit the output limit mid-reasoning — before it
+/// wrote a single word of answer or a tool call. Without a follow-up the turn
+/// simply ended: the user saw the model think, then nothing happen.
+const TRUNCATED_NUDGE: &str = "Your last reply hit the output-length limit while you were still reasoning, before you wrote any answer or tool call, so none of it reached the user. Don't redo that reasoning. Act now: make the next tool call directly (keep its code and arguments compact), or give the answer. Think only briefly first.";
+
+/// How many times one run will resume after such a cut-off. Two is enough for
+/// a model to recover; past that the limit is simply too small for the task.
+const MAX_TRUNCATED_RESUMES: usize = 2;
+
+/// True for a reply that ran out of output budget having produced nothing
+/// usable: no tool call and no visible text, only reasoning.
+fn cut_off_before_acting(message: &AgentMessage) -> bool {
+    let AgentMessage::Assistant { stop_reason, content, .. } = message else { return false };
+    if stop_reason != "length" {
+        return false;
+    }
+    !content.iter().any(|c| match c {
+        crate::agent::types::MessageContent::ToolCall(_) => true,
+        crate::agent::types::MessageContent::Text { text } => !text.trim().is_empty(),
+        _ => false,
+    })
+}
+
 enum StepAction { Continue, Nudge, Stop }
 
 /// What to do at the start of turn `step` (1-indexed) given the ceiling `max`:
@@ -108,6 +131,33 @@ fn track_doom_loop(
         (last_signature, previous_count + 1)
     } else {
         (Some(new_signature), 1)
+    }
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    use super::cut_off_before_acting;
+    use crate::agent::types::{AgentMessage, MessageContent, ToolCall};
+
+    fn reply(stop: &str, content: Vec<MessageContent>) -> AgentMessage {
+        AgentMessage::Assistant { content, stop_reason: stop.into(), error_message: None, timestamp: 0, usage: None }
+    }
+    fn thinking() -> MessageContent {
+        MessageContent::Thinking { thinking: "Let me work this out...".into() }
+    }
+
+    #[test]
+    fn only_reasoning_at_the_limit_counts_as_cut_off() {
+        assert!(cut_off_before_acting(&reply("length", vec![thinking()])));
+        assert!(cut_off_before_acting(&reply("length", vec![thinking(), MessageContent::Text { text: "  ".into() }])));
+    }
+
+    #[test]
+    fn anything_delivered_is_not_cut_off() {
+        let call = MessageContent::ToolCall(ToolCall { id: "1".into(), name: "math".into(), arguments: serde_json::json!({}) });
+        assert!(!cut_off_before_acting(&reply("length", vec![thinking(), call])));
+        assert!(!cut_off_before_acting(&reply("length", vec![MessageContent::Text { text: "Here is".into() }])));
+        assert!(!cut_off_before_acting(&reply("stop", vec![thinking()])));
     }
 }
 
@@ -343,6 +393,8 @@ pub async fn run_agent_loop_continue(
     // call suggests multi-step work isn't being tracked.
     let mut tool_calls_since_todo: usize = 0;
     const TODO_NUDGE_THRESHOLD: usize = 8;
+
+    let mut truncated_resumes: usize = 0;
 
     /// Emit a synthetic "aborted" assistant message + TurnEnd/AgentEnd, matching
     /// the same shape as the error path below, so the frontend renders it consistently.
@@ -606,6 +658,8 @@ pub async fn run_agent_loop_continue(
             }
         }
 
+        let was_cut_off = cut_off_before_acting(&assistant_message);
+
         // Check for tool calls in the assistant message
         let tool_calls: Vec<AgentToolCall> = if let AgentMessage::Assistant { content, .. } = &assistant_message {
             extract_tool_calls(content)
@@ -700,6 +754,15 @@ pub async fn run_agent_loop_continue(
 
         has_more_tool_calls = !tool_results.is_empty();
 
+        // A reply cut off mid-reasoning did nothing; resume instead of ending
+        // the turn on it. Bounded, so a limit that's simply too small for the
+        // task still ends rather than looping.
+        if was_cut_off && !has_more_tool_calls && truncated_resumes < MAX_TRUNCATED_RESUMES {
+            truncated_resumes += 1;
+            context.messages.push(system_reminder(TRUNCATED_NUDGE));
+            has_more_tool_calls = true;
+        }
+
         if abort_flag.load(Ordering::SeqCst) {
             break 'outer;
         }
@@ -737,9 +800,8 @@ pub async fn run_agent_loop_continue(
     // itself. No-ops when memory/auto-consolidate is off or nothing worth
     // remembering happened (pure Q&A turns don't spam memory).
     if let Some(summary) = build_turn_memory_summary(new_messages) {
-        use tauri::Manager;
-        let root = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_else(|_| ".".to_string());
-        let auth = app.state::<Arc<crate::ai::auth::AuthState>>().inner().clone();
+        let root = crate::agent::commands::memory_root_for(state).await;
+        let auth = crate::ai::auth::wait_for_state(app).await;
         if crate::agent::memory::auto_capture(&root, &summary, Some(auth)).await.is_ok() {
             maybe_trigger_extraction(app, &root, state).await;
         }
@@ -828,6 +890,13 @@ pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &Ag
     }
 
     let compacted: Vec<AgentMessage> = context.messages.drain(..cut_point).collect();
+    // The model only needs the summary; the user wants everything they ever
+    // said. Keep the originals where the conversation view can find them.
+    if let Some(path) = state.history_archive().await {
+        if let Err(e) = crate::agent::conversation::append_archive(&path, &compacted) {
+            log::warn!("[compaction] couldn't archive compacted messages: {e}");
+        }
+    }
     let summary_text = if state.llm_summary_enabled().await {
         match generate_llm_summary(app, model, &compacted).await {
             Some(text) => text,
@@ -904,7 +973,7 @@ async fn resolve_api_key(app: &tauri::AppHandle, provider: &str) -> Option<Strin
         return Some("local-dummy-key".to_string());
     }
 
-    let auth_state = app.state::<Arc<AuthState>>();
+    let auth_state = crate::ai::auth::wait_for_state(app).await;
     let mut api_key = auth_state
         .store
         .read(provider)
@@ -1833,35 +1902,32 @@ fn build_turn_memory_summary(messages: &[AgentMessage]) -> Option<String> {
     let mut final_text = String::new();
 
     for msg in messages {
-        match msg {
-            AgentMessage::Assistant { content, .. } => {
-                for c in content {
-                    if let crate::agent::types::MessageContent::ToolCall(tc) = c {
-                        if MUTATING_TOOLS.contains(&tc.name.as_str()) {
-                            did_real_work = true;
-                        }
-                        match tc.name.as_str() {
-                            "write" | "edit" | "apply_patch" => {
-                                if let Some(p) = tc.arguments.get("path").and_then(|v| v.as_str()) {
-                                    if !touched_files.iter().any(|f| f == p) {
-                                        touched_files.push(p.to_string());
-                                    }
-                                }
-                            }
-                            "bash" | "powershell" => {
-                                if let Some(cmd) = tc.arguments.get("command").and_then(|v| v.as_str()) {
-                                    commands.push(cmd.chars().take(80).collect());
-                                }
-                            }
-                            _ => {}
-                        }
-                    } else if let crate::agent::types::MessageContent::Text { text } = c {
-                        // Last assistant text block wins — later ones overwrite earlier.
-                        final_text = text.clone();
+        if let AgentMessage::Assistant { content, .. } = msg {
+            for c in content {
+                if let crate::agent::types::MessageContent::ToolCall(tc) = c {
+                    if MUTATING_TOOLS.contains(&tc.name.as_str()) {
+                        did_real_work = true;
                     }
+                    match tc.name.as_str() {
+                        "write" | "edit" | "apply_patch" => {
+                            if let Some(p) = tc.arguments.get("path").and_then(|v| v.as_str()) {
+                                if !touched_files.iter().any(|f| f == p) {
+                                    touched_files.push(p.to_string());
+                                }
+                            }
+                        }
+                        "bash" | "powershell" => {
+                            if let Some(cmd) = tc.arguments.get("command").and_then(|v| v.as_str()) {
+                                commands.push(cmd.chars().take(80).collect());
+                            }
+                        }
+                        _ => {}
+                    }
+                } else if let crate::agent::types::MessageContent::Text { text } = c {
+                    // Last assistant text block wins — later ones overwrite earlier.
+                    final_text = text.clone();
                 }
             }
-            _ => {}
         }
     }
 
@@ -1928,10 +1994,8 @@ fn estimate_context_json_size(ctx: &Context) -> usize {
             &msg.model_id,
             &msg.stop_reason,
             &msg.error_message,
-        ] {
-            if let Some(s) = s {
-                total += s.len();
-            }
+        ].into_iter().flatten() {
+            total += s.len();
         }
         for block in &msg.content_blocks {
             total += estimate_content_block_raw_str_len(block);
@@ -1964,10 +2028,8 @@ fn estimate_messages_json_size(messages: &[Message]) -> usize {
             &msg.model_id,
             &msg.stop_reason,
             &msg.error_message,
-        ] {
-            if let Some(s) = s {
-                total += s.len();
-            }
+        ].into_iter().flatten() {
+            total += s.len();
         }
         for block in &msg.content_blocks {
             total += estimate_content_block_raw_str_len(block);
@@ -2013,7 +2075,7 @@ fn estimate_content_block_raw_str_len(block: &AiMessageContent) -> usize {
             tool_call_id.len()
                 + content
                     .iter()
-                    .map(|c| estimate_content_block_raw_str_len(c))
+                    .map(estimate_content_block_raw_str_len)
                     .sum::<usize>()
         }
     }

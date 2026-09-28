@@ -568,8 +568,7 @@ pub fn build_header_map(
 #[allow(dead_code)]
 pub fn parse_sse_data(line: &str) -> Option<&str> {
     let line = line.trim();
-    if line.starts_with("data: ") {
-        let payload = &line["data: ".len()..];
+    if let Some(payload) = line.strip_prefix("data: ") {
         if payload == "[DONE]" {
             None
         } else {

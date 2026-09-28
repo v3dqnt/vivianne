@@ -1,6 +1,4 @@
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
+import { Box, Stack, Typography } from '../../../ui'
 import { MagicpenLinear, DocumentLinear, FolderLinear } from '../../../icons'
 
 export interface MentionableSkill {
@@ -82,7 +80,7 @@ export function UnifiedMentionMenu({ items, activeIndex, onSelect, onHover }: Un
                     <MagicpenLinear size={13} color="currentColor" />
                   </Box>
                   <Box sx={{ minWidth: 0, flex: 1 }}>
-                    <Typography variant="body2" sx={{ fontSize: '0.8125rem', fontWeight: 500, fontFamily: '"JetBrains Mono", ui-monospace, monospace' }}>
+                    <Typography variant="body2" sx={{ fontSize: '0.8125rem', fontWeight: 500, fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
                       @{it.skill.name}
                     </Typography>
                     <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
@@ -129,11 +127,11 @@ export function UnifiedMentionMenu({ items, activeIndex, onSelect, onHover }: Un
                     {it.file.isDir ? <FolderLinear size={13} color="currentColor" /> : <DocumentLinear size={13} color="currentColor" />}
                   </Box>
                   <Box sx={{ minWidth: 0, flex: 1 }}>
-                    <Typography variant="body2" sx={{ fontSize: '0.8125rem', fontWeight: 500, fontFamily: '"JetBrains Mono", ui-monospace, monospace' }} noWrap>
+                    <Typography variant="body2" sx={{ fontSize: '0.8125rem', fontWeight: 500, fontFamily: '"Geist Mono", ui-monospace, monospace' }} noWrap>
                       {it.file.name}
                       {it.file.isDir ? '/' : ''}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block', fontFamily: '"JetBrains Mono", ui-monospace, monospace' }}>
+                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
                       {it.file.relPath}
                     </Typography>
                   </Box>

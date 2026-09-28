@@ -6,7 +6,7 @@ authors = ["you"]
 license = ""
 repository = ""
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.82"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -26,7 +26,17 @@ tauri-build = { version = "2.6.3", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.11.3", features = [] }
+# `macos-private-api` is REQUIRED by `app.macOSPrivateApi: true` in
+# tauri.conf.json (the build fails outright if the config asks for it and
+# the feature is off). It is what makes `transparent: true` windows — the
+# voice notch and the DIP highlight overlay — actually transparent on macOS
+# instead of opaque rectangles. No-op on other platforms.
+# `unstable` is what exposes `Window::add_child` — embedding a real browser
+# webview inside the app window, positioned over the preview panel. It is the
+# only way to show a live, natively-rendered page rather than a screenshot
+# feed; camofox has no streaming endpoint (verified: no screencast/mjpeg/ws
+# route), so its screenshot API caps at roughly 3fps.
+tauri = { version = "2.11.3", features = ["macos-private-api", "unstable", "tray-icon", "image-png"] }
 tauri-plugin-log = "2"
 tauri-plugin-shell = "2.2.0"
 tauri-plugin-store = "2"
@@ -67,6 +77,19 @@ which = "7.0"
 # log_backend routes whisper.cpp's extremely chatty stderr output (per-token
 # decode traces) into the `log` crate, where our Info-level filter drops it.
 whisper-rs = { version = "0.16", features = ["log_backend"] }
+
+# Parakeet TDT speech-to-text, via sherpa-onnx.
+#
+# Not a second whisper: whisper.cpp cannot run a NeMo transducer at all. A TDT
+# model is an encoder + decoder + joiner with a duration head, decoded by a
+# greedy transducer loop — sherpa-onnx implements that loop, which is the
+# reason for taking the dependency rather than driving onnxruntime directly.
+#
+# `default-features = false` drops `tts` (sherpa's Piper/VITS stack, ~unused
+# here — Viv Instant speaks through the webview's SpeechSynthesis) while
+# keeping `download-binaries`, which fetches a prebuilt sherpa-onnx instead of
+# building it from source with CMake.
+sherpa-rs = { version = "0.6", default-features = false, features = ["download-binaries"] }
 # Bundled sqlite3 (no system dep) with FTS5 for real BM25 lexical memory search.
 # Note: FTS5 is compiled into the bundled sqlite3 amalgamation by default
 # (no separate rusqlite cargo feature needed for it).
@@ -87,6 +110,10 @@ portable-pty = "0.9.0"
 # WordPiece tokenizer bundled from source.
 tract-onnx = "0.21"
 tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
+# Line diffs for the end-of-assignment change review. Diffed here rather than
+# in the webview so only changed hunks cross IPC, not two full copies of every
+# file an assignment touched.
+similar = "2"
 ndarray = "0.16"
 iroh = "1.0.3"
 rquickjs = { version = "0.8.1", default-features = false, features = ["futures"] }
@@ -94,6 +121,14 @@ rust_xlsxwriter = "0.92"
 docx-rs = "0.4"
 printpdf = "0.11"
 zip = "4.2"
+# Document EDITING, as distinct from the generation crates above.
+# Page-level PDF surgery. Already in the tree via printpdf; named directly so
+# the version is ours rather than an implementation detail of another crate.
+lopdf = "0.34"
+# DOCX/PPTX are zips of XML. quick-xml lets the text be rewritten by walking
+# real elements instead of regexing markup, which is what keeps a rewritten
+# file openable by Word/PowerPoint.
+quick-xml = "0.37"
 
 [target."cfg(windows)".dependencies]
 uiautomation = "0.25.0"

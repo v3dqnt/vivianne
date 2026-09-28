@@ -1,11 +1,5 @@
 import { useEffect } from 'react'
-import Stack from '@mui/material/Stack'
-import Box from '@mui/material/Box'
-import Typography from '@mui/material/Typography'
-import Button from '@mui/material/Button'
-import LinearProgress from '@mui/material/LinearProgress'
-import Divider from '@mui/material/Divider'
-import CircularProgress from '@mui/material/CircularProgress'
+import { Stack, Box, Typography, Button, LinearProgress, Divider, CircularProgress } from '../../../ui'
 import { useUpdateStore } from '../../updates/store/updateStore'
 import { ChangelogBody } from '../../updates/components/ChangelogBody'
 

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Hardened-runtime entitlements. Notarisation requires the hardened runtime,
+  and the hardened runtime blocks by default several things this app must do:
+  JIT for the QuickJS PTC runtime and the WebView's JavaScript engine, loading
+  the unsigned native modules camoufox rebuilds at runtime, and driving other
+  applications through Apple Events.
+
+  Deliberately NOT sandboxed (no com.apple.security.app-sandbox): Vivianne is a
+  coding agent whose entire purpose is reading and writing arbitrary files in
+  the user's projects and spawning build tools. A sandboxed build would be
+  unable to do the thing it exists to do. That rules out the Mac App Store and
+  makes Developer ID + notarisation the distribution path.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>

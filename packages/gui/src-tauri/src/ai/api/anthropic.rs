@@ -801,18 +801,15 @@ fn process_event(
             let api_index = parsed["index"].as_u64().unwrap_or(0) as usize;
             if let Some(pos) = blocks.iter().position(|b| b.api_index() == api_index) {
                 let block = blocks.remove(pos);
-                match block {
-                    Block::ToolCall { partial_json, content_index, .. } => {
-                        // Finalize tool call arguments
-                        if let Ok(args) = serde_json::from_str::<Value>(&partial_json) {
-                            if let Some(MessageContent::ToolCall(tc)) = output.content.get_mut(content_index) {
-                                tc.arguments = args;
-                            }
+                if let Block::ToolCall { partial_json, content_index, .. } = block {
+                    // Finalize tool call arguments
+                    if let Ok(args) = serde_json::from_str::<Value>(&partial_json) {
+                        if let Some(MessageContent::ToolCall(tc)) = output.content.get_mut(content_index) {
+                            tc.arguments = args;
                         }
-                        // Override stop reason to toolUse if any tool call present
-                        output.stop_reason = "toolUse".to_string();
                     }
-                    _ => {}
+                    // Override stop reason to toolUse if any tool call present
+                    output.stop_reason = "toolUse".to_string();
                 }
             }
         }

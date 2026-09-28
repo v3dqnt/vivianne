@@ -23,12 +23,39 @@ export const hasTauri = (): boolean =>
  */
 export async function call<T>(command: string, args?: Record<string, unknown>): Promise<T | null> {
   if (!hasTauri()) return null
-  try {
-    return await invoke<T>(command, args)
-  } catch (err) {
-    console.error(`[ipc] ${command} failed:`, err)
-    throw err
+  let waited = 0
+  for (;;) {
+    try {
+      return await invoke<T>(command, args)
+    } catch (err) {
+      // The backend is still starting. Tauri creates the windows before the
+      // Rust `setup` hook finishes registering state — and `setup` blocks on
+      // an OS keychain probe — so the frontend's first calls can land before
+      // the state they need exists. They were failing outright: the model
+      // list came back empty, today's conversation never opened, and nothing
+      // retried, so it stayed that way until a reload.
+      //
+      // Retried only for this exact error, which Tauri raises for nothing but
+      // unregistered state. Any other failure is a real one and throws at
+      // once. The bound means a genuinely broken startup still surfaces.
+      if (isStartupRace(err) && waited < STARTUP_WAIT_LIMIT_MS) {
+        const delay = Math.min(250, 25 * 2 ** Math.min(4, Math.floor(waited / 100)))
+        await new Promise((r) => setTimeout(r, delay))
+        waited += delay
+        continue
+      }
+      console.error(`[ipc] ${command} failed:`, err)
+      throw err
+    }
   }
+}
+
+/** Long enough for any real startup; short enough that a broken one surfaces. */
+const STARTUP_WAIT_LIMIT_MS = 20_000
+
+function isStartupRace(err: unknown): boolean {
+  const message = typeof err === 'string' ? err : err instanceof Error ? err.message : ''
+  return message.includes('state not managed for field')
 }
 
 /**

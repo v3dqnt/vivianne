@@ -1,21 +1,38 @@
-/* Sora ships as a variable font — one file covers the whole weight range via
-   `font-weight: 100 800`, so a single @font-face (plus its italic
-   counterpart) is all that's needed, no per-weight files. Loaded as plain
-   CSS rather than through MUI's CssBaseline `@font-face` styleOverrides
-   array, which silently drops all but the last entry when multiple
-   @font-face blocks share a family name (an emotion serialization quirk). */
+/* Geist and Geist Mono (Vercel, SIL Open Font License — Geist-LICENSE.txt).
+   Both ship as variable fonts: one file per style covers the whole weight
+   range. Bundled locally rather than fetched, so the app renders the same
+   offline. Loaded as plain CSS rather than through MUI's CssBaseline
+   `@font-face` styleOverrides array, which silently drops all but the last
+   entry when several @font-face blocks share a family name (an emotion
+   serialization quirk). */
 @font-face {
-  font-family: 'Sora';
-  src: url('./Sora-Variable.woff2') format('woff2-variations');
-  font-weight: 100 800;
+  font-family: 'Geist';
+  src: url('./Geist-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
 
 @font-face {
-  font-family: 'Sora';
-  src: url('./Sora-VariableItalic.woff2') format('woff2-variations');
-  font-weight: 100 800;
+  font-family: 'Geist';
+  src: url('./Geist-VariableItalic.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('./GeistMono-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('./GeistMono-VariableItalic.woff2') format('woff2-variations');
+  font-weight: 100 900;
   font-style: italic;
   font-display: swap;
 }

@@ -1,11 +1,5 @@
 import { useEffect, useState } from 'react'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import TextField from '@mui/material/TextField'
-import Button from '@mui/material/Button'
-import CircularProgress from '@mui/material/CircularProgress'
-import Divider from '@mui/material/Divider'
-import Box from '@mui/material/Box'
+import { Stack, Typography, TextField, Button, CircularProgress, Divider, Box } from '../../../ui'
 import { UserOctagonLinear, Link2Linear } from '../../../icons'
 import { useAccountStore } from '../store/accountStore'
 

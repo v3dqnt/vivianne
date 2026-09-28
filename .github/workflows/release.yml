@@ -36,16 +36,28 @@ permissions:
 
 jobs:
   release:
-    # Windows only for now — this is a Windows-first app (the DIP automation
-    # layer is Windows-only). Add macos-latest / ubuntu-22.04 to this matrix
-    # when those platforms are actually supported; tauri-action merges every
-    # matrix job's artifacts into one latest.json.
+    # Windows and macOS. tauri-action merges every matrix job's artifacts into
+    # one latest.json, so the in-app updater serves the right installer per
+    # host from a single manifest.
+    #
+    # macOS builds a universal binary: Apple silicon is the majority of Macs
+    # now, but an x86_64-only or arm64-only build simply will not launch on the
+    # other half, and the updater has one download per platform to offer.
+    # Both architectures need their Rust std, hence the explicit targets.
+    #
+    # The DIP automation layer (UI Automation tree reading) stays Windows-only;
+    # the macOS build ships pixel-mode computer control instead, which is what
+    # the tool schema advertises on that host.
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: windows-latest
             args: ''
+            rust-targets: ''
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+            rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
 
     runs-on: ${{ matrix.platform }}
 
@@ -58,12 +70,32 @@ jobs:
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      # whisper-rs-sys builds whisper.cpp through CMake and runs bindgen. The
+      # macOS runner has clang and cmake, but src-tauri/.cargo/config.toml
+      # pins Windows paths in its `[env]` table, which Cargo applies on every
+      # host. Those entries do not force, so exporting correct values here
+      # wins — the same mechanism packages/gui/scripts/dev-env.mjs uses for
+      # local macOS builds.
+      - name: Prepare macOS build environment
+        if: matrix.platform == 'macos-latest'
+        run: |
+          brew install ninja
+          echo "LIBCLANG_PATH=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-isysroot $(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+          echo "CMAKE=$(which cmake)" >> "$GITHUB_ENV"
+          echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
 
       # Keyed on the lockfile so a dependency change busts it, and scoped to
       # the tauri crate's own target dir.
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: packages/gui/src-tauri -> target
+          # Without this both matrix jobs write the same cache key and race,
+          # and the restored artifacts are for the wrong host.
+          key: ${{ matrix.platform }}
 
       - name: Install dependencies
         run: npm ci

@@ -197,12 +197,13 @@ pub async fn cmd_agent_prompt(
         let base = base.trim();
 
         let mode_section = agent.state.persona_mode().await.prompt_section();
-        let auth = { use tauri::Manager; app.state::<std::sync::Arc<crate::ai::auth::AuthState>>().inner().clone() };
+        let auth = crate::ai::auth::wait_for_state(&app).await;
         let capability_blocks = crate::agent::directive::assemble_capability_blocks(
             &agent.state,
             mode_section,
             &text,
             Some(&auth),
+            true,
             true,
         ).await;
 
@@ -216,6 +217,10 @@ pub async fn cmd_agent_prompt(
 
     state.abort_flag.store(false, std::sync::atomic::Ordering::SeqCst);
     state.steer_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    // Multiplayer project: take in the partner's commits and show the agent
+    // what they did (a no-op anywhere else).
+    crate::multiplayer::collab::before_run(&app, &mp_workspace_folders, &agent.state).await;
+    let request_text = text.clone();
     let attached = images.unwrap_or_default();
     // Prime the model explicitly: some models default to a boilerplate "I can't
     // see images" refusal unless the surrounding text confirms one is actually
@@ -243,10 +248,13 @@ pub async fn cmd_agent_prompt(
     };
     crate::multiplayer::broadcast_user_message(&app, &mp_workspace_folders, &message).await;
     let source_tag = main_source_tag(&state).await;
-    let _new_messages = agent.prompt(message, &app, &tx, &state.abort_flag, &state.steer_flag, &source_tag).await;
+    let new_messages = agent.prompt(message, &app, &tx, &state.abort_flag, &state.steer_flag, &source_tag).await;
     drop(agent);
 
     let _ = save_current_session_impl(None, &state).await;
+    // Multiplayer project: summarise the run for the partner, commit, sync.
+    // Off the reply path — git and the network never delay the turn ending.
+    tauri::async_runtime::spawn(crate::multiplayer::collab::after_run(app.clone(), mp_workspace_folders, request_text, new_messages));
     Ok(Vec::new())
 }
 
@@ -432,8 +440,7 @@ pub async fn cmd_debug_agent_status(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<serde_json::Value, String> {
-    use crate::ai::auth::{AuthState, Credential};
-    use tauri::Manager;
+    use crate::ai::auth::Credential;
 
     // Reads only `agent_state` (the lock-free `Arc<RwLock<_>>` clone `Agent`
     // itself also holds), not the `agent` mutex — that mutex is held for a
@@ -444,7 +451,7 @@ pub async fn cmd_debug_agent_status(
     let messages = state.agent_state.messages().await;
 
     // Try to read API key for current provider
-    let auth_state = app.state::<Arc<AuthState>>();
+    let auth_state = crate::ai::auth::wait_for_state(&app).await;
     let credential = auth_state.store.read(&model.provider).await.ok().flatten();
     let api_key_status = match credential {
         None => "not_found",
@@ -629,6 +636,31 @@ pub async fn cmd_agent_set_workspace(
     Ok(())
 }
 
+/// The whole computer, as workspace folders: the user's home first (the
+/// primary folder, so relative paths and new files land somewhere sensible),
+/// then every drive root. This is General's workspace — it isn't a project,
+/// so nothing narrower is right for it.
+#[tauri::command]
+pub fn cmd_system_roots() -> Vec<String> {
+    let mut roots = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.to_string_lossy().to_string());
+    }
+    #[cfg(windows)]
+    for letter in b'A'..=b'Z' {
+        let drive = format!("{}:\\", letter as char);
+        // `metadata` rather than `exists`: an empty card reader or optical
+        // drive fails fast here instead of being listed as a folder that
+        // then errors on every read.
+        if std::fs::metadata(&drive).map(|m| m.is_dir()).unwrap_or(false) {
+            roots.push(drive);
+        }
+    }
+    #[cfg(not(windows))]
+    roots.push("/".to_string());
+    roots
+}
+
 /// Create a brand-new empty folder on disk (not just browse to an existing
 /// one) — for the "New folder…" workspace action.
 ///
@@ -759,6 +791,28 @@ pub async fn cmd_agent_set_follow_up_mode(
     Ok(())
 }
 
+/// Where the session's context window is actually going.
+///
+/// The composer used to show one opaque percentage bar, which tells you that
+/// you're at 78% but not what to do about it. These are the categories a user
+/// can actually act on: prune history, disable tools, or compact.
+///
+/// Every field is an estimate from the same char/4 heuristic
+/// `calculate_context_tokens` uses, so the parts add up to the whole rather
+/// than being measured two different ways and disagreeing.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextBreakdown {
+    /// System prompt: persona/directive text plus the generated capability map.
+    pub system_prompt: u32,
+    /// JSON schemas for every enabled tool — this is why disabling unused
+    /// tools reclaims context, and it's invisible without a breakdown.
+    pub tool_schemas: u32,
+    pub user: u32,
+    pub assistant: u32,
+    pub tool_results: u32,
+}
+
 /// Session usage stats for the GUI footer / header.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -776,6 +830,7 @@ pub struct SessionStats {
     pub model_name: String,
     pub provider: String,
     pub max_tokens: u32,
+    pub breakdown: ContextBreakdown,
 }
 
 /// Return estimated context usage and token totals for the active session.
@@ -800,13 +855,45 @@ pub async fn cmd_agent_session_stats(
     // gauge above agree with each other.
     let mut input_tokens = 0u32;
     let mut output_tokens = 0u32;
+    let mut breakdown = ContextBreakdown::default();
     for msg in &messages {
         let tokens = (message_char_len(msg) as f32 / 4.0).ceil() as u32;
         match msg {
-            AgentMessage::Assistant { .. } => output_tokens += tokens,
-            _ => input_tokens += tokens,
+            AgentMessage::Assistant { .. } => {
+                output_tokens += tokens;
+                breakdown.assistant += tokens;
+            }
+            AgentMessage::ToolResult { .. } => {
+                input_tokens += tokens;
+                breakdown.tool_results += tokens;
+            }
+            _ => {
+                input_tokens += tokens;
+                breakdown.user += tokens;
+            }
         }
     }
+
+    // Tool schemas ride along in every single request, so they occupy context
+    // permanently — measured from the real definition list (which already
+    // reflects the user's disabled-tools setting, playbooks and MCP servers),
+    // not a fixed guess.
+    let tool_defs = crate::agent::tool_exec::get_agent_tool_definitions().await;
+    breakdown.tool_schemas = (tool_defs
+        .iter()
+        .map(crate::agent::loop_core::estimate_json_value_raw_str_len)
+        .sum::<usize>() as f32
+        / 4.0)
+        .ceil() as u32;
+
+    // The system prompt is rebuilt here rather than cached, for the same
+    // reason the tool list is: it varies with persona mode, the enabled tool
+    // set, memory and project instructions, so a stored number would drift.
+    // `mention_scan_text` is empty because the per-turn intent hint isn't part
+    // of the standing prompt cost.
+    let system_prompt =
+        crate::agent::directive::assemble_capability_blocks(&state.agent_state, None, "", None, true, true).await;
+    breakdown.system_prompt = (system_prompt.len() as f32 / 4.0).ceil() as u32;
 
     Ok(SessionStats {
         context_tokens,
@@ -822,6 +909,7 @@ pub async fn cmd_agent_session_stats(
         model_name: model.name,
         provider: model.provider,
         max_tokens: model.max_tokens,
+        breakdown,
     })
 }
 
@@ -906,17 +994,21 @@ pub async fn cmd_list_local_endpoints(
 /// Read settings.json directly from ~/.viv/agent/settings.json
 #[tauri::command]
 pub async fn cmd_get_settings() -> Result<serde_json::Value, String> {
-    let path = crate::agent::paths::viv_agent_dir()?.join("settings.json");
-
-    if !path.exists() {
-        return Ok(serde_json::json!({}));
-    }
-
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read settings: {}", e))?;
-    let val: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse settings: {}", e))?;
-    Ok(val)
+    // Served from the same cache the agent loop already uses, rather than a
+    // fresh blocking read + parse per call.
+    //
+    // Six different frontend stores each call this on mount, so startup was
+    // doing six synchronous disk reads and six JSON parses of one small file
+    // that had not changed between them. `cmd_save_settings` already
+    // invalidates this cache, so a cached read cannot go stale — the write
+    // path was there, only the read path was bypassing it.
+    //
+    // `read_settings_json` resolves a missing or malformed file to `{}`, which
+    // matches this command's previous behaviour for the missing-file case. A
+    // malformed file now yields `{}` instead of an error; that is the better
+    // outcome here, since the Settings panel can still render and rewrite a
+    // corrupted file rather than being locked out by it.
+    Ok(crate::agent::tool_exec::read_settings_json().await)
 }
 
 /// Save settings.json directly to ~/.viv/agent/settings.json
@@ -944,7 +1036,21 @@ pub fn cmd_list_tool_names() -> Vec<serde_json::Value> {
         // disable switch, since it needs to default OFF rather than the
         // "everything on unless disabled" default every other tool gets here.
         .filter(|t| t["name"] != "run_script")
-        .map(|t| serde_json::json!({ "name": t["name"], "description": t["description"] }))
+        .map(|t| {
+            // Group each tool with the SAME capability map the model's system
+            // prompt is built from (`agent::capabilities::GROUPS`), rather than
+            // a second hand-maintained list in the Settings UI. That map already
+            // has a drift-guard test asserting every tool sits in exactly one
+            // group, so Settings inherits that guarantee for free and can never
+            // disagree with what the model is told it can do.
+            let name = t["name"].as_str().unwrap_or_default();
+            let group = crate::agent::capabilities::GROUPS
+                .iter()
+                .find(|g| g.tools.contains(&name))
+                .map(|g| g.name)
+                .unwrap_or("Other");
+            serde_json::json!({ "name": t["name"], "description": t["description"], "group": group })
+        })
         .collect()
 }
 
@@ -960,7 +1066,6 @@ pub fn cmd_list_tool_names() -> Vec<serde_json::Value> {
 /// `ai/completion.rs` already use.
 #[tauri::command]
 pub async fn cmd_list_skills(app: tauri::AppHandle, paths: Vec<String>) -> Result<serde_json::Value, String> {
-    use tauri::Manager;
     let mut all_skills = Vec::new();
     let mut all_errors = Vec::new();
 
@@ -975,7 +1080,7 @@ pub async fn cmd_list_skills(app: tauri::AppHandle, paths: Vec<String>) -> Resul
         all_errors.extend(result.errors);
     }
 
-    let auth_state = app.state::<Arc<crate::ai::auth::AuthState>>();
+    let auth_state = crate::ai::auth::wait_for_state(&app).await;
     for skill in &mut all_skills {
         if let Some(provider) = &skill.requires_provider {
             let stored = auth_state.store.read(provider).await.ok().flatten().is_some();
@@ -1026,8 +1131,8 @@ pub async fn cmd_list_playbooks() -> Result<Vec<crate::coding_agent::playbooks::
     Ok(crate::coding_agent::playbooks::load_playbooks())
 }
 
-/// The two hardcoded profiles (general-purpose, Explore) plus every custom
-/// one saved in `~/.viv/subagents` — same data `execute_task_tool` resolves
+/// Every hardcoded built-in profile plus every custom one saved in
+/// `~/.viv/subagents` — the same data `execute_task_tool` resolves
 /// `subagent_type` against, so Settings never drifts from what a `task`
 /// call actually gets.
 #[tauri::command]
@@ -1090,6 +1195,12 @@ pub async fn cmd_add_playbook_file(path: String) -> Result<String, String> {
     if def.name.trim().is_empty() || (!def.is_tool() && !def.is_panel()) {
         return Err("Playbook needs a non-empty 'name' and either a 'command' or a 'panel'.".to_string());
     }
+    if def.is_tool() && crate::agent::tool_schemas::reserved_tool_names().contains(def.name.trim()) {
+        return Err(format!(
+            "'{}' is already a built-in tool name — a playbook with that name could never actually run. Pick a different name.",
+            def.name.trim()
+        ));
+    }
 
     let stem: String = def
         .name
@@ -1127,13 +1238,16 @@ pub async fn cmd_save_playbook(
     if name.is_empty() || (command.is_none() && panel_url.is_none()) {
         return Err("Playbook needs a non-empty name and either a command or a panel URL.".to_string());
     }
+    if command.is_some() && crate::agent::tool_schemas::reserved_tool_names().contains(&name) {
+        return Err(format!("'{name}' is already a built-in tool name — a playbook with that name could never actually run. Pick a different name."));
+    }
     if let Some(url) = &panel_url {
         if !crate::coding_agent::playbooks::is_allowed_panel_url(url) {
             return Err("Panel URL must start with http://localhost: or http://127.0.0.1: — the app's CSP won't frame anything else.".to_string());
         }
     }
     let panel = panel_url.map(|url| crate::coding_agent::playbooks::PanelSpec { url });
-    let def = crate::coding_agent::playbooks::PlaybookDef { name: name.clone(), description, parameters, command, panel };
+    let def = crate::coding_agent::playbooks::PlaybookDef { name: name.clone(), description, parameters, timeout_secs: None, command, panel };
     let dir = crate::coding_agent::playbooks::playbooks_dir()?;
 
     let slugify = |s: &str| -> String {
@@ -1325,7 +1439,7 @@ pub async fn cmd_read_file_content(path: String) -> Result<String, String> {
         .map_err(|e| format!("Failed to read file: {e}"))
 }
 
-fn get_session_dir() -> Result<PathBuf, String> {
+pub(crate) fn get_session_dir() -> Result<PathBuf, String> {
     let mut path = crate::agent::paths::viv_agent_dir()?;
     path.push("sessions");
     std::fs::create_dir_all(&path).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
@@ -1336,7 +1450,7 @@ fn get_session_dir() -> Result<PathBuf, String> {
 /// power loss mid-write can never leave a half-written, unparseable session
 /// file behind — `rename` onto an existing path is atomic on both Windows
 /// and POSIX, a plain `write` is not.
-fn write_session_file_atomic(path: &std::path::Path, json: &str) -> Result<(), String> {
+pub(crate) fn write_session_file_atomic(path: &std::path::Path, json: &str) -> Result<(), String> {
     let tmp_path = path.with_extension("json.tmp");
     std::fs::write(&tmp_path, json).map_err(|e| format!("Failed to save session: {}", e))?;
     std::fs::rename(&tmp_path, path).map_err(|e| format!("Failed to save session: {}", e))?;
@@ -1348,19 +1462,19 @@ fn write_session_file_atomic(path: &std::path::Path, json: &str) -> Result<(), S
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SessionInfo {
-    id: String,
-    name: String,
-    messages: Vec<AgentMessage>,
-    created_at: String,
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) messages: Vec<AgentMessage>,
+    pub(crate) created_at: String,
     /// Per-session workspace folders (first = primary) + access mode,
     /// restored on load. Empty/`None` means "whatever the process cwd
     /// already is" — old sessions saved before this field existed, or saved
     /// under the earlier single-`cwd` shape, still load fine (just start
     /// with an empty workspace rather than crashing).
     #[serde(default)]
-    workspace_folders: Vec<String>,
+    pub(crate) workspace_folders: Vec<String>,
     #[serde(default)]
-    access_mode: Option<String>,
+    pub(crate) access_mode: Option<String>,
 }
 
 /// A saved session without its transcript — what the sidebar actually needs.
@@ -1376,13 +1490,13 @@ pub struct SessionInfo {
 /// already declared exactly these fields.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SessionMeta {
-    id: String,
-    name: String,
-    created_at: String,
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) created_at: String,
     #[serde(default)]
-    workspace_folders: Vec<String>,
+    pub(crate) workspace_folders: Vec<String>,
     #[serde(default)]
-    access_mode: Option<String>,
+    pub(crate) access_mode: Option<String>,
 }
 
 /// Cached session listing.
@@ -1438,7 +1552,12 @@ pub fn prune_empty_sessions() -> usize {
         // know it's empty, and only a file that genuinely holds zero
         // messages is ever removed.
         let Ok(session) = serde_json::from_str::<SessionInfo>(&content) else { continue };
-        if session.messages.is_empty() && std::fs::remove_file(&path).is_ok() {
+        // A past day holding nothing but its handoff note was opened and never
+        // used. Today's is kept even then — it is where the next message goes.
+        let unused_day = crate::agent::days::parse_day_id(&session.id)
+            .is_some_and(|(d, _)| d != crate::agent::days::today())
+            && session.messages.iter().all(crate::agent::days::is_handoff);
+        if (session.messages.is_empty() || unused_day) && std::fs::remove_file(&path).is_ok() {
             removed += 1;
         }
     }
@@ -1513,10 +1632,33 @@ pub async fn cmd_delete_session(
 
 /// Write arbitrary text content to an absolute path chosen by the user
 /// (e.g. via a save dialog). Used by session export and similar
-/// "save this generated text to disk" flows.
+/// "save this generated text to disk" flows, and by the IDE view's save.
 #[tauri::command]
 pub async fn cmd_write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| format!("Failed to write file: {}", e))
+}
+
+/// The FULL, untruncated text content of a file — for the IDE view's editor,
+/// which must never operate on a partial buffer.
+///
+/// Deliberately separate from `cmd_read_file_preview`: that command caps text
+/// at 400,000 chars for display, and editing a capped buffer then saving it
+/// would silently truncate the real file on disk, destroying whatever came
+/// after the cap. An editor's read path and a preview's read path have
+/// different correctness requirements and must not share one command.
+///
+/// Errors (rather than falling back to a lossy read) when the file isn't
+/// valid UTF-8, since a lossy round-trip would corrupt it the same way a
+/// truncated one would — silently, on save.
+#[tauri::command]
+pub async fn cmd_read_file_raw(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::InvalidData {
+            format!("'{path}' isn't valid UTF-8 text — the IDE view can only edit text files.")
+        } else {
+            format!("Failed to read {path}: {e}")
+        }
+    })
 }
 
 /// Load a specific session's messages into the active agent.
@@ -1540,6 +1682,11 @@ pub async fn cmd_load_session(
     let agent = state.agent.lock().await;
     agent.state.set_messages(session.messages).await;
     agent.state.clear_goal().await;
+    // An ordinary thread keeps no compaction archive. Without this, a thread
+    // opened after a project's conversation would inherit that conversation's
+    // archive path and append its own compacted messages to the project's
+    // history.
+    agent.state.set_history_archive(None).await;
     let access_mode = if session.access_mode.as_deref() == Some("readOnly") {
         crate::agent::state::WorkspaceAccessMode::ReadOnly
     } else {
@@ -1592,19 +1739,27 @@ async fn save_current_session_impl(name: Option<String>, state: &Arc<AppState>) 
     let dir = get_session_dir()?;
     let path = dir.join(format!("{}.json", s_id));
     
-    let created_at = chrono::Utc::now().to_rfc3339();
+    // A day's date is its identity, so its `created_at` is fixed to that date
+    // rather than rewritten to "now" on every save like an ordinary session's.
+    let day = crate::agent::days::parse_day_id(&s_id).map(|(d, _)| d.to_string());
+    let created_at = match &day {
+        Some(d) => crate::agent::days::day_start_rfc3339(d),
+        None => chrono::Utc::now().to_rfc3339(),
+    };
+    // Named from the first thing the USER actually asked. A day opens with a
+    // handoff note carried in a `User` message, and naming the day after that
+    // would label every day "<previous_day date=...".
+    let first_ask = messages.iter().find_map(|m| match m {
+        AgentMessage::User { content, .. } if !crate::agent::days::is_handoff(m) => content.first().and_then(|c| match c {
+            MessageContent::Text { text } => Some(text.chars().take(30).collect::<String>()),
+            _ => None,
+        }),
+        _ => None,
+    });
     let name_str = name.unwrap_or_else(|| {
-        messages.first().and_then(|m| {
-            match m {
-                AgentMessage::User { content, .. } => content.first().and_then(|c| {
-                    match c {
-                        MessageContent::Text { text } => Some(text.chars().take(30).collect::<String>()),
-                        _ => None
-                    }
-                }),
-                _ => None
-            }
-        }).unwrap_or_else(|| "Untitled Session".to_string())
+        // An unused day keeps an empty name, which is how the history knows to
+        // leave it out.
+        first_ask.unwrap_or_else(|| if day.is_some() { String::new() } else { "Untitled Session".to_string() })
     });
 
     let workspace_folders = state.agent_state.workspace_folders().await;
@@ -1662,6 +1817,9 @@ pub async fn cmd_new_session(
     {
         let mut agent = state.agent.lock().await;
         agent.reset().await;
+        // See `cmd_load_session`: a thread must not write into a project
+        // conversation's archive.
+        agent.state.set_history_archive(None).await;
     }
 
     let s_id = format!(
@@ -1827,61 +1985,111 @@ pub async fn cmd_agent_respond_confirmation(request_id: String, approved: bool) 
 // Memory commands — project-scoped persistent memory (see agent::memory)
 // ============================================================================
 
-pub(crate) fn memory_root() -> String {
-    std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_else(|_| ".".to_string())
+/// The folder whose memory is in use: the agent's primary workspace folder —
+/// the project, or the home folder in General — so each project remembers
+/// its own things.
+///
+/// This used to be the app process's current directory, which put every
+/// memory from every project into one pile wherever the app was launched
+/// from (in development, inside the app's own source tree). That pile is
+/// moved, once, to the home folder's memory — General's — since it can't be
+/// split back into projects.
+pub(crate) async fn memory_root_for(agent_state: &crate::agent::state::AgentState) -> String {
+    migrate_legacy_memory_once();
+    agent_state
+        .primary_workspace_folder()
+        .await
+        .filter(|p| !p.trim().is_empty())
+        .or_else(|| dirs::home_dir().map(|h| h.display().to_string()))
+        .unwrap_or_else(|| ".".to_string())
+}
+
+fn migrate_legacy_memory_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(cwd) = std::env::current_dir() else { return };
+        let Some(home) = dirs::home_dir() else { return };
+        if cwd == home {
+            return;
+        }
+        let old = cwd.join(".vivianne").join("memory");
+        if !old.is_dir() {
+            return;
+        }
+        let new = crate::agent::paths::project_viv_path(&home, &["memory"]);
+        if new.exists() {
+            log::warn!("[memory] left the old memory at {} in place: {} already exists", old.display(), new.display());
+            return;
+        }
+        if let Some(parent) = new.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::rename(&old, &new) {
+            Ok(()) => log::info!("[memory] moved memory from {} to {}", old.display(), new.display()),
+            Err(e) => log::warn!("[memory] couldn't move {} to {}: {e}", old.display(), new.display()),
+        }
+    });
 }
 
 #[tauri::command]
-pub async fn cmd_memory_status() -> Result<crate::agent::memory::MemoryStatus, String> {
-    Ok(crate::agent::memory::status(&memory_root()).await)
+pub async fn cmd_memory_status(state: State<'_, Arc<AppState>>) -> Result<crate::agent::memory::MemoryStatus, String> {
+    Ok(crate::agent::memory::status(&memory_root_for(&state.agent_state).await).await)
 }
 
 #[tauri::command]
-pub async fn cmd_memory_enable() -> Result<crate::agent::memory::MemoryState, String> {
-    crate::agent::memory::enable(&memory_root()).await
+pub async fn cmd_memory_enable(state: State<'_, Arc<AppState>>) -> Result<crate::agent::memory::MemoryState, String> {
+    crate::agent::memory::enable(&memory_root_for(&state.agent_state).await).await
 }
 
 #[tauri::command]
-pub async fn cmd_memory_disable() -> Result<crate::agent::memory::MemoryState, String> {
-    crate::agent::memory::disable(&memory_root()).await
+pub async fn cmd_memory_disable(state: State<'_, Arc<AppState>>) -> Result<crate::agent::memory::MemoryState, String> {
+    crate::agent::memory::disable(&memory_root_for(&state.agent_state).await).await
 }
 
 #[tauri::command]
-pub async fn cmd_memory_configure(auto_consolidate: Option<bool>) -> Result<crate::agent::memory::MemoryState, String> {
-    crate::agent::memory::configure(&memory_root(), auto_consolidate).await
+pub async fn cmd_memory_configure(
+    state: State<'_, Arc<AppState>>,
+    auto_consolidate: Option<bool>) -> Result<crate::agent::memory::MemoryState, String> {
+    crate::agent::memory::configure(&memory_root_for(&state.agent_state).await, auto_consolidate).await
 }
 
 #[tauri::command]
-pub async fn cmd_memory_purge() -> Result<bool, String> {
-    crate::agent::memory::purge(&memory_root()).await
+pub async fn cmd_memory_purge(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
+    crate::agent::memory::purge(&memory_root_for(&state.agent_state).await).await
 }
 
 #[tauri::command]
-pub async fn cmd_memory_configure_extraction(enabled: bool) -> Result<crate::agent::memory::MemoryState, String> {
-    crate::agent::memory::configure_extraction(&memory_root(), enabled).await
+pub async fn cmd_memory_configure_extraction(
+    state: State<'_, Arc<AppState>>,
+    enabled: bool) -> Result<crate::agent::memory::MemoryState, String> {
+    crate::agent::memory::configure_extraction(&memory_root_for(&state.agent_state).await, enabled).await
 }
 
 #[tauri::command]
 pub async fn cmd_memory_remember(
+    state: State<'_, Arc<AppState>>,
+    
     app: tauri::AppHandle,
     text: String,
     key: Option<String>,
 ) -> Result<crate::agent::memory::MemoryEntry, String> {
-    use tauri::Manager;
-    let auth = app.state::<Arc<crate::ai::auth::AuthState>>().inner().clone();
-    crate::agent::memory::remember(&memory_root(), &text, key, Some(auth)).await
+    let auth = crate::ai::auth::wait_for_state(&app).await;
+    crate::agent::memory::remember(&memory_root_for(&state.agent_state).await, &text, key, Some(auth)).await
 }
 
 #[tauri::command]
-pub async fn cmd_memory_forget(query: String) -> Result<usize, String> {
-    crate::agent::memory::forget(&memory_root(), &query).await
+pub async fn cmd_memory_forget(
+    state: State<'_, Arc<AppState>>,
+    query: String) -> Result<usize, String> {
+    crate::agent::memory::forget(&memory_root_for(&state.agent_state).await, &query).await
 }
 
 #[tauri::command]
-pub async fn cmd_memory_recall(app: tauri::AppHandle, query: String) -> Result<Vec<crate::agent::memory::MemoryEntry>, String> {
-    use tauri::Manager;
-    let auth = app.state::<Arc<crate::ai::auth::AuthState>>().inner().clone();
-    Ok(crate::agent::memory::recall(&memory_root(), &query, Some(&auth), None).await)
+pub async fn cmd_memory_recall(
+    state: State<'_, Arc<AppState>>,
+    app: tauri::AppHandle, query: String) -> Result<Vec<crate::agent::memory::MemoryEntry>, String> {
+    let auth = crate::ai::auth::wait_for_state(&app).await;
+    Ok(crate::agent::memory::recall(&memory_root_for(&state.agent_state).await, &query, Some(&auth), None).await)
 }
 
 // ============================================================================
@@ -2041,8 +2249,10 @@ pub async fn cmd_terminal_close(
 // ============================================================================
 
 #[tauri::command]
-pub async fn cmd_lsp_diagnostics(path: String) -> Result<Vec<crate::lsp::Diagnostic>, String> {
-    let root = memory_root();
+pub async fn cmd_lsp_diagnostics(
+    state: State<'_, Arc<AppState>>,
+    path: String) -> Result<Vec<crate::lsp::Diagnostic>, String> {
+    let root = memory_root_for(&state.agent_state).await;
     Ok(crate::lsp::manager::diagnostics_for(&path, &root).await)
 }
 
@@ -2106,11 +2316,7 @@ fn parse_github_repo(url: &str) -> Option<String> {
         r
     } else if let Some(r) = url.strip_prefix("https://github.com/") {
         r
-    } else if let Some(r) = url.strip_prefix("ssh://git@github.com/") {
-        r
-    } else {
-        return None;
-    };
+    } else { url.strip_prefix("ssh://git@github.com/")? };
     let rest = rest.strip_suffix(".git").unwrap_or(rest).trim_end_matches('/');
     let mut parts = rest.split('/');
     let owner = parts.next()?.trim();
@@ -2399,3 +2605,203 @@ pub async fn cmd_git_status(path: String) -> Result<Vec<GitStatusEntry>, String>
     Ok(entries)
 }
 
+
+// ============================================================================
+// Telemetry, crash records, and bug reports
+// ============================================================================
+//
+// All three read from `agent::telemetry`'s local store. Nothing is uploaded
+// unless the user has both enabled telemetry and configured an endpoint —
+// see that module's header for why the default is off.
+
+/// Record one usage event. Called from the frontend for UI-level actions the
+/// backend can't see (a panel opened, a settings tab visited).
+#[tauri::command]
+pub fn cmd_telemetry_track(kind: String, props: Option<serde_json::Value>) {
+    crate::agent::telemetry::track(&kind, props.unwrap_or(serde_json::Value::Null));
+}
+
+/// Summary for the Usage page: counts by event kind, plus recent crashes.
+#[tauri::command]
+pub fn cmd_get_telemetry_summary() -> serde_json::Value {
+    use std::collections::HashMap;
+    let events = crate::agent::telemetry::read_events();
+    let crashes = crate::agent::telemetry::read_crashes();
+
+    let mut by_kind: HashMap<String, u64> = HashMap::new();
+    for event in &events {
+        *by_kind.entry(event.kind.clone()).or_insert(0) += 1;
+    }
+    let mut kinds: Vec<serde_json::Value> =
+        by_kind.into_iter().map(|(kind, count)| serde_json::json!({ "kind": kind, "count": count })).collect();
+    // Descending by count so the Usage page's list needs no client-side sort.
+    kinds.sort_by(|a, b| b["count"].as_u64().cmp(&a["count"].as_u64()));
+
+    serde_json::json!({
+        "eventCount": events.len(),
+        "firstEventTs": events.first().map(|e| e.ts),
+        "lastEventTs": events.last().map(|e| e.ts),
+        "kinds": kinds,
+        "crashes": crashes,
+    })
+}
+
+/// Wipe the local telemetry store. The user owns this data, so deleting it
+/// has to be one click and has to actually delete rather than tombstone.
+#[tauri::command]
+pub fn cmd_clear_telemetry() -> Result<(), String> {
+    if let Ok(path) = crate::agent::telemetry::events_path() {
+        let _ = std::fs::remove_file(path);
+    }
+    if let Ok(dir) = crate::agent::telemetry::crashes_dir() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Bundle a user-written bug report with the context needed to act on it:
+/// recent events, the latest crash, and build/OS identifiers.
+///
+/// Always written to disk and the path returned, so the report survives even
+/// when upload is off or fails — the user can then attach the file to an
+/// issue by hand rather than losing what they typed.
+#[tauri::command]
+pub async fn cmd_submit_bug_report(
+    app: tauri::AppHandle,
+    description: String,
+    include_diagnostics: bool,
+) -> Result<serde_json::Value, String> {
+    if description.trim().is_empty() {
+        return Err("Please describe what went wrong.".to_string());
+    }
+
+    let events = if include_diagnostics { crate::agent::telemetry::read_events() } else { Vec::new() };
+    let tail: Vec<_> =
+        events.iter().rev().take(crate::agent::telemetry::REPORT_EVENT_TAIL).rev().cloned().collect();
+    let crashes = if include_diagnostics { crate::agent::telemetry::read_crashes() } else { Vec::new() };
+
+    let report = serde_json::json!({
+        "ts": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+        "description": description.trim(),
+        "appVersion": app.package_info().version.to_string(),
+        "os": format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+        "events": tail,
+        "latestCrash": crashes.first(),
+    });
+
+    let dir = crate::agent::paths::viv_agent_dir()?.join("reports");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("reports dir: {e}"))?;
+    let path = dir.join(format!("report-{}.json", report["ts"].as_u64().unwrap_or(0)));
+    std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap_or_default())
+        .map_err(|e| format!("write report: {e}"))?;
+
+    let uploaded = match crate::agent::telemetry::upload(report).await {
+        Ok(sent) => sent,
+        Err(e) => {
+            // A failed upload must not lose the report — it's already on disk.
+            log::warn!("[telemetry] bug report saved locally but upload failed: {e}");
+            false
+        }
+    };
+
+    Ok(serde_json::json!({ "path": path.to_string_lossy(), "uploaded": uploaded }))
+}
+
+// ─── Checkpoints ─────────────────────────────────────────────────────────────
+
+/// Every checkpoint for a session, newest first.
+#[tauri::command]
+pub async fn cmd_list_checkpoints(
+    session_id: Option<String>,
+    state: tauri::State<'_, std::sync::Arc<AppState>>,
+) -> Result<Vec<crate::agent::checkpoints::Checkpoint>, String> {
+    let id = match session_id {
+        Some(s) if !s.is_empty() => s,
+        _ => state.session_id.lock().await.clone().unwrap_or_default(),
+    };
+    if id.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(crate::agent::checkpoints::list(&id))
+}
+
+/// Restore one checkpoint, putting the files it captured back as they were.
+///
+/// Returns exactly which files were written, removed, or failed — a checkpoint
+/// only ever covered a known set of paths, so reporting a bare "restored" would
+/// overstate what happened.
+#[tauri::command]
+pub async fn cmd_restore_checkpoint(
+    checkpoint_id: String,
+    session_id: Option<String>,
+    state: tauri::State<'_, std::sync::Arc<AppState>>,
+) -> Result<crate::agent::checkpoints::RestoreReport, String> {
+    let id = match session_id {
+        Some(s) if !s.is_empty() => s,
+        _ => state.session_id.lock().await.clone().unwrap_or_default(),
+    };
+    if id.is_empty() {
+        return Err("No active session to restore a checkpoint from.".to_string());
+    }
+    crate::agent::checkpoints::restore(&id, &checkpoint_id)
+}
+
+// ─── Document inspection (Documents panel) ───────────────────────────────────
+
+/// Addressable parts of a document, for the Documents panel's part list.
+///
+/// The panel needs the same view of a file the `inspect_document` tool gives the
+/// model — same ids, same editability flags — so that clicking a part in the UI
+/// and asking the model to change it refer to the same thing. Sharing the
+/// implementation is what keeps them from drifting apart.
+#[tauri::command]
+pub async fn cmd_inspect_document(
+    path: String,
+) -> Result<Vec<crate::coding_agent::document_edit::DocPart>, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::coding_agent::document_edit::inspect(std::path::Path::new(&path))
+    })
+    .await
+    .map_err(|e| format!("inspect task panicked: {e}"))?
+}
+
+/// A fresh screenshot of the open browser tab, for the preview panel's poll.
+///
+/// Returns `None` when no tab is open or the browser is not running, so the
+/// panel can keep showing the last good frame rather than flashing an error
+/// every poll interval.
+#[tauri::command]
+pub async fn cmd_web_preview_screenshot() -> Result<Option<String>, String> {
+    crate::camoufox::live_screenshot().await
+}
+
+// ── User-driven browser input ────────────────────────────────────────────────
+//
+// These let the person watching the preview panel act on the page themselves,
+// in the same tab the agent is using. Coordinates are fractions of the viewport
+// (0.0–1.0) so the panel never has to know the page's real size or the device
+// scale factor — see `camoufox`'s note on why pixels would be wrong twice over.
+
+#[tauri::command]
+pub async fn cmd_web_preview_click_at(fx: f64, fy: f64) -> Result<Option<String>, String> {
+    crate::camoufox::click_at_fraction(fx, fy).await.map(|r| r.screenshot_base64)
+}
+
+#[tauri::command]
+pub async fn cmd_web_preview_type(text: String) -> Result<Option<String>, String> {
+    crate::camoufox::type_at_focus(&text).await.map(|r| r.screenshot_base64)
+}
+
+#[tauri::command]
+pub async fn cmd_web_preview_press(key: String) -> Result<Option<String>, String> {
+    crate::camoufox::press_key(&key).await.map(|r| r.screenshot_base64)
+}
+
+#[tauri::command]
+pub async fn cmd_web_preview_scroll(direction: String, amount: i64) -> Result<Option<String>, String> {
+    crate::camoufox::scroll(&direction, amount).await.map(|r| r.screenshot_base64)
+}

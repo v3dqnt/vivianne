@@ -205,8 +205,13 @@ export async function streamUniversal(req: ProviderStreamRequest): Promise<void>
   // afford — retry once at that budget instead of failing outright. Applies
   // uniformly to all four providers here; it's a no-op for the other three
   // since their error bodies never match the OpenRouter-specific pattern.
-  const baseMaxTokens = req.provider === 'openrouter' ? Math.min(req.maxTokens, 4096) : req.maxTokens
-  let attemptMaxTokens = baseMaxTokens || undefined
+  //
+  // The model's full output limit is requested — no pre-emptive cap. OpenRouter
+  // used to be clamped to 4096 "to avoid" that 402, which the retry below
+  // already handles precisely; the clamp's real effect was that a reasoning
+  // model on high effort spent all 4096 tokens thinking and never got to write
+  // its answer or tool call.
+  let attemptMaxTokens = req.maxTokens || undefined
   let retriedForCredits = false
   let setupApi: string = req.apiKind
 

@@ -1,12 +1,17 @@
 import { memo, type ReactNode } from 'react'
-import Box from '@mui/material/Box'
-import Link from '@mui/material/Link'
+import { Box, Link } from '../../../ui'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
+import 'katex/dist/katex.min.css'
 import remend from 'remend'
 import { CodeBlock } from './CodeBlock'
 import { MermaidBlock } from './MermaidBlock'
+import { ChartBlock } from './ChartBlock'
+import { Model3DBlock } from './Model3DBlock'
 import { useThrottledValue } from '../../../lib/useThrottledValue'
+import { normalizeMath } from '../lib/mathText'
 
 const VIDEO_EXT = /\.(mp4|webm|mov|m4v)$/i
 const AUDIO_EXT = /\.(mp3|wav|ogg|m4a|flac)$/i
@@ -25,10 +30,11 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   // ~100ms keeps the visible text live-feeling while cutting redundant
   // full-message reparses during long replies.
   const throttledText = useThrottledValue(text, 100)
-  const healed = remend(throttledText)
+  const healed = normalizeMath(remend(throttledText))
 
   return (
     <Box
+      className="select-text"
       sx={{
         '& > *:first-of-type': { mt: 0 },
         '& > *:last-of-type': { mb: 0 },
@@ -54,7 +60,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
         '& th, & td': { border: 1, borderColor: 'divider', px: 1, py: 0.5, textAlign: 'left' },
         '& th': { bgcolor: 'action.hover', fontWeight: 600 },
         '& code:not(pre code)': {
-          fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+          fontFamily: '"Geist Mono", ui-monospace, monospace',
           fontSize: '0.8125em',
           bgcolor: 'action.hover',
           borderRadius: 1,
@@ -62,10 +68,17 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
           py: 0.15,
         },
         '& a': { color: 'primary.main' },
+        // Display maths scrolls sideways instead of overflowing the bubble;
+        // a long derivation is still readable, and the page never widens.
+        '& .katex-display': { overflowX: 'auto', overflowY: 'hidden', py: 0.5, my: 1 },
+        '& .katex': { fontSize: '1.05em' },
       }}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        // `throwOnError: false` renders a malformed formula as red source text
+        // instead of failing the whole message.
+        rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: 'ignore' }]]}
         components={{
           a: ({ href, children }) => {
             // The model has no real way to emit a native <video>/<audio> tag
@@ -94,7 +107,13 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
             // so the className is the only reliable inline/block signal.
             if (!match) return <code className={className}>{children}</code>
             const code = String(children).replace(/\n$/, '')
+            // Rich fence languages render as real figures rather than as
+            // source. Same mechanism mermaid already used — the model emits a
+            // fenced block inside its own message, so the figure appears where
+            // the explanation is, not buried in a collapsed tool card.
             if (match[1] === 'mermaid') return <MermaidBlock code={code} />
+            if (match[1] === 'chart') return <ChartBlock code={code} />
+            if (match[1] === 'model3d') return <Model3DBlock code={code} />
             return <CodeBlock code={code} lang={match[1]} />
           },
           // The `code` renderer above already produces CodeBlock's own

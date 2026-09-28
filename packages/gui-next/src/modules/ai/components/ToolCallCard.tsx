@@ -1,14 +1,11 @@
 import { useState } from 'react'
-import Box from '@mui/material/Box'
-import Collapse from '@mui/material/Collapse'
-import CircularProgress from '@mui/material/CircularProgress'
-import Typography from '@mui/material/Typography'
+import { Box, Collapse, CircularProgress, Typography, Stack } from '../../../ui'
 import { CommandLinear, EditLinear, SearchNormalLinear, DocumentTextLinear, CodeLinear, ArrowDownLinear, CheckLinear, DangerLinear, ArchiveBookLinear } from '../../../icons'
-import Stack from '@mui/material/Stack'
 import type { AgentMessage } from '../lib/types'
 import { contentToText, contentImages } from '../lib/types'
 import { ImageBlock } from './ImageBlock'
 import { DiffView } from './DiffView'
+import { CodeBlock } from './CodeBlock'
 
 type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
 
@@ -16,6 +13,50 @@ const MEMORY_TOOLS: Record<string, string> = {
   memory_get: 'Recalling memory…',
   memory_search: 'Searching memory…',
   notes_write: 'Taking a note…',
+}
+
+/** Human phrasing per tool, as `[running, finished]`.
+ *
+ * The card used to print the raw tool name — `todo_write`, `apply_patch`,
+ * `code_search` — which is the agent's vocabulary, not the reader's. Naming
+ * the ACTION lets the transcript be skimmed as a narrative of what happened
+ * rather than decoded as a list of function calls. Tools not listed here fall
+ * back to their own name, so a playbook or MCP tool still renders sensibly. */
+const DECLARATIONS: Record<string, [string, string]> = {
+  bash: ['Running', 'Ran'],
+  powershell: ['Running', 'Ran'],
+  sandbox_execute: ['Running sandboxed', 'Ran sandboxed'],
+  run_script: ['Running script', 'Ran script'],
+  read: ['Reading', 'Read'],
+  write: ['Writing', 'Wrote'],
+  edit: ['Editing', 'Edited'],
+  apply_patch: ['Applying patch to', 'Patched'],
+  notebook_edit: ['Editing notebook', 'Edited notebook'],
+  ls: ['Listing', 'Listed'],
+  glob: ['Matching', 'Matched'],
+  grep: ['Searching for', 'Searched for'],
+  code_search: ['Searching code for', 'Searched code for'],
+  web_search: ['Searching the web for', 'Searched the web for'],
+  web_fetch: ['Fetching', 'Fetched'],
+  web_preview: ['Opening', 'Opened'],
+  create_document: ['Creating', 'Created'],
+  generate_image: ['Generating image', 'Generated image'],
+  math: ['Calculating', 'Calculated'],
+  todo_write: ['Updating the plan', 'Updated the plan'],
+  task: ['Delegating to a subagent', 'Delegated to a subagent'],
+  dip: ['Using the screen', 'Used the screen'],
+  computer: ['Using the screen', 'Used the screen'],
+  repo_clone: ['Cloning', 'Cloned'],
+  repo_overview: ['Reading the repo', 'Read the repo'],
+  diagnostics: ['Checking diagnostics', 'Checked diagnostics'],
+}
+
+/** `[label, target]` for the card header. */
+function declarationFor(name: string, pending: boolean, summary: string | null): [string, string | null] {
+  if (pending && name in MEMORY_TOOLS) return [MEMORY_TOOLS[name], null]
+  const phrasing = DECLARATIONS[name]
+  if (!phrasing) return [name, summary]
+  return [pending ? phrasing[0] : phrasing[1], summary]
 }
 
 // Coarse icon-by-name-substring — good enough to visually distinguish the
@@ -87,8 +128,27 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
   const isError = message.isError === true
   const Icon = iconFor(message.toolName)
   const summary = argSummary(message.arguments)
+  const [label, target] = declarationFor(message.toolName, pending, summary)
   const output = contentToText(message.content).trim()
   const images = contentImages(message.content)
+  // Plots from `math` ride in `details` when the model can't take images —
+  // the user should see them either way.
+  const detailPlots = ((message.details as { plots?: unknown } | null)?.plots ?? []) as unknown[]
+  const plots = detailPlots.filter((p): p is string => typeof p === 'string')
+  // Declared AFTER `output`, because it reads it. Putting this above the
+  // `const output` line threw `Cannot access 'output' before initialization`
+  // at render — a temporal dead zone error, so it only fired once a thread
+  // containing a tool call was actually rendered, which took the whole
+  // message list down when switching threads.
+  //
+  // Shell output is not any language shiki knows; tagging it `text` avoids
+  // spurious highlighting of arbitrary stdout. Structured tools that really
+  // do emit JSON get the JSON grammar.
+  const outputLang = ['read', 'code_search', 'grep', 'glob'].includes(message.toolName)
+    ? 'text'
+    : output.trimStart().startsWith('{') || output.trimStart().startsWith('[')
+      ? 'json'
+      : 'text'
   // Only a completed, successful call has real before/after content — a
   // failed `edit` (e.g. old_string not found) changed nothing, so there's
   // nothing to diff. `extractDiffs` itself is cheap (just reshapes
@@ -105,7 +165,7 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
       sx={{
         border: 1,
         borderColor: isError ? 'error.main' : 'divider',
-        borderRadius: 2,
+        borderRadius: '12px',
         overflow: 'hidden',
         bgcolor: 'background.paper',
       }}
@@ -125,17 +185,17 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
         <Box sx={{ display: 'flex', color: 'text.secondary', flexShrink: 0 }}>
           <Icon size={16} color="currentColor" />
         </Box>
-        <Typography variant="caption" sx={{ fontWeight: 600, flexShrink: 0 }}>
-          {pending && message.toolName in MEMORY_TOOLS ? MEMORY_TOOLS[message.toolName] : message.toolName}
+        <Typography variant="caption" sx={{ fontWeight: 600, flexShrink: 0 }} title={message.toolName}>
+          {label}
         </Typography>
-        {summary && (
+        {target && (
           <Typography
             variant="caption"
             color="text.secondary"
             noWrap
-            sx={{ fontFamily: '"JetBrains Mono", ui-monospace, monospace', minWidth: 0 }}
+            sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', minWidth: 0 }}
           >
-            {summary}
+            {target}
           </Typography>
         )}
         <Box sx={{ flex: 1 }} />
@@ -163,6 +223,25 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
           </Box>
         )}
       </Box>
+      {isError && output && !open && (
+        <Typography
+          variant="caption"
+          color="error.main"
+          sx={{
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+            px: 1.5,
+            pb: 0.75,
+            fontFamily: '"Geist Mono", ui-monospace, monospace',
+            fontSize: '0.6875rem',
+            lineHeight: 1.5,
+          }}
+        >
+          {output}
+        </Typography>
+      )}
       {hasBody && (
         // MUI's Collapse keeps its children mounted regardless of `in` — it
         // animates height, so it needs them present to measure. That meant
@@ -178,7 +257,7 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
                   <Typography
                     variant="caption"
                     color="text.secondary"
-                    sx={{ display: 'block', px: 1.5, pt: 1, borderTop: i === 0 ? 1 : 0, borderColor: 'divider', fontFamily: 'monospace' }}
+                    sx={{ display: 'block', px: 1.5, pt: 1, borderTop: i === 0 ? 1 : 0, borderColor: 'divider', fontFamily: '"Geist Mono", ui-monospace, monospace' }}
                   >
                     {d.path}
                   </Typography>
@@ -186,25 +265,12 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
                 </Box>
               ))}
               {output && (
-                <Box
-                  component="pre"
-                  sx={{
-                    m: 0,
-                    px: 1.5,
-                    py: 1,
-                    borderTop: 1,
-                    borderColor: 'divider',
-                    bgcolor: 'action.hover',
-                    fontFamily: '"JetBrains Mono", ui-monospace, monospace',
-                    fontSize: '0.75rem',
-                    lineHeight: 1.5,
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                    maxHeight: 320,
-                    overflowY: 'auto',
-                  }}
-                >
-                  {output}
+                // Routed through CodeBlock so tool output, chat fences and
+                // file previews all render as the same object. It brings
+                // theme-correct highlighting and the long-output collapse
+                // with it, replacing a bespoke <pre> that had neither.
+                <Box sx={{ borderTop: 1, borderColor: 'divider' }}>
+                  <CodeBlock code={output} lang={outputLang} wrap bare={false} collapsible />
                 </Box>
               )}
             </>
@@ -212,10 +278,13 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
         </Collapse>
       )}
     </Box>
-    {images.length > 0 && (
+    {(images.length > 0 || plots.length > 0) && (
       <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
         {images.map((block, i) => (
           <ImageBlock key={i} block={block} />
+        ))}
+        {plots.map((b64, i) => (
+          <ImageBlock key={`plot-${i}`} block={{ type: 'image', base64: b64, mediaType: 'image/png' } as Parameters<typeof ImageBlock>[0]['block']} />
         ))}
       </Stack>
     )}

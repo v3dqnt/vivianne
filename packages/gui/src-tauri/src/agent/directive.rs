@@ -75,7 +75,7 @@ For a task with several concrete steps, use todo_write to track them rather than
 Your full, live capability list is in the <vivianne_capabilities> section below. It is generated from the tools you actually have this turn, so trust it: never answer \"I don't have X\" for anything listed there, and call list_tools if you are genuinely unsure. Extra notes on a few of them:\n\
 - code_search: relevance-ranked search for loose/conceptual queries. Lexical/keyword-based, not embeddings — won't connect a query word to a code word that shares no letters.\n\
 - task: hand a self-contained subtask to a subagent. Runs in background by default — poll with task_output/wait_tasks. Set run_in_background=false only for a single one-off subtask you have nothing else to do until it returns. Don't use for anything you can do directly in 1-2 tool calls. Call list_subagent_profiles first if you're unsure whether a profile with a preset prompt already exists — pointing at one (subagent_type + a short context) costs far fewer tokens than writing the full prompt yourself. While a background subagent runs, keep making progress yourself instead of idling on task_output: continue other parts of the task, or delegate more independent chunks to additional subagents run in parallel.\n\
-- computer: screenshot (action=\"screenshot\") when you genuinely need to see the screen. Screenshot immediately after a GUI click to confirm it landed. Don't screenshot speculatively or to check things you can read as text.\n\
+- dip: screenshot (action=\"screenshot\") when you genuinely need to see the screen. Screenshot immediately after a GUI click to confirm it landed. Don't screenshot speculatively or to check things you can read as text.\n\
 - todo_write: keep a live checklist for multi-step tasks.\n\
 When deciding how to approach a real dev task, actively consider whether code_search or task would serve better than defaulting to bash + grep.\n\
 </rule>\n\
@@ -99,8 +99,13 @@ To reach the web: web_search finds pages, web_fetch reads one as text, and web_p
 </guideline>\n\
 \n\
 <guideline priority=\"medium\" name=\"images_and_diagrams\">\n\
-You have real vision: you can see and analyse images the user attaches and screenshots the computer tool captures. When a message includes an image, look at it — don't say you can't see images, describe what's actually in it.\n\
+You have real vision: you can see and analyse images the user attaches and screenshots the dip tool captures. When a message includes an image, look at it — don't say you can't see images, describe what's actually in it.\n\
 When a diagram explains something more clearly than prose — a flow, architecture, sequence, state machine, or decision tree — include it as a Mermaid diagram in a ```mermaid fenced code block. ALWAYS wrap node labels in double quotes. Keep the diagram focused and add a brief written explanation.\n\
+\n\
+Two more fenced languages also render as real figures, not as source. Put them inside your own reply, next to the explanation:\n\
+- ```chart for DATA. JSON: {\"type\": \"bar\"|\"line\"|\"area\"|\"pie\"|\"scatter\", \"title\": ..., \"xLabel\": ..., \"yLabel\": ..., \"data\": [{\"x\": \"Mon\", \"y\": 12}, ...]}. For several series use \"series\": [{\"name\": ..., \"points\": [{\"x\": ..., \"y\": ...}]}] in place of \"data\". Prefer a chart over a markdown table whenever the point is magnitude or trend. Scatter caps at 3 series for colour-blind separability.\n\
+- ```model3d for 3D. Either {\"objects\": [{\"shape\": \"box\"|\"sphere\"|\"cylinder\"|\"cone\"|\"torus\"|\"plane\", \"size\": [1,1,1], \"position\": [0,0,0], \"color\": \"#4a9eff\"}]} to build a scene from primitives, or {\"src\": \"path/to/model.glb\"} to display a .glb/.gltf from disk. The viewer orbits and zooms.\n\
+Use a figure only when it carries information prose would carry worse. A chart of two numbers is worse than a sentence.\n\
 </guideline>\n\
 \n\
 </vivianne_rules>";
@@ -123,6 +128,12 @@ pub(crate) async fn assemble_capability_blocks(
     mention_scan_text: &str,
     _auth: Option<&std::sync::Arc<crate::ai::auth::AuthState>>,
     include_project_instructions: bool,
+    // True only for the conversation the user is actually talking to. Kept
+    // separate from `include_project_instructions` on purpose: `task`
+    // subagents get the project's AGENTS.md too, and if the master-agent
+    // block rode on that flag every subagent would believe it was the
+    // project's master — and start acting like one.
+    primary_agent: bool,
 ) -> String {
     let mut prompt = format!("<vivianne_directive>\n{}\n</vivianne_directive>", BASE_DIRECTIVE);
 
@@ -197,6 +208,17 @@ pub(crate) async fn assemble_capability_blocks(
         }
     }
 
+    // The project's master agent: its identity and charter. Read from disk
+    // every turn like the instructions above, so editing the charter takes
+    // effect on the next message.
+    if primary_agent {
+        if let Some(root) = workspace_folders.first() {
+            if let Some(master_block) = crate::agent::master::prompt_block(root).await {
+                prompt = format!("{prompt}\n\n{master_block}");
+            }
+        }
+    }
+
     // Project memory is pulled on demand through the `recall` tool rather
     // than dumped into every turn — it was an 8KB (~2k token) block on every
     // message regardless of whether the conversation had anything to do with
@@ -215,7 +237,7 @@ mod tests {
         let state = AgentState::new();
         state.set_workspace(vec![dir.to_string_lossy().to_string()], crate::agent::state::WorkspaceAccessMode::Full).await;
 
-        let prompt = assemble_capability_blocks(&state, None, "", None, true).await;
+        let prompt = assemble_capability_blocks(&state, None, "", None, true, true).await;
 
         assert!(prompt.contains("<vivianne_directive>"));
         assert!(prompt.contains(BASE_DIRECTIVE));
@@ -227,9 +249,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn only_the_primary_agent_is_told_it_is_the_master() {
+        // A subagent spawned inside a project with a charter still gets the
+        // project's instructions — but if it also got the master block it
+        // would believe it was the master, and start planning and editing the
+        // charter like one.
+        let dir = std::env::temp_dir().join(format!("vivianne_master_gate_{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let root = dir.to_string_lossy().to_string();
+        crate::agent::master::cmd_create_master(root.clone(), "Lead".into(), "# P\n## Purpose\nx".into(), None)
+            .await
+            .unwrap();
+        let state = AgentState::new();
+        state.set_workspace(vec![root], crate::agent::state::WorkspaceAccessMode::Full).await;
+
+        let primary = assemble_capability_blocks(&state, None, "", None, true, true).await;
+        let subagent = assemble_capability_blocks(&state, None, "", None, true, false).await;
+
+        assert!(primary.contains("<project_master>"));
+        assert!(primary.contains("You are Lead"));
+        assert!(!subagent.contains("<project_master>"));
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
     async fn includes_mode_block_when_provided() {
         let state = AgentState::new();
-        let prompt = assemble_capability_blocks(&state, Some("# Mode: Ask\nTest mode text."), "", None, true).await;
+        let prompt = assemble_capability_blocks(&state, Some("# Mode: Ask\nTest mode text."), "", None, true, true).await;
 
         assert!(prompt.contains("<vivianne_mode>"));
         assert!(prompt.contains("Test mode text."));
@@ -243,7 +290,7 @@ mod tests {
         let state = AgentState::new();
         state.set_workspace(vec![dir.to_string_lossy().to_string()], crate::agent::state::WorkspaceAccessMode::Full).await;
 
-        let prompt = assemble_capability_blocks(&state, Some("mode text"), "", None, true).await;
+        let prompt = assemble_capability_blocks(&state, Some("mode text"), "", None, true, true).await;
 
         let directive_pos = prompt.find("<vivianne_directive>").unwrap();
         let mode_pos = prompt.find("<vivianne_mode>").unwrap();

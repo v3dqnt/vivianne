@@ -1,10 +1,4 @@
-import Dialog from '@mui/material/Dialog'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import IconButton from '@mui/material/IconButton'
-import Box from '@mui/material/Box'
-import Chip from '@mui/material/Chip'
-import Tooltip from '@mui/material/Tooltip'
+import { Dialog, Stack, Typography, IconButton, Box, Chip, Tooltip } from '../../../ui'
 import { Hierarchy2Linear, RefreshLinear, CloseCircleLinear } from '../../../icons'
 import { useGitStore } from '../store/gitStore'
 
@@ -71,7 +65,7 @@ export function GitGraphModal({ open, onClose, root }: { open: boolean; onClose:
                 <Typography variant="caption" color="text.secondary" noWrap>
                   {c.author}
                 </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ fontFamily: '"JetBrains Mono", ui-monospace, monospace' }}>
+                <Typography variant="caption" color="text.secondary" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
                   {c.hash.slice(0, 7)}
                 </Typography>
               </Box>

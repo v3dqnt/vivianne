@@ -1,17 +1,11 @@
 import { useEffect, useState } from 'react'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import TextField from '@mui/material/TextField'
-import Button from '@mui/material/Button'
-import IconButton from '@mui/material/IconButton'
-import CircularProgress from '@mui/material/CircularProgress'
-import Divider from '@mui/material/Divider'
-import Box from '@mui/material/Box'
-import Chip from '@mui/material/Chip'
-import Tooltip from '@mui/material/Tooltip'
+import { Stack, Typography, TextField, Button, IconButton, CircularProgress, Divider, Box, Chip, Tooltip } from '../../../ui'
 import { Link2Linear, SendLinear, CodeLinear } from '../../../icons'
 import { useMultiplayerStore } from '../store/multiplayerStore'
 import { useProjectsStore } from '../../sessions/store/projectsStore'
+import { call } from '../../../ipc'
+import { MyCode } from './MultiplayerSection'
+import { CollabView } from './CollabView'
 import { Markdown } from '../../ai/components/Markdown'
 import { contentToText } from '../../ai/lib/types'
 
@@ -111,7 +105,7 @@ function ChatAndSnippets() {
               submit()
             }
           }}
-          slotProps={snippetMode ? { input: { sx: { fontFamily: '"JetBrains Mono", ui-monospace, monospace', fontSize: '0.75rem' } } } : undefined}
+          slotProps={snippetMode ? { input: { sx: { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem' } } } : undefined}
         />
         <IconButton onClick={submit} disabled={!text.trim()}>
           <SendLinear size={16} color="currentColor" />
@@ -153,6 +147,53 @@ function ConnectToProjectPeer({ peerId, peerDisplayName }: { peerId: string; pee
   )
 }
 
+/** When this project is paired with the test partner (a second Vivianne
+ * on this computer), a way to open it again — it's a separate window that
+ * may have been closed. */
+function TestPartnerControls({ peerId, name, folder }: { peerId: string; name: string; folder: string }) {
+  const [isTestPartner, setIsTestPartner] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    call<string>('cmd_multiplayer_test_partner_id')
+      .then((id) => setIsTestPartner(id === peerId))
+      .catch(() => setIsTestPartner(false))
+  }, [peerId])
+
+  if (!isTestPartner || !folder) return null
+  return (
+    <Stack sx={{ gap: 0.75, alignItems: 'flex-start' }}>
+      <Typography variant="caption" color="text.secondary">
+        This project is paired with the test partner on this computer. Open it if its window isn’t running, then connect.
+      </Typography>
+      <Button
+        size="small"
+        variant="outlined"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true)
+          setError(null)
+          try {
+            await call('cmd_multiplayer_launch_test_partner', { name, folder })
+          } catch (e) {
+            setError(e instanceof Error ? e.message : String(e))
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        Open the test partner
+      </Button>
+      {error && (
+        <Typography variant="caption" color="error.main">
+          {error}
+        </Typography>
+      )}
+    </Stack>
+  )
+}
+
 export function MultiplayerWorkspacePanel() {
   const projects = useProjectsStore((s) => s.projects)
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
@@ -170,9 +211,9 @@ export function MultiplayerWorkspacePanel() {
     return (
       <Stack sx={{ gap: 1, p: 2 }}>
         <Typography variant="caption" color="text.secondary">
-          {project ? `"${project.name}" isn't a multiplayer project.` : 'No project selected.'} Create a new project with
-          the multiplayer toggle on to share context, chat, and snippets with a pair here — see Settings → Multiplayer
-          for your pairing code.
+          {project ? `"${project.name}" isn't a multiplayer project.` : 'No project selected.'} Multiplayer is set up per
+          project: create a new project with “Multiplayer project” switched on to share context, chat and snippets with a
+          pair. No second device? That dialog can also open a test partner on this computer.
         </Typography>
       </Stack>
     )
@@ -195,18 +236,27 @@ export function MultiplayerWorkspacePanel() {
       </Stack>
 
       {!connectedToRightPeer ? (
-        <ConnectToProjectPeer peerId={project.multiplayer.peer_id} peerDisplayName={project.multiplayer.peer_display_name} />
+        <>
+          <ConnectToProjectPeer peerId={project.multiplayer.peer_id} peerDisplayName={project.multiplayer.peer_display_name} />
+          <TestPartnerControls peerId={project.multiplayer.peer_id} name={project.name} folder={project.path ?? ''} />
+          <Divider />
+          <MyCode />
+          <Divider />
+          <CollabView projectId={project.id} partnerName={project.multiplayer.peer_display_name || 'Partner'} />
+        </>
       ) : (
         <>
           <Divider />
+          <CollabView projectId={project.id} partnerName={project.multiplayer.peer_display_name || 'Partner'} />
+          <Divider />
+          <ChatAndSnippets />
+          <Divider />
           <Stack sx={{ gap: 1 }}>
             <Typography variant="caption" sx={{ fontWeight: 600 }}>
-              Shared context
+              Their agent, live
             </Typography>
             <SharedContext />
           </Stack>
-          <Divider />
-          <ChatAndSnippets />
         </>
       )}
     </Stack>

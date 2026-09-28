@@ -1,12 +1,4 @@
-import Dialog from '@mui/material/Dialog'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import IconButton from '@mui/material/IconButton'
-import ButtonBase from '@mui/material/ButtonBase'
-import Tooltip from '@mui/material/Tooltip'
-import { useTheme } from '@mui/material/styles'
-import { surfaceCard } from '../../../theme'
+import { Dialog, Box, Stack, Typography, IconButton, ButtonBase, Tooltip, useTheme } from '../../../ui'
 import {
   CloseCircleLinear,
   KeyLinear,
@@ -14,7 +6,6 @@ import {
   FlashLinear,
   Link2Linear,
   ArchiveBookLinear,
-  ChartLinear,
   MagicpenLinear,
   ClockLinear,
   ColorSwatchLinear,
@@ -22,6 +13,7 @@ import {
   ArchiveLinear,
   MicrophoneLinear,
   SparkleLinear,
+  GlobalLinear,
 } from '../../../icons'
 import { ProvidersSection } from './ProvidersSection'
 import { LocalModelsSection } from './LocalModelsSection'
@@ -29,15 +21,16 @@ import { ModsSection } from './ModsSection'
 import { SubagentsSection } from './SubagentsSection'
 import { McpSection } from './McpSection'
 import { MemorySection } from './MemorySection'
+import { DiagnosticsSection } from './DiagnosticsSection'
 import { UsageSection } from './UsageSection'
 import { SkillsSection } from './SkillsSection'
 import { AutomationsSection } from './AutomationsSection'
 import { ThemesSection } from './ThemesSection'
-import { VoiceSection } from './VoiceSection'
 import { ComponentsSection } from './ComponentsSection'
 import { UpdatesSection } from './UpdatesSection'
+import { InstantSection } from './InstantSection'
+import { WebSearchSection } from './WebSearchSection'
 import { AccountSection } from '../../account/components/AccountSection'
-import { MultiplayerSection } from '../../multiplayer/components/MultiplayerSection'
 import { useSettingsUi, type SettingsSection } from '../store/uiStore'
 
 interface SectionDef {
@@ -52,8 +45,11 @@ const GROUPS: { label: string; items: SectionDef[] }[] = [
   {
     label: 'Account',
     items: [
-      { id: 'account', label: 'Account', icon: UserOctagonLinear },
-      { id: 'multiplayer', label: 'Multiplayer', icon: Link2Linear },
+      // Usage lives here rather than in its own tab: what it reports — tokens
+      // spent, cost, which days were active — is an account fact, and having
+      // to cross the sidebar to answer "what has this cost me" split one
+      // question across two places.
+      { id: 'account', label: 'Account & usage', icon: UserOctagonLinear },
     ],
   },
   {
@@ -69,17 +65,18 @@ const GROUPS: { label: string; items: SectionDef[] }[] = [
       { id: 'mods', label: 'Mods', icon: FlashLinear },
       { id: 'subagents', label: 'Subagents', icon: UserOctagonLinear },
       { id: 'mcp', label: 'MCP servers', icon: Link2Linear },
+      { id: 'websearch', label: 'Web search', icon: GlobalLinear },
       { id: 'memory', label: 'Memory', icon: ArchiveBookLinear },
       { id: 'skills', label: 'Skills', icon: MagicpenLinear },
       { id: 'automations', label: 'Automations', icon: ClockLinear },
-      { id: 'voice', label: 'Voice', icon: MicrophoneLinear },
+      { id: 'instant', label: 'Viv Instant', icon: MicrophoneLinear },
     ],
   },
   {
     label: 'App',
     items: [
-      { id: 'usage', label: 'Usage', icon: ChartLinear },
-      { id: 'themes', label: 'Theme', icon: ColorSwatchLinear },
+      { id: 'diagnostics', label: 'Diagnostics', icon: FlashLinear },
+      { id: 'themes', label: 'Theme & layout', icon: ColorSwatchLinear },
       { id: 'components', label: 'Components', icon: ArchiveLinear },
       { id: 'updates', label: 'Updates', icon: SparkleLinear },
     ],
@@ -88,7 +85,6 @@ const GROUPS: { label: string; items: SectionDef[] }[] = [
 
 export function SettingsDialog() {
   const theme = useTheme()
-  const SURFACE = surfaceCard(theme.palette.mode)
   const open = useSettingsUi((s) => s.open)
   const section = useSettingsUi((s) => s.section)
   const openSettings = useSettingsUi((s) => s.openSettings)
@@ -102,8 +98,20 @@ export function SettingsDialog() {
       maxWidth="md"
       fullWidth
       slotProps={{
-        paper: { sx: { height: 660, overflow: 'hidden', backgroundImage: 'none', ...SURFACE } },
-        backdrop: { sx: { backdropFilter: 'blur(3px)' } },
+        // Solid, not glass: Settings is read closely, and text over a blurred
+        // window behind it is harder to read than text on a plain surface.
+        paper: {
+          sx: {
+            height: 660,
+            overflow: 'hidden',
+            backgroundImage: 'none',
+            bgcolor: 'background.paper',
+            border: 0,
+            borderColor: 'divider',
+            borderRadius: `${theme.radius['3xl']}px`,
+            boxShadow: `${theme.elevation.ring}, ${theme.elevation.xl}`,
+          },
+        },
       }}
     >
       <Stack direction="row" sx={{ height: '100%', minHeight: 0 }}>
@@ -113,6 +121,7 @@ export function SettingsDialog() {
             flexShrink: 0,
             borderRight: 1,
             borderColor: 'divider',
+            bgcolor: 'background.chrome',
             p: 2,
             pt: 2.5,
             gap: 2.25,
@@ -187,18 +196,31 @@ export function SettingsDialog() {
                 the full width; every other section is a single settings
                 column, which reads better constrained. */}
             <Box sx={section === 'providers' ? { height: '100%' } : { maxWidth: 640 }}>
-              {section === 'account' && <AccountSection />}
-              {section === 'multiplayer' && <MultiplayerSection />}
+              {(section === 'account' || section === 'usage') && (
+                <Stack sx={{ gap: 4 }}>
+                  <AccountSection />
+                  <Box>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.25 }}>
+                      Usage
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
+                      Tokens and cost across every provider, from this machine's local history.
+                    </Typography>
+                    <UsageSection />
+                  </Box>
+                </Stack>
+              )}
               {section === 'providers' && <ProvidersSection />}
               {section === 'local' && <LocalModelsSection />}
               {section === 'mods' && <ModsSection />}
               {section === 'subagents' && <SubagentsSection />}
               {section === 'mcp' && <McpSection />}
               {section === 'memory' && <MemorySection />}
-              {section === 'usage' && <UsageSection />}
+              {section === 'diagnostics' && <DiagnosticsSection />}
               {section === 'skills' && <SkillsSection />}
               {section === 'automations' && <AutomationsSection />}
-              {section === 'voice' && <VoiceSection />}
+              {section === 'instant' && <InstantSection />}
+              {section === 'websearch' && <WebSearchSection />}
               {section === 'themes' && <ThemesSection />}
               {section === 'components' && <ComponentsSection />}
               {section === 'updates' && <UpdatesSection />}

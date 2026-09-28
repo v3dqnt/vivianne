@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
+use tokio::io::AsyncBufReadExt;
 use tokio::process::Child;
 
 /// Which local inference server backend an endpoint runs. Both speak GGUF
@@ -53,7 +54,63 @@ pub struct LlamaProcessConfig {
     pub auto_start: bool,
     #[serde(default)]
     pub engine: LocalEngine,
+    /// Performance tuning. Every field is optional and defaults to "let the
+    /// engine decide", so an endpoint saved before these existed behaves
+    /// exactly as it did.
+    #[serde(default)]
+    pub tuning: LlamaTuning,
 }
+
+/// Optional llama.cpp performance knobs.
+///
+/// Measured on this machine (RTX 4060 Laptop, Qwen2.5-Coder-7B Q4_K_M, Vulkan
+/// build 10068, llama-bench pp512/tg64) to decide which of these are worth
+/// exposing at all:
+///
+///   auto device      pp 1954 t/s   tg 48.9 t/s
+///   pinned Vulkan1   pp 1952 t/s   tg 48.0 t/s   (the discrete GPU)
+///   pinned Vulkan0   pp   80 t/s   tg  7.7 t/s   (the Intel iGPU)
+///   Vulkan1 + q8_0 KV pp 1952 t/s  tg 48.0 t/s
+///
+/// Two conclusions drove what is here. Auto device selection already picks the
+/// right GPU, so `device` is an escape hatch rather than a fix — but the 24x
+/// spread between the two devices is why an escape hatch has to exist at all.
+/// And q8_0 KV cache costs nothing measurable in throughput while halving KV
+/// memory, which on an 8GB card is what decides how much context actually
+/// fits.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlamaTuning {
+    /// `-t`. None lets llama.cpp choose; it defaults to a count derived from
+    /// the whole CPU, which over-subscribes on hybrid P+E-core machines.
+    #[serde(default)]
+    pub threads: Option<u32>,
+    /// `--device`, e.g. "Vulkan1". None keeps auto-selection.
+    #[serde(default)]
+    pub device: Option<String>,
+    /// `-ctk`/`-ctv`, e.g. "q8_0". None keeps f16.
+    #[serde(default)]
+    pub kv_cache_type: Option<String>,
+    /// `--mlock`. Keeps weights resident instead of letting the OS page them
+    /// out; can fail without the privilege, so it stays opt-in.
+    #[serde(default)]
+    pub mlock: bool,
+    /// `--cache-reuse`. Server default is 0 (off). Lets the server salvage
+    /// chunks of the KV cache when the prompt diverges mid-way and then
+    /// re-converges — which is what a compaction pass does to an agent's
+    /// conversation.
+    #[serde(default)]
+    pub cache_reuse: Option<u32>,
+    /// Raw extra flags, split on whitespace. The escape hatch: llama.cpp gains
+    /// flags faster than this struct can track them, and without this the only
+    /// way to pass one was to not use the app.
+    #[serde(default)]
+    pub extra_args: Option<String>,
+}
+
+/// How many trailing stderr lines to keep per instance. llama.cpp is chatty at
+/// load time; the last few lines are where the actual failure appears.
+const STDERR_TAIL_LINES: usize = 40;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -150,6 +207,34 @@ impl LlamaManager {
                     // the model is left unable to actually use anything.
                     "--jinja",
                 ]);
+
+                let t = &config.tuning;
+                if let Some(dev) = t.device.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+                    cmd.args(["--device", dev]);
+                }
+                if let Some(threads) = t.threads.filter(|n| *n > 0) {
+                    cmd.args(["-t", &threads.to_string()]);
+                }
+                if let Some(kv) = t.kv_cache_type.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
+                    // Quantising V requires Flash Attention, which this build
+                    // already defaults to `auto`; asking for it explicitly
+                    // means a build where auto declines still gets a working
+                    // K/V pair rather than failing to start.
+                    cmd.args(["-fa", "on", "-ctk", kv, "-ctv", kv]);
+                }
+                if t.mlock {
+                    cmd.arg("--mlock");
+                }
+                if let Some(reuse) = t.cache_reuse.filter(|n| *n > 0) {
+                    cmd.args(["--cache-reuse", &reuse.to_string()]);
+                }
+                if let Some(extra) = t.extra_args.as_deref() {
+                    // Whitespace split, not a shell parse: these go straight to
+                    // `Command::args`, so nothing is interpreted by a shell and
+                    // a quoted value with spaces is not supported (nor needed
+                    // by any llama.cpp flag).
+                    cmd.args(extra.split_whitespace());
+                }
             }
             LocalEngine::MistralRs => {
                 cmd.args([
@@ -169,8 +254,12 @@ impl LlamaManager {
             }
         }
 
+        // stderr was piped to null, so a model that failed to load, a flag the
+        // build rejected, or an out-of-VRAM abort all surfaced as the same
+        // generic "didn't become ready within 30s". Capture it instead and put
+        // the tail in the crash status.
         cmd.stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::null());
 
         #[cfg(windows)]
@@ -191,6 +280,27 @@ impl LlamaManager {
             }
         };
 
+        // Drain stderr into a bounded tail. This is not optional bookkeeping:
+        // with `Stdio::piped()` and nothing reading it, the pipe buffer fills
+        // and llama-server blocks forever inside its own logging.
+        let mut child = child;
+        let stderr_tail: Arc<Mutex<std::collections::VecDeque<String>>> =
+            Arc::new(Mutex::new(std::collections::VecDeque::with_capacity(STDERR_TAIL_LINES)));
+        if let Some(pipe) = child.stderr.take() {
+            let tail = stderr_tail.clone();
+            tokio::spawn(async move {
+                let mut lines = tokio::io::BufReader::new(pipe).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if let Ok(mut buf) = tail.lock() {
+                        if buf.len() == STDERR_TAIL_LINES {
+                            buf.pop_front();
+                        }
+                        buf.push_back(line);
+                    }
+                }
+            });
+        }
+
         // Create a stop flag for this instance and store child + flag
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_flag_clone = stop_flag.clone();
@@ -208,6 +318,7 @@ impl LlamaManager {
         let id_clone = id.to_string();
         let port = config.port;
         let engine = config.engine;
+        let stderr_tail_for_monitor = stderr_tail.clone();
         tokio::spawn(async move {
             let health_url = match engine {
                 LocalEngine::LlamaCpp => format!("http://127.0.0.1:{port}/v1/models"),
@@ -242,9 +353,19 @@ impl LlamaManager {
                     if ready {
                         inst.status = LlamaStatus::Running;
                     } else if inst.status == LlamaStatus::Starting {
+                        // The generic timeout said nothing about WHY. The
+                        // real reason — a bad GGUF, a flag this build rejects,
+                        // out of VRAM — is always in llama.cpp's own output.
+                        let detail = stderr_tail_for_monitor
+                            .lock()
+                            .ok()
+                            .map(|b| b.iter().cloned().collect::<Vec<_>>().join("\n"))
+                            .filter(|t| !t.trim().is_empty())
+                            .map(|t| format!("\n\nLast output from {binary}:\n{t}"))
+                            .unwrap_or_default();
                         inst.status = LlamaStatus::Crashed(format!(
                             "{binary} started but didn't become ready within 30s — \
-                             check that the model file is valid and {binary} can load it."
+                             check that the model file is valid and {binary} can load it.{detail}"
                         ));
                     }
                 }
@@ -461,6 +582,9 @@ pub async fn cmd_llama_register(
     // confirmed-working way to keep old frontend calls (pre-dating this
     // field) from breaking on a missing `engine` key in the invoke payload.
     engine: Option<LocalEngine>,
+    // Same Option-not-serde-default reasoning as `engine` above: endpoints
+    // saved before tuning existed simply omit the key.
+    tuning: Option<LlamaTuning>,
     manager: tauri::State<'_, Arc<LlamaManager>>,
 ) -> Result<(), String> {
     let config = LlamaProcessConfig {
@@ -472,6 +596,7 @@ pub async fn cmd_llama_register(
         ctx_size,
         auto_start,
         engine: engine.unwrap_or_default(),
+        tuning: tuning.unwrap_or_default(),
     };
     manager.register(config);
     Ok(())

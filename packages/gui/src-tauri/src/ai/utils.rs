@@ -113,8 +113,8 @@ pub fn repair_json(json: &str) -> String {
             }
             let next_char = chars[index + 1];
 
-            if next_char == 'u' {
-                if index + 5 < chars.len() {
+            if next_char == 'u'
+                && index + 5 < chars.len() {
                     let unicode_digits: String = chars[index + 2..=index + 5].iter().collect();
                     if unicode_digits.chars().all(|c| c.is_ascii_hexdigit()) {
                         repaired.push_str(&format!("\\u{}", unicode_digits));
@@ -122,7 +122,6 @@ pub fn repair_json(json: &str) -> String {
                         continue;
                     }
                 }
-            }
 
             let valid_escapes = ['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'];
             if valid_escapes.contains(&next_char) {

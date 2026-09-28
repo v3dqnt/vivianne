@@ -32,6 +32,28 @@ export type LlamaStatus = 'starting' | 'running' | 'stopped' | { crashed: string
  * never needs to know which one it's talking to. */
 export type LocalEngine = 'llamaCpp' | 'mistralRs'
 
+/** Optional llama.cpp performance flags. Mirrors
+ * `agent::llama_manager::LlamaTuning`; every field omitted means "let the
+ * engine decide", which is what every endpoint saved before this existed
+ * does. */
+export interface LlamaTuning {
+  /** `-t`. llama.cpp's own default is derived from the whole CPU, which
+   * over-subscribes on hybrid P+E-core machines. */
+  threads?: number | null
+  /** `--device`, e.g. "Vulkan1". Auto-selection is usually right; this is the
+   * escape hatch for when it is not. */
+  device?: string | null
+  /** `-ctk`/`-ctv`. "q8_0" halves KV cache memory at no measured throughput
+   * cost, which is what decides how much context fits on a small card. */
+  kvCacheType?: string | null
+  /** `--mlock`. Opt-in: it can fail without the OS privilege. */
+  mlock?: boolean
+  /** `--cache-reuse`. Off in llama.cpp by default. */
+  cacheReuse?: number | null
+  /** Raw extra flags, whitespace-separated. */
+  extraArgs?: string | null
+}
+
 export interface LlamaEndpoint {
   id: string
   name: string
@@ -41,6 +63,7 @@ export interface LlamaEndpoint {
   ctxSize: number
   autoStart: boolean
   engine: LocalEngine
+  tuning?: LlamaTuning
   status: LlamaStatus
 }
 

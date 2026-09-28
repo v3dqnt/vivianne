@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import Box from '@mui/material/Box'
-import Typography from '@mui/material/Typography'
-import { useTheme, alpha } from '@mui/material/styles'
+import { Box, Typography, useTheme, alpha } from '../../../ui'
 import { Terminal, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -112,7 +110,7 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
       cursorBlink: true,
       cursorStyle: 'bar',
       fontSize: 12.5,
-      fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+      fontFamily: '"Geist Mono", ui-monospace, monospace',
       lineHeight: 1.5,
       letterSpacing: 0.1,
       theme: terminalTheme(theme.palette.mode, theme.palette.text.primary, theme.palette.primary.main),
@@ -250,7 +248,20 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
           {status}
         </Typography>
       )}
-      <Box ref={containerRef} sx={{ width: '100%', height: '100%', minHeight: 0, background: 'transparent' }} />
+      <Box
+        ref={containerRef}
+        sx={{
+          width: '100%',
+          height: '100%',
+          minHeight: 0,
+          background: 'transparent',
+          // xterm's own stylesheet paints its scroll container solid black,
+          // whatever the theme's background says. Overridden so the terminal
+          // sits on its panel's glass surface like every other panel does,
+          // rather than as a black slab inside it.
+          '& .xterm-scrollable-element, & .xterm-viewport': { backgroundColor: 'transparent !important' },
+        }}
+      />
     </Box>
   )
 }

@@ -1,9 +1,5 @@
 import { useEffect } from 'react'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import Button from '@mui/material/Button'
-import LinearProgress from '@mui/material/LinearProgress'
-import Divider from '@mui/material/Divider'
+import { Stack, Typography, Button, LinearProgress, Divider } from '../../../ui'
 import { TickCircleLinear, ImportLinear } from '../../../icons'
 import { useOptionalComponentsStore } from '../store/optionalComponentsStore'
 

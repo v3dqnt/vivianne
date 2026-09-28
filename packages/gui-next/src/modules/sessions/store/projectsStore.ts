@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { call } from '../../../ipc'
 import { useWorkspaceStore } from '../../ai/store/workspaceStore'
+import { useDaysStore, GENERAL_SCOPE } from './daysStore'
 
 // snake_case fields, matching `Project`'s own wire shape (`created_at`) —
 // neither struct uses `rename_all = "camelCase"` on the Rust side.
@@ -81,6 +82,18 @@ interface ProjectsStoreState {
   openExternal: (target: 'explorer' | 'terminal') => Promise<void>
 }
 
+/** Open today's conversation for the active project, if it isn't already.
+ *
+ * Guarded on scope rather than always calling through, because `refresh()`
+ * runs after every rename and assignment, and re-opening would re-fetch the
+ * live transcript each time for nothing. */
+function openActiveDay(activeProjectId: string | null) {
+  if (!activeProjectId) return
+  const scope = activeProjectId === GENERAL_PROJECT_ID ? GENERAL_SCOPE : activeProjectId
+  if (useDaysStore.getState().scope === scope) return
+  void useDaysStore.getState().openScope(scope)
+}
+
 /** The project whose folder the workspace was last synced to. Guards against
  * re-applying on every `refresh()` (which runs after any assign/rename), so
  * folders the user added on top of the project's own are only discarded when
@@ -130,6 +143,7 @@ export const useProjectsStore = create<ProjectsStoreState>((set, get) => ({
       // Covers app start, where the first project resolves here rather than
       // through an explicit click.
       syncWorkspaceToProject(list.find((p) => p.id === get().activeProjectId))
+      openActiveDay(get().activeProjectId)
     } finally {
       set({ loading: false })
     }
@@ -183,9 +197,14 @@ export const useProjectsStore = create<ProjectsStoreState>((set, get) => ({
 
   setActiveProject: (id) => {
     set({ activeProjectId: id })
-    // General has no folder of its own to point the workspace at — leave it
-    // exactly as it was rather than forcing a change.
-    if (id !== GENERAL_PROJECT_ID) syncWorkspaceToProject(get().projects.find((p) => p.id === id))
+    // General's workspace (the whole computer) is applied when its thread
+    // opens. Forget the last synced project, so coming back to it re-points
+    // the workspace at its folder instead of staying on the whole computer.
+    if (id === GENERAL_PROJECT_ID) lastSyncedProjectId = GENERAL_PROJECT_ID
+    else syncWorkspaceToProject(get().projects.find((p) => p.id === id))
+    // Each project has exactly one live conversation — today's. Switching
+    // projects switches to it.
+    openActiveDay(id)
   },
 
   openExternal: async (target) => {

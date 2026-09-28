@@ -1,4 +1,4 @@
-import Box from '@mui/material/Box'
+import { Box } from '../../../ui'
 import type { MessageContent } from '../lib/types'
 
 /** Renders one `image` content block. Click opens the full-res image in a new tab — no in-app lightbox, ponytail-simple. */

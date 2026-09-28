@@ -50,7 +50,7 @@ fn parse_repo_reference(input: &str) -> Result<(String, String), String> {
 }
 
 fn cache_root() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".vivianne").join("repo-cache")
+    crate::agent::paths::viv_home_path(&["repo-cache"])
 }
 
 fn cache_path_for(label: &str) -> PathBuf {
@@ -89,6 +89,12 @@ async fn run_git(args: &[&str], cwd: &Path) -> Result<String, String> {
 // ── repo_clone ───────────────────────────────────────────────────────────────
 
 pub struct RepoCloneTool;
+impl Default for RepoCloneTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RepoCloneTool { pub fn new() -> Self { Self } }
 
 #[async_trait]

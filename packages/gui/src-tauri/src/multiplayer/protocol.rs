@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 /// Bumped if the frame shape ever changes incompatibly — sent in `Hello` so
 /// two mismatched app versions fail with a clear reason instead of a
 /// confusing deserialize error deep in the stream.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
-pub const ALPN: &[u8] = b"vivianne/multiplayer/1";
+pub const ALPN: &[u8] = b"vivianne/multiplayer/2";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -26,6 +26,14 @@ pub enum WireMessage {
     /// Human chat, kept on the same connection rather than a second one —
     /// there's only ever one peer, no reason to multiplex differently.
     Chat { text: String },
+    /// What one of this side's runs did, summarised (see `collab`).
+    Activity { entry: Box<super::collab::ActivityEntry> },
+    /// This side's daily usage totals on the shared project.
+    Usage { days: std::collections::BTreeMap<String, crate::agent::usage_store::DayUsage> },
+    /// Commits the partner lacks, as a base64 git bundle (no shared remote).
+    GitBundle { base: Option<String>, head: String, data: String },
+    /// This side's current HEAD, so the partner bundles only what's new.
+    GitHead { head: String },
 }
 
 /// Real frames (chat, a turn's messages, even a base64 screenshot) are

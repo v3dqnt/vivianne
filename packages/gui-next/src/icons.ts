@@ -1,162 +1,110 @@
-import type { ComponentType, SVGProps } from 'react'
+import type { SVGProps } from 'react'
 import { createElement } from 'react'
-import {
-  PlusCircleIcon,
-  PlusIcon,
-  BookOpenIcon,
-  ArchiveBoxIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-  FolderOpenIcon,
-  ArrowLeftIcon,
-  ArrowRightIcon,
-  ArrowUpIcon,
-  CheckIcon,
-  ClipboardDocumentListIcon,
-  ClockIcon,
-  XCircleIcon,
-  XMarkIcon,
-  CodeBracketIcon,
-  CommandLineIcon,
-  DocumentDuplicateIcon,
-  ClipboardDocumentCheckIcon,
-  CpuChipIcon,
-  ExclamationTriangleIcon,
-  DocumentIcon,
-  DocumentTextIcon,
-  DocumentArrowUpIcon,
-  PencilIcon,
-  ArrowUpTrayIcon,
-  BoltIcon,
-  ChartBarIcon,
-  SwatchIcon,
-  FolderPlusIcon,
-  FolderIcon,
-  CodeBracketSquareIcon,
-  GlobeAltIcon,
-  Squares2X2Icon,
-  ArrowDownTrayIcon,
-  KeyIcon,
-  Square3Stack3DIcon,
-  LinkIcon,
-  LockClosedIcon,
-  SparklesIcon,
-  PencilSquareIcon,
-  QuestionMarkCircleIcon,
-  ChatBubbleLeftIcon,
-  ComputerDesktopIcon,
-  PaperClipIcon,
-  MicrophoneIcon,
-  PlayCircleIcon,
-  PlayIcon,
-  ArrowPathIcon,
-  MagnifyingGlassIcon,
-  PaperAirplaneIcon,
-  Cog6ToothIcon,
-  ShieldCheckIcon,
-  StopCircleIcon,
-  StopIcon,
-  QueueListIcon,
-  CheckCircleIcon,
-  TrashIcon,
-  ArrowUturnLeftIcon,
-  LockOpenIcon,
-  UserCircleIcon,
-} from '@heroicons/react/20/solid'
+import { HugeiconsIcon, type IconSvgElement } from '@hugeicons/react'
+// The glyphs, vendored by scripts/gen-icons.mjs (see there for why).
+import * as G from './iconGlyphs'
 
 /**
- * Every icon this app uses, backed by Heroicons instead of mx-icons — one
- * file so a call site's `import { SettingsLinear } from '../../../icons'`
- * looks identical to the old `from '../../../icons'` (same names, same {size,
- * color} props), and the ~60-name mapping to real Heroicons exports lives
- * in exactly one place instead of being re-guessed per file.
+ * Every icon this app uses, from Hugeicons (Terax's icon set) — one file so
+ * call sites keep importing stable names (`SettingsLinear`, `CloseLinear`)
+ * with the same `{ size, color }` props, and the name-to-glyph mapping lives
+ * in exactly one place.
  *
- * Heroicons components don't take `size`/`color` — they take standard SVG
- * props. This wrapper adapts the old mx-icons call signature onto that,
- * so none of the ~40 call-site files needed to change beyond their import
- * path. `color` relies on the same `currentColor` CSS-inheritance behavior
- * every call site was already passing explicitly.
+ * Terax draws icons at a 1.75 stroke by default (2 for small emphasised
+ * glyphs, 1.5 for large ones), muted at rest and ink on hover — the colour
+ * comes from `currentColor`, as every call site already passes.
  */
-interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'color'> {
+interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'color' | 'ref'> {
   size?: number
   color?: string
+  strokeWidth?: number
 }
 
-function icon(Icon: ComponentType<SVGProps<SVGSVGElement>>) {
-  return function WrappedIcon({ size = 20, color, style, ...rest }: IconProps) {
-    return createElement(Icon, { width: size, height: size, style: color ? { ...style, color } : style, ...rest })
+function icon(glyph: IconSvgElement) {
+  return function WrappedIcon({ size = 20, color = 'currentColor', strokeWidth, ...rest }: IconProps) {
+    // Thin strokes vanish at small sizes and shout at large ones.
+    const stroke = strokeWidth ?? (size <= 12 ? 2 : size >= 20 ? 1.5 : 1.75)
+    return createElement(HugeiconsIcon, { icon: glyph, size, color, strokeWidth: stroke, ...(rest as object) })
   }
 }
 
-export const AddCircleLinear = icon(PlusCircleIcon)
-export const AddLinear = icon(PlusIcon)
-export const ArchiveBookLinear = icon(BookOpenIcon)
-export const ArchiveLinear = icon(ArchiveBoxIcon)
-export const ArrowDownLinear = icon(ChevronDownIcon)
-/** Tree disclosure chevron. Distinct from `ArrowRightLinear`, which is a
- * literal → arrow — pairing that with a chevron-down for the open state made
- * the two states look like unrelated controls. */
-export const ChevronRightLinear = icon(ChevronRightIcon)
-export const FolderOpenLinear = icon(FolderOpenIcon)
-export const ArrowLeftLinear = icon(ArrowLeftIcon)
-export const ArrowRightLinear = icon(ArrowRightIcon)
-export const ArrowUpLinear = icon(ArrowUpIcon)
-export const BookLinear = icon(BookOpenIcon)
-export const ChartLinear = icon(ChartBarIcon)
-export const CheckLinear = icon(CheckIcon)
-export const ColorSwatchLinear = icon(SwatchIcon)
-export const ClipboardTextLinear = icon(ClipboardDocumentListIcon)
-export const ClockLinear = icon(ClockIcon)
-export const CloseCircleLinear = icon(XCircleIcon)
-/** Plain ✕ with no surrounding circle. At the 10-14px sizes tab and panel
- * close buttons use, XCircleIcon collapses into an unreadable dot. */
-export const CloseLinear = icon(XMarkIcon)
-export const CodeLinear = icon(CodeBracketIcon)
-export const CommandLinear = icon(CommandLineIcon)
-export const CommandSquareLinear = icon(CommandLineIcon)
-export const CopyLinear = icon(DocumentDuplicateIcon)
-export const CopySuccessLinear = icon(ClipboardDocumentCheckIcon)
-export const CpuLinear = icon(CpuChipIcon)
-export const DangerLinear = icon(ExclamationTriangleIcon)
-export const DocumentLinear = icon(DocumentIcon)
-export const DocumentTextLinear = icon(DocumentTextIcon)
-export const DocumentUploadLinear = icon(DocumentArrowUpIcon)
-export const EditLinear = icon(PencilIcon)
-export const ExportLinear = icon(ArrowUpTrayIcon)
-export const FlashLinear = icon(BoltIcon)
-export const FolderAddLinear = icon(FolderPlusIcon)
-export const FolderLinear = icon(FolderIcon)
-// Heroicons deliberately ships no brand marks — closest generic stand-in.
-export const GithubLinear = icon(CodeBracketSquareIcon)
-export const GlobalLinear = icon(GlobeAltIcon)
-export const Hierarchy2Linear = icon(Squares2X2Icon)
-export const ImportLinear = icon(ArrowDownTrayIcon)
-export const KeyLinear = icon(KeyIcon)
-export const LayerLinear = icon(Square3Stack3DIcon)
-export const Link2Linear = icon(LinkIcon)
-export const LockLinear = icon(LockClosedIcon)
-export const MagicpenLinear = icon(SparklesIcon)
-export const MessageAddLinear = icon(PencilSquareIcon)
-export const MessageQuestionLinear = icon(QuestionMarkCircleIcon)
-export const MessageSquareLinear = icon(ChatBubbleLeftIcon)
-export const MonitorLinear = icon(ComputerDesktopIcon)
-export const PaperclipLinear = icon(PaperClipIcon)
-export const PlayCircleLinear = icon(PlayCircleIcon)
-export const PlayLinear = icon(PlayIcon)
-export const RefreshLinear = icon(ArrowPathIcon)
-export const SearchNormalLinear = icon(MagnifyingGlassIcon)
-export const SendLinear = icon(PaperAirplaneIcon)
-export const Setting2Linear = icon(Cog6ToothIcon)
-export const SettingLinear = icon(Cog6ToothIcon)
-export const SettingsLinear = icon(Cog6ToothIcon)
-export const ShieldTickLinear = icon(ShieldCheckIcon)
-export const SparkleLinear = icon(SparklesIcon)
-export const StopCircleLinear = icon(StopCircleIcon)
-export const StopLinear = icon(StopIcon)
-export const TaskLinear = icon(QueueListIcon)
-export const TickCircleLinear = icon(CheckCircleIcon)
-export const TrashLinear = icon(TrashIcon)
-export const UndoLinear = icon(ArrowUturnLeftIcon)
-export const UnlockLinear = icon(LockOpenIcon)
-export const UserOctagonLinear = icon(UserCircleIcon)
-export const MicrophoneLinear = icon(MicrophoneIcon)
+export const AddCircleLinear = icon(G.AddCircleIcon)
+export const AddLinear = icon(G.Add01Icon)
+export const ArchiveBookLinear = icon(G.BookOpen01Icon)
+export const ArchiveLinear = icon(G.Archive01Icon)
+export const ArrowDownLinear = icon(G.ArrowDown01Icon)
+export const ChevronRightLinear = icon(G.ArrowRight01Icon)
+export const FolderOpenLinear = icon(G.FolderOpenIcon)
+export const ArrowLeftLinear = icon(G.ArrowLeft02Icon)
+export const ArrowRightLinear = icon(G.ArrowRight02Icon)
+export const ArrowUpLinear = icon(G.ArrowUp02Icon)
+export const BookLinear = icon(G.Book02Icon)
+export const ChartLinear = icon(G.ChartColumnIcon)
+export const CheckLinear = icon(G.Tick02Icon)
+export const ColorSwatchLinear = icon(G.PaintBoardIcon)
+export const ClipboardTextLinear = icon(G.TaskDaily01Icon)
+export const ClockLinear = icon(G.Clock01Icon)
+export const CloseCircleLinear = icon(G.CancelCircleIcon)
+export const CloseLinear = icon(G.Cancel01Icon)
+export const CodeLinear = icon(G.SourceCodeIcon)
+export const CommandLinear = icon(G.CommandLineIcon)
+export const CommandSquareLinear = icon(G.ComputerTerminal01Icon)
+export const CopyLinear = icon(G.Copy01Icon)
+export const CopySuccessLinear = icon(G.CopyCheckIcon)
+export const CpuLinear = icon(G.CpuIcon)
+export const DangerLinear = icon(G.Alert02Icon)
+export const DocumentLinear = icon(G.File01Icon)
+export const DocumentTextLinear = icon(G.FileEditIcon)
+export const DocumentUploadLinear = icon(G.FileUploadIcon)
+export const EditLinear = icon(G.PencilEdit02Icon)
+export const ExportLinear = icon(G.Upload04Icon)
+export const FlashLinear = icon(G.FlashIcon)
+export const FolderAddLinear = icon(G.FolderAddIcon)
+export const FolderLinear = icon(G.Folder01Icon)
+// Hugeicons' free set includes the GitHub mark.
+export const GithubLinear = icon(G.GithubIcon)
+export const GlobalLinear = icon(G.Globe02Icon)
+export const Hierarchy2Linear = icon(G.GitBranchIcon)
+export const ImportLinear = icon(G.Download04Icon)
+export const KeyLinear = icon(G.Key01Icon)
+export const LayerLinear = icon(G.Layers01Icon)
+export const Link2Linear = icon(G.Link01Icon)
+export const LockLinear = icon(G.LockIcon)
+export const MagicpenLinear = icon(G.MagicWand01Icon)
+export const MessageAddLinear = icon(G.MessageAdd01Icon)
+export const MessageQuestionLinear = icon(G.HelpCircleIcon)
+export const MessageSquareLinear = icon(G.Message01Icon)
+export const MonitorLinear = icon(G.ComputerIcon)
+export const PaperclipLinear = icon(G.Attachment01Icon)
+export const PlayCircleLinear = icon(G.PlayCircleIcon)
+export const PlayLinear = icon(G.PlayIcon)
+export const RefreshLinear = icon(G.RefreshIcon)
+export const SearchNormalLinear = icon(G.Search01Icon)
+/** Send: an up arrow, like Terax's composer. */
+export const SendLinear = icon(G.ArrowUp02Icon)
+export const Setting2Linear = icon(G.Settings02Icon)
+export const SettingLinear = icon(G.Settings02Icon)
+export const SettingsLinear = icon(G.Settings01Icon)
+export const ShieldTickLinear = icon(G.SecurityCheckIcon)
+export const SparkleLinear = icon(G.SparklesIcon)
+export const StopCircleLinear = icon(G.StopCircleIcon)
+export const StopLinear = icon(G.StopIcon)
+export const TaskLinear = icon(G.TaskDone01Icon)
+export const TickCircleLinear = icon(G.CheckmarkCircle02Icon)
+export const TrashLinear = icon(G.Delete02Icon)
+export const UndoLinear = icon(G.Undo02Icon)
+export const RedoLinear = icon(G.Redo02Icon)
+export const MaximizeLinear = icon(G.Maximize01Icon)
+export const MinimizeLinear = icon(G.Minimize01Icon)
+/** Context window — a stack of data filling up. */
+export const ContextLinear = icon(G.DatabaseIcon)
+/** The Panels menu: which panels are open. */
+export const PanelsLinear = icon(G.LayoutTwoColumnIcon)
+/** The Layout menu: starting arrangements. Not the branch icon — one
+ * glyph meaning two things is worse than none. */
+export const LayoutLinear = icon(G.DashboardSquare01Icon)
+export const AgentsLinear = icon(G.UserGroupIcon)
+export const UserPlusLinear = icon(G.UserAdd01Icon)
+export const UnlockLinear = icon(G.SquareUnlock02Icon)
+export const UserOctagonLinear = icon(G.UserCircleIcon)
+export const MicrophoneLinear = icon(G.Mic01Icon)

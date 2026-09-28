@@ -4,8 +4,9 @@
 //! No CRDT merge yet, no chat-driven agent coordination yet; both are later
 //! phases in the plan doc, built on top of this connection.
 
+pub mod collab;
 pub mod commands;
-mod identity;
+pub(crate) mod identity;
 mod protocol;
 mod state;
 

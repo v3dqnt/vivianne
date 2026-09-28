@@ -1,6 +1,5 @@
 import { useEffect } from 'react'
-import ButtonBase from '@mui/material/ButtonBase'
-import Typography from '@mui/material/Typography'
+import { ButtonBase, Typography } from '../../../ui'
 // NOTE: import only icons that mx-icons actually exports at runtime — its
 // bundled `.d.ts` declares many names its `dist/index.js` does not ship, so
 // `tsc` will happily pass on a name that then fails the bundler.
@@ -25,9 +24,9 @@ export function PermissionModePill() {
         display: 'flex',
         alignItems: 'center',
         gap: 0.75,
-        px: 1.25,
-        py: 0.5,
-        borderRadius: 999,
+        px: 1,
+        py: 0.375,
+        borderRadius: '8px',
         border: 1,
         borderColor: bypassMode ? 'transparent' : 'divider',
         bgcolor: bypassMode ? 'rgba(255,255,255,0.05)' : 'transparent',
@@ -35,7 +34,7 @@ export function PermissionModePill() {
       }}
     >
       {bypassMode ? <ShieldTickLinear size={13} color="currentColor" /> : <MessageQuestionLinear size={13} color="currentColor" />}
-      <Typography variant="caption" sx={{ fontWeight: 500 }}>
+      <Typography className="cq-label" variant="caption" sx={{ fontWeight: 500 }}>
         {bypassMode ? 'Auto' : 'Ask for approval'}
       </Typography>
     </ButtonBase>

@@ -408,6 +408,26 @@ pub async fn stream_chat_completions(
         reqwest::header::CONTENT_TYPE,
         reqwest::header::HeaderValue::from_static("application/json"),
     );
+    // OpenRouter identifies the CALLING APPLICATION by these two headers —
+    // they're how a request gets attributed to an app in its `/apps`
+    // directory and its per-app analytics/rankings. Without them, OpenRouter
+    // sees an anonymous API call with no known app behind it.
+    //
+    // That's exactly what breaks a model gated as "only available on agentic
+    // harnesses" (e.g. thinkingmachines/inkling:free): OpenRouter's gate for
+    // that restriction checks whether the request carries a recognized app
+    // identity, not just whether `tools` is present in the body. Sending
+    // these unconditionally is harmless for every other provider and every
+    // other model — a base_url that isn't OpenRouter's API simply ignores
+    // unknown headers — so there's no need to gate this on `provider`.
+    header_map.insert(
+        reqwest::header::HeaderName::from_static("http-referer"),
+        reqwest::header::HeaderValue::from_static("https://vivianne.app"),
+    );
+    header_map.insert(
+        reqwest::header::HeaderName::from_static("x-title"),
+        reqwest::header::HeaderValue::from_static("Vivianne"),
+    );
     if let Some(ref custom) = options.headers {
         for (k, v) in custom {
             if let (Ok(name), Ok(val)) = (
@@ -704,7 +724,7 @@ fn process_chunk(
                     let partial = state
                         .tool_partial_args
                         .entry(idx)
-                        .or_insert_with(String::new);
+                        .or_default();
                     partial.push_str(args);
 
                     // Try to parse partial JSON

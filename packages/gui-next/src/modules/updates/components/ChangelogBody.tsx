@@ -1,6 +1,4 @@
-import Stack from '@mui/material/Stack'
-import Box from '@mui/material/Box'
-import Typography from '@mui/material/Typography'
+import { Stack, Box, Typography } from '../../../ui'
 import type { ChangelogEntry } from '../store/updateStore'
 
 /** Muted per-section accent. The changelog's own vocabulary is Added /

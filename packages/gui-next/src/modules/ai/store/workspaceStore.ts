@@ -13,6 +13,8 @@ interface WorkspaceStoreState {
   accessMode: WorkspaceAccessMode
   /** Git branch of the primary (first) folder, or null if it isn't a repo. */
   branch: string | null
+  /** The workspace is the whole computer (General): home plus every drive. */
+  wholeComputer: boolean
   loading: boolean
   refresh: () => Promise<void>
   setWorkspace: (folders: string[], accessMode: WorkspaceAccessMode) => Promise<void>
@@ -20,6 +22,8 @@ interface WorkspaceStoreState {
   createFolder: (name: string) => Promise<void>
   removeFolder: (path: string) => Promise<void>
   toggleAccessMode: () => Promise<void>
+  /** Point the agent at the whole computer — General's workspace. */
+  applyWholeComputer: () => Promise<void>
 }
 
 async function refreshBranch(primaryFolder: string | undefined, set: (partial: Partial<WorkspaceStoreState>) => void) {
@@ -35,6 +39,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
   folders: [],
   accessMode: 'full',
   branch: null,
+  wholeComputer: false,
   loading: false,
 
   refresh: async () => {
@@ -47,7 +52,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
     set({ loading: true })
     try {
       await call('cmd_agent_set_workspace', { folders, accessMode })
-      set({ folders, accessMode })
+      set({ folders, accessMode, wholeComputer: false })
       void refreshBranch(folders[0], set)
     } finally {
       set({ loading: false })
@@ -84,7 +89,21 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
   },
 
   toggleAccessMode: async () => {
-    const { folders, accessMode } = get()
+    const { folders, accessMode, wholeComputer } = get()
     await get().setWorkspace(folders, accessMode === 'full' ? 'readOnly' : 'full')
+    if (wholeComputer) set({ wholeComputer: true })
+  },
+
+  applyWholeComputer: async () => {
+    const roots = await call<string[]>('cmd_system_roots')
+    if (!roots?.length) return
+    // Compare against what the backend holds now, not this store's copy:
+    // loading a thread just replaced the backend's workspace behind our back.
+    await get().refresh()
+    const { folders, accessMode } = get()
+    if (folders.length !== roots.length || folders.some((f, i) => f !== roots[i])) {
+      await get().setWorkspace(roots, accessMode)
+    }
+    set({ wholeComputer: true })
   },
 }))

@@ -127,7 +127,7 @@ async fn download_file(app: &AppHandle, url: &str, dest: &PathBuf) -> Result<(),
             .map_err(|e| format!("Failed to save the installer to disk: {e}"))?;
         if let Some(total) = total {
             let percent = ((downloaded as f64 / total as f64) * 100.0).min(100.0) as u8;
-            if percent >= last_reported_percent + 1 {
+            if percent > last_reported_percent {
                 last_reported_percent = percent;
                 crate::optional_components::emit(app, "docker", Some(percent), &format!("Downloading Docker Desktop's installer... {percent}%"));
             }

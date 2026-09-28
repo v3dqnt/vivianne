@@ -1,19 +1,5 @@
 import { useEffect, useState } from 'react'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import Divider from '@mui/material/Divider'
-import Button from '@mui/material/Button'
-import IconButton from '@mui/material/IconButton'
-import CircularProgress from '@mui/material/CircularProgress'
-import Dialog from '@mui/material/Dialog'
-import DialogTitle from '@mui/material/DialogTitle'
-import DialogContent from '@mui/material/DialogContent'
-import DialogActions from '@mui/material/DialogActions'
-import TextField from '@mui/material/TextField'
-import Select from '@mui/material/Select'
-import MenuItem from '@mui/material/MenuItem'
-import InputLabel from '@mui/material/InputLabel'
-import FormControl from '@mui/material/FormControl'
+import { Stack, Typography, Divider, Button, IconButton, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Select, MenuItem, InputLabel, FormControl, FormControlLabel, Checkbox, Collapse, Box } from '../../../ui'
 import { ImportLinear, PlayCircleLinear, StopCircleLinear, TrashLinear, CpuLinear, SettingLinear } from '../../../icons'
 import { useLlamaStore, DEFAULT_CTX_SIZE, DEFAULT_NGL } from '../store/llamaStore'
 import { statusLabel, isRunning, isBusyStatus, engineLabel, type LlamaEndpoint, type LocalEngine } from '../lib/llama'
@@ -44,6 +30,16 @@ function EndpointDialog({
   const [ngl, setNgl] = useState(DEFAULT_NGL)
   const [engine, setEngine] = useState<LocalEngine>('llamaCpp')
   const [saving, setSaving] = useState(false)
+  // Tuning is collapsed by default: the defaults are correct on a normal
+  // machine (llama.cpp's own device auto-selection was measured picking the
+  // discrete GPU here), so these are for the cases where they are not.
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [kvCacheType, setKvCacheType] = useState('')
+  const [threads, setThreads] = useState('')
+  const [device, setDevice] = useState('')
+  const [cacheReuse, setCacheReuse] = useState('')
+  const [mlock, setMlock] = useState(false)
+  const [extraArgs, setExtraArgs] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -51,6 +47,18 @@ function EndpointDialog({
     setCtxSize(endpoint?.ctxSize ?? DEFAULT_CTX_SIZE)
     setNgl(endpoint?.ngl ?? DEFAULT_NGL)
     setEngine(endpoint?.engine ?? 'llamaCpp')
+    const t = endpoint?.tuning
+    setKvCacheType(t?.kvCacheType ?? '')
+    setThreads(t?.threads != null ? String(t.threads) : '')
+    setDevice(t?.device ?? '')
+    setCacheReuse(t?.cacheReuse != null ? String(t.cacheReuse) : '')
+    setMlock(t?.mlock ?? false)
+    setExtraArgs(t?.extraArgs ?? '')
+    // Open the section when this endpoint already has something set, so a
+    // non-default tuning is never hidden behind a collapsed header.
+    setShowAdvanced(
+      !!(t && (t.kvCacheType || t.threads || t.device || t.cacheReuse || t.mlock || t.extraArgs)),
+    )
   }, [open, endpoint, defaultName])
 
   const running = endpoint ? isRunning(endpoint.status) : false
@@ -58,10 +66,23 @@ function EndpointDialog({
   const submit = async () => {
     setSaving(true)
     try {
+      // Empty string means "unset" for every field here, which is what makes
+      // the engine fall back to its own default rather than to a value the UI
+      // invented.
+      const num = (v: string) => (v.trim() === '' ? null : Math.max(0, Number(v) || 0))
+      const str = (v: string) => (v.trim() === '' ? null : v.trim())
+      const tuning = {
+        kvCacheType: str(kvCacheType),
+        threads: num(threads),
+        device: str(device),
+        cacheReuse: num(cacheReuse),
+        mlock,
+        extraArgs: str(extraArgs),
+      }
       if (endpoint) {
-        await updateEndpoint(endpoint.id, { name: name.trim() || endpoint.name, ctxSize, ngl, engine })
+        await updateEndpoint(endpoint.id, { name: name.trim() || endpoint.name, ctxSize, ngl, engine, tuning })
       } else if (modelPath) {
-        await addEndpoint(modelPath, name.trim() || fileName(modelPath).replace(/\.gguf$/i, ''), ctxSize, ngl, engine)
+        await addEndpoint(modelPath, name.trim() || fileName(modelPath).replace(/\.gguf$/i, ''), ctxSize, ngl, engine, tuning)
       }
       onClose()
     } finally {
@@ -108,6 +129,77 @@ function EndpointDialog({
             onChange={(e) => setNgl(Math.max(0, Number(e.target.value) || 0))}
             helperText="999 = offload the whole model to GPU. 0 = CPU only (frees VRAM, much slower)."
           />
+          {/* llama.cpp only — mistral.rs takes none of these flags. */}
+          {engine === 'llamaCpp' && (
+            <Box>
+              <Button
+                size="small"
+                onClick={() => setShowAdvanced((v) => !v)}
+                sx={{ textTransform: 'none', px: 0.5, color: 'text.secondary', fontWeight: 600 }}
+              >
+                {showAdvanced ? 'Hide' : 'Show'} performance options
+              </Button>
+              <Collapse in={showAdvanced}>
+                <Stack spacing={2} sx={{ pt: 1.5 }}>
+                  <FormControl size="small" fullWidth>
+                    <InputLabel id="kv-cache-label">KV cache type</InputLabel>
+                    <Select
+                      labelId="kv-cache-label"
+                      label="KV cache type"
+                      value={kvCacheType}
+                      onChange={(e) => setKvCacheType(e.target.value)}
+                    >
+                      <MenuItem value="">f16 (default)</MenuItem>
+                      <MenuItem value="q8_0">q8_0 — half the memory</MenuItem>
+                      <MenuItem value="q4_0">q4_0 — quarter the memory</MenuItem>
+                    </Select>
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+                      The KV cache, not the model, is what usually decides how much context fits. q8_0 measured
+                      identical throughput here while halving it, so it buys context for free.
+                    </Typography>
+                  </FormControl>
+                  <TextField
+                    label="Device"
+                    size="small"
+                    value={device}
+                    onChange={(e) => setDevice(e.target.value)}
+                    placeholder="auto"
+                    helperText={'Blank auto-selects, which is usually right. Set it (e.g. "Vulkan1") if the wrong GPU is picked — run `llama-server --list-devices` to see the names.'}
+                  />
+                  <TextField
+                    label="CPU threads"
+                    size="small"
+                    type="number"
+                    value={threads}
+                    onChange={(e) => setThreads(e.target.value)}
+                    placeholder="auto"
+                    helperText="Blank lets llama.cpp decide. On a hybrid P+E-core CPU its default can over-subscribe; the physical performance-core count is often faster."
+                  />
+                  <TextField
+                    label="Cache reuse (tokens)"
+                    size="small"
+                    type="number"
+                    value={cacheReuse}
+                    onChange={(e) => setCacheReuse(e.target.value)}
+                    placeholder="0 (off)"
+                    helperText="Lets the server salvage KV cache when the prompt changes in the middle rather than only at the end — which is what compacting a conversation does. Try 256."
+                  />
+                  <FormControlLabel
+                    control={<Checkbox size="small" checked={mlock} onChange={(e) => setMlock(e.target.checked)} />}
+                    label={<Typography variant="body2">Lock weights in RAM (--mlock)</Typography>}
+                  />
+                  <TextField
+                    label="Extra flags"
+                    size="small"
+                    value={extraArgs}
+                    onChange={(e) => setExtraArgs(e.target.value)}
+                    placeholder="--no-context-shift"
+                    helperText="Passed to llama-server verbatim, split on spaces. No shell is involved, so quoting does nothing."
+                  />
+                </Stack>
+              </Collapse>
+            </Box>
+          )}
           {endpoint && running && (
             <Typography variant="caption" color="warning.main">
               This model is running — saving will stop it. Start it again to apply the new settings.
