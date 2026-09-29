@@ -85,7 +85,6 @@ impl PowerShellTool { pub fn new(cwd: String) -> Self { Self { cwd } } }
 impl Tool for PowerShellTool {
     fn name(&self) -> &str { "powershell" }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        if let Some(gated) = super::tool_exec::plan_mode_gate("powershell") { return gated; }
         let command = args["command"].as_str().unwrap_or("").to_string();
         if command.trim().is_empty() { return err("'command' is required"); }
         if let Some(reason) = super::sandbox::check_command(&command) {
@@ -120,7 +119,6 @@ impl NotebookEditTool { pub fn new(cwd: String) -> Self { Self { cwd } } }
 impl Tool for NotebookEditTool {
     fn name(&self) -> &str { "notebook_edit" }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        if let Some(gated) = super::tool_exec::plan_mode_gate("notebook_edit") { return gated; }
         let nb_path = args["notebook_path"].as_str().unwrap_or("");
         if nb_path.is_empty() { return err("'notebook_path' is required"); }
         if !nb_path.ends_with(".ipynb") { return err("File must be a Jupyter notebook (.ipynb)"); }

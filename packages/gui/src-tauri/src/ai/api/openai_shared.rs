@@ -177,6 +177,10 @@ pub struct ChatCompletionRequest {
     /// Mistral tool_choice variant (any | required | …)
     #[serde(rename = "toolChoice", skip_serializing_if = "Option::is_none")]
     pub tool_choice_camel: Option<Value>,
+    /// llama.cpp server: extra variables for the model's Jinja chat template,
+    /// e.g. `{"enable_thinking": false}` for hybrid-reasoning models.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_template_kwargs: Option<Value>,
 }
 
 /// `stream_options` object (usage reporting during streaming).

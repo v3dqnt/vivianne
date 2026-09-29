@@ -88,19 +88,42 @@ pub struct LlamaTuning {
     /// `--device`, e.g. "Vulkan1". None keeps auto-selection.
     #[serde(default)]
     pub device: Option<String>,
-    /// `-ctk`/`-ctv`, e.g. "q8_0". None keeps f16.
+    /// `-ctk`/`-ctv`, e.g. "q8_0". None means q8_0 (see the measurements
+    /// above: same throughput, half the KV memory); "f16" opts back out.
     #[serde(default)]
     pub kv_cache_type: Option<String>,
     /// `--mlock`. Keeps weights resident instead of letting the OS page them
     /// out; can fail without the privilege, so it stays opt-in.
     #[serde(default)]
     pub mlock: bool,
-    /// `--cache-reuse`. Server default is 0 (off). Lets the server salvage
+    /// `--cache-reuse`. Server default is 0 (off); None here means
+    /// `DEFAULT_CACHE_REUSE`, Some(0) turns it off. Lets the server salvage
     /// chunks of the KV cache when the prompt diverges mid-way and then
-    /// re-converges — which is what a compaction pass does to an agent's
-    /// conversation.
+    /// re-converges — which is what a compaction pass, or the agent loop
+    /// shrinking an old tool result, does to an agent's conversation.
     #[serde(default)]
     pub cache_reuse: Option<u32>,
+    /// `--spec-type`. None means `ngram-mod`: lossless speculative decoding
+    /// that drafts from n-grams already seen in the context, so it needs no
+    /// draft model and costs ~16 MB. An agent rewriting code it just read is
+    /// the best case for it — measured here (MiniCPM 1B, RTX 4060, 900-token
+    /// code rewrite) at 265 → 511 tokens/s once the prompt was cached.
+    /// "none" turns it off; any other value is passed through verbatim.
+    #[serde(default)]
+    pub speculative: Option<String>,
+    /// `--cache-ram` in MiB: host-RAM prompt cache that idle slots are saved
+    /// to. The server's default is 8192 MiB, which on a 16 GB laptop is half
+    /// the machine held for cache hits between conversations. None means
+    /// `DEFAULT_CACHE_RAM_MIB`; -1 is unlimited, 0 disables it.
+    #[serde(default)]
+    pub cache_ram_mib: Option<i32>,
+    /// `--sleep-idle-seconds`: unload the model after this long without a
+    /// request, and reload it on the next one. Returns the whole VRAM/RAM
+    /// allocation to the machine while nobody is talking to the model. The
+    /// health poll does not count as a request (checked against build
+    /// 10068), so a sleeping server still reads as Running. None/0 = never.
+    #[serde(default)]
+    pub sleep_idle_seconds: Option<u32>,
     /// Raw extra flags, split on whitespace. The escape hatch: llama.cpp gains
     /// flags faster than this struct can track them, and without this the only
     /// way to pass one was to not use the app.
@@ -111,6 +134,80 @@ pub struct LlamaTuning {
 /// How many trailing stderr lines to keep per instance. llama.cpp is chatty at
 /// load time; the last few lines are where the actual failure appears.
 const STDERR_TAIL_LINES: usize = 40;
+
+/// How long a starting server gets to answer its health check.
+const STARTUP_TIMEOUT_SECS: u32 = 120;
+
+/// The UI's "offload everything" value for `ngl`. Passing it literally
+/// disables llama.cpp's `--fit` (which only adjusts arguments the user left
+/// unset), so a model plus context that doesn't fit in VRAM fails to load or
+/// spills unpredictably instead of being fitted layer by layer — and a MoE
+/// model never gets its experts moved to the CPU. Treated as "unset".
+pub const NGL_ALL: u32 = 999;
+const DEFAULT_KV_CACHE_TYPE: &str = "q8_0";
+const DEFAULT_CACHE_REUSE: u32 = 256;
+const DEFAULT_SPECULATIVE: &str = "ngram-mod";
+const DEFAULT_CACHE_RAM_MIB: i32 = 2048;
+
+/// llama-server arguments for an endpoint. Split out of `start` so the
+/// defaulting rules above can be tested without spawning a process.
+fn llama_cpp_args(config: &LlamaProcessConfig) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-m".into(), config.model_path.clone(),
+        "--port".into(), config.port.to_string(),
+        "--ctx-size".into(), config.ctx_size.to_string(),
+        "--host".into(), "127.0.0.1".into(),
+        // Without this, llama-server ignores the GGUF's embedded chat
+        // template and falls back to a plain completion format: the model
+        // still sees the `tools` schema in the prompt and tries to answer
+        // with one, but the reply comes back as markdown-fenced JSON in
+        // `content` with `finish_reason: "stop"` — never a real `tool_calls`
+        // field — so Vivianne's agent loop can't act on it.
+        "--jinja".into(),
+    ];
+    if config.ngl < NGL_ALL {
+        args.extend(["-ngl".into(), config.ngl.to_string()]);
+    }
+
+    let t = &config.tuning;
+    let set = |v: &Option<String>| v.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from);
+    if let Some(dev) = set(&t.device) {
+        args.extend(["--device".into(), dev]);
+    }
+    if let Some(threads) = t.threads.filter(|n| *n > 0) {
+        args.extend(["-t".into(), threads.to_string()]);
+    }
+    let kv = set(&t.kv_cache_type).unwrap_or_else(|| DEFAULT_KV_CACHE_TYPE.into());
+    if kv != "f16" {
+        // Quantising V requires Flash Attention. It defaults to `auto`;
+        // asking for it explicitly means a build where auto declines still
+        // gets a working K/V pair rather than failing to start.
+        args.extend(["-fa".into(), "on".into(), "-ctk".into(), kv.clone(), "-ctv".into(), kv]);
+    }
+    if t.mlock {
+        args.push("--mlock".into());
+    }
+    let reuse = t.cache_reuse.unwrap_or(DEFAULT_CACHE_REUSE);
+    if reuse > 0 {
+        args.extend(["--cache-reuse".into(), reuse.to_string()]);
+    }
+    let spec = set(&t.speculative).unwrap_or_else(|| DEFAULT_SPECULATIVE.into());
+    if spec != "none" {
+        args.extend(["--spec-type".into(), spec]);
+    }
+    args.extend(["--cache-ram".into(), t.cache_ram_mib.unwrap_or(DEFAULT_CACHE_RAM_MIB).to_string()]);
+    if let Some(secs) = t.sleep_idle_seconds.filter(|s| *s > 0) {
+        args.extend(["--sleep-idle-seconds".into(), secs.to_string()]);
+    }
+    if let Some(extra) = t.extra_args.as_deref() {
+        // Whitespace split, not a shell parse: these go straight to
+        // `Command::args`, so nothing is interpreted by a shell and a quoted
+        // value with spaces is not supported (nor needed by any flag). Last,
+        // so a flag repeated here overrides the default above.
+        args.extend(extra.split_whitespace().map(String::from));
+    }
+    args
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -191,50 +288,7 @@ impl LlamaManager {
 
         match config.engine {
             LocalEngine::LlamaCpp => {
-                cmd.args([
-                    "-m", &config.model_path,
-                    "--port", &config.port.to_string(),
-                    "--ctx-size", &config.ctx_size.to_string(),
-                    "-ngl", &config.ngl.to_string(),
-                    "--host", "127.0.0.1",
-                    // Without this, llama-server ignores the GGUF's embedded
-                    // chat template and falls back to a plain completion
-                    // format: the model still sees the `tools` schema in the
-                    // prompt and tries to answer with one, but the reply
-                    // comes back as markdown-fenced JSON in `content` with
-                    // `finish_reason: "stop"` — never a real `tool_calls`
-                    // field — so Vivianne's agent loop can't act on it and
-                    // the model is left unable to actually use anything.
-                    "--jinja",
-                ]);
-
-                let t = &config.tuning;
-                if let Some(dev) = t.device.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
-                    cmd.args(["--device", dev]);
-                }
-                if let Some(threads) = t.threads.filter(|n| *n > 0) {
-                    cmd.args(["-t", &threads.to_string()]);
-                }
-                if let Some(kv) = t.kv_cache_type.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
-                    // Quantising V requires Flash Attention, which this build
-                    // already defaults to `auto`; asking for it explicitly
-                    // means a build where auto declines still gets a working
-                    // K/V pair rather than failing to start.
-                    cmd.args(["-fa", "on", "-ctk", kv, "-ctv", kv]);
-                }
-                if t.mlock {
-                    cmd.arg("--mlock");
-                }
-                if let Some(reuse) = t.cache_reuse.filter(|n| *n > 0) {
-                    cmd.args(["--cache-reuse", &reuse.to_string()]);
-                }
-                if let Some(extra) = t.extra_args.as_deref() {
-                    // Whitespace split, not a shell parse: these go straight to
-                    // `Command::args`, so nothing is interpreted by a shell and
-                    // a quoted value with spaces is not supported (nor needed
-                    // by any llama.cpp flag).
-                    cmd.args(extra.split_whitespace());
-                }
+                cmd.args(llama_cpp_args(&config));
             }
             LocalEngine::MistralRs => {
                 cmd.args([
@@ -329,14 +383,30 @@ impl LlamaManager {
                 .build()
                 .unwrap_or_default();
 
-            // Phase 1: wait up to 30s for the server to start responding
+            // Phase 1: wait for the server to start responding. Generous,
+            // because `--fit` probes device memory before loading and a
+            // multi-GB GGUF off a cold disk can take a while — but a process
+            // that has already exited is reported at once rather than after
+            // the full window.
             let mut ready = false;
-            for _ in 0..30 {
+            for _ in 0..STARTUP_TIMEOUT_SECS {
                 if stop_flag_clone.load(Ordering::SeqCst) {
                     ready = false;
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let exited = app_clone
+                    .try_state::<Arc<LlamaManager>>()
+                    .map(|m| {
+                        let mut map = m.instances.lock().expect("llama manager lock");
+                        map.get_mut(&id_clone)
+                            .and_then(|i| i.child.as_mut())
+                            .is_some_and(|c| matches!(c.try_wait(), Ok(Some(_))))
+                    })
+                    .unwrap_or(false);
+                if exited {
+                    break;
+                }
                 if client.get(&health_url).send().await
                     .map(|r| r.status().is_success())
                     .unwrap_or(false)
@@ -364,7 +434,7 @@ impl LlamaManager {
                             .map(|t| format!("\n\nLast output from {binary}:\n{t}"))
                             .unwrap_or_default();
                         inst.status = LlamaStatus::Crashed(format!(
-                            "{binary} started but didn't become ready within 30s — \
+                            "{binary} exited or didn't become ready within {STARTUP_TIMEOUT_SECS}s — \
                              check that the model file is valid and {binary} can load it.{detail}"
                         ));
                     }
@@ -503,6 +573,10 @@ impl LlamaManager {
                     "ctxSize": i.config.ctx_size,
                     "autoStart": i.config.auto_start,
                     "engine": i.config.engine,
+                    // Without this the frontend never saw an endpoint's
+                    // tuning: the edit dialog opened blank, and the next save
+                    // (which persists what this list returns) wiped it.
+                    "tuning": i.config.tuning,
                     "status": i.status,
                 })
             })
@@ -611,4 +685,64 @@ pub async fn cmd_llama_unregister(
     manager.stop(&id).await?;
     manager.remove(&id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(ngl: u32, tuning: LlamaTuning) -> LlamaProcessConfig {
+        LlamaProcessConfig {
+            id: "t".into(),
+            name: "t".into(),
+            model_path: "m.gguf".into(),
+            port: 8081,
+            ngl,
+            ctx_size: 32768,
+            auto_start: false,
+            engine: LocalEngine::LlamaCpp,
+            tuning,
+        }
+    }
+
+    fn has(args: &[String], pair: &[&str]) -> bool {
+        args.windows(pair.len()).any(|w| w.iter().zip(pair).all(|(a, b)| a == b))
+    }
+
+    #[test]
+    fn untuned_endpoint_gets_the_memory_and_speed_defaults() {
+        let args = llama_cpp_args(&config(NGL_ALL, LlamaTuning::default()));
+        assert!(!args.iter().any(|a| a == "-ngl"), "offload-all must leave -ngl unset so --fit can work: {args:?}");
+        assert!(has(&args, &["-ctk", "q8_0"]) && has(&args, &["-ctv", "q8_0"]) && has(&args, &["-fa", "on"]));
+        assert!(has(&args, &["--cache-reuse", "256"]));
+        assert!(has(&args, &["--spec-type", "ngram-mod"]));
+        assert!(has(&args, &["--cache-ram", "2048"]));
+        assert!(!args.iter().any(|a| a == "--sleep-idle-seconds"));
+        assert!(args.iter().any(|a| a == "--jinja"));
+    }
+
+    #[test]
+    fn explicit_values_opt_out_of_each_default() {
+        let args = llama_cpp_args(&config(20, LlamaTuning {
+            kv_cache_type: Some("f16".into()),
+            cache_reuse: Some(0),
+            speculative: Some("none".into()),
+            cache_ram_mib: Some(0),
+            sleep_idle_seconds: Some(600),
+            extra_args: Some("--no-context-shift  -np 1".into()),
+            ..Default::default()
+        }));
+        assert!(has(&args, &["-ngl", "20"]));
+        assert!(!args.iter().any(|a| a == "-ctk" || a == "--cache-reuse" || a == "--spec-type"));
+        assert!(has(&args, &["--cache-ram", "0"]));
+        assert!(has(&args, &["--sleep-idle-seconds", "600"]));
+        assert!(args.ends_with(&["--no-context-shift".to_string(), "-np".into(), "1".into()]));
+    }
+
+    #[test]
+    fn tuning_saved_before_the_new_fields_still_deserializes() {
+        let t: LlamaTuning = serde_json::from_value(serde_json::json!({ "kvCacheType": "q4_0", "mlock": true })).unwrap();
+        assert_eq!(t.kv_cache_type.as_deref(), Some("q4_0"));
+        assert!(t.speculative.is_none() && t.cache_ram_mib.is_none() && t.sleep_idle_seconds.is_none());
+    }
 }

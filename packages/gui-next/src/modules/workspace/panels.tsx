@@ -28,6 +28,7 @@ const PreviewPanel = lazy(() => import('../dock/components/PreviewPanel').then((
 const BackgroundTasksPanel = lazy(() =>
   import('../dock/components/BackgroundTasksPanel').then((m) => ({ default: m.BackgroundTasksPanel })),
 )
+const PlanPanel = lazy(() => import('../plan/components/PlanPanel').then((m) => ({ default: m.PlanPanel })))
 const AgentsPanel = lazy(() => import('../team/components/AgentsPanel').then((m) => ({ default: m.AgentsPanel })))
 const CustomPanel = lazy(() => import('../dock/components/CustomPanel').then((m) => ({ default: m.CustomPanel })))
 const ReviewPanel = lazy(() => import('../git/components/ReviewPanel').then((m) => ({ default: m.ReviewPanel })))
@@ -129,6 +130,11 @@ export const COMPONENTS: Record<PanelKind, FunctionComponent<IDockviewPanelProps
   agents: () => (
     <Fill>
       <AgentsPanel />
+    </Fill>
+  ),
+  plan: () => (
+    <Fill>
+      <PlanPanel />
     </Fill>
   ),
   // Documents were a panel (and a panel per file) before they became a mode

@@ -149,10 +149,12 @@ pub(crate) async fn assemble_capability_blocks(
     // agent started telling users it had no browser tools while holding nine
     // of them.
     let available = crate::agent::tool_exec::available_tool_names(state).await;
-    prompt = format!(
-        "{prompt}\n\n<vivianne_capabilities>\n{}\n</vivianne_capabilities>",
+    let section = if crate::agent::tool_profile::is_lean_provider(&state.model().await.provider) {
+        crate::agent::capabilities::capability_section_lean(&available)
+    } else {
         crate::agent::capabilities::capability_section(&available)
-    );
+    };
+    prompt = format!("{prompt}\n\n<vivianne_capabilities>\n{section}\n</vivianne_capabilities>");
 
     // Re-stated every turn, not just left to whatever's still in scrollback —
     // a goal set several turns ago (or before a compaction summarized away

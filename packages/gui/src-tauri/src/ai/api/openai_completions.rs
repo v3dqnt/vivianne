@@ -44,6 +44,8 @@ pub struct OpenAICompletionsOptions {
     pub max_retries: Option<u32>,
     pub reasoning_effort: Option<String>,
     pub tool_choice: Option<Value>,
+    /// Passed through as `chat_template_kwargs` (llama.cpp server only).
+    pub chat_template_kwargs: Option<Value>,
 }
 
 // ─── Message building ────────────────────────────────────────────────────────
@@ -293,6 +295,7 @@ fn build_request_body(
         mistral_reasoning_effort: None,
         max_tokens_camel: None,
         tool_choice_camel: None,
+        chat_template_kwargs: options.chat_template_kwargs.clone(),
     }
 }
 
@@ -532,7 +535,13 @@ pub async fn stream_chat_completions(
     };
 
     let mut byte_stream = response.bytes_stream();
-    let mut buffer = String::new();
+    // Bytes, not a String: a network chunk can end in the middle of a
+    // multi-byte UTF-8 character, and decoding each chunk on its own dropped
+    // any such chunk whole — every token in it, including tool-call JSON, for
+    // any reply with non-ASCII text in it. Lines are only decoded once
+    // complete, and a newline byte can never occur inside a multi-byte
+    // sequence, so splitting on it first is safe.
+    let mut buffer: Vec<u8> = Vec::new();
 
     'outer: loop {
         match byte_stream.next().await {
@@ -543,14 +552,13 @@ pub async fn stream_chat_completions(
                 break;
             }
             Some(Ok(chunk)) => {
-                if let Ok(text) = std::str::from_utf8(&chunk) {
-                    buffer.push_str(text);
-                }
+                buffer.extend_from_slice(&chunk);
 
                 // Process complete lines
-                while let Some(newline_pos) = buffer.find('\n') {
-                    let line = buffer[..newline_pos].to_string();
-                    buffer = buffer[newline_pos + 1..].to_string();
+                let mut consumed = 0;
+                while let Some(offset) = buffer[consumed..].iter().position(|b| *b == b'\n') {
+                    let line = String::from_utf8_lossy(&buffer[consumed..consumed + offset]).into_owned();
+                    consumed += offset + 1;
 
                     if let Some(data) = parse_sse_data(&line) {
                         match serde_json::from_str::<ChatCompletionChunk>(data) {
@@ -580,6 +588,9 @@ pub async fn stream_chat_completions(
                         }
                     }
                 }
+                // One drain per chunk rather than a copy of the remainder per
+                // line, which made a long stream quadratic in its length.
+                buffer.drain(..consumed);
             }
         }
     }

@@ -687,9 +687,6 @@ impl Tool for GithubActTool {
         "github_act"
     }
     async fn execute(&self, args: &Value, _cwd: &str) -> ToolResult {
-        if let Some(gated) = super::tool_exec::plan_mode_gate("github_act") {
-            return gated;
-        }
         let action = arg_str(args, "action").unwrap_or("");
         // Pushing is git, not the API — handled before a token is required.
         if action == "push" {
@@ -979,11 +976,6 @@ impl Tool for GithubApiTool {
             "DELETE" => reqwest::Method::DELETE,
             other => return err(format!("unsupported method {other}")),
         };
-        if method != reqwest::Method::GET {
-            if let Some(gated) = super::tool_exec::plan_mode_gate("github_api") {
-                return gated;
-            }
-        }
         let gh = match Gh::new().await {
             Ok(g) => g,
             Err(e) => return err(e),

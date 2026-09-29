@@ -43,6 +43,8 @@ const DECLARATIONS: Record<string, [string, string]> = {
   generate_image: ['Generating image', 'Generated image'],
   math: ['Calculating', 'Calculated'],
   todo_write: ['Updating the plan', 'Updated the plan'],
+  submit_plan: ['Writing the plan', 'Proposed a plan'],
+  assign_plan_steps: ['Carrying out the plan', 'Carried out the plan'],
   task: ['Delegating to a subagent', 'Delegated to a subagent'],
   dip: ['Using the screen', 'Used the screen'],
   computer: ['Using the screen', 'Used the screen'],

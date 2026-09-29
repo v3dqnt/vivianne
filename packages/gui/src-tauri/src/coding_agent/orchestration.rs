@@ -63,6 +63,9 @@ pub struct SubagentHandle {
     /// The running loop's steering queue and flag, set once it starts, so a
     /// user comment can redirect a live run (`agent::runs`).
     pub steering: Option<(Arc<tokio::sync::RwLock<Vec<AgentMessage>>>, Arc<std::sync::atomic::AtomicBool>)>,
+    /// The running loop's abort flag, set once it starts, so cancelling the
+    /// subagent stops it (see `cancel_subagent`).
+    pub abort: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// Process-wide registry of subagents. In-process only — no cross-window,
@@ -254,17 +257,11 @@ impl Tool for KillTaskTool {
                 results.push(json!({ "task_id": id, "outcome": "not_found" }));
                 continue;
             };
-            let mut g = h.lock().unwrap_or_else(|e| e.into_inner());
-            if g.status.is_terminal() {
+            if !cancel_subagent(&h, reason.clone()) {
                 lines.push(format!("{id}: already_finished"));
                 results.push(json!({ "task_id": id, "outcome": "already_finished" }));
                 continue;
             }
-            g.cancelled = true;
-            g.status = SubagentStatus::Cancelled { reason: reason.clone() };
-            let notify = g.notify.clone();
-            drop(g);
-            notify.notify_waiters();
             lines.push(format!("{id}: cancelled"));
             results.push(json!({ "task_id": id, "outcome": "cancelled" }));
         }
@@ -277,103 +274,27 @@ impl Tool for KillTaskTool {
     }
 }
 
-// ── enter_plan_mode / exit_plan_mode ────────────────────────────────────────
+// ── cancellation ────────────────────────────────────────────────────────────
 
-/// Global plan-mode flag. When true, mutating tools (write, edit, apply_patch,
-/// bash without --dry-run) should refuse. The check lives in `tool_exec`'s
-/// gate — this module just owns the flag.
-pub struct PlanModeState {
-    inner: std::sync::atomic::AtomicBool,
-    plan: Mutex<Option<String>>,
-}
-
-impl PlanModeState {
-    fn new() -> Self {
-        Self {
-            inner: std::sync::atomic::AtomicBool::new(false),
-            plan: Mutex::new(None),
-        }
+/// Cancel a running subagent — and actually stop it.
+///
+/// Marking the handle cancelled only tells *readers* it was cancelled; the
+/// loop driving it has its own abort flag, which is what makes it stop
+/// calling the model and running tools. Both are set here, so a cancelled
+/// subagent stops spending at its next step rather than running to the end
+/// unobserved.
+pub fn cancel_subagent(handle: &Arc<Mutex<SubagentHandle>>, reason: Option<String>) -> bool {
+    let mut g = handle.lock().unwrap_or_else(|e| e.into_inner());
+    if g.status.is_terminal() {
+        return false;
     }
-
-    pub fn global() -> &'static Self {
-        static S: OnceLock<PlanModeState> = OnceLock::new();
-        S.get_or_init(Self::new)
+    g.cancelled = true;
+    g.status = SubagentStatus::Cancelled { reason };
+    if let Some(abort) = &g.abort {
+        abort.store(true, std::sync::atomic::Ordering::SeqCst);
     }
-
-    pub fn is_active(&self) -> bool {
-        self.inner.load(std::sync::atomic::Ordering::Acquire)
-    }
-
-    pub fn enter(&self, plan: Option<String>) {
-        self.inner.store(true, std::sync::atomic::Ordering::Release);
-        *self.plan.lock().unwrap_or_else(|e| e.into_inner()) = plan;
-    }
-
-    pub fn exit(&self) -> Option<String> {
-        self.inner.store(false, std::sync::atomic::Ordering::Release);
-        self.plan.lock().unwrap_or_else(|e| e.into_inner()).take()
-    }
-
-    pub fn current_plan(&self) -> Option<String> {
-        self.plan.lock().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-}
-
-pub struct EnterPlanModeTool;
-impl Default for EnterPlanModeTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl EnterPlanModeTool { pub fn new() -> Self { Self } }
-
-#[async_trait]
-impl Tool for EnterPlanModeTool {
-    fn name(&self) -> &str { "enter_plan_mode" }
-
-    async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        let plan = args["plan"].as_str().map(|s| s.to_string());
-        PlanModeState::global().enter(plan.clone());
-        ToolResult {
-            content: format!(
-                "Plan mode is now ACTIVE. Mutating tools are gated off until exit_plan_mode is called.{}",
-                match &plan {
-                    Some(p) => format!("\n\nPlan:\n{}", p),
-                    None => String::new(),
-                }
-            ),
-            is_error: false,
-            details: Some(json!({ "plan_mode": true, "plan": plan })),
-        }
-    }
-}
-
-pub struct ExitPlanModeTool;
-impl Default for ExitPlanModeTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ExitPlanModeTool { pub fn new() -> Self { Self } }
-
-#[async_trait]
-impl Tool for ExitPlanModeTool {
-    fn name(&self) -> &str { "exit_plan_mode" }
-
-    async fn execute(&self, _args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        let prior = PlanModeState::global().exit();
-        ToolResult {
-            content: format!(
-                "Plan mode is now INACTIVE. Mutating tools are re-enabled.{}",
-                match &prior {
-                    Some(p) => format!("\n\nExited with plan:\n{}", p),
-                    None => String::new(),
-                }
-            ),
-            is_error: false,
-            details: Some(json!({ "plan_mode": false, "prior_plan": prior })),
-        }
-    }
+    let notify = g.notify.clone();
+    drop(g);
+    notify.notify_waiters();
+    true
 }

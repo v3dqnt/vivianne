@@ -14,7 +14,8 @@ import { ContextUsageBar as ContextUsageBarImpl } from './ContextUsageBar'
 import { StreamStatusLine as StreamStatusLineImpl } from './StreamStatusLine'
 import { RunStatusBar as RunStatusBarImpl } from './RunStatusBar'
 import { LimitsPill as LimitsPillImpl } from './LimitsPill'
-import { PlanModeBanner as PlanModeBannerImpl } from './PlanModeBanner'
+import { PlanPill as PlanPillImpl } from '../../plan/components/PlanPill'
+import { usePlanStore } from '../../plan/store/planStore'
 import { SubagentPanel as SubagentPanelImpl } from './SubagentPanel'
 import { ComputerUseBanner as ComputerUseBannerImpl } from './ComputerUseBanner'
 import { QueuePanel as QueuePanelImpl } from './QueuePanel'
@@ -35,7 +36,7 @@ const ContextUsageBar = memo(ContextUsageBarImpl)
 const StreamStatusLine = memo(StreamStatusLineImpl)
 const RunStatusBar = memo(RunStatusBarImpl)
 const LimitsPill = memo(LimitsPillImpl)
-const PlanModeBanner = memo(PlanModeBannerImpl)
+const PlanPill = memo(PlanPillImpl)
 const SubagentPanel = memo(SubagentPanelImpl)
 const ComputerUseBanner = memo(ComputerUseBannerImpl)
 const QueuePanel = memo(QueuePanelImpl)
@@ -106,6 +107,7 @@ export function Composer() {
   const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([])
   const [dragging, setDragging] = useState(false)
   const isBusy = useAgentStore((s) => s.isBusy)
+  const planMode = usePlanStore((s) => s.planMode)
   const sendMessage = useAgentStore((s) => s.sendMessage)
   const steer = useAgentStore((s) => s.steer)
   const abort = useAgentStore((s) => s.abort)
@@ -385,7 +387,6 @@ export function Composer() {
             it is about the run in progress, which is this box's business. */}
         <ComputerUseBanner />
 
-        <PlanModeBanner />
         <RunStatusBar />
         <SubagentPanel />
         <StreamStatusLine />
@@ -465,7 +466,7 @@ export function Composer() {
               multiline
               minRows={1}
               maxRows={8}
-              placeholder={isBusy ? 'Agent is working — send to queue, or steer to redirect now...' : 'Do anything'}
+              placeholder={isBusy ? 'Agent is working — send to queue, or steer to redirect now...' : planMode ? 'Describe what you want built — the agent will research it and propose a plan' : 'Do anything'}
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={onKeyDown}
@@ -480,6 +481,7 @@ export function Composer() {
                 onAddFiles={handleAddFiles}
               />
               <PermissionModePill />
+              <PlanPill />
               <LimitsPill />
 
               <Box sx={{ flex: 1 }} />

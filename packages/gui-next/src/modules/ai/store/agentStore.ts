@@ -2,7 +2,6 @@ import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { call, on } from '../../../ipc'
 import type { AgentEvent, AgentMessage, ImageAttachment, MessageContent, QuestionSpec, RunLedger } from '../lib/types'
 import { useModelStore } from './modelStore'
-import { usePlanModeStore } from './planModeStore'
 import { useSubagentStore } from './subagentStore'
 import { useShellTaskStore, isShellTool } from '../../dock/store/shellTaskStore'
 import { useWebPreviewStore } from './webPreviewStore'
@@ -20,7 +19,6 @@ const streamStartedAt = new Map<string, number>()
 /** Tool names whose start/end also drives a side-panel store, so agentStore
  * (the one place already subscribed to every tool event) can just forward
  * instead of every panel needing its own duplicate listener. */
-const PLAN_MODE_TOOLS = new Set(['enter_plan_mode', 'exit_plan_mode'])
 
 /** Computer-use tool names that should light the "Vivianne is driving the
  * screen" indicator. The tool is `dip`; `computer` is still accepted by the
@@ -384,7 +382,6 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             if (isShellTool(event.payload.tool_name)) {
               useShellTaskStore.getState().finish(event.payload.tool_call_id, !!event.payload.is_error)
             }
-            if (isPrimary(threadId) && PLAN_MODE_TOOLS.has(event.payload.tool_name)) void usePlanModeStore.getState().refresh()
             if (isPrimary(threadId) && event.payload.tool_name === 'task') void useSubagentStore.getState().refresh()
             set((s) => {
               const idx = s.messages.findIndex(
@@ -516,7 +513,7 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
           case 'panel_focus_requested': {
             if (!isPrimary(threadId)) break
             const p = event.payload
-            const RIGHT_PANEL_KINDS: RightPanelKind[] = ['review', 'files', 'preview', 'tasks']
+            const RIGHT_PANEL_KINDS: RightPanelKind[] = ['review', 'files', 'preview', 'tasks', 'plan']
             if (p.panel.startsWith('custom:')) {
               // Always "open" — set_panel's backend-side validation already
               // confirmed this id exists, and there's no sensible "close the

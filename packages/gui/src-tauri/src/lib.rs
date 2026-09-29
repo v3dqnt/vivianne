@@ -336,11 +336,15 @@ pub fn run() {
       crate::coding_agent::commands::cmd_coding_list_subagents,
       crate::coding_agent::commands::cmd_coding_get_subagent_messages,
       crate::coding_agent::commands::cmd_coding_kill_subagent,
-      crate::coding_agent::commands::cmd_coding_plan_mode,
+      crate::agent::plans::cmd_plan_list,
+      crate::agent::plans::cmd_plan_get,
+      crate::agent::plans::cmd_plan_mode_get,
+      crate::agent::plans::cmd_plan_mode_set,
+      crate::agent::plans::cmd_plan_approve,
+      crate::agent::plans::cmd_plan_cancel,
       crate::agent::run_ledger::cmd_long_task_get,
       crate::agent::run_ledger::cmd_long_task_control,
       crate::agent::run_ledger::cmd_long_task_resume_prompt,
-      crate::coding_agent::commands::cmd_coding_set_plan_mode,
       crate::coding_agent::commands::cmd_coding_register_stream_channel,
       crate::coding_agent::computer::cmd_capture_screen,
       crate::instant::stt::cmd_instant_stt_preload,
@@ -605,6 +609,10 @@ pub fn run() {
                       .get("engine")
                       .and_then(|v| serde_json::from_value::<crate::agent::llama_manager::LocalEngine>(v.clone()).ok())
                       .unwrap_or_default();
+                    let tuning = config
+                      .get("tuning")
+                      .and_then(|v| serde_json::from_value::<crate::agent::llama_manager::LlamaTuning>(v.clone()).ok())
+                      .unwrap_or_default();
                     Some((
                       config.get("id")?.as_str()?.to_string(),
                       config.get("name")?.as_str()?.to_string(),
@@ -614,6 +622,7 @@ pub fn run() {
                       config.get("ctxSize")?.as_u64()? as u32,
                       auto_start,
                       engine,
+                      tuning,
                     ))
                   })
                   .collect::<Vec<_>>()
@@ -633,7 +642,7 @@ pub fn run() {
         // is a fresh, empty in-process registry every launch; `settings.json`
         // is the only thing that actually persists). Only `autoStart` ones
         // also get their process launched.
-        for (id, name, model_path, port, ngl, ctx_size, auto_start, engine) in endpoints {
+        for (id, name, model_path, port, ngl, ctx_size, auto_start, engine, tuning) in endpoints {
           let manager = app_clone.state::<Arc<LlamaManager>>();
           manager.register(crate::agent::llama_manager::LlamaProcessConfig {
             id: id.clone(),
@@ -644,9 +653,7 @@ pub fn run() {
             ctx_size,
             auto_start,
             engine,
-            // Startup restore reads the pre-tuning settings shape; an endpoint
-            // keeps engine defaults until it is saved again from Settings.
-            tuning: Default::default(),
+            tuning,
           });
           if auto_start {
             log::info!("[llama] auto-starting '{}' ({}:{})", name, model_path, port);

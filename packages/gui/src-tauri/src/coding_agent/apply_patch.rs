@@ -172,7 +172,6 @@ impl Tool for ApplyPatchTool {
         "apply_patch"
     }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        if let Some(gated) = super::tool_exec::plan_mode_gate("apply_patch") { return gated; }
         let patch_text = args["patchText"].as_str().unwrap_or("");
         if patch_text.trim().is_empty() {
             return ToolResult { content: "Error: patchText is required".to_string(), is_error: true, details: None };

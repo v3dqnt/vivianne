@@ -76,8 +76,6 @@ async fn tool_audit() {
         ("web_fetch", json!({ "url": "https://example.com" })),
         ("repo_clone", json!({ "repository": "octocat/Hello-World" })),
         ("repo_overview", json!({ "repository": "octocat/Hello-World" })),
-        ("enter_plan_mode", json!({ "plan": "audit" })),
-        ("exit_plan_mode", json!({})),
         ("task_output", json!({ "task_ids": ["nope"] })),
         ("kill_task", json!({ "task_ids": ["nope"] })),
     ];

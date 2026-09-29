@@ -173,7 +173,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Plan and track work",
         when: "A task with several steps, so progress is visible rather than held in your head.",
-        tools: &["todo_write", "enter_plan_mode", "exit_plan_mode", "present_plan"],
+        tools: &["todo_write", "present_plan", "submit_plan", "assign_plan_steps"],
         how: None,
         triggers: &["plan ", "make a plan", "step by step", "break this down", "roadmap", "keep track", "todo", "checklist", "what's left", "progress"],
     },
@@ -258,7 +258,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Other",
         when: "Occasional needs.",
-        tools: &["run_script", "connect_mcp_server", "list_tools", "get_current_time", "sleep"],
+        tools: &["run_script", "connect_mcp_server", "list_tools", "load_tools", "get_current_time", "sleep"],
         how: Some(
             "list_tools returns your full live tool list with descriptions — call it if you are ever unsure whether \
              you have some capability, instead of telling the user you lack it.",
@@ -307,6 +307,40 @@ pub fn capability_section(available: &HashSet<String>) -> String {
         out.push_str(&format!("Tools: {}\n", extra.join(", ")));
     }
 
+    out
+}
+
+/// The capability section for a model on the lean tool profile (see
+/// `agent::tool_profile`). Every group is still named — a capability that
+/// isn't loaded must stay one `load_tools` call away, not become invisible —
+/// but as one line each, with the `how` kept only for the groups whose tools
+/// are always loaded. Roughly a third of `capability_section`'s size, and
+/// deliberately independent of which groups are loaded right now, so the
+/// system prompt doesn't change (and invalidate the prompt cache) when the
+/// tool list grows.
+pub fn capability_section_lean(available: &HashSet<String>) -> String {
+    let core: HashSet<&str> = crate::agent::tool_profile::CORE_TOOLS.iter().copied().collect();
+    let mut out = String::from(
+        "Every tool below is real and yours. To keep you fast, only the core ones start in your function list. \
+         If you need one that isn't there, call load_tools with its group — e.g. load_tools({\"groups\": [\"GitHub\"]}) — \
+         and it is callable on your next step. Never tell the user you lack a capability listed here.\n",
+    );
+    for group in GROUPS {
+        let present: Vec<&str> = group.tools.iter().copied().filter(|t| available.contains(*t)).collect();
+        if present.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("\n## {} — {}\nTools: {}\n", group.name, group.when, present.join(", ")));
+        if let Some(how) = group.how.filter(|_| present.iter().all(|t| core.contains(t))) {
+            out.push_str(&format!("How: {how}\n"));
+        }
+    }
+    let grouped: HashSet<&str> = GROUPS.iter().flat_map(|g| g.tools.iter().copied()).collect();
+    let mut extra: Vec<&str> = available.iter().map(String::as_str).filter(|t| !grouped.contains(t)).collect();
+    if !extra.is_empty() {
+        extra.sort_unstable();
+        out.push_str(&format!("\n## Custom and connected tools — load with group \"custom\"\nTools: {}\n", extra.join(", ")));
+    }
     out
 }
 

@@ -593,9 +593,6 @@ impl Tool for EditDocumentTool {
         "edit_document"
     }
     async fn execute(&self, args: &Value, _cwd: &str) -> ToolResult {
-        if let Some(gated) = super::tool_exec::plan_mode_gate("edit_document") {
-            return gated;
-        }
         let Some(rel) = args.get("path").and_then(|v| v.as_str()) else {
             return err("'path' is required");
         };

@@ -15,7 +15,7 @@ import { closePanel, openPanel } from '../../workspace/layout'
 
 /** One kind of view a panel can host. `'custom'` renders a user-defined panel
  * playbook named by `panelName`. */
-export type DockViewKind = 'review' | 'files' | 'ide' | 'preview' | 'documents' | 'tasks' | 'multiplayer' | 'terminal' | 'agents' | 'document' | 'custom'
+export type DockViewKind = 'review' | 'files' | 'ide' | 'preview' | 'documents' | 'tasks' | 'multiplayer' | 'terminal' | 'agents' | 'plan' | 'document' | 'custom'
 
 /** Kept as the old name so `set_panel`'s values keep type-checking. */
 export type RightPanelKind = DockViewKind

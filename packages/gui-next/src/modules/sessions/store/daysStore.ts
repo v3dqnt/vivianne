@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { call } from '../../../ipc'
+import { usePlanStore } from '../../plan/store/planStore'
 import { useAgentStore } from '../../ai/store/agentStore'
 import type { AgentMessage } from '../../ai/lib/types'
 import type { SessionInfo } from '../lib/types'
@@ -155,6 +156,7 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
       await get().refreshEarlier()
       // After the transcript: resuming a long task sends a message into it.
       void useAgentStore.getState().refreshLongTask()
+      void usePlanStore.getState().refreshList()
     }
     opening = opening.then(run, run)
     return opening

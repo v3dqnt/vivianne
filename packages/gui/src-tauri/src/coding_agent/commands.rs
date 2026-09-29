@@ -12,7 +12,7 @@
 //! since a working gate already exists.
 
 use crate::coding_agent::orchestration::{
-    KillTaskTool, PlanModeState, SubagentRegistry, SubagentStatus,
+    KillTaskTool, SubagentRegistry, SubagentStatus,
 };
 use crate::coding_agent::tool_exec::Tool as _;
 
@@ -91,28 +91,6 @@ pub async fn cmd_coding_kill_subagent(id: String) -> Result<String, String> {
     let args = serde_json::json!({ "task_ids": [id] });
     let res = tool.execute(&args, ".").await;
     Ok(res.content)
-}
-
-#[derive(serde::Serialize)]
-pub struct PlanModeInfo {
-    pub active: bool,
-    pub plan: Option<String>,
-}
-
-#[tauri::command]
-pub async fn cmd_coding_plan_mode() -> Result<PlanModeInfo, String> {
-    let s = PlanModeState::global();
-    Ok(PlanModeInfo { active: s.is_active(), plan: s.current_plan() })
-}
-
-/// GUI escape hatch: force plan mode on/off from outside the model loop.
-/// Used by a "Plan Mode" toggle in the app chrome so the user can also drive
-/// the switch (grok exposes the same affordance in its UI).
-#[tauri::command]
-pub async fn cmd_coding_set_plan_mode(active: bool, plan: Option<String>) -> Result<bool, String> {
-    let s = PlanModeState::global();
-    if active { s.enter(plan); } else { s.exit(); }
-    Ok(s.is_active())
 }
 
 /// Register the frontend's live-output channel. Call once (e.g. at app

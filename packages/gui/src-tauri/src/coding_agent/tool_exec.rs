@@ -89,8 +89,6 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         // than wired up, since a working one already exists.
         Box::new(super::orchestration::TaskOutputTool::new()),
         Box::new(super::orchestration::KillTaskTool::new()),
-        Box::new(super::orchestration::EnterPlanModeTool::new()),
-        Box::new(super::orchestration::ExitPlanModeTool::new()),
     ];
     // ── User-defined: playbooks (~/.viv/playbooks/*.json) ──────────────────
     // A playbook is a tool if it has `command`, a panel if it has `panel`
@@ -101,22 +99,6 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         tools.push(Box::new(super::playbooks::PlaybookTool::new(def, cwd.clone())));
     }
     tools
-}
-
-/// Check whether a mutating tool should be refused because plan mode is on.
-/// Called from the mutating tools (write, edit, apply_patch, bash, powershell,
-/// notebook_edit, streaming_*) before doing any work.
-pub(crate) fn plan_mode_gate(tool_name: &str) -> Option<ToolResult> {
-    if !super::orchestration::PlanModeState::global().is_active() {
-        return None;
-    }
-    Some(ToolResult {
-        content: format!(
-            "'{tool_name}' is disabled while plan mode is active. Call exit_plan_mode first, or use a read-only tool."
-        ),
-        is_error: true,
-        details: Some(serde_json::json!({ "gated_by": "plan_mode" })),
-    })
 }
 
 // ── Shared limits & helpers ─────────────────────────────────────────────
@@ -345,7 +327,6 @@ impl Tool for WriteTool {
     }
 
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        if let Some(gated) = plan_mode_gate("write") { return gated; }
         let path = args["path"].as_str().unwrap_or("").to_string();
         let content = args["content"].as_str().unwrap_or("").to_string();
         let full_path = resolve_path(&self.cwd, &path);
@@ -414,7 +395,6 @@ impl Tool for EditTool {
     }
 
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        if let Some(gated) = plan_mode_gate("edit") { return gated; }
         let path = args["path"].as_str().unwrap_or("").to_string();
         let old_string = args["old_string"].as_str().unwrap_or("");
         let new_string = args["new_string"].as_str().unwrap_or("");
@@ -536,7 +516,6 @@ impl Tool for BashTool {
     }
 
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        if let Some(gated) = plan_mode_gate("bash") { return gated; }
         let command = args["command"].as_str().unwrap_or("").to_string();
         if let Some(reason) = super::sandbox::check_command(&command) {
             return ToolResult { content: reason.to_string(), is_error: true, details: None };

@@ -9,6 +9,7 @@ import {
   LayerLinear,
   CodeLinear,
   AgentsLinear,
+  ClipboardTextLinear,
 } from '../../icons'
 import type { DockViewKind } from '../dock/store/panelStore'
 
@@ -53,6 +54,7 @@ export const PANELS: Record<PanelKind, PanelDef> = {
   // One per open file; `panelName` is the file's path.
   document: { title: 'Document', icon: DocumentTextLinear, renderer: 'onlyWhenVisible', singleton: true, closable: true },
   agents: { title: 'Agents', icon: AgentsLinear, renderer: 'onlyWhenVisible', singleton: true, closable: true },
+  plan: { title: 'Plan', icon: ClipboardTextLinear, renderer: 'onlyWhenVisible', singleton: true, closable: true },
   terminal: { title: 'Terminal', icon: CommandSquareLinear, renderer: 'always', singleton: false, closable: true },
   custom: { title: 'Panel', icon: LayerLinear, renderer: 'onlyWhenVisible', singleton: true, closable: true },
 }
@@ -64,6 +66,7 @@ export const PANELS: Record<PanelKind, PanelDef> = {
 export const ADDABLE: Exclude<PanelKind, 'chat' | 'custom' | 'ide' | 'document' | 'documents'>[] = [
   'files',
   'agents',
+  'plan',
   'preview',
   'terminal',
   'review',

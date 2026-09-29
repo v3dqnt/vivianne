@@ -207,11 +207,19 @@ pub async fn cmd_agent_prompt(
             true,
         ).await;
 
-        let prompt = if base.is_empty() {
+        let mut prompt = if base.is_empty() {
             capability_blocks
         } else {
             format!("{base}\n\n{capability_blocks}")
         };
+        // After the directive, so the per-turn strip above removes it again
+        // and a turn out of plan mode carries none of it.
+        if agent.state.plan_mode().await {
+            prompt.push_str("
+
+");
+            prompt.push_str(crate::agent::plans::PLAN_MODE_DIRECTIVE);
+        }
         agent.state.set_system_prompt(prompt).await;
     }
 
@@ -291,6 +299,9 @@ pub async fn cmd_agent_continue(
 #[tauri::command]
 pub async fn cmd_agent_abort(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     state.abort_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    // A plan being carried out runs inside one long tool call, which the
+    // loop's abort check can't reach until it returns — stop it directly.
+    crate::agent::plans::cancel_all();
     Ok(())
 }
 

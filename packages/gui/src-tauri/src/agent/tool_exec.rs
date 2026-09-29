@@ -38,13 +38,18 @@ const GATED_TOOLS: &[&str] = &[
     "github_act", "github_api",
 ];
 
-/// Mutating tools refused outright while plan mode is active (see
-/// `coding_agent::orchestration::PlanModeState` / `plan_mode_gate`). Checked
-/// *before* the approval-wait below so a plan-mode refusal never shows the
-/// user an "approve this write?" prompt for a call that's going to be
-/// rejected regardless.
-const PLAN_MODE_GATED_TOOLS: &[&str] = &[
-    "write", "edit", "bash", "powershell", "apply_patch", "notebook_edit", "terminal_open", "terminal_send",
+/// The only tools plan mode allows: reading the project and the web, and
+/// finishing with a plan. An allowlist on purpose — the denylist it replaced
+/// named eight tools and let every other way of changing things through
+/// (`dip`, GitHub writes, document edits, MCP tools, terminals).
+///
+/// `task` is allowed because a subagent spawned in plan mode inherits it, so
+/// it can research in parallel but not act.
+pub(crate) const PLAN_MODE_TOOLS: &[&str] = &[
+    "read", "ls", "grep", "glob", "code_search", "repo_overview", "diagnostics", "inspect_document",
+    "web_search", "web_fetch", "recall", "read_skill", "list_tools", "load_tools", "list_subagent_profiles",
+    "question", "get_current_time", "get_goal", "github", "math", "todo_write",
+    "task", "task_output", "submit_plan",
 ];
 
 /// Local, read-only, zero-side-effect tools — safe to run concurrently
@@ -612,30 +617,33 @@ pub async fn execute_tool_calls(
             args: tool_call.arguments.clone(),
         });
 
-        if PLAN_MODE_GATED_TOOLS.contains(&tool_call.name.as_str()) {
-            if let Some(gated) = crate::coding_agent::tool_exec::plan_mode_gate(&tool_call.name) {
-                let denied_result = AgentToolResult {
-                    content: vec![MessageContent::Text { text: gated.content }],
-                    details: serde_json::Value::Null,
-                    terminate: None,
-                };
-                emit.emit(AgentEvent::ToolExecutionEnd {
-                    tool_call_id: tool_call.id.clone(),
-                    tool_name: tool_call.name.clone(),
-                    result: denied_result.clone(),
-                    is_error: true,
-                });
-                slots[slot_idx] = Some(AgentMessage::ToolResult {
-                    tool_call_id: tool_call.id,
-                    tool_name: tool_call.name,
-                    content: denied_result.content,
-                    details: Some(denied_result.details),
-                    is_error: Some(true),
-                    timestamp: now_ms(),
-                    arguments: Some(tool_call.arguments),
-                });
-                continue;
-            }
+        if state.plan_mode().await && !PLAN_MODE_TOOLS.contains(&tool_call.name.as_str()) {
+            let denied_result = AgentToolResult {
+                content: vec![MessageContent::Text {
+                    text: format!(
+                        "'{}' isn't available in plan mode — nothing may be changed until the user approves a plan. Research with read-only tools (read, grep, code_search, web_search, web_fetch…), then call submit_plan.",
+                        tool_call.name
+                    ),
+                }],
+                details: serde_json::Value::Null,
+                terminate: None,
+            };
+            emit.emit(AgentEvent::ToolExecutionEnd {
+                tool_call_id: tool_call.id.clone(),
+                tool_name: tool_call.name.clone(),
+                result: denied_result.clone(),
+                is_error: true,
+            });
+            slots[slot_idx] = Some(AgentMessage::ToolResult {
+                tool_call_id: tool_call.id,
+                tool_name: tool_call.name,
+                content: denied_result.content,
+                details: Some(denied_result.details),
+                is_error: Some(true),
+                timestamp: now_ms(),
+                arguments: Some(tool_call.arguments),
+            });
+            continue;
         }
 
         // Gate side-effecting tools behind user approval unless bypass mode is
@@ -745,6 +753,10 @@ pub async fn execute_tool_calls(
             execute_question_tool(&tool_call.id, &tool_call.arguments, emit).await
         } else if tool_call.name == "confirm_action" {
             execute_confirm_action_tool(&tool_call.id, &tool_call.arguments, emit).await
+        } else if tool_call.name == "submit_plan" {
+            crate::agent::plans::execute_submit_plan(&tool_call.arguments, state.primary_workspace_folder().await, app).await
+        } else if tool_call.name == "assign_plan_steps" {
+            crate::agent::plans::execute_assign_plan_steps(&tool_call.arguments, context.delegate_depth, state, app).await
         } else if tool_call.name == "present_plan" {
             execute_present_plan_tool(&tool_call.arguments)
         } else if tool_call.name == "present_snippet" {
@@ -803,6 +815,11 @@ pub async fn execute_tool_calls(
             execute_get_current_time_tool().await
         } else if tool_call.name == "list_tools" {
             execute_list_tools_tool(&disabled_tools).await
+        } else if tool_call.name == crate::agent::tool_profile::LOAD_TOOLS {
+            let lean = crate::agent::tool_profile::is_lean_provider(&state.model().await.provider);
+            let available = available_tool_names(state).await;
+            let (text, is_error) = crate::agent::tool_profile::execute_load_tools(&tool_call.arguments, &available, lean);
+            text_result(if is_error { format!("Error: {text}") } else { text })
         } else if tool_call.name == "set_panel" {
             execute_set_panel_tool(&tool_call.arguments, emit)
         } else if tool_call.name == "get_goal" {
@@ -1535,7 +1552,7 @@ async fn subagent_source_tag(app: &tauri::AppHandle, kind: &str) -> String {
 /// `coding_agent::orchestration`, dispatched through the generic fallback
 /// below) read from — only the *spawn* side needs direct access to
 /// `AgentState`/`AppHandle`, so only `task` itself is special-cased.
-async fn execute_task_tool(
+pub(crate) async fn execute_task_tool(
     args: &serde_json::Value,
     depth: usize,
     parent_state: &AgentState,
@@ -1663,6 +1680,7 @@ async fn execute_task_tool(
         notify: std::sync::Arc::new(tokio::sync::Notify::new()),
         messages: std::sync::Mutex::new(Vec::new()),
         steering: None,
+        abort: None,
     };
     let arc = SubagentRegistry::global().register(handle);
     // A project specialist's work is kept, and can be commented on.
@@ -1696,6 +1714,8 @@ async fn execute_task_tool(
     // An employee spawned by the top level may run subagents of its own.
     sub_state.set_delegation_allowed(depth == 0 && team_agent.is_some()).await;
     sub_state.set_thinking_level(parent_state.thinking_level().await).await;
+    // A subagent of a planning agent plans too: research, not action.
+    sub_state.set_plan_mode(parent_state.plan_mode().await).await;
     sub_state.set_workspace(parent_state.workspace_folders().await, parent_state.access_mode().await).await;
     let mut role_framing = format!(
         "You are a focused sub-agent handling one delegated task for a parent agent: {description}. \
@@ -1824,7 +1844,15 @@ async fn drive_subagent(
     };
     let abort_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let steer_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    handle.lock().unwrap_or_else(|e| e.into_inner()).steering = Some((queues.steering_queue.clone(), steer_flag.clone()));
+    {
+        let mut h = handle.lock().unwrap_or_else(|e| e.into_inner());
+        h.steering = Some((queues.steering_queue.clone(), steer_flag.clone()));
+        h.abort = Some(abort_flag.clone());
+        // Cancelled before it got this far: don't start at all.
+        if h.cancelled {
+            abort_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
 
     let (tx, mut rx) = crate::agent::events::event_bus();
     let handle_for_events = handle.clone();
@@ -2111,7 +2139,7 @@ fn goal_json(g: &Goal) -> serde_json::Value {
 /// Panel names the `set_panel` tool accepts — must stay in sync with the
 /// `panel` enum in its schema and the `RIGHT_PANEL_KINDS` list the frontend
 /// checks in `agentStore.ts`'s `panel_focus_requested` handler.
-const SETTABLE_PANELS: &[&str] = &["review", "files", "preview_dev", "preview_browser", "documents", "tasks", "terminal"];
+const SETTABLE_PANELS: &[&str] = &["review", "files", "preview_dev", "preview_browser", "documents", "tasks", "plan", "terminal"];
 
 fn execute_set_panel_tool(args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
     let Some(panel) = args.get("panel").and_then(|v| v.as_str()) else {
@@ -2946,11 +2974,11 @@ mod schema_registry_consistency_tests {
     /// list has to be kept in sync with that chain by hand, since nothing
     /// generates it from the real `if`/`else if` conditions.
     const DISPATCH_CHAIN_TOOLS: &[&str] = &[
-        "remember", "recall", "read_skill", "question", "confirm_action", "present_plan",
+        "remember", "recall", "read_skill", "question", "confirm_action", "present_plan", "submit_plan", "assign_plan_steps",
         "present_snippet", "web_preview", "browser_snapshot", "browser_click", "browser_type",
         "browser_press_key", "browser_scroll", "browser_evaluate", "browser_read_console",
         "browser_read_network", "browser_start", "browser_session_status", "browser_import_cookies", "task", "list_subagent_profiles", "hire_agent", "generate_image", "connect_mcp_server",
-        "get_current_time", "list_tools", "set_panel", "get_goal", "create_goal", "update_goal",
+        "get_current_time", "list_tools", "load_tools", "set_panel", "get_goal", "create_goal", "update_goal",
         "terminal_open", "terminal_send", "terminal_read", "terminal_signal", "terminal_close",
         "terminal_list", "create_automation", "list_automations", "delete_automation",
         "set_automation_enabled", "sandbox_execute", "run_script", "math", "dip", "computer",

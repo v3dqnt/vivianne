@@ -673,7 +673,7 @@ When you hit a login wall: call browser_session_status first, and if there is ge
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "panel": { "type": "string", "description": "One of: review (diff/review panel), files (workspace file tree), preview_dev (the Preview panel in dev-server mode), preview_browser (the Preview panel in browser mode — web_preview/browser_* activity), documents (the Preview panel in Documents mode — where the user views and edits pdf/docx/xlsx/pptx files; open it when working on a document with them), tasks (background subagent tasks), terminal (the bottom terminal panel). Or \"custom:<name>\" for a panel-type playbook (see list_tools for what's installed — Settings → Mods → Playbooks)." },
+                    "panel": { "type": "string", "description": "One of: review (diff/review panel), files (workspace file tree), preview_dev (the Preview panel in dev-server mode), preview_browser (the Preview panel in browser mode — web_preview/browser_* activity), documents (the Preview panel in Documents mode — where the user views and edits pdf/docx/xlsx/pptx files; open it when working on a document with them), tasks (background subagent tasks), plan (the Plan panel — plans under review or being carried out), terminal (the bottom terminal panel). Or \"custom:<name>\" for a panel-type playbook (see list_tools for what's installed — Settings → Mods → Playbooks)." },
                     "action": { "type": "string", "enum": ["open", "close"] }
                 },
                 "required": ["panel", "action"]
@@ -706,6 +706,17 @@ When you hit a login wall: call browser_session_status first, and if there is ge
                     "blocked_reason": { "type": "string", "description": "Why it's blocked — action='blocked' only" }
                 },
                 "required": ["action"]
+            }
+        }),
+        serde_json::json!({
+            "name": "load_tools",
+            "description": "Add tools to your function list. To keep you fast, only core tools are loaded at first; your system prompt names every group you have. If a tool you need isn't in your function list, call this with its group, and it is callable from your next step. Loaded tools stay loaded for the rest of the conversation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "groups": { "type": "array", "items": { "type": "string" }, "description": "Group names from your capability list, e.g. [\"GitHub\"] or [\"browse\"]. \"custom\" loads MCP and playbook tools." },
+                    "tools": { "type": "array", "items": { "type": "string" }, "description": "Exact tool names, when you know them." }
+                }
             }
         }),
         serde_json::json!({
@@ -879,19 +890,68 @@ When you hit a login wall: call browser_session_status first, and if there is ge
             }
         }),
         serde_json::json!({
-            "name": "enter_plan_mode",
-            "description": "Enter plan mode. While active, mutating tools (write, edit, apply_patch, bash, powershell, notebook_edit, terminal_open, terminal_send) are refused — you can only read, search, and think. Use to sketch a plan before making changes. Provide an optional 'plan' summary.",
+            "name": "submit_plan",
+            "description": "Submit a plan for the user to review — the end of every plan-mode turn, and how you revise a plan after feedback. The plan opens in the user's Plan panel, where they comment on individual sections and steps, then ask for changes or approve. Write it for a reader deciding whether to approve: concrete, specific to this project, grounded in what you found. Sections should cover the goal, what you found (the relevant code, the dependencies involved with their current versions, and anything learned from the web, with sources), the approach, risks and open questions, and how the result will be verified. Steps are the units of work the team will carry out, each sized for one specialist, with dependencies where one needs another's result. To revise, submit the whole plan again with the same plan_id and say what changed in 'changes'.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "plan": { "type": "string", "description": "Optional summary of the plan you're proposing" }
-                }
+                    "plan_id": { "type": "string", "description": "Only when revising: the id of the plan being revised. Omit for a new plan." },
+                    "title": { "type": "string", "description": "Short name of the plan" },
+                    "summary": { "type": "string", "description": "Two or three sentences: what will be done and why" },
+                    "sections": {
+                        "type": "array",
+                        "description": "The body of the plan, in reading order",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "string", "description": "Stable id, kept across revisions (e.g. 'findings') — comments attach to it" },
+                                "heading": { "type": "string" },
+                                "body": { "type": "string", "description": "Markdown" }
+                            },
+                            "required": ["id", "heading", "body"]
+                        }
+                    },
+                    "steps": {
+                        "type": "array",
+                        "description": "The work, in order",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "string", "description": "Stable id, kept across revisions (e.g. 'db-schema')" },
+                                "title": { "type": "string" },
+                                "detail": { "type": "string", "description": "What exactly to do, which files, and how to verify it" },
+                                "owner": { "type": "string", "description": "Suggested team member (agent id), if the project has a team" },
+                                "depends_on": { "type": "array", "items": { "type": "string" }, "description": "Ids of steps that must finish first" }
+                            },
+                            "required": ["id", "title", "detail"]
+                        }
+                    },
+                    "changes": { "type": "string", "description": "When revising: what changed from the previous version and how it answers the feedback" }
+                },
+                "required": ["title", "summary", "sections", "steps"]
             }
         }),
         serde_json::json!({
-            "name": "exit_plan_mode",
-            "description": "Exit plan mode, re-enabling mutating tools. Returns the plan you recorded with enter_plan_mode, if any.",
-            "parameters": { "type": "object", "properties": {} }
+            "name": "assign_plan_steps",
+            "description": "Carry out a plan the user approved: give each step to a member of your team, and the steps run — independent ones in parallel, each only once the steps it depends on are done, each step's agent getting the reports of the steps it builds on. Returns when every step has finished, with each step's report, for you to review, integrate and verify. Steps without an assignment keep the owner the plan suggested, or go to a general-purpose agent. Calling it again on a plan that partly failed re-runs only the unfinished steps.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan_id": { "type": "string" },
+                    "assignments": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "step_id": { "type": "string" },
+                                "agent_id": { "type": "string", "description": "An approved team member's id, or \"general-purpose\"" }
+                            },
+                            "required": ["step_id", "agent_id"]
+                        }
+                    }
+                },
+                "required": ["plan_id"]
+            }
         }),
         serde_json::json!({
             "name": "sandbox_execute",

@@ -616,7 +616,15 @@ pub async fn run_agent_loop_continue(
         // its own schema list here backs up the runtime depth check in
         // execute_task_tool, so a nested attempt fails closed instead of
         // costing a round-trip to find out.
-        let mut tool_defs = crate::agent::tool_exec::get_agent_tool_definitions().await;
+        // Only what the model may actually call (a disabled tool's schema
+        // used to ride along anyway and get refused at execution), and for a
+        // local model only the lean profile — see `agent::tool_profile`.
+        let mut tool_defs = crate::agent::tool_profile::select_tool_defs(
+            crate::agent::tool_exec::get_agent_tool_definitions().await,
+            &crate::agent::tool_exec::available_tool_names(state).await,
+            crate::agent::tool_profile::is_lean_provider(&model.provider),
+            &context.messages,
+        );
         if context.delegate_depth >= 1 {
             tool_defs.retain(|t| t.get("name").and_then(|n| n.as_str()) != Some("task"));
         }
@@ -1019,7 +1027,10 @@ pub async fn run_agent_loop_continue(
         if let Some(l) = ledger.as_mut() {
             if !abort_flag.load(Ordering::SeqCst) && ended_on.is_none() {
                 use crate::agent::run_ledger::RunStatus;
-                match state.goal().await.map(|g| (g.phase, g.blocked_reason)) {
+                // A planning turn ends by handing a plan over for review;
+                // nudging it to keep working would only fight that.
+                let planning = state.plan_mode().await;
+                match state.goal().await.map(|g| (g.phase, g.blocked_reason)).filter(|_| !planning) {
                     Some((crate::agent::types::GoalPhase::Complete, _)) => {
                         l.set_status(RunStatus::Done, None);
                         crate::agent::notifications::notify_long_task(app, &format!("Done: {}", l.objective));
@@ -1749,9 +1760,18 @@ async fn call_provider_stream_and_await(
                 // routing local models through the pre-migration Rust path
                 // sidesteps the whole class of browser-security-policy
                 // failures instead of trying to configure around them.
+                // Thinking Off used to change nothing for a local model: a
+                // hybrid-reasoning GGUF (Qwen3 and its kin) went on spending
+                // hundreds of tokens thinking before every tool call. Their
+                // chat templates read `enable_thinking`; templates without
+                // it ignore unknown variables, so this is safe to send to any
+                // model. Every other level leaves the template's default.
+                let chat_template_kwargs = matches!(thinking_level_clone, ThinkingLevel::Off)
+                    .then(|| serde_json::json!({ "enable_thinking": false }));
                 let options = crate::ai::api::openai_completions::OpenAICompletionsOptions {
                     max_tokens: Some(model_clone.max_tokens),
                     api_key: api_key_clone,
+                    chat_template_kwargs,
                     ..Default::default()
                 };
                 let _ = crate::ai::api::openai_completions::stream_chat_completions(

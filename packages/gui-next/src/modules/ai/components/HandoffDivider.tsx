@@ -245,3 +245,54 @@ export function ResumeDivider({ text }: { text: string }) {
     </Stack>
   )
 }
+
+/** Plan review traffic: the comments sent back on a plan, or its approval.
+ * Written by the app on the user's behalf (see `plan/store/planStore.ts` and
+ * `plans::cmd_plan_approve`), so shown as a marker, not a wall of XML. */
+export function isPlanNoteText(text: string): boolean {
+  const t = text.trimStart()
+  return t.startsWith('<plan_feedback') || t.startsWith('<plan_approved')
+}
+
+export function PlanNoteDivider({ text }: { text: string }) {
+  const theme = useTheme()
+  const [open, setOpen] = useState(false)
+  const approved = text.trimStart().startsWith('<plan_approved')
+  const version = text.match(/version="(\d+)"/)?.[1]
+  const body = approved
+    ? ''
+    : (text.match(/<plan_feedback[^>]*>([\s\S]*?)<\/plan_feedback>/)?.[1] ?? '').trim()
+  const count = body ? body.split('\n').filter((l) => l.startsWith('- ')).length : 0
+  const label = approved
+    ? `You approved the plan${version ? ` (v${version})` : ''}`
+    : `You asked for changes to the plan${version ? ` (v${version})` : ''} — ${count} comment${count === 1 ? '' : 's'}`
+  return (
+    <Stack sx={{ gap: 0.75, py: 0.5 }}>
+      <ButtonBase
+        onClick={() => !approved && setOpen((v) => !v)}
+        aria-expanded={approved ? undefined : open}
+        sx={{ display: 'flex', alignItems: 'center', gap: 1.25, width: '100%', borderRadius: '8px', py: 0.5 }}
+      >
+        <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
+        <Typography variant="caption" sx={{ color: approved ? 'success.main' : 'text.secondary', fontWeight: 600, whiteSpace: 'nowrap' }}>
+          {label}
+        </Typography>
+        {!approved && (
+          <Typography variant="caption" sx={{ color: 'text.disabled', whiteSpace: 'nowrap' }}>
+            {open ? 'Hide' : 'Show'}
+          </Typography>
+        )}
+        <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
+      </ButtonBase>
+      <Collapse in={open} unmountOnExit>
+        <Box sx={{ px: 2, py: 1.25, borderRadius: '12px', bgcolor: alpha(theme.palette.text.primary, 0.035), border: 1, borderColor: 'divider' }}>
+          {body.split('\n').map((l, i) => (
+            <Typography key={i} variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.55, py: 0.25 }}>
+              {l.replace(/ \[[^\]]+\]/, '')}
+            </Typography>
+          ))}
+        </Box>
+      </Collapse>
+    </Stack>
+  )
+}

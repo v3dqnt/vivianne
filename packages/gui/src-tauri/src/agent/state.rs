@@ -91,6 +91,10 @@ struct AgentStateInner {
     /// (see `agent::run_ledger`). Set means: no step ceiling, spend and time
     /// caps instead, wait out rate limits, keep going until the goal is done.
     long_task: Option<String>,
+    /// Plan mode: research only, ending in a plan for the user to review
+    /// (see `agent::plans`). Per conversation — the old process-wide flag
+    /// switched every project and every subagent into it at once.
+    plan_mode: bool,
 }
 
 impl AgentState {
@@ -139,6 +143,7 @@ impl AgentState {
                 delegation_allowed: false,
                 goal: None,
                 long_task: None,
+                plan_mode: false,
             })),
         };
         if !workspace_folders.is_empty() {
@@ -257,6 +262,14 @@ impl AgentState {
 
     pub async fn set_long_task(&self, key: Option<String>) {
         self.inner.write().await.long_task = key;
+    }
+
+    pub async fn plan_mode(&self) -> bool {
+        self.inner.read().await.plan_mode
+    }
+
+    pub async fn set_plan_mode(&self, on: bool) {
+        self.inner.write().await.plan_mode = on;
     }
 
     pub async fn set_system_prompt(&self, value: String) {
