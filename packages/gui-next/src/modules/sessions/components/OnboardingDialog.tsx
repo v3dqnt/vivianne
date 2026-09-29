@@ -9,7 +9,6 @@ import { useDaysStore } from '../store/daysStore'
 import { useAgentStore } from '../../ai/store/agentStore'
 import { Choices, ListInput, Question } from '../onboarding/fields'
 import {
-  AUDIENCES,
   AUTONOMY,
   CHECK_INS,
   DEADLINES,
@@ -18,11 +17,8 @@ import {
   GIT,
   KINDS,
   MAX_PRIORITIES,
-  PRIORITIES,
   SCALES,
-  STAGES,
   STYLES,
-  TESTING,
   emptyAnswers,
   featuresFor,
   platformsFor,
@@ -30,6 +26,7 @@ import {
   toBrief,
   toCharter,
   toInstructions,
+  vocabFor,
   type Answers,
   type FollowUp,
 } from '../onboarding/model'
@@ -50,7 +47,7 @@ interface FollowUpQuestion {
 
 type StepId = 'basics' | 'kind' | 'people' | 'features' | 'tech' | 'quality' | 'style' | 'questions' | 'review'
 
-const STEPS: Array<{ id: StepId; title: string; sub: string }> = [
+const BASE_STEPS: Array<{ id: StepId; title: string; sub: string }> = [
   { id: 'basics', title: 'Basics', sub: 'Name, folder and the one-line idea' },
   { id: 'kind', title: 'The project', sub: 'What kind of thing you’re building' },
   { id: 'people', title: 'Users & problem', sub: 'Who it’s for and why it should exist' },
@@ -137,6 +134,16 @@ export function OnboardingDialog({
 
   const set = <K extends keyof Answers>(key: K, value: Answers[K]) => setA((prev) => ({ ...prev, [key]: value }))
 
+  const v = vocabFor(a.kind)
+  const STEPS = BASE_STEPS.map((st) =>
+    st.id === 'features'
+      ? { ...st, title: v.featuresTitle, sub: v.featuresSub }
+      : st.id === 'tech'
+        ? { ...st, title: v.techTitle, sub: v.techSub }
+        : st.id === 'people' && v.showScale === false
+          ? { ...st, title: 'Question & audience', sub: 'What you want to find out, and for whom' }
+          : st,
+  )
   const index = STEPS.findIndex((s) => s.id === step)
   const brief = useMemo(() => toBrief(a), [a])
 
@@ -234,7 +241,7 @@ export function OnboardingDialog({
       // fails, and nothing half-made is left in the project list.
       await call('cmd_create_master', { root, name: masterName.trim(), charter, instructions })
       if (!project) {
-        await createProject(a.name.trim(), root, null)
+        await createProject(a.name.trim(), root, null, 'company')
       } else if (useProjectsStore.getState().activeProjectId !== project.id) {
         useProjectsStore.getState().setActiveProject(project.id)
       }
@@ -342,7 +349,7 @@ export function OnboardingDialog({
             value={a.pitch}
             autoFocus={!!project}
             onChange={(e) => set('pitch', e.target.value)}
-            placeholder="A recipe app that imports recipes from any site and turns a week of meals into one shopping list."
+            placeholder={v.pitchPlaceholder}
           />
         </Question>
       </>
@@ -359,32 +366,34 @@ export function OnboardingDialog({
           </Question>
         )}
         <Question label="Where does it stand today?">
-          <Choices options={STAGES} value={a.stage} onChange={(v) => set('stage', v)} />
+          <Choices options={v.stages} value={a.stage} onChange={(x) => set('stage', x)} />
         </Question>
       </>
     ),
 
     people: (
       <>
-        <Question label="Who is it for?" hint="Pick every group that applies.">
-          <Choices multi options={AUDIENCES} value={a.audience} onChange={(v) => set('audience', v)} />
+        <Question label={v.audienceLabel} hint="Pick every group that applies.">
+          <Choices multi options={v.audiences} value={a.audience} onChange={(x) => set('audience', x)} />
         </Question>
-        <Question label="What problem does it solve for them?" hint="What do they do today without it, and what’s painful about that?">
+        <Question label={v.problemLabel} hint={v.problemHint}>
           <TextField id="ob-problem" size="small" fullWidth multiline minRows={3} value={a.problem} onChange={(e) => set('problem', e.target.value)} />
         </Question>
-        <Question label="How many people will use it?">
-          <Choices options={SCALES} value={a.scale} onChange={(v) => set('scale', v)} />
-        </Question>
+        {v.showScale && (
+          <Question label="How many people will use it?">
+            <Choices options={SCALES} value={a.scale} onChange={(x) => set('scale', x)} />
+          </Question>
+        )}
       </>
     ),
 
     features: (
       <>
-        <Question label="Which of these does the first version need?" hint={`Suggested for a ${a.kind?.toLowerCase() ?? 'project like this'}.`}>
+        <Question label={v.featuresLabel} hint={`Suggested for ${a.kind ? `a ${a.kind.toLowerCase()} project` : 'a project like this'}.`}>
           <Choices multi options={featuresFor(a.kind)} value={a.features} onChange={(v) => set('features', v)} />
         </Question>
-        <Question label="Anything else it must do?" hint="The features specific to your idea. One per line — press Enter to add.">
-          <ListInput id="ob-musthave" value={a.mustHave} onChange={(v) => set('mustHave', v)} placeholder="e.g. Scale a recipe up or down by servings" />
+        <Question label={v.mustHaveLabel} hint={v.mustHaveHint}>
+          <ListInput id="ob-musthave" value={a.mustHave} onChange={(x) => set('mustHave', x)} placeholder={v.mustHavePlaceholder} />
         </Question>
         <Question label="Later, not now">
           <ListInput id="ob-later" value={a.later} onChange={(v) => set('later', v)} placeholder="e.g. Share meal plans with others" />
@@ -397,7 +406,7 @@ export function OnboardingDialog({
 
     tech: (
       <>
-        <Question label="Do you have a stack in mind?">
+        <Question label={v.techQuestion}>
           <ToggleButtonGroup
             size="small"
             exclusive
@@ -427,11 +436,11 @@ export function OnboardingDialog({
           )}
         {a.stackChoice === 'agent' && (
           <Typography variant="body2" color="text.secondary">
-            The master picks a stack that fits everything else you’ve said, and records each choice — with the reason — in the
-            charter, where you can overrule it.
+            The master picks {v.techTitle === 'Technology' ? 'a stack' : 'methods and tools'} that fit everything else you’ve said, and
+            records each choice — with the reason — in the charter, where you can overrule it.
           </Typography>
         )}
-        <Question label="Services, APIs or accounts it should use?" hint="Anything already decided: an existing API, a database you run, a payments account, a design system.">
+        <Question label={v.techNotesLabel} hint={v.techNotesHint}>
           <TextField id="ob-technotes" size="small" fullWidth multiline minRows={2} value={a.techNotes} onChange={(e) => set('techNotes', e.target.value)} />
         </Question>
       </>
@@ -440,20 +449,24 @@ export function OnboardingDialog({
     quality: (
       <>
         <Question label="What matters most?" hint={`Pick up to ${MAX_PRIORITIES}, most important first. The master uses these to settle trade-offs.`}>
-          <Choices multi max={MAX_PRIORITIES} options={PRIORITIES} value={a.priorities} onChange={(v) => set('priorities', v)} />
+          <Choices multi max={MAX_PRIORITIES} options={v.priorities} value={a.priorities} onChange={(x) => set('priorities', x)} />
         </Question>
-        <Question label="How thoroughly should it be tested?">
-          <Choices options={TESTING} value={a.testing} onChange={(v) => set('testing', v)} />
+        <Question label={v.testingLabel}>
+          <Choices options={v.testing} value={a.testing} onChange={(x) => set('testing', x)} />
         </Question>
         <Question label="Timeline">
           <Choices options={DEADLINES} value={a.deadline} onChange={(v) => set('deadline', v)} />
         </Question>
-        <Question label="Design">
-          <Choices options={DESIGN} value={a.design} onChange={(v) => set('design', v)} />
-        </Question>
-        <Question label="Visual style">
-          <Choices multi options={STYLES} value={a.styles} onChange={(v) => set('styles', v)} />
-        </Question>
+        {v.showDesign && (
+          <>
+            <Question label="Design">
+              <Choices options={DESIGN} value={a.design} onChange={(x) => set('design', x)} />
+            </Question>
+            <Question label="Visual style">
+              <Choices multi options={STYLES} value={a.styles} onChange={(x) => set('styles', x)} />
+            </Question>
+          </>
+        )}
         <Question label="Any other constraints?" hint="Budget, licensing, compliance, must work offline, must run on old hardware…">
           <TextField id="ob-constraints" size="small" fullWidth multiline minRows={2} value={a.constraints} onChange={(e) => set('constraints', e.target.value)} />
         </Question>

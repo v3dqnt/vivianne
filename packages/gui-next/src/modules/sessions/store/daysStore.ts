@@ -4,7 +4,7 @@ import { usePlanStore } from '../../plan/store/planStore'
 import { useAgentStore } from '../../ai/store/agentStore'
 import type { AgentMessage } from '../../ai/lib/types'
 import type { SessionInfo } from '../lib/types'
-import { useProjectsStore } from './projectsStore'
+import { useProjectsStore, modeOf } from './projectsStore'
 import { useWorkspaceStore } from '../../ai/store/workspaceStore'
 
 /** Mirrors `agent::days::GENERAL_SCOPE` and `projectsStore`'s `GENERAL_PROJECT_ID`. */
@@ -74,28 +74,37 @@ interface ConversationState {
  * shows up as an ordinary thread so nothing said in it disappears. */
 const LEGACY_GENERAL_CONVERSATION = `conv--${GENERAL_SCOPE}`
 
-/** Threads that belong to General: not a project's conversation or day, and
- * not assigned to a project. */
-function generalThreads(all: SessionInfo[]): SessionInfo[] {
+/** Whether a scope is organised as threads: General always, and a project
+ * created as a threads project. */
+export function isThreaded(scope: string | null): boolean {
+  if (!scope) return false
+  if (scope === GENERAL_SCOPE) return true
+  return modeOf(useProjectsStore.getState().projects.find((p) => p.id === scope)) === 'threads'
+}
+
+/** A scope's threads, newest first: General's are the ones assigned to no
+ * project; a threads project's are the ones assigned to it. */
+function threadsOf(scope: string, all: SessionInfo[]): SessionInfo[] {
   const map = useProjectsStore.getState().sessionProjectMap
   return all
-    .filter((s) => s.id === LEGACY_GENERAL_CONVERSATION || (!s.id.startsWith('conv--') && !s.id.startsWith('day--')))
-    .filter((s) => !map[s.id])
+    .filter((s) => (scope === GENERAL_SCOPE && s.id === LEGACY_GENERAL_CONVERSATION) || (!s.id.startsWith('conv--') && !s.id.startsWith('day--')))
+    .filter((s) => (scope === GENERAL_SCOPE ? !map[s.id] : map[s.id] === scope))
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
 }
 
-/** The last General thread the user had open, so a restart lands back on it. */
+/** The last thread open in each scope, so returning lands back on it. */
 const LAST_THREAD_KEY = 'viv.general.lastThread'
+const keyFor = (scope: string | null) => (scope && scope !== GENERAL_SCOPE ? `${LAST_THREAD_KEY}.${scope}` : LAST_THREAD_KEY)
 function rememberThread(id: string) {
   try {
-    localStorage.setItem(LAST_THREAD_KEY, id)
+    localStorage.setItem(keyFor(useDaysStore.getState().scope), id)
   } catch {
     // storage unavailable — it only costs landing on the newest thread instead
   }
 }
 function lastThread(): string | null {
   try {
-    return localStorage.getItem(LAST_THREAD_KEY)
+    return localStorage.getItem(keyFor(useDaysStore.getState().scope))
   } catch {
     return null
   }
@@ -139,8 +148,8 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
         pendingScope = scope
         return
       }
-      if (scope === GENERAL_SCOPE) {
-        // General keeps threads: reopen the last one, or the newest, or start one.
+      if (isThreaded(scope)) {
+        // Threads: reopen the last one, or the newest, or start one.
         set({ scope, viewing: null, earlier: [], earlierStart: 0 })
         await get().refreshThreads()
         const threads = get().threads
@@ -171,7 +180,7 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
   refreshEarlier: async () => {
     const id = get().todayId
     // Threads keep no compaction archive; only a project conversation does.
-    if (!id || !id.startsWith('conv--') || get().scope === GENERAL_SCOPE) return
+    if (!id || !id.startsWith('conv--') || isThreaded(get().scope)) return
     // Only the most recent page: the archive keeps everything ever said to
     // the master agent, and holding all of it in the view grows without
     // bound. Older pages load on request (`loadOlder`).
@@ -209,7 +218,8 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
 
   refreshThreads: async () => {
     const all = await call<SessionInfo[]>('cmd_get_sessions')
-    set({ threads: generalThreads(all ?? []) })
+    const scope = get().scope ?? GENERAL_SCOPE
+    set({ threads: threadsOf(scope, all ?? []) })
   },
 
   newThread: () => serialized(createThread),
@@ -242,20 +252,34 @@ function serialized(run: () => Promise<void>): Promise<void> {
   return opening
 }
 
+/** A thread's workspace: General's is the whole computer; a project's is
+ * its folder, whatever the thread happened to be saved with. */
+async function applyThreadWorkspace() {
+  const scope = useDaysStore.getState().scope
+  const project = useProjectsStore.getState().projects.find((p) => p.id === scope)
+  if (project?.path) {
+    const ws = useWorkspaceStore.getState()
+    await ws.setWorkspace([project.path], ws.accessMode)
+  } else {
+    await useWorkspaceStore.getState().applyWholeComputer()
+  }
+}
+
 async function loadThread(id: string) {
   await call('cmd_load_session', { id })
-  // Loading a thread restores the workspace it was saved with; General's is
-  // always the whole computer, whatever a thread happened to be saved with.
-  await useWorkspaceStore.getState().applyWholeComputer()
+  await applyThreadWorkspace()
   useDaysStore.setState({ todayId: id, viewing: null, earlier: [], earlierStart: 0 })
   rememberThread(id)
   await syncLiveMessages()
 }
 
 async function createThread() {
-  await useWorkspaceStore.getState().applyWholeComputer()
+  await applyThreadWorkspace()
   const id = await call<string>('cmd_new_session')
   if (!id) return
+  // A project's thread belongs to it.
+  const scope = useDaysStore.getState().scope
+  if (scope && scope !== GENERAL_SCOPE) await useProjectsStore.getState().assign(id, scope)
   useDaysStore.setState({ todayId: id, viewing: null, earlier: [], earlierStart: 0 })
   rememberThread(id)
   await syncLiveMessages()
@@ -271,7 +295,7 @@ useAgentStore.subscribe((s) => {
       const scope = pendingScope
       pendingScope = null
       void useDaysStore.getState().openScope(scope)
-    } else if (useDaysStore.getState().scope === GENERAL_SCOPE) {
+    } else if (isThreaded(useDaysStore.getState().scope)) {
       // The autosave may have named the thread after its first message.
       void useDaysStore.getState().refreshThreads()
     } else {

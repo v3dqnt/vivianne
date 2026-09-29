@@ -911,6 +911,30 @@ When you hit a login wall: call browser_session_status first, and if there is ge
             }
         }),
         serde_json::json!({
+            "name": "team_run",
+            "description": "Give a task to this project's team of agents (the ones the user built in the Agents panel). Every chosen member works on it at the same time with its own prompt, model and tools, and they message each other as they go. Returns when all have finished, with each member's report and what they said to each other, for you to combine into one answer.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": { "type": "string", "description": "The task, complete and self-contained — members don't see this conversation" },
+                    "agents": { "type": "array", "items": { "type": "string" }, "description": "Member ids or names to involve; omit for the whole team" }
+                },
+                "required": ["task"]
+            }
+        }),
+        serde_json::json!({
+            "name": "message_agent",
+            "description": "Send a message to a teammate in this team run, or to everyone. It reaches them between their steps. Use it to split work, share what another member needs, ask something only they know, or flag a conflict.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": { "type": "string", "description": "A teammate's id or name, or \"all\"" },
+                    "text": { "type": "string" }
+                },
+                "required": ["to", "text"]
+            }
+        }),
+        serde_json::json!({
             "name": "submit_plan",
             "description": "Submit a plan for the user to review — the end of every plan-mode turn, and how you revise a plan after feedback. The plan opens in the user's Plan panel, where they comment on individual sections and steps, then ask for changes or approve. Write it for a reader deciding whether to approve: concrete, specific to this project, grounded in what you found. Sections should cover the goal, what you found (the relevant code, the dependencies involved with their current versions, and anything learned from the web, with sources), the approach, risks and open questions, and how the result will be verified. Steps are the units of work the team will carry out, each sized for one specialist, with dependencies where one needs another's result. To revise, submit the whole plan again with the same plan_id and say what changed in 'changes'.",
             "parameters": {

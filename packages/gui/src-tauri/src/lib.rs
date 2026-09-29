@@ -342,6 +342,7 @@ pub fn run() {
       crate::agent::plans::cmd_plan_mode_set,
       crate::agent::plans::cmd_plan_approve,
       crate::agent::plans::cmd_plan_cancel,
+      crate::agent::team_run::cmd_team_run_get,
       crate::agent::run_ledger::cmd_long_task_get,
       crate::agent::run_ledger::cmd_long_task_control,
       crate::agent::run_ledger::cmd_long_task_resume_prompt,

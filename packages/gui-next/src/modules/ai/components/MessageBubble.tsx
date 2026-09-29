@@ -5,6 +5,7 @@ import type { AgentMessage } from '../lib/types'
 import { contentToText, contentToThinking, contentImages } from '../lib/types'
 import { Markdown } from './Markdown'
 import { ToolCallCard } from './ToolCallCard'
+import { TeamRunCard } from '../../team/components/TeamRunCard'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ImageBlock } from './ImageBlock'
 import { ThinkingIndicator } from './ThinkingIndicator'
@@ -45,6 +46,10 @@ function MessageBubbleImpl({
   const [hovered, setHovered] = useState(false)
   const [copied, setCopied] = useState(false)
 
+  if (message.type === 'toolResult' && message.toolName === 'team_run') {
+    const details = message.details as { teamRun?: string } | null
+    return <TeamRunCard runId={details?.teamRun ?? null} pending={message.isError === null} />
+  }
   if (message.type === 'toolResult') {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'flex-start' }}>

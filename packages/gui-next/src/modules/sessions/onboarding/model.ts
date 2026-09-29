@@ -20,6 +20,10 @@ export type ProjectKind =
   | 'AI / ML project'
   | 'Automation / scripts'
   | 'Website'
+  | 'Mathematical modelling'
+  | 'Scientific research'
+  | 'Data analysis / statistics'
+  | 'Simulation'
 
 export const KINDS: ProjectKind[] = [
   'Web app',
@@ -33,7 +37,125 @@ export const KINDS: ProjectKind[] = [
   'AI / ML project',
   'Automation / scripts',
   'Website',
+  'Mathematical modelling',
+  'Scientific research',
+  'Data analysis / statistics',
+  'Simulation',
 ]
+
+/** Kinds of work that answer a question rather than ship a product. The
+ * interview speaks their language: a research question instead of a user
+ * problem, deliverables instead of features, methods instead of a stack,
+ * validation instead of testing. */
+const RESEARCH_KINDS: ProjectKind[] = ['Mathematical modelling', 'Scientific research', 'Data analysis / statistics', 'Simulation']
+
+export type Domain = 'software' | 'research'
+
+export function domainOf(kind: string | null): Domain {
+  return kind && RESEARCH_KINDS.includes(kind as ProjectKind) ? 'research' : 'software'
+}
+
+/** Words that change with the domain — everything the interview and the
+ * charter call things. */
+export interface Vocab {
+  stages: string[]
+  audiences: string[]
+  audienceLabel: string
+  problemLabel: string
+  problemHint: string
+  showScale: boolean
+  featuresTitle: string
+  featuresSub: string
+  featuresLabel: string
+  mustHaveLabel: string
+  mustHaveHint: string
+  mustHavePlaceholder: string
+  techTitle: string
+  techSub: string
+  techQuestion: string
+  techNotesLabel: string
+  techNotesHint: string
+  priorities: string[]
+  testingLabel: string
+  testing: string[]
+  showDesign: boolean
+  pitchPlaceholder: string
+  purposeHeading: string
+  usersHeading: string
+  scopeHeading: string
+  techHeading: string
+}
+
+const SOFTWARE_VOCAB: Vocab = {
+  stages: ['Just an idea', 'There’s a spec or designs', 'A prototype exists', 'Extending an existing product'],
+  audiences: ['Just me', 'Friends & family', 'My team / company (internal)', 'Consumers (public)', 'Businesses (B2B)', 'Developers'],
+  audienceLabel: 'Who is it for?',
+  problemLabel: 'What problem does it solve for them?',
+  problemHint: 'What do they do today without it, and what’s painful about that?',
+  showScale: true,
+  featuresTitle: 'Features',
+  featuresSub: 'What the first version must do',
+  featuresLabel: 'Which of these does the first version need?',
+  mustHaveLabel: 'Anything else it must do?',
+  mustHaveHint: 'The features specific to your idea. One per line — press Enter to add.',
+  mustHavePlaceholder: 'e.g. Scale a recipe up or down by servings',
+  techTitle: 'Technology',
+  techSub: 'Your stack, or leave it to the master',
+  techQuestion: 'Do you have a stack in mind?',
+  techNotesLabel: 'Services, APIs or accounts it should use?',
+  techNotesHint: 'Anything already decided: an existing API, a database you run, a payments account, a design system.',
+  priorities: ['Ship fast', 'Code quality & maintainability', 'Performance', 'Security & privacy', 'Accessibility', 'Polished UI / UX', 'Low running cost', 'Simplicity'],
+  testingLabel: 'How thoroughly should it be tested?',
+  testing: ['Prototype — no tests needed', 'Tests for the core logic', 'Thorough (unit + integration)', 'Full, including end-to-end'],
+  showDesign: true,
+  pitchPlaceholder: 'A recipe app that imports recipes from any site and turns a week of meals into one shopping list.',
+  purposeHeading: 'Purpose',
+  usersHeading: 'Users',
+  scopeHeading: 'Scope',
+  techHeading: 'Technical direction',
+}
+
+const RESEARCH_VOCAB: Vocab = {
+  stages: ['Just a question', 'Literature reviewed', 'A model or data to build on', 'Results to extend or write up'],
+  audiences: ['Just me', 'My lab / research group', 'A paper or journal', 'A thesis', 'A course / teaching', 'Decision makers / policy', 'Industry / a client'],
+  audienceLabel: 'Who are the results for?',
+  problemLabel: 'What question are you trying to answer?',
+  problemHint: 'As precisely as you can — the hypothesis, the quantity you want, or the behaviour you want to explain.',
+  showScale: false,
+  featuresTitle: 'Deliverables',
+  featuresSub: 'What should come out of it',
+  featuresLabel: 'Which of these should it produce?',
+  mustHaveLabel: 'Anything else it must produce?',
+  mustHaveHint: 'Results, figures or artefacts specific to your question. One per line — press Enter to add.',
+  mustHavePlaceholder: 'e.g. Phase diagram of the steady states against the damping ratio',
+  techTitle: 'Methods & tools',
+  techSub: 'Your tools and methods, or leave them to the master',
+  techQuestion: 'Do you have tools or methods in mind?',
+  techNotesLabel: 'Data, models, papers or equipment it should use?',
+  techNotesHint: 'Anything already fixed: a dataset, an existing model, key papers, a lab instrument, a compute budget.',
+  priorities: [
+    'Correctness & rigour',
+    'Reproducibility',
+    'Speed to results',
+    'Interpretability',
+    'Computational efficiency',
+    'Publication-quality output',
+    'Grounded in the literature',
+    'Simplicity',
+  ],
+  testingLabel: 'How should results be validated?',
+  testing: ['Sanity checks only', 'Verify against known or analytical results', 'Validate against real data', 'Full: verification, validation and uncertainty'],
+  showDesign: false,
+  pitchPlaceholder: 'A compartmental model of measles spread in a boarding school, fitted to the 1978 outbreak data.',
+  purposeHeading: 'Research question',
+  usersHeading: 'Audience',
+  scopeHeading: 'Deliverables',
+  techHeading: 'Methods & tools',
+}
+
+export function vocabFor(kind: string | null): Vocab {
+  return domainOf(kind) === 'research' ? RESEARCH_VOCAB : SOFTWARE_VOCAB
+}
 
 export const STAGES = ['Just an idea', 'There’s a spec or designs', 'A prototype exists', 'Extending an existing product']
 
@@ -103,6 +225,53 @@ const FEATURES: Record<ProjectKind, string[]> = {
   'AI / ML project': ['Data pipeline', 'Model training', 'Fine-tuning', 'Inference API', 'Evaluation / benchmarks', 'RAG / retrieval', 'Agents / tool use', 'Notebooks'],
   'Automation / scripts': ['Scheduled runs', 'Web scraping', 'Spreadsheet / file processing', 'API integrations', 'Email / chat notifications', 'Logging & alerts'],
   Website: ['Blog / CMS', 'Contact form', 'SEO', 'Analytics', 'Multiple languages', 'Newsletter signup', 'Image gallery'],
+  'Mathematical modelling': [
+    'Model derivation (equations, assumptions)',
+    'Non-dimensionalisation & scaling',
+    'Analytical solution / asymptotics',
+    'Stability & bifurcation analysis',
+    'Numerical solution',
+    'Parameter estimation / fitting',
+    'Sensitivity analysis',
+    'Uncertainty quantification',
+    'Figures & plots',
+    'Report / paper draft (LaTeX)',
+    'Reproducible notebooks',
+  ],
+  'Scientific research': [
+    'Literature review',
+    'Hypotheses',
+    'Experimental design',
+    'Data collection plan',
+    'Statistical analysis',
+    'Figures',
+    'Paper draft (LaTeX)',
+    'Reproducible analysis code',
+    'Pre-registration',
+    'Grant / proposal text',
+  ],
+  'Data analysis / statistics': [
+    'Data cleaning',
+    'Exploratory analysis',
+    'Hypothesis tests',
+    'Regression / statistical models',
+    'Bayesian modelling',
+    'Time-series / forecasting',
+    'Machine learning models',
+    'Figures',
+    'Dashboard',
+    'Written report',
+  ],
+  Simulation: [
+    'Simulation engine',
+    'Parameter sweeps',
+    'Validation against data or theory',
+    'Convergence & error analysis',
+    'Visualisation / animation',
+    'Performance (parallel / GPU)',
+    'Figures',
+    'Written report',
+  ],
 }
 
 export function featuresFor(kind: string | null): string[] {
@@ -128,6 +297,11 @@ const G = {
   engine: { id: 'engine', label: 'Game engine', multi: false, options: ['Godot', 'Unity', 'Unreal', 'Bevy', 'Phaser', 'Plain canvas / WebGL'] },
   ml: { id: 'ml', label: 'ML stack', multi: true, options: ['PyTorch', 'TensorFlow', 'scikit-learn', 'Hugging Face', 'LangChain / LlamaIndex', 'OpenAI / Anthropic APIs', 'Local models (llama.cpp / Ollama)'] },
   site: { id: 'site', label: 'Site framework', multi: false, options: ['Astro', 'Next.js', 'Hugo', 'Eleventy', 'Plain HTML'] },
+  sciLanguage: { id: 'sciLanguage', label: 'Language', multi: true, options: ['Python', 'Julia', 'R', 'MATLAB', 'Mathematica', 'C++ / Fortran'] },
+  numerics: { id: 'numerics', label: 'Numerical & symbolic', multi: true, options: ['NumPy / SciPy', 'SymPy', 'JAX', 'DifferentialEquations.jl', 'FEniCS / Firedrake', 'COMSOL', 'Mathematica'] },
+  stats: { id: 'stats', label: 'Statistics', multi: true, options: ['pandas / polars', 'statsmodels', 'scikit-learn', 'PyMC / Stan', 'R tidyverse', 'PyTorch'] },
+  writing: { id: 'writing', label: 'Writing up', multi: true, options: ['LaTeX', 'Jupyter notebooks', 'Quarto', 'Markdown', 'Word'] },
+  compute: { id: 'compute', label: 'Compute', multi: false, options: ['My laptop', 'A workstation / GPU', 'University cluster (HPC)', 'Cloud'] },
 } satisfies Record<string, TechGroup>
 
 const TECH: Record<ProjectKind, TechGroup[]> = {
@@ -142,6 +316,10 @@ const TECH: Record<ProjectKind, TechGroup[]> = {
   'AI / ML project': [G.language, G.ml, G.database, G.hosting],
   'Automation / scripts': [G.language, G.hosting],
   Website: [G.site, G.styling, G.hosting],
+  'Mathematical modelling': [G.sciLanguage, G.numerics, G.writing, G.compute],
+  'Scientific research': [G.sciLanguage, G.stats, G.writing, G.compute],
+  'Data analysis / statistics': [G.sciLanguage, G.stats, G.writing, G.compute],
+  Simulation: [G.sciLanguage, G.numerics, G.writing, G.compute],
 }
 
 export function techGroupsFor(kind: string | null): TechGroup[] {
@@ -294,22 +472,24 @@ export function toBrief(a: Answers, opts: { includeFollowUps?: boolean } = {}): 
   const add = (label: string, value: string | null | undefined) => {
     if (value && value.trim()) lines.push(`${label}: ${value.trim()}`)
   }
+  const research = domainOf(a.kind) === 'research'
   add('Project name', a.name)
   add('In one sentence', a.pitch)
   add('Kind of project', a.kind)
   add('Platforms', list(a.platforms))
   add('Current stage', a.stage)
-  add('Who it is for', list(a.audience))
-  add('Problem it solves', a.problem)
+  add(research ? 'Results are for' : 'Who it is for', list(a.audience))
+  add(research ? 'Research question' : 'Problem it solves', a.problem)
   add('Expected scale', a.scale)
-  add('Features for the first version', list([...a.features, ...a.mustHave]))
+  add(research ? 'Deliverables' : 'Features for the first version', list([...a.features, ...a.mustHave]))
   add('Later / nice to have', list(a.later))
   add('Explicitly out of scope', list(a.outOfScope))
-  if (a.stackChoice === 'agent') lines.push('Technology: left to the agent to choose')
-  for (const [label, value] of chosenTech(a)) add(`Technology — ${label}`, value)
-  add('Technology notes', a.techNotes)
+  const techWord = research ? 'Methods & tools' : 'Technology'
+  if (a.stackChoice === 'agent') lines.push(`${techWord}: left to the agent to choose`)
+  for (const [label, value] of chosenTech(a)) add(`${techWord} — ${label}`, value)
+  add(research ? 'Data, models, papers or equipment' : 'Technology notes', a.techNotes)
   add('Top priorities', list(a.priorities))
-  add('Testing expectations', a.testing)
+  add(research ? 'Validation' : 'Testing expectations', a.testing)
   add('Timeline', a.deadline)
   add('Design', a.design)
   add('Visual style', list(a.styles))
@@ -341,11 +521,13 @@ const bullets = (items: string[]) => items.filter((s) => s.trim()).map((s) => `-
  * for the master to raise.
  */
 export function toCharter(a: Answers): string {
+  const v = vocabFor(a.kind)
+  const research = domainOf(a.kind) === 'research'
   const open: string[] = []
-  if (!a.audience.length) open.push('Who is this for?')
-  if (!a.problem.trim()) open.push('What problem does it solve for them?')
-  if (!a.features.length && !a.mustHave.length) open.push('Which features does the first version need?')
-  if (!a.testing) open.push('How thoroughly should it be tested?')
+  if (!a.audience.length) open.push(v.audienceLabel)
+  if (!a.problem.trim()) open.push(v.problemLabel)
+  if (!a.features.length && !a.mustHave.length) open.push(research ? 'What exactly should it produce?' : 'Which features does the first version need?')
+  if (!a.testing) open.push(v.testingLabel)
   for (const f of a.followUps) if (!f.answer.length && !f.note.trim()) open.push(f.question)
 
   const tech = chosenTech(a)
@@ -353,21 +535,21 @@ export function toCharter(a: Answers): string {
 
   return [
     `# ${a.name.trim() || 'Untitled project'}\n`,
-    section('Purpose', [a.pitch, a.problem ? `\n${a.problem}` : '']),
-    section('Users', [
+    section(v.purposeHeading, [a.pitch, a.problem ? `\n${a.problem}` : '']),
+    section(v.usersHeading, [
       a.audience.length ? `For: ${list(a.audience)}.` : '',
       a.scale ? `Expected scale: ${a.scale}.` : '',
     ]),
-    section('Scope', [
+    section(v.scopeHeading, [
       a.kind ? `A ${a.kind.toLowerCase()}${a.platforms.length ? ` for ${list(a.platforms)}` : ''}.` : '',
       a.stage ? `Starting point: ${a.stage.toLowerCase()}.` : '',
       ...bullets([...a.features, ...a.mustHave]),
       a.later.length ? `\nLater:\n${bullets(a.later).join('\n')}` : '',
     ]),
     section('Out of scope', bullets(a.outOfScope)),
-    section('Technical direction', [
+    section(v.techHeading, [
       a.stackChoice === 'agent'
-        ? 'The stack is left to the master to choose. It records what it picks, and why, under Decisions.'
+        ? `The ${research ? 'methods and tools are' : 'stack is'} left to the master to choose. It records what it picks, and why, under Decisions.`
         : tech.map(([l, v]) => `- ${l}: ${v}`).join('\n'),
       a.techNotes,
     ]),
@@ -379,8 +561,9 @@ export function toCharter(a: Answers): string {
       a.constraints,
     ]),
     section('Definition of done', [
-      ...bullets([...a.features, ...a.mustHave].map((f) => `${f} works end to end`)),
-      a.testing ? `- Testing: ${a.testing}` : '',
+      ...bullets([...a.features, ...a.mustHave].map((f) => (research ? `${f} — produced and checked` : `${f} works end to end`))),
+      a.testing ? `- ${research ? 'Validation' : 'Testing'}: ${a.testing}` : '',
+      research ? '- Every result can be regenerated from the project’s own code, with its assumptions and sources written down' : '',
     ]),
     section('Decisions', decisions.length ? decisions : ['_None recorded yet._']),
     // "Not specified yet" would read as a skipped question here; an empty
@@ -444,6 +627,11 @@ export function toInstructions(a: Answers): string {
     case EXPLANATIONS[2]:
       lines.push('Teach as you go: explain concepts and trade-offs, the user wants to learn.')
       break
+  }
+  if (domainOf(a.kind) === 'research') {
+    lines.push('State every assumption, and where each equation, parameter value and claim comes from; cite sources.')
+    lines.push('Check results before reporting them: units and dimensions, limiting cases, conservation laws, known solutions.')
+    lines.push('Keep everything reproducible: scripts or notebooks that regenerate every number and figure from scratch.')
   }
   if (a.priorities.length) lines.push(`When trade-offs conflict, favour: ${a.priorities.join(' > ')}.`)
   return lines.map((l) => `- ${l}`).join('\n')

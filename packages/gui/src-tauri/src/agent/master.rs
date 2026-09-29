@@ -148,10 +148,12 @@ quietly picking one.\n\
 
 const CHARTER_SYSTEM_PROMPT: &str = "\
 You turn the answers from a project onboarding interview into a project charter: the \
-founding document an AI engineering agent will work from for the life of the project. The \
-answers are structured — project type, users, features, technology choices, quality bar, \
-constraints — plus free-text notes and answers to follow-up questions. Every fact the person \
-gave must appear in the charter; nothing may be dropped because it seemed minor.
+founding document an AI agent will work from for the life of the project. The project may be \
+software, or research — mathematical modelling, scientific research, data analysis or \
+simulation. The answers are structured — project type, audience, features or deliverables, \
+technology or methods, quality or validation bar, constraints — plus free-text notes and \
+answers to follow-up questions. Every fact the person gave must appear in the charter; \
+nothing may be dropped because it seemed minor.
 
 Where the person explicitly chose a technology, record it under Decisions as \
 \"<choice> — chosen at onboarding\". Where they left a choice to the agent, say so under \
@@ -171,6 +173,13 @@ or clearly implied; mark anything you inferred with \"(assumed)\".
 ## Decisions — technology choices the person made explicitly, one bullet each; \
 \"_None recorded yet._\" if they made none.
 ## Open questions — what the agent must ask before or during building.
+
+For a research project (mathematical modelling, scientific research, data analysis, \
+simulation), use these section names instead, in this order: Research question (the question, \
+stated precisely, and why it matters), Audience, Deliverables, Out of scope, Methods & tools \
+(approach, assumptions, data sources, tools), Constraints, Definition of done (each \
+deliverable produced and validated as the person asked, every result reproducible from the \
+project's code, assumptions and sources written down), Decisions, Open questions.
 
 Rules: never invent facts the person did not give — put unknowns under Open questions instead. \
 Be concrete and brief; the whole charter should fit on one page. Output only the Markdown.";
@@ -317,14 +326,22 @@ pub async fn cmd_get_master(root: String) -> Result<Option<MasterInfo>, String> 
 }
 
 const QUESTIONS_SYSTEM_PROMPT: &str = "\
-You are interviewing someone about a software project they want an AI engineering agent to \
-build. You have their answers so far. Ask the follow-up questions whose answers would most \
-change how the project gets built — the gaps and ambiguities a senior engineer would want \
-settled before writing any code. Never ask about anything they already answered.
+You are interviewing someone about a project they want an AI agent to carry out. It may be \
+software, or research: mathematical modelling, scientific research, data analysis or \
+simulation — the kind of project is in their answers. You have their answers so far. Ask the \
+follow-up questions whose answers would most change how the work gets done — the gaps and \
+ambiguities an expert would want settled before starting. Never ask about anything they \
+already answered.
 
-Good questions are specific to this project: data it must store and where it comes from, \
+For software, ask what a senior engineer would: data it must store and where it comes from, \
 integrations with outside services, edge cases in the core features, who can see or change \
 what, what happens offline or on failure, migration from something that exists today.
+
+For research, ask what a senior scientist or applied mathematician would: the assumptions \
+that may be made and the ones that may not, the variables, parameters and their ranges or \
+regimes, where data comes from and how good it is, what the result will be checked against \
+(analytical cases, experiments, published results), the precision or confidence needed, and \
+what form the answer should take.
 
 Ask between 3 and 6 questions. For each, offer 2 to 5 short suggested answers the person can \
 pick from, written as they would say them. Set \"multi\" to true when several answers can \

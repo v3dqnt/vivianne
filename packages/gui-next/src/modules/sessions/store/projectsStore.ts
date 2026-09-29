@@ -18,6 +18,17 @@ export interface Project {
   path: string | null
   color: string | null
   multiplayer: MultiplayerProjectInfo | null
+  /** How work is organised (`projects::Project::mode`). Absent on projects
+   * made before the choice existed; those work as `company`. */
+  mode?: ProjectMode | null
+}
+
+/** Threads: separate chats. Company: a master that hires and delegates.
+ * Team: agents the user builds, working a task in parallel and talking. */
+export type ProjectMode = 'threads' | 'company' | 'team'
+
+export function modeOf(project: Pick<Project, 'mode'> | null | undefined): ProjectMode {
+  return project?.mode ?? 'company'
 }
 
 /** Accent colors for the sidebar project rail. */
@@ -64,7 +75,7 @@ interface ProjectsStoreState {
   activeProjectId: string | null
   loading: boolean
   refresh: () => Promise<void>
-  create: (name: string, path?: string | null, color?: string | null) => Promise<Project | null>
+  create: (name: string, path?: string | null, color?: string | null, mode?: ProjectMode | null) => Promise<Project | null>
   createMultiplayer: (
     name: string,
     path: string,
@@ -149,10 +160,10 @@ export const useProjectsStore = create<ProjectsStoreState>((set, get) => ({
     }
   },
 
-  create: async (name, path = null, color = null) => {
+  create: async (name, path = null, color = null, mode = null) => {
     const trimmed = name.trim()
     if (!trimmed) return null
-    const project = await call<Project>('cmd_create_project', { name: trimmed, path, color })
+    const project = await call<Project>('cmd_create_project', { name: trimmed, path, color, mode })
     await get().refresh()
     // Via the action, not a raw `set` — a new project should point the
     // workspace at its folder straight away.

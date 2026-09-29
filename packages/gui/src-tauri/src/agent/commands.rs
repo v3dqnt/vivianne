@@ -220,6 +220,17 @@ pub async fn cmd_agent_prompt(
 ");
             prompt.push_str(crate::agent::plans::PLAN_MODE_DIRECTIVE);
         }
+        // A team project: the conversation coordinates the user's agents.
+        if let Some(root) = agent.state.primary_workspace_folder().await {
+            if crate::agent::projects::mode_for_workspace(&root).as_deref() == Some("team") {
+                if let Some(d) = crate::agent::team_run::coordinator_directive(&root) {
+                    prompt.push_str("
+
+");
+                    prompt.push_str(&d);
+                }
+            }
+        }
         agent.state.set_system_prompt(prompt).await;
     }
 
@@ -302,6 +313,7 @@ pub async fn cmd_agent_abort(state: State<'_, Arc<AppState>>) -> Result<(), Stri
     // A plan being carried out runs inside one long tool call, which the
     // loop's abort check can't reach until it returns — stop it directly.
     crate::agent::plans::cancel_all();
+    crate::agent::team_run::cancel_all();
     Ok(())
 }
 

@@ -31,6 +31,21 @@ pub struct Project {
     /// (`.is_some()`) instead of several fields that could disagree.
     #[serde(default)]
     pub multiplayer: Option<MultiplayerProjectInfo>,
+    /// How work is organised in this project, chosen when it is created:
+    /// `threads` (separate chats), `company` (a master agent that hires and
+    /// delegates), or `team` (agents the user defines, working a task in
+    /// parallel and messaging each other). `None` is a project from before
+    /// the choice existed, which works as `company`.
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+pub const PROJECT_MODES: &[&str] = &["threads", "company", "team"];
+
+/// The mode of the project whose folder is `root`.
+pub fn mode_for_workspace(root: &str) -> Option<String> {
+    let data = load().ok()?;
+    data.projects.into_iter().find(|p| p.path.as_deref() == Some(root)).and_then(|p| p.mode)
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -84,10 +99,15 @@ pub async fn cmd_list_projects() -> Result<Vec<Project>, String> {
 }
 
 #[tauri::command]
-pub async fn cmd_create_project(name: String, path: Option<String>, color: Option<String>) -> Result<Project, String> {
+pub async fn cmd_create_project(name: String, path: Option<String>, color: Option<String>, mode: Option<String>) -> Result<Project, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("Project name must not be empty".to_string());
+    }
+    if let Some(m) = &mode {
+        if !PROJECT_MODES.contains(&m.as_str()) {
+            return Err(format!("Unknown project mode '{m}' — threads, company or team"));
+        }
     }
     let mut data = load()?;
     let project = Project {
@@ -103,6 +123,7 @@ pub async fn cmd_create_project(name: String, path: Option<String>, color: Optio
         path,
         color,
         multiplayer: None,
+        mode,
     };
     data.projects.push(project.clone());
     save(&data)?;
@@ -196,6 +217,7 @@ pub async fn cmd_create_multiplayer_project(
             peer_display_name,
             git_remote,
         }),
+        mode: None,
     };
     data.projects.push(project.clone());
     save(&data)?;
@@ -352,6 +374,7 @@ pub fn add_multiplayer_project_to(
         path: Some(path.to_string()),
         color: None,
         multiplayer: Some(MultiplayerProjectInfo { peer_id: peer_id.to_string(), peer_display_name, git_remote: None }),
+        mode: None,
     });
     if let Some(parent) = projects_json.parent() {
         let _ = std::fs::create_dir_all(parent);

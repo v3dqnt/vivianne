@@ -636,7 +636,11 @@ pub async fn run_agent_loop_continue(
             &context.messages,
         );
         if context.delegate_depth >= 1 {
-            tool_defs.retain(|t| t.get("name").and_then(|n| n.as_str()) != Some("task"));
+            tool_defs.retain(|t| !matches!(t.get("name").and_then(|n| n.as_str()), Some("task" | "team_run")));
+        }
+        // Only a member of a team run has anyone to message.
+        if state.team_member().await.is_none() {
+            tool_defs.retain(|t| t.get("name").and_then(|n| n.as_str()) != Some("message_agent"));
         }
         let mut llm_context = crate::ai::types::Context {
             messages: llm_messages,

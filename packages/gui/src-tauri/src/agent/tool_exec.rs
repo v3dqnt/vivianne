@@ -753,6 +753,10 @@ pub async fn execute_tool_calls(
             execute_question_tool(&tool_call.id, &tool_call.arguments, emit).await
         } else if tool_call.name == "confirm_action" {
             execute_confirm_action_tool(&tool_call.id, &tool_call.arguments, emit).await
+        } else if tool_call.name == "team_run" {
+            crate::agent::team_run::execute_team_run(&tool_call.arguments, context.delegate_depth, state, app).await
+        } else if tool_call.name == "message_agent" {
+            crate::agent::team_run::execute_message_agent(&tool_call.arguments, state, app).await
         } else if tool_call.name == "submit_plan" {
             crate::agent::plans::execute_submit_plan(&tool_call.arguments, state.primary_workspace_folder().await, app).await
         } else if tool_call.name == "assign_plan_steps" {
@@ -1716,6 +1720,13 @@ pub(crate) async fn execute_task_tool(
     sub_state.set_thinking_level(parent_state.thinking_level().await).await;
     // A subagent of a planning agent plans too: research, not action.
     sub_state.set_plan_mode(parent_state.plan_mode().await).await;
+    // A member of a team run: checked against the run, so a model can't
+    // make itself a member by passing these arguments.
+    if let (Some(run), Some(member)) = (args.get("team_run").and_then(|v| v.as_str()), args.get("team_member").and_then(|v| v.as_str())) {
+        if crate::agent::team_run::is_member(run, member) && member == subagent_type {
+            sub_state.set_team_member(Some((run.to_string(), member.to_string()))).await;
+        }
+    }
     sub_state.set_workspace(parent_state.workspace_folders().await, parent_state.access_mode().await).await;
     let mut role_framing = format!(
         "You are a focused sub-agent handling one delegated task for a parent agent: {description}. \
@@ -2974,7 +2985,7 @@ mod schema_registry_consistency_tests {
     /// list has to be kept in sync with that chain by hand, since nothing
     /// generates it from the real `if`/`else if` conditions.
     const DISPATCH_CHAIN_TOOLS: &[&str] = &[
-        "remember", "recall", "read_skill", "question", "confirm_action", "present_plan", "submit_plan", "assign_plan_steps",
+        "remember", "recall", "read_skill", "question", "confirm_action", "present_plan", "submit_plan", "assign_plan_steps", "team_run", "message_agent",
         "present_snippet", "web_preview", "browser_snapshot", "browser_click", "browser_type",
         "browser_press_key", "browser_scroll", "browser_evaluate", "browser_read_console",
         "browser_read_network", "browser_start", "browser_session_status", "browser_import_cookies", "task", "list_subagent_profiles", "hire_agent", "generate_image", "connect_mcp_server",

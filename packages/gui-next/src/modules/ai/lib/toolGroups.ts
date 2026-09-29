@@ -51,7 +51,8 @@ export function groupTranscript(
   }
 
   messages.forEach((m, i) => {
-    const foldable = i !== streamingIndex && (m.type === 'toolResult' || isSilentAssistant(m))
+    const foldable =
+      i !== streamingIndex && ((m.type === 'toolResult' && !STANDALONE_TOOLS.has(m.toolName)) || isSilentAssistant(m))
     if (foldable) run.push(i)
     else {
       flush()
@@ -114,6 +115,10 @@ function familyOf(name: string): Family {
 }
 
 const PLAN_TOOLS = new Set(['todo_write', 'todo_write_rich'])
+
+/** Tools whose result is its own view, and stays visible rather than folded
+ * into a group: a team at work is the point of the turn. */
+const STANDALONE_TOOLS = new Set(['team_run'])
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 

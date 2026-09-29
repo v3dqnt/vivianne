@@ -39,6 +39,7 @@ pub mod checkpoints;
 pub mod recovery;
 pub mod run_ledger;
 pub mod plans;
+pub mod team_run;
 pub mod capabilities;
 pub mod tool_profile;
 pub mod directive;

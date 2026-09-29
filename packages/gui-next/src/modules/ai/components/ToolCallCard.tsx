@@ -44,6 +44,7 @@ const DECLARATIONS: Record<string, [string, string]> = {
   math: ['Calculating', 'Calculated'],
   todo_write: ['Updating the plan', 'Updated the plan'],
   submit_plan: ['Writing the plan', 'Proposed a plan'],
+  message_agent: ['Messaging a teammate', 'Messaged a teammate'],
   assign_plan_steps: ['Carrying out the plan', 'Carried out the plan'],
   task: ['Delegating to a subagent', 'Delegated to a subagent'],
   dip: ['Using the screen', 'Used the screen'],

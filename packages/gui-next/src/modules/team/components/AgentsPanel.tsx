@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Box, Stack, Typography, Button, ButtonBase, IconButton, InputBase, Select, MenuItem, Checkbox, Tooltip, CircularProgress, alpha } from '../../../ui'
 import { AddLinear, ArrowLeftLinear, EditLinear, TrashLinear, AgentsLinear, UserPlusLinear } from '../../../icons'
 import { call } from '../../../ipc'
-import { useProjectsStore } from '../../sessions/store/projectsStore'
+import { useProjectsStore, modeOf } from '../../sessions/store/projectsStore'
 import { useMasterStore } from '../../sessions/store/masterStore'
 import { ListInput } from '../../sessions/onboarding/fields'
 import { useModelOptions } from '../../settings/components/SubagentsSection'
@@ -23,7 +23,10 @@ const EMPTY: TeamAgent[] = []
 export function AgentsPanel() {
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const projects = useProjectsStore((s) => s.projects)
-  const root = projects.find((p) => p.id === activeProjectId)?.path ?? null
+  const project = projects.find((p) => p.id === activeProjectId)
+  const root = project?.path ?? null
+  // A team project has no master: the agents are peers the user built.
+  const teamMode = modeOf(project) === 'team'
   const agents = useTeamStore((s) => (root ? (s.byRoot[root] ?? EMPTY) : EMPTY))
   const loaded = useTeamStore((s) => (root ? root in s.byRoot : false))
   const load = useTeamStore((s) => s.load)
@@ -57,6 +60,7 @@ export function AgentsPanel() {
         agent={editing === 'new' ? null : editing}
         team={agents}
         masterName={master?.name ?? 'Master'}
+        teamMode={teamMode}
         onClose={() => setEditing(null)}
       />
     )
@@ -74,7 +78,9 @@ export function AgentsPanel() {
               Agents
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>
-              Specialists the master delegates to. Saved in .viv/agents.
+              {teamMode
+                ? 'Your team. Give it a task in the chat — they work on it together. Saved in .viv/agents.'
+                : 'Specialists the master delegates to. Saved in .viv/agents.'}
             </Typography>
           </Stack>
           <Button size="small" variant="contained" disableElevation startIcon={<AddLinear size={14} color="currentColor" />} onClick={() => setEditing('new')} sx={{ borderRadius: '8px', flexShrink: 0 }}>
@@ -82,6 +88,7 @@ export function AgentsPanel() {
           </Button>
         </Stack>
 
+        {!teamMode && (
         <Stack sx={{ gap: 0.75 }}>
           <SectionLabel>Master</SectionLabel>
           {master ? (
@@ -103,6 +110,7 @@ export function AgentsPanel() {
             </Typography>
           )}
         </Stack>
+        )}
 
         {proposed.length > 0 && (
           <Stack sx={{ gap: 0.75 }}>
@@ -121,10 +129,12 @@ export function AgentsPanel() {
             <Stack sx={{ alignItems: 'center', textAlign: 'center', gap: 1, py: 3, px: 2, border: 1, borderColor: 'divider', borderStyle: 'dashed', borderRadius: '10px' }}>
               <AgentsLinear size={22} color="currentColor" />
               <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem' }}>
-                No specialists yet
+                {teamMode ? 'No agents yet' : 'No specialists yet'}
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 300 }}>
-                Create one for an area of the project — frontend, API, tests — or ask the master to propose the team it needs.
+                {teamMode
+                  ? 'Create each member of your team: what it’s responsible for, its instructions, its model and its tools.'
+                  : 'Create one for an area of the project — frontend, API, tests — or ask the master to propose the team it needs.'}
               </Typography>
               <Button size="small" startIcon={<UserPlusLinear size={14} color="currentColor" />} onClick={() => setEditing('new')} sx={{ borderRadius: '8px' }}>
                 Create an agent
@@ -349,7 +359,21 @@ function Field({ label, hint, htmlFor, children }: { label: string; hint?: strin
 const inputSx = { fontSize: '0.8125rem', px: 1.25, py: 0.75, border: 1, borderColor: 'divider', borderRadius: '8px', '&.ui-focused': { borderColor: 'primary.main' } } as const
 const selectSx = { fontSize: '0.8125rem', borderRadius: '8px', '& .ui-Select-select': { py: 0.875 } } as const
 
-function AgentForm({ root, agent, team, masterName, onClose }: { root: string; agent: TeamAgent | null; team: TeamAgent[]; masterName: string; onClose: () => void }) {
+function AgentForm({
+  root,
+  agent,
+  team,
+  masterName,
+  teamMode = false,
+  onClose,
+}: {
+  root: string
+  agent: TeamAgent | null
+  team: TeamAgent[]
+  masterName: string
+  teamMode?: boolean
+  onClose: () => void
+}) {
   const save = useTeamStore((s) => s.save)
   const modelOptions = useModelOptions()
   const [allTools, setAllTools] = useState<ToolInfo[]>([])
@@ -393,7 +417,7 @@ function AgentForm({ root, agent, team, masterName, onClose }: { root: string; a
           role: role.trim(),
           color,
           status,
-          reportsTo: reportsTo === 'master' ? null : reportsTo,
+          reportsTo: teamMode || reportsTo === 'master' ? null : reportsTo,
           model: modelId === '__inherit__' ? null : (modelOptions.find((m) => m.id === modelId) ?? base.model),
           allowedTools: toolMode === 'all' ? null : Array.from(tools),
           owns,
@@ -424,7 +448,11 @@ function AgentForm({ root, agent, team, masterName, onClose }: { root: string; a
               {agent ? (isProposal ? `Review proposed hire: ${agent.name}` : `Edit ${agent.name}`) : 'New agent'}
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>
-              {isProposal && agent?.reason ? `Why the master wants it: ${agent.reason}` : 'A specialist the master can hand work to.'}
+              {isProposal && agent?.reason
+                ? `Why the master wants it: ${agent.reason}`
+                : teamMode
+                  ? 'A member of your team. It works on every task the team gets, alongside the others.'
+                  : 'A specialist the master can hand work to.'}
             </Typography>
           </Stack>
         </Stack>
@@ -433,11 +461,16 @@ function AgentForm({ root, agent, team, masterName, onClose }: { root: string; a
           <InputBase id="agent-name" autoFocus={!agent} value={name} onChange={(e) => setName(e.target.value)} placeholder="Frontend Engineer" sx={inputSx} />
         </Field>
 
-        <Field label="Role" hint="One sentence: what it is responsible for. The master reads this when deciding who gets a task." htmlFor="agent-role">
+        <Field
+          label="Role"
+          hint={teamMode ? 'One sentence: what it is responsible for. Its teammates see this.' : 'One sentence: what it is responsible for. The master reads this when deciding who gets a task.'}
+          htmlFor="agent-role"
+        >
           <InputBase id="agent-role" value={role} onChange={(e) => setRole(e.target.value)} placeholder="Builds and maintains the React UI" sx={inputSx} />
         </Field>
 
         <Stack direction="row" sx={{ gap: 1.5, flexWrap: 'wrap' }}>
+          {!teamMode && (
           <Box sx={{ flex: '1 1 180px' }}>
             <Field label="Reports to">
               <Select size="small" value={reportsTo} onChange={(e) => setReportsTo(e.target.value)} sx={selectSx}>
@@ -452,6 +485,7 @@ function AgentForm({ root, agent, team, masterName, onClose }: { root: string; a
               </Select>
             </Field>
           </Box>
+          )}
           <Box sx={{ flex: '1 1 180px' }}>
             <Field label="Model">
               <Select size="small" value={modelId} onChange={(e) => setModelId(e.target.value)} sx={selectSx}>
@@ -542,7 +576,15 @@ function AgentForm({ root, agent, team, masterName, onClose }: { root: string; a
           )}
         </Field>
 
-        <Field label="Instructions" hint="Standing instructions it gets with every task: conventions, the decisions that apply to its area, how to check its own work." htmlFor="agent-instructions">
+        <Field
+          label={teamMode ? 'Prompt' : 'Instructions'}
+          hint={
+            teamMode
+              ? 'Its standing prompt: how it thinks, what it does on every task, how it checks its own work.'
+              : 'Standing instructions it gets with every task: conventions, the decisions that apply to its area, how to check its own work.'
+          }
+          htmlFor="agent-instructions"
+        >
           <InputBase
             id="agent-instructions"
             multiline

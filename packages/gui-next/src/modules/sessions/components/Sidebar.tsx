@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Box, Stack, Typography, IconButton, InputBase, ButtonBase, Tooltip, Collapse, alpha, useTheme } from '../../../ui'
 import { ExportLinear, AddLinear, TrashLinear } from '../../../icons'
-import { useProjectsStore, projectColor, GENERAL_PROJECT_ID } from '../store/projectsStore'
+import { useProjectsStore, projectColor, modeOf, GENERAL_PROJECT_ID } from '../store/projectsStore'
 import { useDaysStore } from '../store/daysStore'
 import { useAgentStore } from '../../ai/store/agentStore'
 import { contentToText, type AgentMessage } from '../../ai/lib/types'
@@ -112,6 +112,8 @@ export function Sidebar() {
 
   const isGeneral = activeProjectId === GENERAL_PROJECT_ID
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null
+  const mode = modeOf(activeProject)
+  const threaded = isGeneral || mode === 'threads'
 
   const root = activeProject?.path ?? null
   const master = useMasterStore((s) => (root ? s.byRoot[root] : null))
@@ -218,7 +220,7 @@ export function Sidebar() {
         <BranchIndicator />
       </Stack>
 
-      {activeProject?.path && master !== undefined && (
+      {activeProject?.path && mode === 'company' && master !== undefined && (
         <Box sx={{ px: 1.5, pb: 1.25, flexShrink: 0 }}>
           {master ? (
             <ButtonBase
@@ -304,7 +306,7 @@ export function Sidebar() {
         </Box>
       )}
 
-      {isGeneral ? (
+      {threaded ? (
         <GeneralThreads onExport={exportCurrent} />
       ) : (
       <>
@@ -322,7 +324,7 @@ export function Sidebar() {
         <DayRow
           primary
           active={onToday}
-          label={master ? `With ${master.name}` : 'Vivianne'}
+          label={mode === 'team' ? 'With your team' : master ? `With ${master.name}` : 'Vivianne'}
           preview={lastAsked || 'Nothing asked yet'}
           onClick={backToToday}
         />
@@ -366,9 +368,11 @@ export function Sidebar() {
               ))}
               {activeTeam.length === 0 && pendingHires === 0 && (
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 1, py: 0.5, lineHeight: 1.45 }}>
-                  {master
-                    ? `No agents yet. ${master.name} proposes them as the work needs, or add one with +.`
-                    : 'No agents yet. Add one with +, or brief a master agent to build the team.'}
+                  {mode === 'team'
+                    ? 'No agents yet. Build your team with + — each gets its own prompt, model and tools, and they work on your tasks together.'
+                    : master
+                      ? `No agents yet. ${master.name} proposes them as the work needs, or add one with +.`
+                      : 'No agents yet. Add one with +, or brief a master agent to build the team.'}
                 </Typography>
               )}
             </Stack>
@@ -431,10 +435,9 @@ export function Sidebar() {
 }
 
 /**
- * General's threads — separate conversations, as the app worked before
- * projects each got one continuous conversation with their master. General
- * isn't a project: it has no master and no team holding a line of work
- * together, so separate threads are the better fit there.
+ * Threads — separate conversations. General's, and a threads project's:
+ * work that is a series of separate questions rather than one line of work
+ * held together by a master or a team.
  */
 function GeneralThreads({ onExport }: { onExport: () => void }) {
   const theme = useTheme()

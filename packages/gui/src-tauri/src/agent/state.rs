@@ -95,6 +95,9 @@ struct AgentStateInner {
     /// (see `agent::plans`). Per conversation — the old process-wide flag
     /// switched every project and every subagent into it at once.
     plan_mode: bool,
+    /// `(run id, member id)` while this agent works in a team run (see
+    /// `agent::team_run`) — what lets it message its teammates.
+    team_member: Option<(String, String)>,
 }
 
 impl AgentState {
@@ -144,6 +147,7 @@ impl AgentState {
                 goal: None,
                 long_task: None,
                 plan_mode: false,
+                team_member: None,
             })),
         };
         if !workspace_folders.is_empty() {
@@ -270,6 +274,14 @@ impl AgentState {
 
     pub async fn set_plan_mode(&self, on: bool) {
         self.inner.write().await.plan_mode = on;
+    }
+
+    pub async fn team_member(&self) -> Option<(String, String)> {
+        self.inner.read().await.team_member.clone()
+    }
+
+    pub async fn set_team_member(&self, member: Option<(String, String)>) {
+        self.inner.write().await.team_member = member;
     }
 
     pub async fn set_system_prompt(&self, value: String) {

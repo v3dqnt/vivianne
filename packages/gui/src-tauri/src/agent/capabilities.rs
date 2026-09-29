@@ -173,7 +173,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Plan and track work",
         when: "A task with several steps, so progress is visible rather than held in your head.",
-        tools: &["todo_write", "present_plan", "submit_plan", "assign_plan_steps"],
+        tools: &["todo_write", "present_plan", "submit_plan", "assign_plan_steps", "team_run", "message_agent"],
         how: None,
         triggers: &["plan ", "make a plan", "step by step", "break this down", "roadmap", "keep track", "todo", "checklist", "what's left", "progress"],
     },

@@ -6,7 +6,7 @@ import { useProjectsStore, projectColor, projectInitial, PROJECT_COLORS, GENERAL
 import { useMultiplayerStore } from '../../multiplayer/store/multiplayerStore'
 import { call } from '../../../ipc'
 import { isWindows } from '../../../lib/platform'
-import { OnboardingDialog } from './OnboardingDialog'
+import { NewProjectDialog } from './NewProjectDialog'
 
 export const PROJECT_RAIL_WIDTH = 56
 
@@ -348,9 +348,8 @@ export function ProjectRail() {
       </Menu>
 
       <ProjectDialog open={dialog.open} project={dialog.project} onClose={() => setDialog({ open: false, project: null })} />
-      <OnboardingDialog
+      <NewProjectDialog
         open={onboarding}
-        project={null}
         onClose={() => setOnboarding(false)}
         onMultiplayer={() => {
           setOnboarding(false)
