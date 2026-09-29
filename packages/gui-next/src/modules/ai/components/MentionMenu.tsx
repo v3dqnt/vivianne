@@ -48,7 +48,7 @@ export function UnifiedMentionMenu({ items, activeIndex, onSelect, onHover }: Un
     <Box sx={{ position: 'absolute', bottom: '100%', left: 0, mb: 1.5, width: '100%', maxWidth: 420, borderRadius: 2, border: 1, borderColor: 'divider', bgcolor: 'background.paper', boxShadow: 4, overflow: 'hidden', zIndex: 50 }}>
       {skills.length > 0 && (
         <>
-          <Typography variant="caption" sx={{ display: 'block', px: 1.5, py: 0.75, fontSize: '0.5625rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary', borderBottom: 1, borderColor: 'divider' }}>
+          <Typography variant="caption" sx={{ display: 'block', px: 1.5, py: 0.75, fontSize: '0.6875rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary', borderBottom: 1, borderColor: 'divider' }}>
             Skills
           </Typography>
           <Box sx={{ p: 0.5 }}>
@@ -95,7 +95,7 @@ export function UnifiedMentionMenu({ items, activeIndex, onSelect, onHover }: Un
       )}
       {files.length > 0 && (
         <>
-          <Typography variant="caption" sx={{ display: 'block', px: 1.5, py: 0.75, fontSize: '0.5625rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary', borderBottom: 1, borderColor: 'divider', borderTop: skills.length > 0 ? 1 : 0 }}>
+          <Typography variant="caption" sx={{ display: 'block', px: 1.5, py: 0.75, fontSize: '0.6875rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary', borderBottom: 1, borderColor: 'divider', borderTop: skills.length > 0 ? 1 : 0 }}>
             Files
           </Typography>
           <Box sx={{ maxHeight: 280, overflowY: 'auto', p: 0.5 }}>

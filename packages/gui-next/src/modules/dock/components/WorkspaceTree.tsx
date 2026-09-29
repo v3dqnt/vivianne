@@ -419,7 +419,7 @@ export function WorkspaceTree() {
                                 fontWeight: 700,
                                 textTransform: 'uppercase',
                                 letterSpacing: 0.4,
-                                fontSize: '0.625rem',
+                                fontSize: '0.6875rem',
                                 color: 'text.secondary',
                               }}
                             >

@@ -41,7 +41,7 @@ export function Tag({ children }: { children: React.ReactNode }) {
 
 export function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.625rem', px: 0.5 }}>
+    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.6875rem', px: 0.5 }}>
       {children}
     </Typography>
   )

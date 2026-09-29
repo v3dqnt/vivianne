@@ -59,6 +59,11 @@ export function CssBaseline({ extra }: { extra?: Record<string, unknown> }) {
             MozOsxFontSmoothing: 'grayscale',
             boxSizing: 'border-box',
             WebkitTextSizeAdjust: '100%',
+            // Every type size is rem (theme.ts `pxToRem`, Tailwind, the
+            // one-off sx sizes), so this one value is the app's text scale.
+            // 15px sits a step under the browser's 16: denser, while spacing
+            // (px-based) keeps its breathing room.
+            fontSize: '15px',
             colorScheme: p.mode,
           },
           '*, *::before, *::after': { boxSizing: 'inherit' },

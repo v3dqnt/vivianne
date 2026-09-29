@@ -97,7 +97,7 @@ function Tag({ label, title }: { label: string; title: string }) {
           px: 0.5,
           py: 0.125,
           borderRadius: '5px',
-          fontSize: '0.625rem',
+          fontSize: '0.6875rem',
           fontWeight: 600,
           letterSpacing: 0.2,
           lineHeight: 1.6,

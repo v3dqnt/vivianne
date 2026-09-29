@@ -95,8 +95,8 @@ function BuiltinRow({
           <Typography variant="body2" sx={{ fontWeight: 700 }}>
             {profile.name}
           </Typography>
-          <Chip size="small" label="Built-in" sx={{ fontSize: '0.625rem', height: 18 }} />
-          <Chip size="small" label={toolSummary(profile.allowedTools)} sx={{ fontSize: '0.625rem', height: 18 }} />
+          <Chip size="small" label="Built-in" sx={{ fontSize: '0.6875rem', height: 18 }} />
+          <Chip size="small" label={toolSummary(profile.allowedTools)} sx={{ fontSize: '0.6875rem', height: 18 }} />
         </Stack>
         <Typography variant="caption" color="text.secondary">
           {profile.description}
@@ -144,8 +144,8 @@ function CustomRow({ profile, onEdit, onDelete }: { profile: SubagentProfile; on
           <Typography variant="body2" sx={{ fontWeight: 700 }}>
             {profile.name}
           </Typography>
-          <Chip size="small" label={toolSummary(profile.allowedTools)} sx={{ fontSize: '0.625rem', height: 18 }} />
-          {profile.model && <Chip size="small" label={profile.model.name} sx={{ fontSize: '0.625rem', height: 18 }} />}
+          <Chip size="small" label={toolSummary(profile.allowedTools)} sx={{ fontSize: '0.6875rem', height: 18 }} />
+          {profile.model && <Chip size="small" label={profile.model.name} sx={{ fontSize: '0.6875rem', height: 18 }} />}
         </Stack>
         <Typography variant="caption" color="text.secondary">
           {profile.description || 'No description.'}

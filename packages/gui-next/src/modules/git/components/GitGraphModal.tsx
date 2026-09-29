@@ -53,8 +53,8 @@ export function GitGraphModal({ open, onClose, root }: { open: boolean; onClose:
               >
                 <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: i === 0 ? 'warning.main' : 'text.disabled' }} />
                 <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, minWidth: 0 }}>
-                  {i === 0 && <Chip size="small" label="HEAD" variant="outlined" sx={{ height: 18, fontSize: '0.625rem', borderColor: 'warning.main', color: 'warning.main' }} />}
-                  {i === 0 && branchesByHead.map((b) => <Chip key={b} size="small" label={b} sx={{ height: 18, fontSize: '0.625rem' }} />)}
+                  {i === 0 && <Chip size="small" label="HEAD" variant="outlined" sx={{ height: 18, fontSize: '0.6875rem', borderColor: 'warning.main', color: 'warning.main' }} />}
+                  {i === 0 && branchesByHead.map((b) => <Chip key={b} size="small" label={b} sx={{ height: 18, fontSize: '0.6875rem' }} />)}
                   <Typography variant="body2" noWrap sx={{ fontSize: '0.8125rem' }}>
                     {c.message}
                   </Typography>

@@ -214,7 +214,7 @@ export function MessageList({
             resizes, and lines up with the Composer's matching maxWidth below it. */}
         {/* The conversation is content, so it's selectable; the chrome
             around it isn't (see baselineExtras). */}
-        <Box className="select-text" sx={{ maxWidth: 820, mx: 'auto' }}>
+        <Box className="select-text" sx={{ maxWidth: 880, mx: 'auto' }}>
           {/* `shift` while an older page is being put in front, so the view
               stays on what the user was reading instead of jumping. */}
           <Virtualizer scrollRef={containerRef} shift={prepending}>

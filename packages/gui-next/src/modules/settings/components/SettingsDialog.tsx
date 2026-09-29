@@ -135,7 +135,7 @@ export function SettingsDialog() {
             <Stack key={group.label} sx={{ gap: 0.375 }}>
               <Typography
                 variant="caption"
-                sx={{ px: 1.5, mb: 0.5, fontWeight: 600, letterSpacing: 0.6, textTransform: 'uppercase', fontSize: '0.625rem', color: 'text.secondary' }}
+                sx={{ px: 1.5, mb: 0.5, fontWeight: 600, letterSpacing: 0.6, textTransform: 'uppercase', fontSize: '0.6875rem', color: 'text.secondary' }}
               >
                 {group.label}
               </Typography>

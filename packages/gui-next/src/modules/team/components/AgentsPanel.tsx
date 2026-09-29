@@ -218,7 +218,7 @@ function AgentRow({
             {agent.name}
           </Typography>
           {working && (
-            <Typography component="span" sx={{ fontSize: '0.625rem', fontWeight: 700, color: 'primary.main', flexShrink: 0 }}>
+            <Typography component="span" sx={{ fontSize: '0.6875rem', fontWeight: 700, color: 'primary.main', flexShrink: 0 }}>
               ● working
             </Typography>
           )}

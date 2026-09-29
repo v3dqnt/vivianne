@@ -58,7 +58,7 @@ export function ChangelogBody({ entries, limit }: { entries: ChangelogEntry[]; l
                   fontWeight: 700,
                   textTransform: 'uppercase',
                   letterSpacing: 0.5,
-                  fontSize: '0.625rem',
+                  fontSize: '0.6875rem',
                   color: sectionColor(section.title),
                 }}
               >

@@ -56,7 +56,7 @@ export function InstantStepLog({ steps }: { steps: InstantStep[] }) {
                   display: 'block',
                   color: 'text.secondary',
                   fontFamily: '"Geist Mono", ui-monospace, monospace',
-                  fontSize: '0.625rem',
+                  fontSize: '0.6875rem',
                   lineHeight: 1.4,
                   wordBreak: 'break-word',
                 }}

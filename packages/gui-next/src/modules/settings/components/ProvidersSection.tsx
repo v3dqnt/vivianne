@@ -335,7 +335,7 @@ export function ProvidersSection() {
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.625rem', px: 1, mb: 0.5 }}
+            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.6875rem', px: 1, mb: 0.5 }}
           >
             Providers
           </Typography>
@@ -348,7 +348,7 @@ export function ProvidersSection() {
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.625rem', px: 1, mb: 0.5 }}
+            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.6875rem', px: 1, mb: 0.5 }}
           >
             Custom providers
           </Typography>

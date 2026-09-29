@@ -26,7 +26,7 @@ export function StatusMark({ status }: { status: FileChange['status'] }) {
         display: 'inline-grid',
         placeItems: 'center',
         fontFamily: MONO,
-        fontSize: '0.625rem',
+        fontSize: '0.6875rem',
         fontWeight: 700,
         color: spec.color,
         bgcolor: alpha(spec.color, 0.14),

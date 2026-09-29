@@ -254,7 +254,7 @@ function PartEditor({ part, onSave }: { part: DocPart; onSave: (part: string, te
       })}
     >
       <Tooltip title={part.label}>
-        <Typography variant="caption" color="text.disabled" sx={{ fontFamily: '"Geist Mono", monospace', fontSize: '0.625rem', pt: 0.5, minWidth: 44 }}>
+        <Typography variant="caption" color="text.disabled" sx={{ fontFamily: '"Geist Mono", monospace', fontSize: '0.6875rem', pt: 0.5, minWidth: 44 }}>
           {part.id}
         </Typography>
       </Tooltip>

@@ -127,7 +127,7 @@ export function SkillsSection() {
                 </Typography>
               )}
               {s.path && (
-                <Typography variant="caption" noWrap sx={{ display: 'block', fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.625rem', color: 'text.secondary' }}>
+                <Typography variant="caption" noWrap sx={{ display: 'block', fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.6875rem', color: 'text.secondary' }}>
                   {s.path}
                 </Typography>
               )}

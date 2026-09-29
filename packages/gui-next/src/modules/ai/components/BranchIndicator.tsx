@@ -102,7 +102,7 @@ export function BranchIndicator() {
         </Stack>
 
         <Stack sx={{ maxHeight: 280, overflowY: 'auto', py: 0.5 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ px: 1.5, py: 0.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, fontSize: '0.625rem' }}>
+          <Typography variant="caption" color="text.secondary" sx={{ px: 1.5, py: 0.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, fontSize: '0.6875rem' }}>
             Branches
           </Typography>
           {filtered.length === 0 ? (

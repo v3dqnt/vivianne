@@ -84,7 +84,7 @@ export function DipOverlay() {
               py: 0.125,
               bgcolor: '#4a9eff',
               color: '#fff',
-              fontSize: '0.625rem',
+              fontSize: '0.6875rem',
               fontWeight: 600,
               borderRadius: 0.5,
               whiteSpace: 'nowrap',

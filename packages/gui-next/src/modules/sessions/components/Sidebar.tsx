@@ -63,7 +63,7 @@ const SECTION_LABEL_SX = {
   fontWeight: 600,
   letterSpacing: 0.4,
   textTransform: 'uppercase',
-  fontSize: '0.625rem',
+  fontSize: '0.6875rem',
 } as const
 
 /**
@@ -385,7 +385,7 @@ export function Sidebar() {
               <Typography variant="caption" color="text.secondary" sx={SECTION_LABEL_SX}>
                 Archive
               </Typography>
-              <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.625rem' }}>
+              <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
                 {myArchive.length}
               </Typography>
               <Box sx={{ flex: 1 }} />

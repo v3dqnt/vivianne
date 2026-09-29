@@ -80,7 +80,7 @@ function clock(ms: number): string {
   return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
 
-const SECTION = { fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.625rem', color: 'text.secondary' } as const
+const SECTION = { fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.6875rem', color: 'text.secondary' } as const
 
 /** Usage, activity and sync for one multiplayer project — `multiplayer::collab`. */
 export function CollabView({ projectId, partnerName }: { projectId: string; partnerName: string }) {

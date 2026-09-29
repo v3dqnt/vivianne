@@ -200,7 +200,7 @@ export function IdeTree() {
               {visible.length > 1 && (
                 <Typography
                   variant="caption"
-                  sx={{ display: 'block', px: 1, py: 0.5, fontWeight: 700, letterSpacing: 0.3, color: 'text.disabled', fontSize: '0.625rem' }}
+                  sx={{ display: 'block', px: 1, py: 0.5, fontWeight: 700, letterSpacing: 0.3, color: 'text.disabled', fontSize: '0.6875rem' }}
                 >
                   {t.label.toUpperCase()}
                 </Typography>
