@@ -144,6 +144,16 @@ fn cut_off_before_acting(message: &AgentMessage) -> bool {
     })
 }
 
+/// A `dip` call that only looks: repeating one is how a screen is watched
+/// (the answer changes as the app does), not a loop.
+fn observes_the_screen(tc: &AgentToolCall) -> bool {
+    (tc.name == "dip" || tc.name == "computer")
+        && matches!(
+            tc.arguments.get("action").and_then(|v| v.as_str()),
+            Some("screenshot" | "zoom" | "wait" | "snapshot" | "find" | "read_text" | "list_windows" | "cursor_position")
+        )
+}
+
 enum StepAction { Continue, Nudge, Stop }
 
 /// What to do at the start of turn `step` (1-indexed) given the ceiling `max`:
@@ -863,7 +873,7 @@ pub async fn run_agent_loop_continue(
         // still counts as two identical steps in a row, not a reset.
         let sig: Vec<(String, serde_json::Value)> = tool_calls
             .iter()
-            .filter(|tc| !DOOM_LOOP_EXCLUDED_TOOLS.contains(&tc.name.as_str()))
+            .filter(|tc| !DOOM_LOOP_EXCLUDED_TOOLS.contains(&tc.name.as_str()) && !observes_the_screen(tc))
             .map(|tc| (tc.name.clone(), tc.arguments.clone()))
             .collect();
         if !sig.is_empty() {

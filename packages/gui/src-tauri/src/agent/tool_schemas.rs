@@ -49,17 +49,25 @@ fn powershell_description() -> &'static str {
     }
 }
 
-/// The Windows-only half of the `dip` tool description — appended to the
-/// shared pixel-mode text only where `uiautomation` actually compiles.
-#[cfg(target_os = "windows")]
 /// Documents the narration cursor, which is not control and is easy to
-/// mistake for it. Appended to the `computer` tool description on every
-/// platform, unlike `STRUCTURED_MODE_DOC`, because it is only a window.
+/// mistake for it. Appended on every platform: it is only a window.
 const NARRATION_DOC: &str = "
 
-SHOWING THE USER (point_at / highlight / clear_pointer) — draws a second, decorative cursor. It does NOT move the real mouse, click, or steal focus, so it is always safe. Use it when you are explaining rather than doing: point_at{x,y,text} puts a pulsing marker with a caption at a screen coordinate, highlight{x,y,width,height,text} rings a region, clear_pointer removes it. Reach for it when the user asks where something is, or just before an action they would want to see coming. Clear it when the answer no longer applies. Coordinates are the same screen coordinates screenshot and snapshot report.";
+SHOWING THE USER (point_at / highlight / clear_pointer) — draws a second, decorative cursor. It does NOT move the real mouse, click, or take focus. point_at{x,y,text} marks a point with a caption, highlight{x,y,width,height,text} rings a region, clear_pointer removes it. Use it when explaining rather than doing.";
 
-const STRUCTURED_MODE_DOC: &str = "\n\nSTRUCTURED MODE (snapshot / interact / list_windows / focus_window / window_action / launch_app) — Windows only, PREFERRED for real application UI over guessing pixels. snapshot reads a window's actual UI Automation tree (buttons, fields, text, each with a reliable numeric id) and briefly highlights every found element on screen. PASS THE WINDOW ID from list_windows to snapshot — it raises that window and reads it. Without an id, snapshot falls back to whatever currently has keyboard focus, which is almost always Vivianne's own window rather than the app you meant. interact then acts on one element by id — the real cursor visibly moves there first, then clicks/types, exactly like a person would. list_windows/focus_window/window_action manage which window is in front; launch_app starts a new process. Typical flow: list_windows -> snapshot with that window's id (or launch_app then list_windows if it isn't open yet) -> interact -> snapshot again (ids only last one snapshot call, so re-snapshot after anything that could have changed the UI). Fall back to pixel mode only when snapshot finds nothing useful (canvas/game UI).";
+/// The Windows-only half of the `dip` description — structured mode.
+#[cfg(target_os = "windows")]
+const STRUCTURED_MODE_DOC: &str = "
+
+STRUCTURED MODE — Windows. PREFER THIS for any normal app: it is faster and far more reliable than pixels.
+- list_windows: every open window, front to back, with ids.
+- launch_app{command, args?}: start an app, document, folder or URI (notepad, calc, a file path, ms-settings:display, https://...). Waits for its window and makes it the target — you can type into it straight away.
+- focus_window{id}: bring a window forward and make it the target. window_action{id, window_state}: minimize/maximize/restore/close.
+- snapshot{id?}: the window's UI as an indented list, e.g. `[12] Edit \"File name\" = \"report.txt\" *focused`, read in one fast pass. Without an id it reads the target window.
+- find{query}: only the elements matching a name, value or type — the quick way to one element in a big window.
+- interact{id, element_action, value?}: act on an element by id. element_action: click, double_click, right_click, invoke, focus, set_value (REPLACES the field's text), toggle, select, expand, collapse, scroll_into_view.
+- read_text{id?}: the full text of a document, field or the whole window.
+Ids last until the next snapshot/find; after anything that changes the UI, snapshot again. Use pixel mode only for what snapshot can't see (games, canvas, custom-drawn UI).";
 
 #[allow(unused_mut)] // `mut` on `computer_actions` only needed on Windows, extended below
 pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
@@ -69,14 +77,17 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
     // Vec so the schema's `enum` only ever lists actions that actually
     // dispatch on this platform — see `computer::execute_computer_tool`.
     let mut computer_actions = vec![
-        "screenshot", "mouse_move", "left_click", "left_click_drag", "right_click",
-        "middle_click", "double_click", "type", "key", "cursor_position",
+        "screenshot", "zoom", "mouse_move", "left_click", "left_click_drag", "right_click",
+        "middle_click", "double_click", "triple_click", "scroll", "type", "key", "cursor_position", "wait",
         // Narration, not control: these draw a marker on screen and move
         // nothing. Cross-platform, because they are only a Tauri window.
         "point_at", "highlight", "clear_pointer",
     ];
     #[cfg(target_os = "windows")]
-    computer_actions.extend(["snapshot", "interact", "list_windows", "focus_window", "window_action", "launch_app"]);
+    computer_actions.extend([
+        "snapshot", "find", "read_text", "interact", "list_windows", "focus_window", "window_action", "launch_app",
+        "hold_key", "key_down", "key_up",
+    ]);
 
     // The description has to be gated the same way the `enum` above is. It
     // was not, so on macOS and Linux the model was told at length to prefer
@@ -179,39 +190,49 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
         }),
         serde_json::json!({
             "name": "dip",
-            "description": "Control the computer: mouse, keyboard, and screen. Read the 'dip' skill before your first call if you haven't already — it has the full decision process and worked examples. Two modes, pick per situation:\n\nPIXEL MODE (screenshot / mouse_move / left_click / left_click_drag / right_click / middle_click / double_click / type / key / cursor_position) — cross-platform. Take a screenshot first to see what's on screen, then act on pixel coordinates read off it. left_click/right_click/double_click accept an optional 'coordinate' to move-then-click in one call. Works on anything, including canvas-rendered apps and games, but coordinates are a guess you verify visually with another screenshot.".to_string() + structured_mode + NARRATION_DOC,
+            "description": "Control the computer: apps, windows, mouse, keyboard and screen.\n\nPIXEL MODE — works on anything. screenshot{window?, monitor?} returns a scaled image; every coordinate you pass afterwards is in THAT image's pixels and is mapped to the screen for you. zoom{region:[x0,y0,x1,y1]} gives a closer look to read small text. Clicks: left_click / right_click / middle_click / double_click / triple_click with optional coordinate; mouse_move; left_click_drag{coordinate, start_coordinate?}; scroll{direction, amount, coordinate?}. Keyboard: type{text} (any text, emoji and newlines included); key{text:\"ctrl+s\", repeat?} — names like enter, tab, esc, win, alt, shift, f1-f24, up/down/left/right, home, end, pagedown, delete, volume_up, or a single character; hold_key{text, duration}; key_down / key_up. Typing and keys go to the TARGET window (the app you last launched, focused, snapshotted or clicked in) even while Vivianne is in front — you never type into the chat by accident. wait{duration} pauses for loading. cursor_position.".to_string() + structured_mode + NARRATION_DOC,
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "enum": computer_actions,
-                        "description": "Which action to perform — see the tool description for the full pixel-mode / structured-mode split."
+                        "description": "Which action to perform."
                     },
                     "coordinate": {
                         "type": "array",
                         "items": { "type": "number" },
-                        "description": "X,Y screen coordinates. Required for mouse_move and left_click_drag; optional for left_click/right_click/double_click (moves the cursor there first, then clicks)."
+                        "description": "[x, y] in the last screenshot's pixels (screen pixels if you haven't taken one)."
                     },
-                    "text": { "type": "string", "description": "Text to type (action=type), or a key combination such as 'Control+C' (action=key)." },
-                    "id": { "type": "number", "description": "Element id from the last snapshot (action=interact), or window id from the last list_windows (action=snapshot, action=focus_window, action=window_action). For action=snapshot this is optional but strongly recommended: it picks which window to read instead of falling back to the focused one." },
+                    "start_coordinate": { "type": "array", "items": { "type": "number" }, "description": "left_click_drag: where to start (default: the current cursor)." },
+                    "text": { "type": "string", "description": "type: the text. key / hold_key / key_down / key_up: a key or combination like \"ctrl+shift+t\". point_at / highlight: a caption." },
+                    "repeat": { "type": "number", "description": "key: press it this many times (e.g. down x5)." },
+                    "duration": { "type": "number", "description": "Seconds — wait, or how long hold_key holds." },
+                    "direction": { "type": "string", "enum": ["up", "down", "left", "right"], "description": "scroll direction." },
+                    "amount": { "type": "number", "description": "scroll: wheel notches (default 3)." },
+                    "region": { "type": "array", "items": { "type": "number" }, "description": "zoom: [x0, y0, x1, y1] in the last screenshot's pixels." },
+                    "window": { "type": "boolean", "description": "screenshot: capture just the target window instead of the whole screen." },
+                    "monitor": { "type": "number", "description": "screenshot: which monitor (0-based); default is the one the target window is on." },
+                    "id": { "type": "number", "description": "interact / read_text: an element id from the last snapshot or find. snapshot / find / focus_window / window_action: a window id from list_windows." },
+                    "query": { "type": "string", "description": "find: part of the element's name, text or type." },
                     "element_action": {
                         "type": "string",
-                        "enum": ["click", "focus", "set_value", "scroll_into_view"],
-                        "description": "What to do with the element — required for action=interact."
+                        "enum": ["click", "double_click", "right_click", "invoke", "focus", "set_value", "toggle", "select", "expand", "collapse", "scroll_into_view"],
+                        "description": "interact: what to do (default click)."
                     },
+                    "value": { "type": "string", "description": "interact with set_value: the text the field should contain." },
                     "window_state": {
                         "type": "string",
                         "enum": ["minimize", "maximize", "restore", "close"],
-                        "description": "Required for action=window_action."
+                        "description": "window_action: what to do to the window."
                     },
-                    "value": { "type": "string", "description": "Text to type into the element — required when action=interact and element_action=set_value." },
-                    "command": { "type": "string", "description": "Executable name (resolved via PATH) or full path — required for action=launch_app." },
-                    "args": { "type": "array", "items": { "type": "string" }, "description": "Command-line arguments, if any — for action=launch_app." },
-                    "x": { "type": "number", "description": "Screen X — required for action=point_at and action=highlight." },
-                    "y": { "type": "number", "description": "Screen Y — required for action=point_at and action=highlight." },
-                    "width": { "type": "number", "description": "Region width — required for action=highlight." },
-                    "height": { "type": "number", "description": "Region height — required for action=highlight." }
+                    "command": { "type": "string", "description": "launch_app: an app name, path, document, folder or URI." },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "launch_app: arguments." },
+                    "highlight": { "type": "boolean", "description": "snapshot: also ring the window on screen for the user." },
+                    "x": { "type": "number", "description": "point_at / highlight: x in screenshot pixels." },
+                    "y": { "type": "number", "description": "point_at / highlight: y in screenshot pixels." },
+                    "width": { "type": "number", "description": "highlight: width." },
+                    "height": { "type": "number", "description": "highlight: height." }
                 },
                 "required": ["action"]
             }

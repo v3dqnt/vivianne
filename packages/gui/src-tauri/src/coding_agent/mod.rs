@@ -12,6 +12,8 @@ pub mod tool_exec;
 pub mod computer;
 #[cfg(target_os = "windows")]
 pub mod dip;
+#[cfg(target_os = "windows")]
+pub mod win;
 pub mod tools_ext;
 pub mod apply_patch;
 pub mod repo_tools;

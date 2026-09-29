@@ -272,6 +272,7 @@ dependencies = [
  "uuid",
  "which 7.0.3",
  "whisper-rs",
+ "windows 0.62.2",
  "xcap",
  "zip 4.6.1",
 ]

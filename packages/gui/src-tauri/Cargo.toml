@@ -132,3 +132,18 @@ quick-xml = "0.37"
 
 [target."cfg(windows)".dependencies]
 uiautomation = "0.25.0"
+# Direct Win32 for `dip`: SendInput (Unicode typing, full key map, wheel),
+# foreground control past the focus lock, window enumeration, launching via
+# the shell, and process elevation checks. Same `windows` version
+# `uiautomation` already builds on, so this adds features, not a second copy.
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_System_Threading",
+  "Win32_Security",
+  "Win32_UI_Shell",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Registry",
+] }
