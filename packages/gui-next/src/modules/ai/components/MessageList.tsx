@@ -10,6 +10,8 @@ import { useAgentStore } from '../store/agentStore'
 import { MessageBubble } from './MessageBubble'
 import { ToolGroup } from './ToolGroup'
 import { groupTranscript } from '../lib/toolGroups'
+import { findCheckpoints } from '../lib/checkpoints'
+import { CheckpointCard } from './CheckpointCard'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { TodoPanel } from './TodoPanel'
 
@@ -77,7 +79,11 @@ export function MessageList({
     return map
   }, [messages])
 
-  const transcript = useMemo(() => groupTranscript(messages, streamingIndex), [messages, streamingIndex])
+  const checkpoints = useMemo(() => findCheckpoints(messages), [messages])
+  const transcript = useMemo(
+    () => groupTranscript(messages, streamingIndex, new Set(checkpoints.keys())),
+    [messages, streamingIndex, checkpoints],
+  )
 
   const [revertTarget, setRevertTarget] = useState<number | null>(null)
   const [reverting, setReverting] = useState(false)
@@ -205,7 +211,11 @@ export function MessageList({
   // within a session, and a group keeps its first index as it grows, so a
   // row's key never changes under it.
   const items = transcript.map((item) =>
-    item.kind === 'message' ? (
+    item.kind === 'checkpoint' ? (
+      <Box key={`c${item.index}`} sx={{ pb: 1.5 }}>
+        <CheckpointCard checkpoint={checkpoints.get(item.index)!} />
+      </Box>
+    ) : item.kind === 'message' ? (
       <Box key={item.index} sx={{ pb: 1.5 }}>
         {renderMessage(item.index)}
         {reviewAfter([item.index])}

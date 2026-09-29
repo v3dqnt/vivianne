@@ -8,6 +8,8 @@ type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
 export type TranscriptItem =
   | { kind: 'message'; index: number }
   | { kind: 'group'; start: number; indices: number[]; toolIndices: number[] }
+  /** Part of the plan got done at this message (see `checkpoints.ts`). */
+  | { kind: 'checkpoint'; index: number }
 
 /** Assistant turns that said nothing visible and exist only to carry tool
  * calls. They belong inside the group rather than breaking it into pieces.
@@ -30,7 +32,11 @@ function isSilentAssistant(m: AgentMessage): boolean {
  * never folded: while it streams it has no text yet, and hiding the
  * "thinking" indicator inside a collapsed group would make a working agent
  * look idle. */
-export function groupTranscript(messages: AgentMessage[], streamingIndex: number | null): TranscriptItem[] {
+export function groupTranscript(
+  messages: AgentMessage[],
+  streamingIndex: number | null,
+  checkpointAt: ReadonlySet<number> = new Set(),
+): TranscriptItem[] {
   const items: TranscriptItem[] = []
   let run: number[] = []
 
@@ -46,12 +52,17 @@ export function groupTranscript(messages: AgentMessage[], streamingIndex: number
 
   messages.forEach((m, i) => {
     const foldable = i !== streamingIndex && (m.type === 'toolResult' || isSilentAssistant(m))
-    if (foldable) {
-      run.push(i)
-      return
+    if (foldable) run.push(i)
+    else {
+      flush()
+      items.push({ kind: 'message', index: i })
     }
-    flush()
-    items.push({ kind: 'message', index: i })
+    // A checkpoint is never folded away: it closes the group before it, so
+    // progress reads as "worked… ✓ done… worked… ✓ done".
+    if (checkpointAt.has(i)) {
+      flush()
+      items.push({ kind: 'checkpoint', index: i })
+    }
   })
   flush()
   return items
@@ -102,6 +113,8 @@ function familyOf(name: string): Family {
   return 'other'
 }
 
+const PLAN_TOOLS = new Set(['todo_write', 'todo_write_rich'])
+
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
 function pathOf(m: ToolResultMessage): string | null {
@@ -115,7 +128,8 @@ function pathOf(m: ToolResultMessage): string | null {
  * did, in the order a reader cares about it: changes first, then evidence. */
 export function summarizeTools(tools: ToolResultMessage[]): string {
   const by = new Map<Family, ToolResultMessage[]>()
-  for (const t of tools) {
+  // Plan updates are bookkeeping, and show up as checkpoints on their own.
+  for (const t of tools.filter((t) => !PLAN_TOOLS.has(t.toolName))) {
     const f = familyOf(t.toolName)
     by.set(f, [...(by.get(f) ?? []), t])
   }

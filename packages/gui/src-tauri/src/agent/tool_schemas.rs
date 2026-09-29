@@ -610,7 +610,7 @@ When you hit a login wall: call browser_session_status first, and if there is ge
         }),
         serde_json::json!({
             "name": "todo_write",
-            "description": "Create and manage a structured task checklist for the session. Replaces the whole list each call. At most one item may be 'in_progress' at a time, and content must be unique across items — both are rejected as errors.",
+            "description": "Create and manage a structured task checklist for the session. Each completed item becomes a visible checkpoint of your progress, so plan real milestones, mark each completed (with a summary) as soon as it is done, and keep the list current. Replaces the whole list each call. At most one item may be 'in_progress' at a time, and content must be unique across items — both are rejected as errors.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -621,7 +621,8 @@ When you hit a login wall: call browser_session_status first, and if there is ge
                             "type": "object",
                             "properties": {
                                 "content": { "type": "string" },
-                                "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] }
+                                "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] },
+                                "summary": { "type": "string", "description": "When marking an item completed: one short line on what was actually done (e.g. 'added /login route and form, 4 tests pass'). Shown to the user as a checkpoint." }
                             },
                             "required": ["content", "status"]
                         }
