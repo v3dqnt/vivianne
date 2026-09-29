@@ -37,9 +37,13 @@ export const PRESET_LABELS: Record<Preset, string> = {
 }
 
 const ZONE_IDS: Record<Zone, string> = { right: 'zone-right', bottom: 'zone-bottom' }
+/** How big each zone starts, and the smallest it can be dragged to. Below
+ * these a panel stops being usable: the right panel's file tree and preview
+ * need room for a path and a readable page, the bottom panel for a few lines
+ * of terminal output under its tabs. */
 const ZONE_SIZE: Record<Zone, { initialSize: number; minimumSize: number }> = {
-  right: { initialSize: 400, minimumSize: 240 },
-  bottom: { initialSize: 260, minimumSize: 120 },
+  right: { initialSize: 400, minimumSize: 320 },
+  bottom: { initialSize: 260, minimumSize: 160 },
 }
 
 /** Serialized dockview layout. Bumped from v1 when the zones arrived: a v1
@@ -276,6 +280,25 @@ export function applyPreset(preset: Preset) {
   scheduleSave()
 }
 
+/** A saved layout with today's zone minimums applied.
+ *
+ * A zone's minimum is stored in the layout itself, so a layout saved before
+ * the minimum existed (or when it was smaller) would restore without it and
+ * let the panel be dragged down to nothing. The saved size is raised to the
+ * minimum too, so it doesn't open narrower than it can be dragged. */
+function withZoneMinimums(saved: unknown): unknown {
+  const edges = (saved as { edgeGroups?: Record<string, { minimumSize?: number; size?: number }> } | null)?.edgeGroups
+  if (!edges) return saved
+  for (const zone of ['right', 'bottom'] as Zone[]) {
+    const e = edges[zone]
+    if (!e) continue
+    const min = ZONE_SIZE[zone].minimumSize
+    e.minimumSize = Math.max(e.minimumSize ?? 0, min)
+    if (typeof e.size === 'number' && e.size < min) e.size = min
+  }
+  return saved
+}
+
 /** Called once dockview is ready: restore the saved layout, or start fresh. */
 export function attach(dockview: DockviewApi) {
   api = dockview
@@ -290,7 +313,7 @@ export function attach(dockview: DockviewApi) {
     scheduleSave()
   })
 
-  const saved = loadPersisted<unknown>(STORAGE_KEY, null)
+  const saved = withZoneMinimums(loadPersisted<unknown>(STORAGE_KEY, null))
   let restored = false
   if (saved) {
     try {
