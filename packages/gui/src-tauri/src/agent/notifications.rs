@@ -72,6 +72,26 @@ pub async fn maybe_send_completion_notification(app: &tauri::AppHandle, messages
     }
 }
 
+/// A long task needs you: it paused on a cap, got blocked, or finished.
+///
+/// Unlike the per-turn notification this ignores the opt-in toggle. A long
+/// task is started precisely so the person can walk away, so the moment it
+/// stops needing nobody is the one thing they must hear about. It still
+/// stays quiet while they are looking at the window.
+pub fn notify_long_task(app: &tauri::AppHandle, body: &str) {
+    use tauri::Manager;
+    use tauri_plugin_notification::NotificationExt;
+
+    let is_focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
+    if is_focused {
+        return;
+    }
+    let body: String = body.chars().take(160).collect();
+    if let Err(e) = app.notification().builder().title("Vivianne").body(body).show() {
+        log::warn!("[notifications] failed to show long-task notification: {e}");
+    }
+}
+
 /// Settings → Notifications "Test" button — fires immediately regardless of
 /// the enabled toggle or window focus, so the user can confirm OS-level
 /// notification permission actually works before relying on it.

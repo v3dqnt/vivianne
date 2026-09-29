@@ -685,7 +685,7 @@ When you hit a login wall: call browser_session_status first, and if there is ge
         }),
         serde_json::json!({
             "name": "create_goal",
-            "description": "Set this session's goal, replacing any existing one. Use for a task substantial enough that keeping the underlying objective explicit (separate from the moment-to-moment todo checklist) helps you stay on track across many turns — not for quick asks.",
+            "description": "Set the goal of the task you were given, replacing any existing one. Do this for any task that takes more than a few steps. While the goal is active you keep working on it — ending a turn does not end the task; you will be prompted to continue — through as many steps, hours or days as it takes, until you call update_goal with action 'complete' (done and verified) or 'blocked' (you need the user). Rate limits, model outages and app restarts are handled for you. Not for quick questions.",
             "parameters": {
                 "type": "object",
                 "properties": {

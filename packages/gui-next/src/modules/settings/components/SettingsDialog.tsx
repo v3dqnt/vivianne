@@ -14,6 +14,7 @@ import {
   MicrophoneLinear,
   SparkleLinear,
   GlobalLinear,
+  ShieldTickLinear,
 } from '../../../icons'
 import { ProvidersSection } from './ProvidersSection'
 import { LocalModelsSection } from './LocalModelsSection'
@@ -29,6 +30,7 @@ import { ThemesSection } from './ThemesSection'
 import { ComponentsSection } from './ComponentsSection'
 import { UpdatesSection } from './UpdatesSection'
 import { InstantSection } from './InstantSection'
+import { ReliabilitySection } from './ReliabilitySection'
 import { WebSearchSection } from './WebSearchSection'
 import { AccountSection } from '../../account/components/AccountSection'
 import { useSettingsUi, type SettingsSection } from '../store/uiStore'
@@ -57,6 +59,7 @@ const GROUPS: { label: string; items: SectionDef[] }[] = [
     items: [
       { id: 'providers', label: 'Providers', icon: KeyLinear },
       { id: 'local', label: 'Local models', icon: CpuLinear },
+      { id: 'reliability', label: 'Reliability', icon: ShieldTickLinear },
     ],
   },
   {
@@ -211,6 +214,7 @@ export function SettingsDialog() {
                 </Stack>
               )}
               {section === 'providers' && <ProvidersSection />}
+              {section === 'reliability' && <ReliabilitySection />}
               {section === 'local' && <LocalModelsSection />}
               {section === 'mods' && <ModsSection />}
               {section === 'subagents' && <SubagentsSection />}

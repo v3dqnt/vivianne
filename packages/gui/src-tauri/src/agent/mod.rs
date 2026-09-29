@@ -36,6 +36,8 @@ pub mod usage_store;
 pub mod telemetry;
 pub mod hooks;
 pub mod checkpoints;
+pub mod recovery;
+pub mod run_ledger;
 pub mod capabilities;
 pub mod directive;
 pub mod personas;

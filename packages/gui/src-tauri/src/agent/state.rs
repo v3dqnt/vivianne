@@ -87,6 +87,10 @@ struct AgentStateInner {
     /// Irrelevant at the top level, which can always delegate.
     delegation_allowed: bool,
     goal: Option<Goal>,
+    /// The ledger key of the long task this conversation is running, if any
+    /// (see `agent::run_ledger`). Set means: no step ceiling, spend and time
+    /// caps instead, wait out rate limits, keep going until the goal is done.
+    long_task: Option<String>,
 }
 
 impl AgentState {
@@ -134,6 +138,7 @@ impl AgentState {
                 history_archive: None,
                 delegation_allowed: false,
                 goal: None,
+                long_task: None,
             })),
         };
         if !workspace_folders.is_empty() {
@@ -244,6 +249,14 @@ impl AgentState {
 
     pub async fn set_auto_approve(&self, value: bool) {
         self.inner.write().await.auto_approve = value;
+    }
+
+    pub async fn long_task(&self) -> Option<String> {
+        self.inner.read().await.long_task.clone()
+    }
+
+    pub async fn set_long_task(&self, key: Option<String>) {
+        self.inner.write().await.long_task = key;
     }
 
     pub async fn set_system_prompt(&self, value: String) {

@@ -72,6 +72,39 @@ export interface QuestionSpec {
   multiSelect: boolean
 }
 
+/** `agent::run_ledger::RunStatus`. */
+export type RunStatus = 'running' | 'waiting' | 'paused' | 'blocked' | 'done' | 'stopped'
+
+/** `agent::run_ledger::Milestone` — a finished item of a long task's plan. */
+export interface Milestone {
+  title: string
+  summary: string | null
+  at: number
+  spentUsd: number
+  elapsedMs: number
+}
+
+/** `agent::run_ledger::RunLedger` — `#[serde(rename_all = "camelCase")]`. */
+export interface RunLedger {
+  key: string
+  thread: string
+  workspace: string | null
+  objective: string
+  status: RunStatus
+  capUsd: number | null
+  deadlineMs: number | null
+  startedAt: number
+  updatedAt: number
+  spentUsd: number
+  steps: number
+  model: string | null
+  waitUntil: number | null
+  statusReason: string | null
+  milestones: Milestone[]
+  /** `(title, status)` pairs. */
+  todos: [string, string][]
+}
+
 /** `#[serde(tag = "type", content = "payload", rename_all = "snake_case")]` */
 export type AgentEvent =
   | { type: 'memory_injected'; payload: { entry_count: number } }
@@ -113,6 +146,8 @@ export type AgentEvent =
       type: 'model_fallback'
       payload: { from_provider: string; from_model: string; to_provider: string; to_model: string; reason: string }
     }
+  | { type: 'run_waiting'; payload: { until_ms: number; reason: string } }
+  | { type: 'long_task'; payload: { ledger: RunLedger } }
   | {
       type: 'credential_rotated'
       payload: { provider: string; from_label: string; to_label: string; reason: string }

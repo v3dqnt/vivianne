@@ -1,6 +1,6 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { call, on } from '../../../ipc'
-import type { AgentEvent, AgentMessage, ImageAttachment, MessageContent, QuestionSpec } from '../lib/types'
+import type { AgentEvent, AgentMessage, ImageAttachment, MessageContent, QuestionSpec, RunLedger } from '../lib/types'
 import { useModelStore } from './modelStore'
 import { usePlanModeStore } from './planModeStore'
 import { useSubagentStore } from './subagentStore'
@@ -130,6 +130,16 @@ interface AgentStoreState {
   setDraft: (text: string) => void
   /** What's sitting in the backend steering + follow-up queues. */
   queuedMessages: QueuedMessages
+  /** Every model failed and the run is waiting before trying again. */
+  runWaiting: { untilMs: number; reason: string } | null
+  /** The ledger of this conversation's current task (`agent::run_ledger`):
+   * status, spend, checkpoints. Every task has one. */
+  longTask: RunLedger | null
+  /** Re-read the long task for the open conversation; picks a running one
+   * back up after a relaunch. */
+  refreshLongTask: () => Promise<void>
+  /** Pause, stop, raise the caps of, or resume the long task. */
+  controlLongTask: (action: 'pause' | 'stop' | 'extend' | 'resume', add?: { usd?: number; hours?: number }) => Promise<void>
   init: () => Promise<void>
   sendMessage: (text: string, images?: ImageAttachment[]) => Promise<void>
   /** Fold older history into a summary. Returns how many messages were folded (0 = nothing to compact). */
@@ -175,7 +185,14 @@ interface ThreadScopedEvent {
 }
 
 export function createAgentStore(threadId: string): UseBoundStore<StoreApi<AgentStoreState>> {
-  return create<AgentStoreState>((set, get) => ({
+  return create<AgentStoreState>((set, get) => {
+  /** Resume the long task by sending its briefing as a message, so picking
+   * the task back up is visible in the conversation like any other turn. */
+  const resumeLongTask = async () => {
+    const prompt = await call<string | null>('cmd_long_task_resume_prompt', { threadId })
+    if (prompt) await get().sendMessage(prompt)
+  }
+  return {
     messages: [],
     isBusy: false,
     streamingIndex: null,
@@ -192,6 +209,32 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
     draft: '',
     setDraft: (text: string) => set({ draft: text }),
     queuedMessages: { steering: [], followUp: [] },
+    runWaiting: null,
+    longTask: null,
+
+    refreshLongTask: async () => {
+      if (!isPrimary(threadId)) return
+      const ledger = (await call<RunLedger | null>('cmd_long_task_get', { threadId })) ?? null
+      set({ longTask: ledger })
+      // A task that was running (or waiting out a rate limit) when the app
+      // closed carries on by itself.
+      if (ledger && (ledger.status === 'running' || ledger.status === 'waiting') && !get().isBusy) {
+        await resumeLongTask()
+      }
+    },
+
+    controlLongTask: async (action, add) => {
+      if (!isPrimary(threadId)) return
+      const ledger = await call<RunLedger | null>('cmd_long_task_control', {
+        threadId,
+        action,
+        addUsd: add?.usd ?? null,
+        addHours: add?.hours ?? null,
+      })
+      set({ longTask: action === 'stop' ? null : (ledger ?? null) })
+      if (action === 'pause' || action === 'stop') set({ runWaiting: null })
+      if (action === 'resume' && ledger && !get().isBusy) await resumeLongTask()
+    },
 
     init: async () => {
       if (get().initialized) return
@@ -206,6 +249,10 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
         }
         if (event.type !== 'credential_rotated') {
           set((s) => (s.credentialRotated ? { credentialRotated: null } : s))
+        }
+        // A wait is over the moment anything else happens on the run.
+        if (event.type !== 'run_waiting' && event.type !== 'long_task') {
+          set((s) => (s.runWaiting ? { runWaiting: null } : s))
         }
         switch (event.type) {
           case 'memory_injected': {
@@ -435,6 +482,14 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             })
             break
           }
+          case 'run_waiting': {
+            set({ runWaiting: { untilMs: event.payload.until_ms, reason: event.payload.reason } })
+            break
+          }
+          case 'long_task': {
+            set({ longTask: event.payload.ledger })
+            break
+          }
           case 'credential_rotated': {
             const p = event.payload
             set({
@@ -648,7 +703,8 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
       set({ pendingConfirmation: null })
       await call('cmd_agent_respond_confirmation', { requestId: p.requestId, approved })
     },
-  }))
+  }
+  })
 }
 
 /** The app's one live conversation — the active project's today.

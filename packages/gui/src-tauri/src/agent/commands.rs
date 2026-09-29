@@ -248,6 +248,7 @@ pub async fn cmd_agent_prompt(
     };
     crate::multiplayer::broadcast_user_message(&app, &mp_workspace_folders, &message).await;
     let source_tag = main_source_tag(&state).await;
+    crate::agent::run_ledger::begin_run(&state, threadId.as_deref().unwrap_or_default(), &request_text).await;
     let new_messages = agent.prompt(message, &app, &tx, &state.abort_flag, &state.steer_flag, &source_tag).await;
     drop(agent);
 

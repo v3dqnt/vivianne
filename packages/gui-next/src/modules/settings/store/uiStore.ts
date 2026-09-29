@@ -3,6 +3,7 @@ import { create } from 'zustand'
 export type SettingsSection =
   | 'account'
   | 'providers'
+  | 'reliability'
   | 'local'
   | 'mods'
   | 'subagents'

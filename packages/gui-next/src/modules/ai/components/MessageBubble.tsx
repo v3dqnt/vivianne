@@ -8,7 +8,7 @@ import { ToolCallCard } from './ToolCallCard'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ImageBlock } from './ImageBlock'
 import { ThinkingIndicator } from './ThinkingIndicator'
-import { HandoffDivider, isHandoffText, SummaryDivider, isSummaryText, PairActivityDivider, isPairActivityText } from './HandoffDivider'
+import { HandoffDivider, isHandoffText, SummaryDivider, isSummaryText, PairActivityDivider, isPairActivityText, ResumeDivider, isResumeText } from './HandoffDivider'
 
 // Memoized — `MessageList` re-renders on every streamed token (the store
 // replaces its `messages` array each time), but non-streaming message
@@ -59,6 +59,7 @@ function MessageBubbleImpl({
   if (isUser && isHandoffText(text)) return <HandoffDivider text={text} />
   if (isUser && isSummaryText(text)) return <SummaryDivider text={text} />
   if (isUser && isPairActivityText(text)) return <PairActivityDivider text={text} />
+  if (isUser && isResumeText(text)) return <ResumeDivider text={text} />
   const thinking = contentToThinking(message.content)
   const images = contentImages(message.content)
   // A failed turn ends with `errorMessage` set and (usually) empty content —

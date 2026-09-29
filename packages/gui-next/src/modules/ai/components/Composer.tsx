@@ -12,6 +12,8 @@ import { PermissionModePill as PermissionModePillImpl } from './PermissionModePi
 import { AttachFileButton as AttachFileButtonImpl } from './AttachFileButton'
 import { ContextUsageBar as ContextUsageBarImpl } from './ContextUsageBar'
 import { StreamStatusLine as StreamStatusLineImpl } from './StreamStatusLine'
+import { RunStatusBar as RunStatusBarImpl } from './RunStatusBar'
+import { LimitsPill as LimitsPillImpl } from './LimitsPill'
 import { PlanModeBanner as PlanModeBannerImpl } from './PlanModeBanner'
 import { SubagentPanel as SubagentPanelImpl } from './SubagentPanel'
 import { ComputerUseBanner as ComputerUseBannerImpl } from './ComputerUseBanner'
@@ -31,6 +33,8 @@ const PermissionModePill = memo(PermissionModePillImpl)
 const AttachFileButton = memo(AttachFileButtonImpl)
 const ContextUsageBar = memo(ContextUsageBarImpl)
 const StreamStatusLine = memo(StreamStatusLineImpl)
+const RunStatusBar = memo(RunStatusBarImpl)
+const LimitsPill = memo(LimitsPillImpl)
 const PlanModeBanner = memo(PlanModeBannerImpl)
 const SubagentPanel = memo(SubagentPanelImpl)
 const ComputerUseBanner = memo(ComputerUseBannerImpl)
@@ -382,6 +386,7 @@ export function Composer() {
         <ComputerUseBanner />
 
         <PlanModeBanner />
+        <RunStatusBar />
         <SubagentPanel />
         <StreamStatusLine />
 
@@ -475,6 +480,7 @@ export function Composer() {
                 onAddFiles={handleAddFiles}
               />
               <PermissionModePill />
+              <LimitsPill />
 
               <Box sx={{ flex: 1 }} />
 

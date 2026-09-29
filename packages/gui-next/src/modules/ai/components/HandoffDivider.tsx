@@ -198,3 +198,50 @@ export function PairActivityDivider({ text }: { text: string }) {
     </Stack>
   )
 }
+
+/** Matches `run_ledger::cmd_long_task_resume_prompt`: the message that picks
+ * a long task back up. It is the app speaking, not the user. */
+export function isResumeText(text: string): boolean {
+  return text.trimStart().startsWith('<long_task_resumed>')
+}
+
+export function ResumeDivider({ text }: { text: string }) {
+  const theme = useTheme()
+  const [open, setOpen] = useState(false)
+  const body = (text.match(/<long_task>([\s\S]*?)<\/long_task>/)?.[1] ?? '').trim()
+  return (
+    <Stack sx={{ gap: 0.75, py: 0.5 }}>
+      <ButtonBase
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        sx={{ display: 'flex', alignItems: 'center', gap: 1.25, width: '100%', borderRadius: '8px', py: 0.5 }}
+      >
+        <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
+        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, whiteSpace: 'nowrap' }}>
+          Picked up where it left off
+        </Typography>
+        <Typography variant="caption" sx={{ color: 'text.disabled', whiteSpace: 'nowrap' }}>
+          {open ? 'Hide' : 'Show'} where it stood
+        </Typography>
+        <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
+      </ButtonBase>
+      <Collapse in={open} unmountOnExit>
+        <Box
+          sx={{
+            px: 2,
+            py: 1.25,
+            borderRadius: '12px',
+            bgcolor: alpha(theme.palette.text.primary, 0.035),
+            border: 1,
+            borderColor: 'divider',
+            whiteSpace: 'pre-wrap',
+          }}
+        >
+          <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.6 }}>
+            {body}
+          </Typography>
+        </Box>
+      </Collapse>
+    </Stack>
+  )
+}

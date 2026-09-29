@@ -34,7 +34,7 @@ type SdkProviderOptions = Parameters<typeof streamText>[0]['providerOptions']
 import type { AssistantMessage, ProviderStreamRequest, StreamTokenEvent } from './types'
 import { emptyUsage, now } from './types'
 import { transformMessages, normalizeAnthropicToolCallId } from './transformMessages'
-import { toModelMessages, toSdkTools, runSdkStream } from './sdkShared'
+import { toModelMessages, toSdkTools, runSdkStream, describeProviderError } from './sdkShared'
 import { IdleWatchdog, parseOpenRouterAffordableTokens } from './shared'
 
 function emitToken(payload: StreamTokenEvent) {
@@ -322,8 +322,7 @@ export async function streamUniversal(req: ProviderStreamRequest): Promise<void>
         emitErr(setupApi, `${req.provider}: out of credits — even a reduced-size request was rejected. Add credits or switch to a different model/provider.`)
         return
       }
-      const msg = APICallError.isInstance(e) ? `${req.provider}: (${e.statusCode}) ${e.message}` : e instanceof Error ? e.message : String(e)
-      emitErr(setupApi, msg)
+      emitErr(setupApi, describeProviderError(req.provider, e))
       return
     } finally {
       watchdog.stop()

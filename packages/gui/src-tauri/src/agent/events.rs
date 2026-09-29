@@ -157,6 +157,18 @@ pub enum AgentEvent {
         to_model: String,
         reason: String,
     },
+    /// Every model failed and the run is waiting before it tries again —
+    /// a rate limit or an outage being waited out rather than ending the
+    /// run. `until_ms` is wall-clock, so the UI can count down to it.
+    RunWaiting {
+        until_ms: u64,
+        reason: String,
+    },
+    /// The long task's ledger changed: status, spend, milestones. Carries
+    /// the whole ledger so the UI never has to reconcile partial updates.
+    LongTask {
+        ledger: crate::agent::run_ledger::RunLedger,
+    },
     /// A pooled key for this provider failed and the turn is being retried
     /// against the next key in the same provider's pool — same-provider
     /// rotation, tried before ever falling back to a different provider

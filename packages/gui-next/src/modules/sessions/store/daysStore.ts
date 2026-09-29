@@ -153,6 +153,8 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
       set({ scope, todayId: opened.id, viewing: null, earlier: [], earlierStart: 0, threads: [] })
       await syncLiveMessages()
       await get().refreshEarlier()
+      // After the transcript: resuming a long task sends a message into it.
+      void useAgentStore.getState().refreshLongTask()
     }
     opening = opening.then(run, run)
     return opening
