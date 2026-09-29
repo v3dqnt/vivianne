@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentMessage } from '../lib/types'
+
+type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
 import { findAssignments, type Assignment } from '../lib/review'
 import { ChangeSummary } from './ChangeSummary'
 import { Virtualizer } from 'virtua'
 import { Box, Typography, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Button } from '../../../ui'
 import { useAgentStore } from '../store/agentStore'
 import { MessageBubble } from './MessageBubble'
+import { ToolGroup } from './ToolGroup'
+import { groupTranscript } from '../lib/toolGroups'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { TodoPanel } from './TodoPanel'
 
@@ -72,6 +76,8 @@ export function MessageList({
     for (const a of findAssignments(messages)) if (a.editedFiles) map.set(a.endIndex, a)
     return map
   }, [messages])
+
+  const transcript = useMemo(() => groupTranscript(messages, streamingIndex), [messages, streamingIndex])
 
   const [revertTarget, setRevertTarget] = useState<number | null>(null)
   const [reverting, setReverting] = useState(false)
@@ -170,29 +176,51 @@ export function MessageList({
       </Box>,
     )
   }
-  const items = messages.map((m, i) => (
-    // Index key is acceptable here: this list is append-only within a
-    // session (no reordering/filtering), which is exactly the case index
-    // keys are safe for.
-    <Box key={i} sx={{ pb: 1.5 }}>
-      {/* Omitting the callbacks is what hides a bubble's revert and edit
-          actions — history is not editable. */}
-      <MessageBubble
-        message={m}
-        index={i}
-        streaming={isBusy && streamingIndex === i}
-        onRevert={readOnly ? undefined : setRevertTarget}
-        onEdit={readOnly ? undefined : startEdit}
-      />
-      {/* The review appears once an assignment is over — never under the one
-          still running, whose change set isn't final yet. */}
-      {assignmentsByEnd.has(i) && !(isBusy && assignmentsByEnd.get(i)!.toMs === null) && (
-        <Box sx={{ mt: 1 }}>
-          <ChangeSummary assignment={assignmentsByEnd.get(i)!} sessionId={sessionId} readOnly={readOnly} />
-        </Box>
-      )}
-    </Box>
-  ))
+  // Omitting the callbacks is what hides a bubble's revert and edit
+  // actions — history is not editable.
+  const renderMessage = (i: number, compact = false) => (
+    <MessageBubble
+      message={messages[i]}
+      index={i}
+      streaming={isBusy && streamingIndex === i}
+      onRevert={readOnly ? undefined : setRevertTarget}
+      onEdit={readOnly ? undefined : startEdit}
+      compact={compact}
+    />
+  )
+  /** The review appears once an assignment is over — never under the one
+   * still running, whose change set isn't final yet. */
+  const reviewAfter = (indices: number[]) => {
+    const end = indices.find((i) => assignmentsByEnd.has(i))
+    if (end === undefined) return null
+    const assignment = assignmentsByEnd.get(end)!
+    if (isBusy && assignment.toMs === null) return null
+    return (
+      <Box sx={{ mt: 1 }}>
+        <ChangeSummary assignment={assignment} sessionId={sessionId} readOnly={readOnly} />
+      </Box>
+    )
+  }
+  // Keys are the first message index of each row: the list is append-only
+  // within a session, and a group keeps its first index as it grows, so a
+  // row's key never changes under it.
+  const items = transcript.map((item) =>
+    item.kind === 'message' ? (
+      <Box key={item.index} sx={{ pb: 1.5 }}>
+        {renderMessage(item.index)}
+        {reviewAfter([item.index])}
+      </Box>
+    ) : (
+      <Box key={`g${item.start}`} sx={{ pb: 1.5 }}>
+        <ToolGroup tools={item.toolIndices.map((i) => messages[i] as ToolResultMessage)}>
+          {item.indices.map((i) => (
+            <Box key={i}>{renderMessage(i, true)}</Box>
+          ))}
+        </ToolGroup>
+        {reviewAfter(item.indices)}
+      </Box>
+    ),
+  )
   if (showTrailingIndicator) {
     items.push(
       <Box key="trailing-indicator" sx={{ pb: 1.5 }}>

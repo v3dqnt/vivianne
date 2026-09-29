@@ -31,6 +31,7 @@ function MessageBubbleImpl({
   streaming = false,
   onRevert,
   onEdit,
+  compact = false,
 }: {
   message: AgentMessage
   index?: number
@@ -38,6 +39,8 @@ function MessageBubbleImpl({
   streaming?: boolean
   onRevert?: (index: number) => void
   onEdit?: (index: number, text: string) => void
+  /** Rendered inside a tool group (see `ToolGroup`). */
+  compact?: boolean
 }) {
   const [hovered, setHovered] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -45,7 +48,7 @@ function MessageBubbleImpl({
   if (message.type === 'toolResult') {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'flex-start' }}>
-        <ToolCallCard message={message} />
+        <ToolCallCard message={message} compact={compact} />
       </Box>
     )
   }

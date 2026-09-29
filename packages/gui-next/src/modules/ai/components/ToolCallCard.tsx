@@ -52,7 +52,7 @@ const DECLARATIONS: Record<string, [string, string]> = {
 }
 
 /** `[label, target]` for the card header. */
-function declarationFor(name: string, pending: boolean, summary: string | null): [string, string | null] {
+export function declarationFor(name: string, pending: boolean, summary: string | null): [string, string | null] {
   if (pending && name in MEMORY_TOOLS) return [MEMORY_TOOLS[name], null]
   const phrasing = DECLARATIONS[name]
   if (!phrasing) return [name, summary]
@@ -61,7 +61,7 @@ function declarationFor(name: string, pending: boolean, summary: string | null):
 
 // Coarse icon-by-name-substring — good enough to visually distinguish the
 // common tool families without a per-tool registry to maintain.
-function iconFor(name: string) {
+export function iconFor(name: string) {
   if (name in MEMORY_TOOLS) return ArchiveBookLinear
   const n = name.toLowerCase()
   if (n.includes('bash') || n.includes('shell') || n.includes('command') || n.includes('terminal')) return CommandLinear
@@ -71,7 +71,7 @@ function iconFor(name: string) {
   return CodeLinear
 }
 
-function argSummary(args: Record<string, unknown> | undefined): string | null {
+export function argSummary(args: Record<string, unknown> | undefined): string | null {
   if (!args) return null
   const key = ['path', 'file_path', 'command', 'query', 'pattern', 'url'].find((k) => typeof args[k] === 'string')
   if (!key) return null
@@ -120,7 +120,28 @@ function extractDiffs(message: ToolResultMessage): FileDiff[] {
   }
 }
 
-export function ToolCallCard({ message }: { message: ToolResultMessage }) {
+type ImageContent = Parameters<typeof ImageBlock>[0]['block']
+
+/** Every picture a tool call produced: its image blocks, plus plots from
+ * `math`, which ride in `details` when the model can't take images — the
+ * user should see them either way. */
+export function toolImages(message: ToolResultMessage): ImageContent[] {
+  const detailPlots = ((message.details as { plots?: unknown } | null)?.plots ?? []) as unknown[]
+  const plots = detailPlots
+    .filter((p): p is string => typeof p === 'string')
+    .map((b64) => ({ type: 'image', base64: b64, mediaType: 'image/png', url: null }) as ImageContent)
+  return [...contentImages(message.content), ...plots]
+}
+
+export function ToolCallCard({
+  message,
+  compact = false,
+}: {
+  message: ToolResultMessage
+  /** Inside a tool group: full width, and no media row — the group shows
+   * its members' media itself, so it stays visible while collapsed. */
+  compact?: boolean
+}) {
   const [open, setOpen] = useState(false)
   // `isError` is the wire type's in-flight sentinel: null until the tool
   // finishes, then true/false. Nothing else needs checking for "pending."
@@ -130,11 +151,7 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
   const summary = argSummary(message.arguments)
   const [label, target] = declarationFor(message.toolName, pending, summary)
   const output = contentToText(message.content).trim()
-  const images = contentImages(message.content)
-  // Plots from `math` ride in `details` when the model can't take images —
-  // the user should see them either way.
-  const detailPlots = ((message.details as { plots?: unknown } | null)?.plots ?? []) as unknown[]
-  const plots = detailPlots.filter((p): p is string => typeof p === 'string')
+  const images = compact ? [] : toolImages(message)
   // Declared AFTER `output`, because it reads it. Putting this above the
   // `const output` line threw `Cannot access 'output' before initialization`
   // at render — a temporal dead zone error, so it only fired once a thread
@@ -160,12 +177,12 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
   const hasBody = !!output || diffs.length > 0
 
   return (
-    <Stack spacing={0.5} sx={{ maxWidth: '80%' }}>
+    <Stack spacing={0.5} sx={{ maxWidth: compact ? '100%' : '80%' }}>
     <Box
       sx={{
         border: 1,
         borderColor: isError ? 'error.main' : 'divider',
-        borderRadius: '12px',
+        borderRadius: compact ? '8px' : '12px',
         overflow: 'hidden',
         bgcolor: 'background.paper',
       }}
@@ -278,13 +295,10 @@ export function ToolCallCard({ message }: { message: ToolResultMessage }) {
         </Collapse>
       )}
     </Box>
-    {(images.length > 0 || plots.length > 0) && (
+    {images.length > 0 && (
       <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
         {images.map((block, i) => (
           <ImageBlock key={i} block={block} />
-        ))}
-        {plots.map((b64, i) => (
-          <ImageBlock key={`plot-${i}`} block={{ type: 'image', base64: b64, mediaType: 'image/png' } as Parameters<typeof ImageBlock>[0]['block']} />
         ))}
       </Stack>
     )}
