@@ -43,13 +43,22 @@ export interface LlamaTuning {
   /** `--device`, e.g. "Vulkan1". Auto-selection is usually right; this is the
    * escape hatch for when it is not. */
   device?: string | null
-  /** `-ctk`/`-ctv`. "q8_0" halves KV cache memory at no measured throughput
-   * cost, which is what decides how much context fits on a small card. */
+  /** `-ctk`/`-ctv`. Unset means q8_0: half the KV cache memory at no
+   * measured throughput cost. "f16" opts back out. */
   kvCacheType?: string | null
   /** `--mlock`. Opt-in: it can fail without the OS privilege. */
   mlock?: boolean
-  /** `--cache-reuse`. Off in llama.cpp by default. */
+  /** `--cache-reuse`. Unset means 256; 0 turns it off. */
   cacheReuse?: number | null
+  /** `--spec-type`. Unset means "ngram-mod" (lossless, no draft model);
+   * "none" turns speculative decoding off. */
+  speculative?: string | null
+  /** `--cache-ram` MiB of host RAM for the prompt cache. Unset means 2048
+   * (llama.cpp's own default is 8192); 0 disables it. */
+  cacheRamMib?: number | null
+  /** `--sleep-idle-seconds`: unload the model after this long idle. Unset
+   * or 0 = never. */
+  sleepIdleSeconds?: number | null
   /** Raw extra flags, whitespace-separated. */
   extraArgs?: string | null
 }

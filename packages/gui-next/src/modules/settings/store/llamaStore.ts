@@ -21,12 +21,12 @@ async function syncPersistedEndpoints(endpoints: LlamaEndpoint[]) {
   await call('cmd_save_settings', { settings: { ...settings, localEndpoints: [...nonLlama, ...llama] } })
 }
 
-/** Default context window for a new local model. Deliberately NOT 8192:
- * Vivianne's agent system prompt + tool schemas alone run ~25k tokens, so an
- * 8k context overflows on the very first message ("request exceeds the
- * available context size"). 32768 is the trained context of the common
- * coding models (Qwen2.5-Coder etc.) and leaves real room for a conversation.
- * Users can lower it per-model if VRAM is tight. */
+/** Default context window for a new local model. Local models get the lean
+ * tool profile (`agent::tool_profile`), so the first request is ~6–8k tokens
+ * rather than the ~20k a cloud model is sent — but 8192 would still leave
+ * almost nothing for the conversation. 32768 is the trained context of the
+ * common coding models and, with the default q8_0 KV cache, fits beside a
+ * 9B Q4 model on an 8 GB card. */
 export const DEFAULT_CTX_SIZE = 32768
 export const DEFAULT_NGL = 999
 

@@ -312,21 +312,3 @@ mod section_tests {
         }
     }
 }
-
-#[cfg(test)]
-mod dump_probe {
-    #[test]
-    fn dump_payloads() {
-        use std::collections::HashSet;
-        let defs = crate::agent::tool_schemas::static_tool_definitions();
-        let all: HashSet<String> = defs.iter().filter_map(|d| d["name"].as_str().map(String::from)).collect();
-        let lean = super::select_tool_defs(defs.clone(), &all, true, &[]);
-        let base = crate::agent::directive::BASE_DIRECTIVE;
-        let conv = |d: &Vec<serde_json::Value>| d.iter().map(|t| serde_json::json!({"type":"function","function":{"name":t["name"],"description":t["description"],"parameters":t["parameters"]}})).collect::<Vec<_>>();
-        let out = serde_json::json!({
-            "full": {"system": format!("{base}\n<vivianne_capabilities>\n{}\n</vivianne_capabilities>", crate::agent::capabilities::capability_section(&all)), "tools": conv(&defs)},
-            "lean": {"system": format!("{base}\n<vivianne_capabilities>\n{}\n</vivianne_capabilities>", crate::agent::capabilities::capability_section_lean(&all)), "tools": conv(&lean)},
-        });
-        std::fs::write("C:/Users/v3dqn/AppData/Local/Temp/claude/C--Users-v3dqn-Work-Project-Versa-viv-main-gui-exp/966d2d86-a471-4f16-98e1-22bfe4e341b7/scratchpad/payloads.json", out.to_string()).unwrap();
-    }
-}

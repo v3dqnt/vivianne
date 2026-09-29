@@ -38,6 +38,9 @@ function EndpointDialog({
   const [threads, setThreads] = useState('')
   const [device, setDevice] = useState('')
   const [cacheReuse, setCacheReuse] = useState('')
+  const [speculative, setSpeculative] = useState('')
+  const [cacheRamMib, setCacheRamMib] = useState('')
+  const [sleepIdleSeconds, setSleepIdleSeconds] = useState('')
   const [mlock, setMlock] = useState(false)
   const [extraArgs, setExtraArgs] = useState('')
 
@@ -52,12 +55,26 @@ function EndpointDialog({
     setThreads(t?.threads != null ? String(t.threads) : '')
     setDevice(t?.device ?? '')
     setCacheReuse(t?.cacheReuse != null ? String(t.cacheReuse) : '')
+    setSpeculative(t?.speculative ?? '')
+    setCacheRamMib(t?.cacheRamMib != null ? String(t.cacheRamMib) : '')
+    setSleepIdleSeconds(t?.sleepIdleSeconds != null ? String(t.sleepIdleSeconds) : '')
     setMlock(t?.mlock ?? false)
     setExtraArgs(t?.extraArgs ?? '')
     // Open the section when this endpoint already has something set, so a
     // non-default tuning is never hidden behind a collapsed header.
     setShowAdvanced(
-      !!(t && (t.kvCacheType || t.threads || t.device || t.cacheReuse || t.mlock || t.extraArgs)),
+      !!(
+        t &&
+        (t.kvCacheType ||
+          t.threads ||
+          t.device ||
+          t.cacheReuse != null ||
+          t.speculative ||
+          t.cacheRamMib != null ||
+          t.sleepIdleSeconds ||
+          t.mlock ||
+          t.extraArgs)
+      ),
     )
   }, [open, endpoint, defaultName])
 
@@ -76,6 +93,10 @@ function EndpointDialog({
         threads: num(threads),
         device: str(device),
         cacheReuse: num(cacheReuse),
+        speculative: str(speculative),
+        // -1 (unlimited) is a real value here, so not `num`, which clamps at 0.
+        cacheRamMib: cacheRamMib.trim() === '' ? null : Math.max(-1, Math.trunc(Number(cacheRamMib) || 0)),
+        sleepIdleSeconds: num(sleepIdleSeconds),
         mlock,
         extraArgs: str(extraArgs),
       }
@@ -119,7 +140,7 @@ function EndpointDialog({
             type="number"
             value={ctxSize}
             onChange={(e) => setCtxSize(Math.max(512, Number(e.target.value) || 0))}
-            helperText="Vivianne's agent prompt alone is ~25k tokens — keep this ≥ 32768 for agent use. Larger = more VRAM/RAM for the KV cache."
+            helperText="Local models get a lean tool set, so the agent's first request is ~6–8k tokens — 32768 leaves room for real work. Larger = more VRAM/RAM for the KV cache."
           />
           <TextField
             label="GPU layers (ngl)"
@@ -127,7 +148,7 @@ function EndpointDialog({
             type="number"
             value={ngl}
             onChange={(e) => setNgl(Math.max(0, Number(e.target.value) || 0))}
-            helperText="999 = offload the whole model to GPU. 0 = CPU only (frees VRAM, much slower)."
+            helperText="999 = as much as fits: llama.cpp measures free VRAM and places layers itself (MoE experts go to the CPU first). A lower number pins exactly that many. 0 = CPU only."
           />
           {/* llama.cpp only — mistral.rs takes none of these flags. */}
           {engine === 'llamaCpp' && (
@@ -149,13 +170,14 @@ function EndpointDialog({
                       value={kvCacheType}
                       onChange={(e) => setKvCacheType(e.target.value)}
                     >
-                      <MenuItem value="">f16 (default)</MenuItem>
-                      <MenuItem value="q8_0">q8_0 — half the memory</MenuItem>
+                      <MenuItem value="">q8_0 — half the memory (default)</MenuItem>
+                      <MenuItem value="f16">f16 — full precision</MenuItem>
                       <MenuItem value="q4_0">q4_0 — quarter the memory</MenuItem>
                     </Select>
                     <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
                       The KV cache, not the model, is what usually decides how much context fits. q8_0 measured
-                      identical throughput here while halving it, so it buys context for free.
+                      identical throughput here while halving it, so it buys context for free. q4_0 costs some
+                      accuracy on long contexts.
                     </Typography>
                   </FormControl>
                   <TextField
@@ -181,8 +203,42 @@ function EndpointDialog({
                     type="number"
                     value={cacheReuse}
                     onChange={(e) => setCacheReuse(e.target.value)}
-                    placeholder="0 (off)"
-                    helperText="Lets the server salvage KV cache when the prompt changes in the middle rather than only at the end — which is what compacting a conversation does. Try 256."
+                    placeholder="256"
+                    helperText="Lets the server salvage KV cache when the prompt changes in the middle rather than only at the end — which is what compacting a conversation does. 0 turns it off."
+                  />
+                  <FormControl size="small" fullWidth>
+                    <InputLabel id="spec-label">Speculative decoding</InputLabel>
+                    <Select
+                      labelId="spec-label"
+                      label="Speculative decoding"
+                      value={speculative}
+                      onChange={(e) => setSpeculative(e.target.value)}
+                    >
+                      <MenuItem value="">n-gram (default)</MenuItem>
+                      <MenuItem value="none">Off</MenuItem>
+                    </Select>
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+                      Drafts tokens from text already in the conversation and verifies them in one pass. Output is
+                      identical; code the agent is rewriting streams up to ~2× faster. Costs ~16 MB, no extra model.
+                    </Typography>
+                  </FormControl>
+                  <TextField
+                    label="Prompt cache RAM (MiB)"
+                    size="small"
+                    type="number"
+                    value={cacheRamMib}
+                    onChange={(e) => setCacheRamMib(e.target.value)}
+                    placeholder="2048"
+                    helperText="System RAM the server may keep earlier conversations' prompts in, for instant resumes. llama.cpp's own default is 8192. 0 disables it, -1 is unlimited."
+                  />
+                  <TextField
+                    label="Unload when idle (seconds)"
+                    size="small"
+                    type="number"
+                    value={sleepIdleSeconds}
+                    onChange={(e) => setSleepIdleSeconds(e.target.value)}
+                    placeholder="never"
+                    helperText="Frees all of the model's VRAM and RAM after this long without a request; the next message reloads it (a few seconds). 600 is a good value on a shared machine."
                   />
                   <FormControlLabel
                     control={<Checkbox size="small" checked={mlock} onChange={(e) => setMlock(e.target.checked)} />}
