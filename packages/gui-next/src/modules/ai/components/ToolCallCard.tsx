@@ -1,6 +1,24 @@
 import { useState } from 'react'
-import { Box, Collapse, CircularProgress, Typography, Stack } from '../../../ui'
-import { CommandLinear, EditLinear, SearchNormalLinear, DocumentTextLinear, CodeLinear, ArrowDownLinear, CheckLinear, DangerLinear, ArchiveBookLinear } from '../../../icons'
+import { Box, Button, Collapse, CircularProgress, Typography, Stack, alpha, useTheme } from '../../../ui'
+import {
+  CommandLinear,
+  EditLinear,
+  SearchNormalLinear,
+  DocumentTextLinear,
+  CodeLinear,
+  ArrowDownLinear,
+  CheckLinear,
+  DangerLinear,
+  ArchiveBookLinear,
+  ClipboardTextLinear,
+  MessageSquareLinear,
+  AgentsLinear,
+  GlobalLinear,
+  MonitorLinear,
+  MagicpenLinear,
+} from '../../../icons'
+import { usePlanStore } from '../../plan/store/planStore'
+import { usePanelStore } from '../../dock/store/panelStore'
 import type { AgentMessage } from '../lib/types'
 import { contentToText, contentImages } from '../lib/types'
 import { ImageBlock } from './ImageBlock'
@@ -64,9 +82,27 @@ export function declarationFor(name: string, pending: boolean, summary: string |
 
 // Coarse icon-by-name-substring — good enough to visually distinguish the
 // common tool families without a per-tool registry to maintain.
+const ICONS: Record<string, typeof CodeLinear> = {
+  todo_write: ClipboardTextLinear,
+  submit_plan: ClipboardTextLinear,
+  assign_plan_steps: ClipboardTextLinear,
+  present_plan: ClipboardTextLinear,
+  message_agent: MessageSquareLinear,
+  task: AgentsLinear,
+  team_run: AgentsLinear,
+  web_search: GlobalLinear,
+  web_fetch: GlobalLinear,
+  web_preview: GlobalLinear,
+  dip: MonitorLinear,
+  computer: MonitorLinear,
+  generate_image: MagicpenLinear,
+}
+
 export function iconFor(name: string) {
   if (name in MEMORY_TOOLS) return ArchiveBookLinear
+  if (name in ICONS) return ICONS[name]
   const n = name.toLowerCase()
+  if (n.startsWith('browser_')) return GlobalLinear
   if (n.includes('bash') || n.includes('shell') || n.includes('command') || n.includes('terminal')) return CommandLinear
   if (n.includes('write') || n.includes('edit') || n.includes('patch')) return EditLinear
   if (n.includes('search') || n.includes('grep') || n.includes('glob') || n.includes('find')) return SearchNormalLinear
@@ -164,11 +200,7 @@ export function ToolCallCard({
   // Shell output is not any language shiki knows; tagging it `text` avoids
   // spurious highlighting of arbitrary stdout. Structured tools that really
   // do emit JSON get the JSON grammar.
-  const outputLang = ['read', 'code_search', 'grep', 'glob'].includes(message.toolName)
-    ? 'text'
-    : output.trimStart().startsWith('{') || output.trimStart().startsWith('[')
-      ? 'json'
-      : 'text'
+  const outputLang = ['read', 'code_search', 'grep', 'glob'].includes(message.toolName) ? 'text' : looksLikeJson(output) ? 'json' : 'text'
   // Only a completed, successful call has real before/after content — a
   // failed `edit` (e.g. old_string not found) changed nothing, so there's
   // nothing to diff. `extractDiffs` itself is cheap (just reshapes
@@ -177,10 +209,15 @@ export function ToolCallCard({
   // `DiffView` below, not here, so `hasBody` can still see whether there's
   // anything to expand.
   const diffs = !pending && !isError ? extractDiffs(message) : []
-  const hasBody = !!output || diffs.length > 0
+  // Some tools say something to the model, not to the user: their result is
+  // replaced by a view of what they did, always shown, never the raw text.
+  const special = !pending && !isError ? specialBody(message) : null
+  const hasBody = !special && (!!output || diffs.length > 0)
 
   return (
-    <Stack spacing={0.5} sx={{ maxWidth: compact ? '100%' : '80%' }}>
+    // Open, a card takes the full width it's given: its output shouldn't be
+    // squeezed to the width of its header.
+    <Stack spacing={0.5} sx={{ maxWidth: compact ? '100%' : '80%', width: open ? '100%' : undefined }}>
     <Box
       sx={{
         border: 1,
@@ -243,6 +280,7 @@ export function ToolCallCard({
           </Box>
         )}
       </Box>
+      {special}
       {isError && output && !open && (
         <Typography
           variant="caption"
@@ -284,15 +322,7 @@ export function ToolCallCard({
                   <DiffView before={d.before} after={d.after} />
                 </Box>
               ))}
-              {output && (
-                // Routed through CodeBlock so tool output, chat fences and
-                // file previews all render as the same object. It brings
-                // theme-correct highlighting and the long-output collapse
-                // with it, replacing a bespoke <pre> that had neither.
-                <Box sx={{ borderTop: 1, borderColor: 'divider' }}>
-                  <CodeBlock code={output} lang={outputLang} wrap bare={false} collapsible />
-                </Box>
-              )}
+              {output && <ToolOutput code={output} lang={outputLang} />}
             </>
           )}
         </Collapse>
@@ -307,4 +337,91 @@ export function ToolCallCard({
     )}
     </Stack>
   )
+}
+
+/**
+ * A tool's output, as part of the card rather than a box inside it: the
+ * card's own surface, a faint inset tint, small muted monospace, copy on
+ * hover, and the long-output collapse. No header — the card's header already
+ * says what this is.
+ */
+function ToolOutput({ code, lang }: { code: string; lang: string }) {
+  const theme = useTheme()
+  return (
+    <Box sx={{ borderTop: 1, borderColor: 'divider', bgcolor: alpha(theme.palette.text.primary, 0.02), px: 1.5, py: 1, color: 'text.secondary' }}>
+      <CodeBlock code={code} lang={lang} wrap bare dense collapsible />
+    </Box>
+  )
+}
+
+/** One quiet line under the header, for tools whose result is a pointer to
+ * something rather than text to read. */
+function BodyLine({ children }: { children: React.ReactNode }) {
+  return (
+    <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, pb: 1, pt: 0.25, minWidth: 0 }}>
+      {children}
+    </Stack>
+  )
+}
+
+/** The view that replaces a tool's raw result, when there is one. */
+function specialBody(message: ToolResultMessage): React.ReactNode | null {
+  const details = (message.details ?? {}) as Record<string, unknown>
+  const args = message.arguments ?? {}
+  switch (message.toolName) {
+    case 'submit_plan': {
+      const planId = typeof details.planId === 'string' ? details.planId : null
+      const version = typeof details.version === 'number' ? details.version : null
+      if (!planId) return null
+      const title = typeof args.title === 'string' ? args.title : 'The plan'
+      return (
+        <BodyLine>
+          <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0 }}>
+            {title}
+            {version ? ` · v${version}` : ''} — ready for your review
+          </Typography>
+          <Button
+            size="small"
+            onClick={() => {
+              void usePlanStore.getState().open(planId, version ?? undefined)
+              usePanelStore.getState().openRight('plan')
+            }}
+            sx={{ flexShrink: 0 }}
+          >
+            Open plan
+          </Button>
+        </BodyLine>
+      )
+    }
+    case 'message_agent': {
+      const to = typeof args.to === 'string' ? args.to : ''
+      const text = typeof args.text === 'string' ? args.text : ''
+      if (!text) return null
+      return (
+        <BodyLine>
+          <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+            <Box component="span" sx={{ color: 'text.disabled' }}>
+              to {to === 'all' ? 'everyone' : to}:{' '}
+            </Box>
+            {text}
+          </Typography>
+        </BodyLine>
+      )
+    }
+    default:
+      return null
+  }
+}
+
+/** JSON only if it parses: a log line like "[01] compiling…" starts with a
+ * bracket too, and highlighting it as JSON paints it in random colours. */
+function looksLikeJson(text: string): boolean {
+  const t = text.trim()
+  if (!(t.startsWith('{') || t.startsWith('['))) return false
+  try {
+    JSON.parse(t)
+    return true
+  } catch {
+    return false
+  }
 }

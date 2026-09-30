@@ -69,7 +69,7 @@ export function groupTranscript(
   return items
 }
 
-type Family = 'read' | 'search' | 'edit' | 'run' | 'web' | 'screen' | 'delegate' | 'media' | 'other'
+type Family = 'read' | 'search' | 'edit' | 'run' | 'web' | 'screen' | 'delegate' | 'media' | 'plan' | 'message' | 'other'
 
 const FAMILY: Record<string, Family> = {
   read: 'read',
@@ -100,6 +100,10 @@ const FAMILY: Record<string, Family> = {
   dip: 'screen',
   computer: 'screen',
   task: 'delegate',
+  team_run: 'delegate',
+  submit_plan: 'plan',
+  assign_plan_steps: 'delegate',
+  message_agent: 'message',
   generate_image: 'media',
   generate_video: 'media',
   generate_audio: 'media',
@@ -150,6 +154,10 @@ export function summarizeTools(tools: ToolResultMessage[]): string {
   if (run) parts.push(`Ran ${plural(run.length, 'command', 'commands')}`)
   const media = by.get('media')
   if (media) parts.push(`Generated ${plural(media.length, 'item', 'items')}`)
+  const plan = by.get('plan')
+  if (plan) parts.push(plan.length === 1 ? 'Proposed a plan' : `Proposed ${plan.length} plan versions`)
+  const message = by.get('message')
+  if (message) parts.push(`Sent ${plural(message.length, 'message', 'messages')}`)
   const delegate = by.get('delegate')
   if (delegate) parts.push(`Delegated ${plural(delegate.length, 'task', 'tasks')}`)
   const read = by.get('read')

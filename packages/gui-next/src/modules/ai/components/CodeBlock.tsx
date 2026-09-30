@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Box, IconButton, Tooltip, ButtonBase, useTheme } from '../../../ui'
+import { Box, IconButton, Tooltip, ButtonBase, useTheme, alpha } from '../../../ui'
 import { CopyLinear, CopySuccessLinear } from '../../../icons'
 import { codeToHtml } from 'shiki'
 
@@ -15,6 +15,8 @@ const THEMES = { dark: 'github-dark-default', light: 'github-light' } as const
 /** Collapse anything longer than this, with an expand control. A 400-line
  * tool result should not push the rest of the conversation off screen. */
 const COLLAPSE_LINES = 18
+/** Dense blocks (tool output) are secondary content: they collapse sooner. */
+const DENSE_COLLAPSE_LINES = 12
 
 // Shiki resolves a grammar lazily per language via its own dynamic imports —
 // an unknown/unsupported lang falls back to plain text rather than throwing.
@@ -45,6 +47,7 @@ export function CodeBlock({
   filename,
   collapsible = true,
   showLineNumbers = false,
+  dense = false,
 }: {
   code: string
   lang: string
@@ -53,6 +56,8 @@ export function CodeBlock({
   filename?: string
   collapsible?: boolean
   showLineNumbers?: boolean
+  /** Smaller, quieter text for secondary content like tool output. */
+  dense?: boolean
 }) {
   const theme = useTheme()
   const [html, setHtml] = useState<string | null>(null)
@@ -61,10 +66,16 @@ export function CodeBlock({
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const lineCount = useMemo(() => code.split('\n').length, [code])
-  const isLong = collapsible && lineCount > COLLAPSE_LINES
+  const collapseAt = dense ? DENSE_COLLAPSE_LINES : COLLAPSE_LINES
+  const isLong = collapsible && lineCount > collapseAt
   const shikiTheme = THEMES[theme.palette.mode === 'light' ? 'light' : 'dark']
 
+  // Plain text has nothing to highlight, and shiki would only repaint it in
+  // its theme's foreground instead of the surrounding text colour.
+  const plain = lang === 'text' || lang === 'plaintext' || lang === 'txt'
+
   useEffect(() => {
+    if (plain) return
     let cancelled = false
     // Debounced: while a code fence is still streaming in token-by-token,
     // `code` changes on every chunk — without this, shiki would re-tokenize
@@ -78,7 +89,7 @@ export function CodeBlock({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [code, lang, shikiTheme])
+  }, [code, lang, shikiTheme, plain])
 
   // Without this the "Copied" state can outlive the component and warn.
   useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current) }, [])
@@ -90,10 +101,11 @@ export function CodeBlock({
     copyTimer.current = setTimeout(() => setCopied(false), 1200)
   }
 
-  // Themed surface rather than a hardcoded hex, so light mode gets a light
-  // slab and the block sits on the same material as everything around it.
-  const surface = theme.palette.mode === 'light' ? theme.palette.grey[50] : '#0d1117'
-  const fallbackText = theme.palette.mode === 'light' ? theme.palette.text.primary : '#c9d1d9'
+  // A faint tint of whatever the block sits on, from the theme — not a
+  // colour of its own. The GitHub-dark slab it used to be (#0d1117) was a
+  // blue-black block that belonged to no surface in the app.
+  const surface = alpha(theme.palette.text.primary, theme.palette.mode === 'light' ? 0.03 : 0.035)
+  const fallbackText = dense ? theme.palette.text.secondary : theme.palette.text.primary
 
   const copyButton = (
     <Tooltip title={copied ? 'Copied' : 'Copy'}>
@@ -131,8 +143,8 @@ export function CodeBlock({
           // <pre>, so only !important can hand the surface back to whatever
           // the block is sitting on.
           background: 'transparent !important',
-          fontSize: '0.8125rem',
-          lineHeight: 1.6,
+          fontSize: dense ? '0.75rem' : '0.8125rem',
+          lineHeight: dense ? 1.55 : 1.6,
           ...(wrap
             ? { whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowX: 'hidden' }
             : { overflowX: 'auto' }),
@@ -214,10 +226,18 @@ export function CodeBlock({
       <Box
         sx={{
           position: 'relative',
-          ...(isLong && !expanded ? { maxHeight: `${COLLAPSE_LINES * 1.6}em`, overflow: 'hidden' } : {}),
+          // The fade is a mask on the content, so it works on any surface —
+          // a gradient to a fixed colour only looked right on one.
+          ...(isLong && !expanded
+            ? {
+                maxHeight: `${collapseAt * (dense ? 1.55 : 1.6)}em`,
+                overflow: 'hidden',
+                maskImage: 'linear-gradient(to bottom, black calc(100% - 48px), transparent)',
+              }
+            : {}),
         }}
       >
-        {html ? (
+        {html && !plain ? (
           <Box dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
           // Same padding, font and line-height as the highlighted output, so
@@ -228,19 +248,6 @@ export function CodeBlock({
           </Box>
         )}
 
-        {isLong && !expanded && (
-          // Fade tells you there is more without a second control competing
-          // with the button below it.
-          <Box
-            sx={{
-              position: 'absolute',
-              inset: 'auto 0 0 0',
-              height: 48,
-              pointerEvents: 'none',
-              background: `linear-gradient(to bottom, transparent, ${surface})`,
-            }}
-          />
-        )}
       </Box>
 
       {isLong && (
@@ -251,7 +258,7 @@ export function CodeBlock({
             py: 0.5,
             fontSize: '0.6875rem',
             color: 'text.secondary',
-            borderTop: 1,
+            borderTop: bare ? 0 : 1,
             borderColor: 'divider',
             '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
           }}
