@@ -132,7 +132,7 @@ async fn fetch_openai_style(
     for (k, v) in extra_headers {
         req = req.header(*k, *v);
     }
-    let resp = req.send().await.map_err(|e| format!("{provider}: {e}"))?;
+    let resp = req.send().await.map_err(|e| format!("{provider}: {}", e.without_url()))?;
     if !resp.status().is_success() {
         return Err(format!("{provider}: HTTP {}", resp.status()));
     }
@@ -229,10 +229,13 @@ async fn fetch_anthropic(api_key: &str) -> Result<Vec<DiscoveredModel>, String> 
 async fn fetch_google(api_key: &str) -> Result<Vec<DiscoveredModel>, String> {
     let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(15)).build().map_err(|e| e.to_string())?;
     let resp = client
-        .get(format!("https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"))
+        // The key goes in a header, not the query string: a URL ends up in
+        // every error message and log line, and this one carried the key.
+        .get("https://generativelanguage.googleapis.com/v1beta/models")
+        .header("x-goog-api-key", api_key)
         .send()
         .await
-        .map_err(|e| format!("google: {e}"))?;
+        .map_err(|e| format!("google: {}", e.without_url()))?;
     if !resp.status().is_success() {
         return Err(format!("google: HTTP {}", resp.status()));
     }

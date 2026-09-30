@@ -2641,18 +2641,17 @@ async fn generate_image_google(app: &tauri::AppHandle, prompt: &str, model: &str
         Err(e) => return image_tool_err(format!("Error: http client setup failed: {e}")),
     };
 
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{model}:predict?key={}",
-        crate::ai::api::google::urlencoding_encode(&api_key)
-    );
+    // Key in a header, never the URL: a URL lands in error text, which here
+    // goes into the chat and to the model.
+    let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:predict");
     let body = serde_json::json!({
         "instances": [{ "prompt": prompt }],
         "parameters": { "sampleCount": 1 },
     });
 
-    let resp = match client.post(&url).json(&body).send().await {
+    let resp = match client.post(&url).header("x-goog-api-key", &api_key).json(&body).send().await {
         Ok(r) => r,
-        Err(e) => return image_tool_err(format!("Error: image generation request failed: {e}")),
+        Err(e) => return image_tool_err(format!("Error: image generation request failed: {}", e.without_url())),
     };
 
     let status = resp.status();

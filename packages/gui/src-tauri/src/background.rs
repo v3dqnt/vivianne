@@ -53,7 +53,7 @@ pub fn is_quitting() -> bool {
 /// Unlike the Viv Instant overlay — which must never take focus — this one
 /// should: the user has explicitly asked for the app itself.
 pub fn show_main(app: &tauri::AppHandle) {
-    if let Some(win) = app.get_webview_window("main") {
+    if let Some(win) = app.get_window("main") {
         let _ = win.unminimize();
         let _ = win.show();
         let _ = win.set_focus();
@@ -108,7 +108,7 @@ fn install_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>
 }
 
 fn install_close_handler(app: &tauri::AppHandle) {
-    let Some(main) = app.get_webview_window("main") else {
+    let Some(main) = app.get_window("main") else {
         log::warn!("[background] no main window at setup — close-to-background not installed");
         return;
     };
@@ -121,7 +121,7 @@ fn install_close_handler(app: &tauri::AppHandle) {
                 return;
             }
             api.prevent_close();
-            if let Some(win) = handle.get_webview_window("main") {
+            if let Some(win) = handle.get_window("main") {
                 let _ = win.hide();
             }
             log::info!("[background] main window hidden; Viv Instant stays available");
@@ -136,7 +136,7 @@ fn install_close_handler(app: &tauri::AppHandle) {
 /// handler to veto it.
 #[tauri::command]
 pub async fn cmd_hide_to_background(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("main") {
+    if let Some(win) = app.get_window("main") {
         win.hide().map_err(|e| e.to_string())?;
     }
     Ok(())

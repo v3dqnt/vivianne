@@ -721,7 +721,7 @@ pub fn run() {
       // Tauri exposes the monitor's full bounds but not its work area, so the
       // taskbar/dock is approximated by a margin rather than measured. Only ever
       // shrinks: a screen large enough for the configured size is left alone.
-      if let Some(main) = app.get_webview_window("main") {
+      if let Some(main) = app.get_window("main") {
         if let Ok(Some(monitor)) = main.current_monitor() {
           let scale = monitor.scale_factor();
           let screen = monitor.size().to_logical::<f64>(scale);

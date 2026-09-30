@@ -231,7 +231,7 @@ pub async fn cmd_instant_run(
     // `loop_core`'s `provider_stream_request`). With no main window there is
     // nothing to answer it and the turn would hang until the 120s idle guard
     // fires, looking like the feature is broken rather than unavailable.
-    if app.get_webview_window("main").is_none() {
+    if app.get_window("main").is_none() {
         return Err("Vivianne's main window is closed — Viv Instant needs it to reach the model.".to_string());
     }
 

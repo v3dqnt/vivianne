@@ -258,8 +258,14 @@ async fn complete_google(
         "contents": [{ "role": "user", "parts": [{ "text": user_prompt }] }],
         "systemInstruction": { "parts": [{ "text": system_prompt }] },
     });
-    let url = format!("{}/v1/models/{}:generateContent?key={}", base_url.trim_end_matches('/'), model_id, api_key);
-    let resp = client.post(url).json(&body).send().await.map_err(|e| format!("completion request failed: {e}"))?;
+    let url = format!("{}/v1/models/{}:generateContent", base_url.trim_end_matches('/'), model_id);
+    let resp = client
+        .post(url)
+        .header("x-goog-api-key", api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("completion request failed: {}", e.without_url()))?;
     let status = resp.status();
     let json: serde_json::Value = resp.json().await.map_err(|e| format!("failed to parse completion response: {e}"))?;
     if !status.is_success() {

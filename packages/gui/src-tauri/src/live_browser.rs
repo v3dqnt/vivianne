@@ -102,12 +102,28 @@ pub fn show(app: &tauri::AppHandle, url: &str, rect: Rect) -> Result<(), String>
     if rect.is_degenerate() {
         return Ok(());
     }
+    // Same browser arguments as the window it lives in. WebView2 shares one
+    // browser process per profile, and a webview asking for different
+    // arguments is refused outright (0x8007139F, "not in the correct state"):
+    // the live preview never appeared.
+    let browser_args = window
+        .app_handle()
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == window.label())
+        .and_then(|w| w.additional_browser_args.clone());
+    let mut builder = tauri::webview::WebviewBuilder::new(LABEL, WebviewUrl::External(parsed))
+        // The page is third-party content, so it gets no Tauri API
+        // surface: no invoke, no access to this app's commands.
+        .initialization_script("");
+    if let Some(args) = browser_args {
+        builder = builder.additional_browser_args(&args);
+    }
     window
         .add_child(
-            tauri::webview::WebviewBuilder::new(LABEL, WebviewUrl::External(parsed))
-                // The page is third-party content, so it gets no Tauri API
-                // surface: no invoke, no access to this app's commands.
-                .initialization_script(""),
+            builder,
             LogicalPosition::new(rect.x, rect.y),
             LogicalSize::new(rect.width, rect.height),
         )

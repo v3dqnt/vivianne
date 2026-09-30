@@ -41,7 +41,7 @@ pub async fn maybe_send_completion_notification(app: &tauri::AppHandle, messages
     }
 
     let is_focused = app
-        .get_webview_window("main")
+        .get_window("main")
         .and_then(|w| w.is_focused().ok())
         .unwrap_or(false);
     if is_focused {
@@ -82,7 +82,7 @@ pub fn notify_long_task(app: &tauri::AppHandle, body: &str) {
     use tauri::Manager;
     use tauri_plugin_notification::NotificationExt;
 
-    let is_focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
+    let is_focused = app.get_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
     if is_focused {
         return;
     }
