@@ -197,6 +197,32 @@ async fn ensure_files(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// The recognizer's configuration, for the model files in `dir`.
+fn recognizer_config(dir: &Path) -> sherpa_rs::transducer::TransducerConfig {
+    let p = |n: &str| dir.join(n).to_string_lossy().to_string();
+    sherpa_rs::transducer::TransducerConfig {
+        encoder: p("encoder.int8.onnx"),
+        decoder: p("decoder.int8.onnx"),
+        joiner: p("joiner.int8.onnx"),
+        tokens: p("tokens.txt"),
+        // Must be `nemo_transducer`. As a plain "transducer" sherpa loads it
+        // as an icefall model and looks for a `vocab_size` in the decoder's
+        // metadata, which NeMo exports don't carry, and sherpa's answer to
+        // that is to exit the process: the whole app closed the first time
+        // Parakeet was used. The NeMo loader reads the TDT specifics
+        // (feature size, normalisation) from the model itself.
+        model_type: "nemo_transducer".to_string(),
+        decoding_method: "greedy_search".to_string(),
+        // Enough to be quick on a laptop without monopolising it — Viv Instant
+        // decodes while the user is still talking, and the machine has the
+        // app they are driving to render too.
+        num_threads: 4,
+        sample_rate: 16_000,
+        feature_dim: 80,
+        ..Default::default()
+    }
+}
+
 type Recognizer = Arc<std::sync::Mutex<sherpa_rs::transducer::TransducerRecognizer>>;
 
 async fn get_or_load(app: &tauri::AppHandle) -> Result<Recognizer, String> {
@@ -207,26 +233,7 @@ async fn get_or_load(app: &tauri::AppHandle) -> Result<Recognizer, String> {
         }
     }
     let dir = ensure_files(app).await?;
-    let p = |n: &str| dir.join(n).to_string_lossy().to_string();
-
-    let config = sherpa_rs::transducer::TransducerConfig {
-        encoder: p("encoder.int8.onnx"),
-        decoder: p("decoder.int8.onnx"),
-        joiner: p("joiner.int8.onnx"),
-        tokens: p("tokens.txt"),
-        // sherpa reads the NeMo/TDT specifics out of the ONNX metadata itself;
-        // naming the family here only saves it from loading the model twice to
-        // work that out.
-        model_type: "transducer".to_string(),
-        decoding_method: "greedy_search".to_string(),
-        // Enough to be quick on a laptop without monopolising it — Viv Instant
-        // decodes while the user is still talking, and the machine has the
-        // app they are driving to render too.
-        num_threads: 4,
-        sample_rate: 16_000,
-        feature_dim: 80,
-        ..Default::default()
-    };
+    let config = recognizer_config(&dir);
 
     // Mapping ~628 MB of weights and building the ORT sessions is blocking.
     let recognizer = tokio::task::spawn_blocking(move || {
@@ -269,5 +276,29 @@ pub async fn unload() {
     let mut guard = MODEL.lock().await;
     if guard.take().is_some() {
         log::info!("[instant/parakeet] released model weights");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Loads the downloaded model with the app's own configuration and
+    /// decodes a second of silence. Ignored by default: it needs the ~628 MB
+    /// model on disk. Run it in its own process after changing the config:
+    /// a bad config makes sherpa exit, and here that fails a test rather
+    /// than closing the app.
+    #[test]
+    #[ignore]
+    fn loads_the_downloaded_model() {
+        let Some(base) = std::env::var_os("APPDATA") else { return };
+        let dir = std::path::PathBuf::from(base).join("com.vivianne.app").join("parakeet-tdt-0.6b-v2-int8");
+        if !FILES.iter().all(|(name, min)| is_complete(&dir.join(name), *min)) {
+            eprintln!("model not downloaded; skipping");
+            return;
+        }
+        let mut r = sherpa_rs::transducer::TransducerRecognizer::new(recognizer_config(&dir)).expect("load");
+        let text = r.transcribe(16_000, &vec![0.0f32; 16_000]);
+        assert!(text.trim().len() < 20, "silence should transcribe to (almost) nothing: {text:?}");
     }
 }
