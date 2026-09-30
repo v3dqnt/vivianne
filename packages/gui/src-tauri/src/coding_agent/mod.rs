@@ -14,6 +14,18 @@ pub mod computer;
 pub mod dip;
 #[cfg(target_os = "windows")]
 pub mod win;
+
+/// Stop any typing or key presses in progress (the activity notch's Stop).
+pub fn win_cancel() {
+    #[cfg(target_os = "windows")]
+    win::cancel();
+}
+
+/// A new action starts un-cancelled.
+pub fn win_cancel_reset() {
+    #[cfg(target_os = "windows")]
+    win::cancel_reset();
+}
 pub mod tools_ext;
 pub mod apply_patch;
 pub mod repo_tools;

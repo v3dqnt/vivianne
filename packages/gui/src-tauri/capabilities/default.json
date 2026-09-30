@@ -6,7 +6,8 @@
     "main",
     "dip_overlay",
     "viv_instant",
-    "viv_pointer"
+    "viv_pointer",
+    "viv_activity"
   ],
   "permissions": [
     "core:default",

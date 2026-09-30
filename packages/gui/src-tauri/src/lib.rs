@@ -79,6 +79,7 @@ pub mod optional_components;
 pub mod background;
 pub mod instant;
 pub mod overlays;
+pub mod activity;
 pub mod automation;
 pub mod terminal;
 use crate::automation::AutomationStore;
@@ -364,6 +365,8 @@ pub fn run() {
       crate::overlays::cmd_overlay_ready,
       crate::instant::stt::cmd_instant_stt_installed,
       crate::instant::stt::cmd_parakeet_status,
+      crate::activity::cmd_activity_set_size,
+      crate::agent::commands::cmd_activity_stop,
       crate::instant::stt::cmd_parakeet_download,
       crate::instant::stt::cmd_parakeet_remove,
       // Automation (scheduled agent tasks)

@@ -876,7 +876,16 @@ pub async fn execute_tool_calls(
             // `&tauri::AppHandle` (structured mode drives the highlight
             // overlay), so it's dispatched here rather than through the
             // plain `Tool` trait registry below.
-            tool_result_to_agent_result(crate::coding_agent::computer::execute_computer_tool(&tool_call.arguments, app).await, vision_capable)
+            // The activity notch, for the main agent (Viv Instant has its own).
+            let notch = !state.auto_approve().await;
+            if notch {
+                crate::activity::begin_action(app, &tool_call.arguments);
+            }
+            let result = crate::coding_agent::computer::execute_computer_tool(&tool_call.arguments, app).await;
+            if notch {
+                crate::activity::end_action(app);
+            }
+            tool_result_to_agent_result(result, vision_capable)
         } else if let Some(tool) = tools.iter().find(|t| t.name() == tool_call.name) {
             let res = tool.execute(&tool_call.arguments, ".").await;
             tool_result_to_agent_result(res, vision_capable)

@@ -83,6 +83,26 @@
         "x": 0,
         "y": 0,
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --use-fake-ui-for-media-stream"
+      },
+      {
+        "label": "viv_activity",
+        "create": false,
+        "title": "Vivianne Activity",
+        "url": "overlay.html",
+        "width": 240,
+        "height": 34,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "visible": false,
+        "shadow": false,
+        "center": false,
+        "x": 0,
+        "y": 0,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --use-fake-ui-for-media-stream"
       }
     ],
     "security": {

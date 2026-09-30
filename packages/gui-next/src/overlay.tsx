@@ -28,6 +28,7 @@ import { hasTauri } from './ipc'
 import { DipOverlay } from './modules/dip/components/DipOverlay'
 import { InstantOverlay } from './modules/instant/components/InstantOverlay'
 import { PointerOverlay } from './modules/instant/components/PointerOverlay'
+import { ActivityOverlay } from './modules/instant/components/ActivityOverlay'
 import './tailwind.css'
 
 /**
@@ -47,6 +48,8 @@ function Overlay() {
       return <PointerOverlay />
     case 'dip_overlay':
       return <DipOverlay />
+    case 'viv_activity':
+      return <ActivityOverlay />
     default:
       return null
   }

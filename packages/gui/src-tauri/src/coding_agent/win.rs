@@ -447,6 +447,18 @@ fn wait_for_foreground(timeout_ms: u32) {
     }
 }
 
+/// Set by Stop: typing checks it between characters, so a long type call
+/// ends at once instead of after its last character.
+static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn cancel() {
+    CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn cancel_reset() {
+    CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Past this many characters, text is pasted rather than typed.
 const PASTE_OVER_CHARS: usize = 200;
 
@@ -470,6 +482,9 @@ pub fn type_text(text: &str) -> Result<(usize, bool), String> {
         }
     }
     for group in text_inputs(text) {
+        if CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("Stopped by the user.".into());
+        }
         if (send(&group) as usize) < group.len() {
             return Err(
                 "Windows blocked the input partway (another program may have locked input, or the target runs as administrator)".into(),

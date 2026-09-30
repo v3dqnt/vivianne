@@ -47,6 +47,20 @@ fn state() -> std::sync::MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+#[cfg(target_os = "windows")]
+fn exclude_from_capture(win: &WebviewWindow) {
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
+    if let Ok(h) = win.hwnd() {
+        let hwnd = windows::Win32::Foundation::HWND(h.0 as _);
+        if let Err(e) = unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) } {
+            log::warn!("[overlays] couldn't exclude '{}' from capture: {e}", win.label());
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn exclude_from_capture(_win: &WebviewWindow) {}
+
 /// The overlay's window if it's open. Never creates one — for paths like
 /// hiding, where a window that doesn't exist needs nothing done.
 pub fn get(app: &AppHandle, label: &str) -> Option<WebviewWindow> {
@@ -73,6 +87,10 @@ pub fn ensure(app: &AppHandle, label: &str) -> Result<WebviewWindow, String> {
         .build()
         .map_err(|e| format!("couldn't create the '{label}' window: {e}"))?;
 
+    // Overlays are for the person, never for the agent: kept out of screen
+    // captures so a screenshot shows the app underneath, not a notch or a
+    // pointer the agent would then try to read or click.
+    exclude_from_capture(&win);
     // Highlight overlays sit on top of the very things they point at; they
     // must never take the click. There's no config key for this.
     if label == "dip_overlay" || label == crate::instant::pointer::LABEL {

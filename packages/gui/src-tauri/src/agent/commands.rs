@@ -168,6 +168,10 @@ pub async fn cmd_agent_prompt(
     let mp_workspace_folders_for_loop = mp_workspace_folders.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.rx.recv().await {
+            if let crate::agent::events::AgentEvent::AgentEnd { messages, .. } = &event {
+                let (state, message) = crate::activity::outcome(messages);
+                crate::activity::end_run(&app_clone, state, message);
+            }
             crate::multiplayer::broadcast_agent_event(&app_clone, &mp_workspace_folders_for_loop, &event).await;
             let _ = app_clone.emit(
                 "agent_event",
@@ -292,6 +296,10 @@ pub async fn cmd_agent_continue(
     let mp_workspace_folders = agent.state.workspace_folders().await;
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.rx.recv().await {
+            if let crate::agent::events::AgentEvent::AgentEnd { messages, .. } = &event {
+                let (state, message) = crate::activity::outcome(messages);
+                crate::activity::end_run(&app_clone, state, message);
+            }
             crate::multiplayer::broadcast_agent_event(&app_clone, &mp_workspace_folders, &event).await;
             let _ = app_clone.emit("agent_event", serde_json::json!({ "threadId": "", "event": event }));
         }
@@ -315,6 +323,14 @@ pub async fn cmd_agent_abort(state: State<'_, Arc<AppState>>) -> Result<(), Stri
     crate::agent::plans::cancel_all();
     crate::agent::team_run::cancel_all();
     Ok(())
+}
+
+/// Stop from the activity notch: the run, and any typing mid-flight, now.
+#[tauri::command]
+pub async fn cmd_activity_stop(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    crate::coding_agent::win_cancel();
+    crate::activity::end_run(&app, "stopped", "Stopping…".into());
+    cmd_agent_abort(state).await
 }
 
 /// Queue a steering message AND interrupt the in-flight run at the next

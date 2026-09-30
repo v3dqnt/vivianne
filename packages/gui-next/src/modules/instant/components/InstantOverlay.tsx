@@ -1,14 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Box, Stack, Typography, Button, alpha, useTheme } from '../../../ui'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Box, ButtonBase } from '../../../ui'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { call, on } from '../../../ipc'
 import { useTransparentWindowBody } from '../../../lib/transparentWindow'
 import { useInstantStore, type InstantStep } from '../store/instantStore'
 import { useInstantMic } from '../lib/useInstantMic'
 import { speak, stopSpeaking } from '../lib/instantTts'
-import { InstantCharacterSlot } from './InstantCharacterSlot'
-import { InstantStepLog } from './InstantStepLog'
-import { InstantRiskBar } from './InstantRiskBar'
+import { Notch, NOTCH_MUTED, type NotchTone } from './Notch'
 
 /**
  * What counts as "stop" during a destructive step's countdown.
@@ -21,7 +19,7 @@ import { InstantRiskBar } from './InstantRiskBar'
 const CANCEL_PHRASE = /\b(stop|cancel|no|wait|dont|don't|abort)\b/i
 
 /** Matches `instant::window::COLLAPSED_W`. */
-const COLLAPSED_W = 260
+const COLLAPSED_W = 200
 
 /** What the status line says for each phase. */
 function statusFor(phase: string, hasSteps: boolean): string {
@@ -59,7 +57,6 @@ function statusFor(phase: string, hasSteps: boolean): string {
  *   apps' title bars and tab strips.
  */
 export function InstantOverlay() {
-  const theme = useTheme()
   // Without this the window paints an opaque rectangle over the screen:
   // CssBaseline gives every window a solid body background, which is right for
   // the main window and wrong for a transparent overlay.
@@ -130,7 +127,17 @@ export function InstantOverlay() {
     [store],
   )
 
+  // The microphone's level, for the wave. Throttled: frames arrive ~30 times
+  // a second and the bars don't need more.
+  const [level, setLevel] = useState(0)
+  const levelAt = useRef(0)
   const { start, stop } = useInstantMic({
+    onLevel: (l) => {
+      const now = performance.now()
+      if (now - levelAt.current < 60) return
+      levelAt.current = now
+      setLevel(l)
+    },
     onUtterance,
     onSpeechStart: () => {
       // Barge-in: stop talking the moment the user does.
@@ -242,133 +249,68 @@ export function InstantOverlay() {
 
   const working = phase === 'working'
   const heard = interim || transcript
-  // Expanded by CONTENT rather than phase, so the notch never grows to show
-  // nothing.
-  const expanded = Boolean(summary || error || steps.length || risk)
+  const current = [...steps].reverse().find((st) => st.status === 'running') ?? steps[steps.length - 1]
 
-  // Size the window to the card.
-  //
-  // `useLayoutEffect` + `ResizeObserver` rather than a phase-keyed table of
-  // sizes: the height depends on how much text wrapped and how many steps have
-  // arrived, which only the laid-out DOM knows. Measuring after paint would
-  // show a frame of clipped content on every growth.
-  const cardRef = useRef<HTMLDivElement | null>(null)
-  useLayoutEffect(() => {
-    const el = cardRef.current
-    if (!el) return
-    let last = ''
-    const sync = () => {
-      const r = el.getBoundingClientRect()
-      // Rounded up, plus a couple of pixels for the shadow's bleed — a
-      // fractional device-pixel ratio otherwise rounds down and clips.
-      const width = Math.ceil(Math.max(r.width, COLLAPSED_W)) + 2
-      const height = Math.ceil(r.height) + 2
-      const key = `${width}x${height}`
-      if (key === last) return
-      last = key
-      void call('cmd_instant_set_size', { width, height }).catch(() => {})
-    }
-    sync()
-    const ro = new ResizeObserver(sync)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
+  // The risk countdown, from its absolute deadline.
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (!risk) return
+    const t = window.setInterval(() => setNow(Date.now()), 100)
+    return () => window.clearInterval(t)
+  }, [risk])
 
-  const accent =
-    phase === 'error'
-      ? theme.palette.error.main
-      : phase === 'done'
-        ? theme.palette.success.main
-        : theme.palette.primary.main
+  const tone: NotchTone =
+    phase === 'listening' ? 'listening' : phase === 'error' ? 'error' : phase === 'done' ? 'done' : working || phase === 'transcribing' ? 'working' : 'idle'
+
+  // One line: what it heard while listening, the step it's on while working.
+  const detail = download
+    ? `Downloading speech model ${download.index}/${download.count} · ${download.percent}%`
+    : phase === 'working' && current
+      ? current.summary
+      : heard || (phase === 'listening' ? 'Say what to do' : null)
+
+  // A second line only for what must be read: the answer, an error, or a
+  // risky step about to run.
+  const body = risk ? (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      <Box component="span" sx={{ flex: 1, minWidth: 0 }}>
+        <Box component="span" sx={{ color: '#fbbf24', fontWeight: 600 }}>
+          About to {risk.summary}
+        </Box>
+        <Box component="span" sx={{ color: NOTCH_MUTED }}> · say “stop” or</Box>
+      </Box>
+      <ButtonBase
+        onClick={() => void call('cmd_instant_cancel_step', {})}
+        sx={{ height: 22, px: 1, borderRadius: '999px', fontSize: 11, fontWeight: 600, color: '#0b0b0c', bgcolor: '#fbbf24', flexShrink: 0 }}
+      >
+        Cancel
+      </ButtonBase>
+    </Box>
+  ) : error || summary ? (
+    <Box
+      sx={{
+        color: error ? '#ff9b9b' : 'inherit',
+        display: '-webkit-box',
+        WebkitLineClamp: 3,
+        WebkitBoxOrient: 'vertical',
+        overflow: 'hidden',
+      }}
+    >
+      {error ?? summary}
+    </Box>
+  ) : null
 
   return (
-    <Box sx={{ display: 'inline-flex', p: '1px' }}>
-      <Stack
-        ref={cardRef}
-        sx={{
-          // `fit-content` is what makes the measurement meaningful: the card
-          // must size to its own text, not to the window, or the
-          // ResizeObserver would only ever report back the size it was last
-          // given.
-          width: 'fit-content',
-          minWidth: COLLAPSED_W - 2,
-          maxWidth: 560,
-          gap: expanded ? 0.75 : 0,
-          px: 1.25,
-          py: expanded ? 1 : 0.625,
-          // A true pill when collapsed; a softened rectangle once it has body.
-          borderRadius: expanded ? '20px' : '999px',
-          bgcolor: alpha(theme.palette.background.paper, 0.94),
-          border: 1,
-          borderColor: alpha(accent, 0.3),
-          backdropFilter: 'blur(20px)',
-          boxShadow: '0 10px 32px rgba(0,0,0,0.42)',
-          transition: 'border-radius 160ms ease',
-        }}
-      >
-        <Stack direction="row" sx={{ alignItems: 'center', gap: 1, minWidth: 0 }}>
-          <InstantCharacterSlot phase={phase} compact />
-          <Typography
-            variant="caption"
-            sx={{ fontWeight: 700, letterSpacing: 0.3, color: accent, flexShrink: 0, fontSize: '0.6875rem' }}
-          >
-            {/* The download takes over the status word entirely: on a first
-                run it is several minutes of otherwise unexplained silence,
-                and "Listening" during it would be a lie. */}
-            {download
-              ? `Downloading speech model ${download.index}/${download.count} — ${download.percent}%`
-              : statusFor(phase, steps.length > 0)}
-          </Typography>
-          {/* The heard text sits on the collapsed row, not behind an expansion:
-              confirming it heard you correctly is the single most useful thing
-              this window can show, and the interim is worthless once it is
-              stale. */}
-          {heard && (
-            <Typography
-              variant="caption"
-              sx={{
-                minWidth: 0,
-                flex: 1,
-                color: interim ? 'text.secondary' : 'text.primary',
-                fontStyle: interim ? 'italic' : 'normal',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {heard}
-            </Typography>
-          )}
-          {working && (
-            <Button
-              size="small"
-              variant="text"
-              color="error"
-              onClick={() => void call('cmd_instant_abort', {})}
-              sx={{ textTransform: 'none', fontSize: '0.6875rem', py: 0, px: 0.75, minWidth: 0, flexShrink: 0 }}
-            >
-              Stop
-            </Button>
-          )}
-        </Stack>
-
-        {(summary || error) && (
-          <Typography
-            variant="body2"
-            sx={{ color: error ? 'error.main' : 'text.primary', fontSize: '0.8125rem', lineHeight: 1.45 }}
-          >
-            {error ?? summary}
-          </Typography>
-        )}
-
-        {steps.length > 0 && (
-          <Box sx={{ maxHeight: 220, display: 'flex', minHeight: 0 }}>
-            <InstantStepLog steps={steps} />
-          </Box>
-        )}
-
-        {risk && <InstantRiskBar risk={risk} />}
-      </Stack>
-    </Box>
+    <Notch
+      tone={tone}
+      title={statusFor(phase, steps.length > 0)}
+      detail={detail}
+      level={level}
+      onStop={working ? () => void call('cmd_instant_abort', {}) : null}
+      body={body}
+      progress={risk ? Math.max(0, risk.deadline - now) / Math.max(1, risk.ms) : download ? download.percent / 100 : null}
+      resizeCommand="cmd_instant_set_size"
+      minWidth={COLLAPSED_W}
+    />
   )
 }

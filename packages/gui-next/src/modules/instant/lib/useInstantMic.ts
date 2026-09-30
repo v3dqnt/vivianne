@@ -72,6 +72,8 @@ interface MicCallbacks {
   /** A rough transcript of speech still in progress. Overwritten repeatedly
    * and never acted on — only the final `onUtterance` text is executed. */
   onInterim?: (text: string) => void
+  /** Loudness of each audio frame (RMS, 0..1), for a live level meter. */
+  onLevel?: (level: number) => void
   onError?: (message: string) => void
   /**
    * Whisper model id. Read from settings by the caller rather than here so the
@@ -89,14 +91,14 @@ interface MicCallbacks {
  * finished?" decision slots in where `SILENCE_TAIL_MS` is applied, and would
  * shave most of that tail off the perceived latency.
  */
-export function useInstantMic({ onUtterance, onSpeechStart, onInterim, onError, model }: MicCallbacks) {
+export function useInstantMic({ onUtterance, onSpeechStart, onInterim, onError, onLevel, model }: MicCallbacks) {
   const ctxRef = useRef<AudioContext | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const nodeRef = useRef<AudioWorkletNode | null>(null)
   // Callbacks in refs so starting the mic does not depend on their identity —
   // otherwise every parent re-render would tear down and restart capture.
-  const cbs = useRef({ onUtterance, onSpeechStart, onInterim, onError, model })
-  cbs.current = { onUtterance, onSpeechStart, onInterim, onError, model }
+  const cbs = useRef({ onUtterance, onSpeechStart, onInterim, onError, onLevel, model })
+  cbs.current = { onUtterance, onSpeechStart, onInterim, onError, onLevel, model }
 
   const stop = useCallback(() => {
     nodeRef.current?.port.close()
@@ -211,7 +213,9 @@ export function useInstantMic({ onUtterance, onSpeechStart, onInterim, onError, 
       node.port.onmessage = (ev: MessageEvent<Float32Array>) => {
         const frame = ev.data
         const now = performance.now()
-        const loud = rms(frame) > ENERGY_THRESHOLD
+        const level = rms(frame)
+        cbs.current.onLevel?.(level)
+        const loud = level > ENERGY_THRESHOLD
 
         if (loud) {
           if (!speaking) {

@@ -6,12 +6,10 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut};
 /// Window label, matching the entry in `tauri.conf.json`.
 pub const LABEL: &str = "viv_instant";
 
-/// Gap between the notch and the top edge of the screen.
-///
-/// Small but non-zero: flush against the edge reads as a rendering glitch
-/// rather than a deliberate object, and a few pixels of gap is what makes it
-/// look like it is hanging from the top rather than clipped by it.
-const TOP_MARGIN: f64 = 6.0;
+/// Gap between the notch and the top edge of the screen: none. The notch is
+/// drawn flush, square along the top and rounded below, so it reads as part
+/// of the screen's edge rather than a card floating over the work.
+const TOP_MARGIN: f64 = 0.0;
 
 /// The collapsed notch, in logical pixels.
 ///
@@ -22,8 +20,8 @@ const TOP_MARGIN: f64 = 6.0;
 /// underneath. A notch that stayed 680x440 would blank out a large rectangle of
 /// the user's screen — including, at the top of the display, other apps' title
 /// bars and tab strips.
-pub const COLLAPSED_W: f64 = 260.0;
-pub const COLLAPSED_H: f64 = 44.0;
+pub const COLLAPSED_W: f64 = 200.0;
+pub const COLLAPSED_H: f64 = 34.0;
 
 fn overlay(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
     crate::overlays::get(app, LABEL)
