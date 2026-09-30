@@ -272,6 +272,35 @@ pub async fn cmd_instant_stt_installed(app: tauri::AppHandle) -> Result<bool, St
     Ok(true)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParakeetStatus {
+    installed: bool,
+    bytes: u64,
+}
+
+/// Parakeet as a component: whether it is on disk and how much it takes,
+/// whichever engine is selected.
+#[tauri::command]
+pub async fn cmd_parakeet_status(app: tauri::AppHandle) -> Result<ParakeetStatus, String> {
+    Ok(ParakeetStatus {
+        installed: crate::instant::parakeet::is_installed(&app),
+        bytes: crate::instant::parakeet::installed_bytes(&app),
+    })
+}
+
+/// Download Parakeet ahead of use. Progress arrives as `instant:stt_download`.
+#[tauri::command]
+pub async fn cmd_parakeet_download(app: tauri::AppHandle) -> Result<(), String> {
+    crate::instant::parakeet::download(&app).await
+}
+
+/// Delete the downloaded Parakeet model.
+#[tauri::command]
+pub async fn cmd_parakeet_remove(app: tauri::AppHandle) -> Result<(), String> {
+    crate::instant::parakeet::remove(&app).await
+}
+
 /// Drop the loaded whisper context and its decode state.
 ///
 /// Mirrors [`crate::instant::parakeet::unload`], and exists for the same

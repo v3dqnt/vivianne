@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Box, Stack, Typography, IconButton, Tooltip, Menu, MenuItem, Divider, ListItemIcon } from '../ui'
 import { call, hasTauri } from '../ipc'
 import { fileManagerName, terminalAppName } from '../lib/platform'
-import { FolderLinear, CommandSquareLinear, TickCircleLinear, PanelsLinear, LayoutLinear } from '../icons'
+import { FolderLinear, CommandSquareLinear, TickCircleLinear, PanelsLinear, LayoutLinear, SidebarLinear } from '../icons'
+import { useSidebarStore } from '../modules/sessions/store/sidebarStore'
 import { PRESET_LABELS, ZONE_LABELS, applyPreset, resetLayout, toggleZone, useWorkspace, type Preset, type Zone } from '../modules/workspace/layout'
 import { usePlaybookStore } from '../modules/settings/store/playbookStore'
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
@@ -149,6 +150,25 @@ function TitleBarActions() {
  * ones stay off (`decorations: false`) there too rather than being
  * re-enabled — two sets of traffic lights would be worse than one.
  */
+/** Folds the project sidebar away (Ctrl+B), for more room to work. */
+function SidebarToggle() {
+  const collapsed = useSidebarStore((s) => s.collapsed)
+  const toggle = useSidebarStore((s) => s.toggle)
+  return (
+    <Tooltip title={collapsed ? 'Show sidebar (Ctrl+B)' : 'Hide sidebar (Ctrl+B)'}>
+      <IconButton
+        size="small"
+        aria-label={collapsed ? 'Show sidebar' : 'Hide sidebar'}
+        aria-pressed={!collapsed}
+        onClick={toggle}
+        sx={{ ml: 1.25, width: 28, height: 28, borderRadius: 0.8, color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } }}
+      >
+        <SidebarLinear size={16} color="currentColor" />
+      </IconButton>
+    </Tooltip>
+  )
+}
+
 export function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false)
 
@@ -253,6 +273,7 @@ export function TitleBar() {
         >
           <path d="M1 5 L5 1 M1.2 2.5 V1.2 H2.5 M4.8 3.5 V4.8 H3.5" />
         </TrafficLight>
+        <SidebarToggle />
       </Box>
 
       <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>

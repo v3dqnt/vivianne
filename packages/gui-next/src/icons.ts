@@ -103,6 +103,8 @@ export const PanelsLinear = icon(G.LayoutTwoColumnIcon)
 /** The Layout menu: starting arrangements. Not the branch icon — one
  * glyph meaning two things is worse than none. */
 export const LayoutLinear = icon(G.DashboardSquare01Icon)
+/** Folds the project sidebar away and back. */
+export const SidebarLinear = icon(G.SidebarLeftIcon)
 export const AgentsLinear = icon(G.UserGroupIcon)
 export const UserPlusLinear = icon(G.UserAdd01Icon)
 export const UnlockLinear = icon(G.SquareUnlock02Icon)

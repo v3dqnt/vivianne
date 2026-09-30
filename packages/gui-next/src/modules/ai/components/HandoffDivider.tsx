@@ -199,6 +199,13 @@ export function PairActivityDivider({ text }: { text: string }) {
   )
 }
 
+/** A user-role message the app wrote, not the person: day handoffs,
+ * compaction summaries, resumes, plan notes, team messages. Never shown as
+ * "what you asked". */
+export function isAppText(text: string): boolean {
+  return /^\s*<(previous_day|compacted_history|pair_activity|long_task_resumed|long_task|plan_feedback|plan_approved|team_message|user_comment)\b/.test(text)
+}
+
 /** Matches `run_ledger::cmd_long_task_resume_prompt`: the message that picks
  * a long task back up. It is the app speaking, not the user. */
 export function isResumeText(text: string): boolean {

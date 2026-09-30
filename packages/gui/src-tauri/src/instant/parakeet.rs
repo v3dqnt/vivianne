@@ -104,10 +104,39 @@ pub fn is_installed(app: &tauri::AppHandle) -> bool {
     FILES.iter().all(|(name, min)| is_complete(&dir.join(name), *min))
 }
 
+/// One download at a time: Settings' Download button and Viv Instant's first
+/// use can both ask, and two writers on one `.part` file corrupt it. The
+/// second caller waits, then finds the files already there.
+static DOWNLOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Bytes the model takes on disk, 0 when absent.
+pub fn installed_bytes(app: &tauri::AppHandle) -> u64 {
+    let Ok(dir) = models_dir(app) else { return 0 };
+    FILES
+        .iter()
+        .filter_map(|(name, _)| std::fs::metadata(dir.join(name)).ok())
+        .map(|m| m.len())
+        .sum()
+}
+
+/// Download whatever is missing, without loading the model.
+pub async fn download(app: &tauri::AppHandle) -> Result<(), String> {
+    ensure_files(app).await.map(|_| ())
+}
+
+/// Delete the downloaded model, unloading it first.
+pub async fn remove(app: &tauri::AppHandle) -> Result<(), String> {
+    let _guard = DOWNLOAD_LOCK.lock().await;
+    unload().await;
+    let dir = models_dir(app)?;
+    std::fs::remove_dir_all(&dir).map_err(|e| format!("Couldn't delete the model: {e}"))
+}
+
 /// Download whatever is missing, streaming with progress.
 async fn ensure_files(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     use futures::StreamExt;
 
+    let _guard = DOWNLOAD_LOCK.lock().await;
     let dir = models_dir(app)?;
     for (index, (name, min)) in FILES.iter().enumerate() {
         let path = dir.join(name);
@@ -141,8 +170,9 @@ async fn ensure_files(app: &tauri::AppHandle) -> Result<PathBuf, String> {
             // the network.
             if received - last_emit > 2_000_000 {
                 last_emit = received;
-                let _ = app.emit_to(
-                    crate::instant::window::LABEL,
+                // Broadcast: Viv Instant and Settings → Components both
+                // show this download.
+                let _ = app.emit(
                     "instant:stt_download",
                     DownloadProgress {
                         file: (*name).to_string(),
@@ -163,7 +193,7 @@ async fn ensure_files(app: &tauri::AppHandle) -> Result<PathBuf, String> {
             return Err(format!("{name} downloaded but is too small — the download was truncated."));
         }
     }
-    let _ = app.emit_to(crate::instant::window::LABEL, "instant:stt_download_done", ());
+    let _ = app.emit("instant:stt_download_done", ());
     Ok(dir)
 }
 

@@ -360,6 +360,9 @@ pub fn run() {
       crate::instant::pointer::cmd_pointer_hide,
       crate::overlays::cmd_overlay_ready,
       crate::instant::stt::cmd_instant_stt_installed,
+      crate::instant::stt::cmd_parakeet_status,
+      crate::instant::stt::cmd_parakeet_download,
+      crate::instant::stt::cmd_parakeet_remove,
       // Automation (scheduled agent tasks)
       crate::automation::cmd_automation_list,
       crate::automation::cmd_automation_create,

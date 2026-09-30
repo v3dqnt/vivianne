@@ -5,7 +5,7 @@ import { useProjectsStore, projectColor, modeOf, GENERAL_PROJECT_ID } from '../s
 import { useDaysStore } from '../store/daysStore'
 import { useAgentStore } from '../../ai/store/agentStore'
 import { contentToText, type AgentMessage } from '../../ai/lib/types'
-import { isHandoffText } from '../../ai/components/HandoffDivider'
+import { isAppText } from '../../ai/components/HandoffDivider'
 import { surfaceCard } from '../../../theme'
 import { pathSeparator } from '../../../lib/platform'
 import type { SessionInfo } from '../lib/types'
@@ -48,7 +48,7 @@ function toMarkdown(title: string, messages: AgentMessage[]): string {
   for (const m of messages) {
     const text = contentToText(m.content)
     if (m.type === 'user') {
-      if (isHandoffText(text) || text.trimStart().startsWith('<compacted_history>')) continue
+      if (isAppText(text)) continue
       lines.push('## You', '', text, '')
     } else if (m.type === 'assistant') {
       lines.push('## Vivianne', '', text, '')
@@ -157,7 +157,7 @@ export function Sidebar() {
         const m = list[i]
         if (m.type !== 'user') continue
         const text = contentToText(m.content).trim()
-        if (text && !isHandoffText(text) && !text.startsWith('<compacted_history>') && !text.startsWith('<pair_activity')) return text
+        if (text && !isAppText(text)) return text
       }
     }
     return ''
@@ -379,27 +379,31 @@ export function Sidebar() {
           </Box>
         )}
 
-        {myArchive.length > 0 && (
-          <Box sx={{ mt: 1.5, borderTop: 1, borderColor: 'divider', pt: 1 }}>
-            <ButtonBase
-              onClick={() => setArchiveOpen((v) => !v)}
-              aria-expanded={archiveOpen}
-              sx={{ display: 'flex', width: '100%', justifyContent: 'flex-start', gap: 0.75, px: 2, py: 0.5 }}
-            >
-              <Typography variant="caption" color="text.secondary" sx={SECTION_LABEL_SX}>
-                Archive
-              </Typography>
-              <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
-                {myArchive.length}
-              </Typography>
-              <Box sx={{ flex: 1 }} />
-              <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
-                {archiveOpen ? 'Hide' : 'Show'}
-              </Typography>
-            </ButtonBase>
-            <Collapse in={archiveOpen} unmountOnExit>
-              {/* Explains the section once, because it is the one thing in the
-                  sidebar that looks like the old app and behaves differently. */}
+      </Box>
+
+      {/* Pinned to the bottom, folded: the archive is history, so it takes
+          one line until asked for, and scrolls within its own space when
+          open instead of pushing the team off the sidebar. */}
+      {myArchive.length > 0 && (
+        <Box sx={{ flexShrink: 0, borderTop: 1, borderColor: 'divider', py: 0.5 }}>
+          <ButtonBase
+            onClick={() => setArchiveOpen((v) => !v)}
+            aria-expanded={archiveOpen}
+            sx={{ display: 'flex', width: '100%', justifyContent: 'flex-start', gap: 0.75, px: 2, py: 0.5 }}
+          >
+            <Typography variant="caption" color="text.secondary" sx={SECTION_LABEL_SX}>
+              Archive
+            </Typography>
+            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
+              {myArchive.length}
+            </Typography>
+            <Box sx={{ flex: 1 }} />
+            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
+              {archiveOpen ? 'Hide' : 'Show'}
+            </Typography>
+          </ButtonBase>
+          <Collapse in={archiveOpen} unmountOnExit>
+            <Box sx={{ maxHeight: '38vh', overflowY: 'auto' }}>
               <Typography variant="caption" color="text.disabled" sx={{ display: 'block', px: 2, pb: 0.75, fontSize: '0.6875rem', lineHeight: 1.4 }}>
                 Threads from before this project had one conversation. Kept exactly as they were, read-only.
               </Typography>
@@ -416,11 +420,10 @@ export function Sidebar() {
                   />
                 )}
               />
-            </Collapse>
-          </Box>
-        )}
-      </Box>
-
+            </Box>
+          </Collapse>
+        </Box>
+      )}
       </>
       )}
 

@@ -501,14 +501,22 @@ function PlaybooksSubsection() {
   )
 }
 
+/** Playbooks are switched off in Settings for now: the agent's own tool
+ * creator covers the same ground. Flip to bring the section back. */
+const PLAYBOOKS_ENABLED = false
+
 export function ModsSection() {
   return (
     <Stack sx={{ gap: 2.5 }}>
       <ToolsSubsection />
       <Divider />
       <ExperimentalSubsection />
-      <Divider />
-      <PlaybooksSubsection />
+      {PLAYBOOKS_ENABLED && (
+        <>
+          <Divider />
+          <PlaybooksSubsection />
+        </>
+      )}
     </Stack>
   )
 }
