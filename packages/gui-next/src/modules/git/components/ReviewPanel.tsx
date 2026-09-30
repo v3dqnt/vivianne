@@ -1,14 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import IconButton from '@mui/material/IconButton'
-import ButtonBase from '@mui/material/ButtonBase'
-import Button from '@mui/material/Button'
-import Menu from '@mui/material/Menu'
-import MenuItem from '@mui/material/MenuItem'
-import Tooltip from '@mui/material/Tooltip'
-import CircularProgress from '@mui/material/CircularProgress'
+import { Box, Stack, Typography, IconButton, ButtonBase, Button, Menu, MenuItem, Tooltip, CircularProgress } from '../../../ui'
 import { CloseCircleLinear, ArrowDownLinear, ArrowRightLinear, RefreshLinear, DocumentTextLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { useActiveWorkspaceRoot } from '../../dock/useActiveWorkspace'
@@ -74,7 +65,7 @@ function parseDiff(diff: string): DiffLine[] {
   return out
 }
 
-const MONO = { fontFamily: '"JetBrains Mono", ui-monospace, monospace', fontSize: '0.6875rem', lineHeight: 1.6 } as const
+const MONO = { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.6875rem', lineHeight: 1.6 } as const
 
 function lineBg(kind: DiffLine['kind']): string {
   if (kind === 'add') return 'rgba(61, 214, 140, 0.13)'

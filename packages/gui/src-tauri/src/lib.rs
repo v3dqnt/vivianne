@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 pub mod ai;
 use crate::ai::auth::{AuthState, auth_read_credential, auth_store_api_key, auth_store_oauth, auth_delete_credential, auth_is_authenticated, auth_resolve_api_key, CredentialPool, cmd_pool_list, cmd_pool_add, cmd_pool_remove, cmd_pool_set_strategy, cmd_pool_get_strategy, cmd_pool_reset_cooldowns};
@@ -16,11 +16,70 @@ pub mod coding_agent;
 pub mod lsp;
 pub mod mcp;
 mod file_preview;
+
+/// Makes `cargo test` able to run at all on Windows.
+///
+/// This crate imports `TaskDialogIndirect`, `SetWindowSubclass`,
+/// `RemoveWindowSubclass` and `DefSubclassProc` (through wry/tauri). All four
+/// exist only in **version 6** of `comctl32.dll`, which Windows hands out only
+/// to a binary whose manifest declares a dependency on
+/// `Microsoft.Windows.Common-Controls` 6.0.0.0. Anything else is bound to the
+/// v5 `comctl32` in System32, which does not export them — so the process dies
+/// during module load with `STATUS_ENTRYPOINT_NOT_FOUND` (0xc0000139) before
+/// `main` is ever reached.
+///
+/// `tauri-build` embeds that manifest into `app.exe`, which is why the app runs
+/// fine. It does not embed one into the unit-test harness binary Cargo builds
+/// from this same crate, which is why `cargo test` failed on this repo for its
+/// entire history with an error that looked like a toolchain fault and had
+/// nothing to do with any test.
+///
+/// Emitting the linker directive from the crate itself fixes every binary built
+/// from it — app, tests, examples, benches — rather than just the one
+/// `tauri-build` knows about. `.drectve` is the COFF section the linker reads
+/// command-line options from; `#[used]` keeps it from being stripped.
+#[cfg(windows)]
+#[used]
+#[link_section = ".drectve"]
+static COMMON_CONTROLS_V6_MANIFEST: [u8; 167] = *br#" /MANIFESTDEPENDENCY:"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'""#;
+
+/// Set when Viv Instant's global wake chord can't be registered at startup —
+/// most often because another running application already claims it. Recorded
+/// rather than only logged: the chord is the ONLY way into Viv Instant, so a
+/// clash makes the whole feature unreachable and looks broken rather than
+/// blocked. Settings reads this back via `cmd_instant_shortcut_error`.
+static INSTANT_SHORTCUT_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// The human-readable wake chord, matching what `setup` actually registers.
+///
+/// macOS reserves Ctrl+Shift+<key> chords far more aggressively than Windows
+/// does, and Control is not the modifier a Mac user reaches for; the platform
+/// convention for an app-level chord is Command. The label lives in Rust
+/// rather than being re-derived in the UI so the string the user is told to
+/// press and the chord actually registered can never drift apart.
+pub const INSTANT_SHORTCUT_LABEL: &str =
+  if cfg!(target_os = "macos") { "\u{2318}\u{21e7}Space" } else { "Ctrl+Shift+Space" };
+
+#[tauri::command]
+fn cmd_instant_shortcut_error() -> Option<String> {
+  INSTANT_SHORTCUT_ERROR.lock().ok().and_then(|s| s.clone())
+}
+
+#[tauri::command]
+fn cmd_instant_shortcut_label() -> &'static str {
+  INSTANT_SHORTCUT_LABEL
+}
 mod updates;
 pub mod camoufox;
+pub mod browser_sessions;
+pub mod live_browser;
+pub mod live_browser_agent;
 pub mod docker_installer;
 pub mod optional_components;
-pub mod voice;
+pub mod background;
+pub mod instant;
+pub mod overlays;
+pub mod activity;
 pub mod automation;
 pub mod terminal;
 use crate::automation::AutomationStore;
@@ -29,6 +88,17 @@ use crate::agent::dev_server_manager::DevServerManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  // A profile (VIV_PROFILE) is a separate Vivianne on the same machine; its
+  // webview storage (layout, last thread, …) must be separate too, or two
+  // instances would share and overwrite each other's UI state.
+  #[cfg(windows)]
+  if crate::agent::paths::profile().is_some() {
+    if let Ok(home) = crate::agent::paths::viv_home() {
+      let dir = home.join("webview");
+      let _ = std::fs::create_dir_all(&dir);
+      std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &dir);
+    }
+  }
   tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_store::Builder::default().build())
@@ -38,13 +108,29 @@ pub fn run() {
     .plugin(tauri_plugin_notification::init())
     .plugin(
       tauri_plugin_global_shortcut::Builder::new()
-        .with_handler(|app, _shortcut, event| {
-          // Fire on key-press (not release) and broadcast to every window so
-          // the notch (which runs the voice pipeline) force-activates even when
-          // the main window isn't focused.
-          if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-            let _ = app.emit("voice-wake", ());
+        .with_handler(|app, shortcut, event| {
+          // The wake chord is push-to-talk: pressed starts listening,
+          // released sends what was said. Escape acts on press only.
+          let pressed = event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed;
+          if shortcut.key != tauri_plugin_global_shortcut::Code::Escape {
+            if pressed {
+              crate::instant::window::press(app);
+            } else {
+              crate::instant::window::release(app);
+            }
+            return;
           }
+          if !pressed {
+            return;
+          }
+          // Two chords share this one handler, told apart by key. Escape is
+          // registered only for the duration of a run (see
+          // `instant::window::arm_escape`) — it has to be a GLOBAL shortcut
+          // rather than a keydown listener in the overlay, because the overlay
+          // deliberately never takes focus: if it did, the keystrokes Viv
+          // Instant is typing would land in the overlay instead of the app it
+          // is driving.
+          crate::instant::window::abort_from_shortcut(app);
         })
         .build(),
     )
@@ -92,6 +178,36 @@ pub fn run() {
       crate::agent::commands::cmd_get_models_config,
       crate::agent::commands::cmd_save_models_config,
       crate::agent::commands::cmd_get_settings,
+      crate::agent::days::cmd_open_today,
+      crate::agent::days::cmd_list_days,
+      crate::agent::days::cmd_read_session_messages,
+      crate::agent::days::cmd_list_archive,
+      crate::agent::master::cmd_draft_charter,
+      crate::agent::master::cmd_create_master,
+      crate::agent::master::cmd_get_master,
+      crate::agent::master::cmd_master_kickoff_prompt,
+      crate::agent::master::cmd_onboarding_questions,
+      crate::agent::master::cmd_open_agent_file,
+      crate::agent::team::cmd_list_team,
+      crate::agent::team::cmd_save_team_agent,
+      crate::agent::team::cmd_approve_team_agent,
+      crate::agent::team::cmd_delete_team_agent,
+      crate::agent::conversation::cmd_open_conversation,
+      crate::agent::conversation::cmd_read_conversation_archive,
+      crate::agent::runs::cmd_list_agent_runs,
+      crate::agent::runs::cmd_read_run_messages,
+      crate::agent::runs::cmd_comment_on_run,
+      crate::agent::office::cmd_read_document_bytes,
+      crate::agent::commands::cmd_system_roots,
+      crate::multiplayer::commands::cmd_multiplayer_launch_test_partner,
+      crate::multiplayer::commands::cmd_multiplayer_test_partner_id,
+      crate::multiplayer::commands::cmd_app_profile,
+      crate::multiplayer::collab::cmd_multiplayer_collab,
+      crate::multiplayer::collab::cmd_multiplayer_dismiss_notes,
+      crate::agent::office::cmd_edit_document_part,
+      crate::agent::office::cmd_restore_document_bytes,
+      crate::agent::review::cmd_assignment_changes,
+      crate::agent::review::cmd_undo_assignment,
       crate::agent::commands::cmd_list_tool_names,
       crate::agent::commands::cmd_register_local_endpoint,
       crate::agent::commands::cmd_unregister_local_endpoint,
@@ -120,14 +236,31 @@ pub fn run() {
       crate::agent::projects::cmd_assign_session_project,
       crate::agent::commands::cmd_delete_session,
       crate::agent::commands::cmd_write_text_file,
+      crate::agent::commands::cmd_read_file_raw,
       crate::agent::commands::cmd_load_session,
       crate::agent::commands::cmd_save_current_session,
       crate::agent::commands::cmd_rename_session,
       crate::agent::commands::cmd_new_session,
       crate::agent::commands::cmd_agent_revert_to_index,
       crate::agent::commands::cmd_get_usage_history,
+      crate::agent::commands::cmd_telemetry_track,
+      crate::agent::commands::cmd_get_telemetry_summary,
+      crate::agent::commands::cmd_list_checkpoints,
+      crate::agent::commands::cmd_inspect_document,
+      crate::browser_sessions::cmd_browser_session_status,
+      crate::browser_sessions::cmd_browser_import_cookies,
+      crate::browser_sessions::cmd_browser_reset_session,
+      crate::browser_sessions::cmd_browser_cookies_dir,
+      crate::browser_sessions::cmd_browser_list_cookie_files,
+      crate::agent::commands::cmd_restore_checkpoint,
+      crate::agent::commands::cmd_clear_telemetry,
+      crate::agent::commands::cmd_submit_bug_report,
       // Updates / changelog / announcements
       crate::file_preview::cmd_read_file_preview,
+      cmd_instant_shortcut_error,
+      cmd_instant_shortcut_label,
+      crate::background::cmd_hide_to_background,
+      crate::background::cmd_quit_app,
       crate::updates::cmd_app_version,
       crate::updates::cmd_get_changelog,
       crate::updates::cmd_get_update_state,
@@ -145,6 +278,9 @@ pub fn run() {
       crate::agent::commands::cmd_list_skills,
       crate::agent::commands::cmd_save_skill_file,
       crate::agent::commands::cmd_list_playbooks,
+      crate::coding_agent::custom_tools::cmd_list_custom_tools,
+      crate::coding_agent::custom_tools::cmd_delete_custom_tool,
+      crate::coding_agent::custom_tools::cmd_custom_tool_source,
       crate::agent::commands::cmd_add_playbook_file,
       crate::agent::commands::cmd_save_playbook,
       crate::agent::commands::cmd_remove_playbook,
@@ -172,6 +308,16 @@ pub fn run() {
       crate::agent::commands::cmd_web_preview_back,
       crate::agent::commands::cmd_web_preview_forward,
       crate::agent::commands::cmd_web_preview_refresh,
+      crate::agent::commands::cmd_web_preview_screenshot,
+      crate::agent::commands::cmd_web_preview_click_at,
+      crate::agent::commands::cmd_web_preview_type,
+      crate::agent::commands::cmd_web_preview_press,
+      crate::agent::commands::cmd_web_preview_scroll,
+      crate::live_browser::cmd_live_browser_show,
+      crate::live_browser::cmd_live_browser_hide,
+      crate::live_browser::cmd_live_browser_close,
+      crate::live_browser::cmd_live_browser_url,
+      crate::live_browser::cmd_live_browser_eval,
       crate::agent::commands::cmd_check_docker_status,
       crate::agent::commands::cmd_install_docker,
       crate::optional_components::cmd_get_optional_components_status,
@@ -198,12 +344,36 @@ pub fn run() {
       crate::coding_agent::commands::cmd_coding_list_subagents,
       crate::coding_agent::commands::cmd_coding_get_subagent_messages,
       crate::coding_agent::commands::cmd_coding_kill_subagent,
-      crate::coding_agent::commands::cmd_coding_plan_mode,
-      crate::coding_agent::commands::cmd_coding_set_plan_mode,
+      crate::agent::plans::cmd_plan_list,
+      crate::agent::plans::cmd_plan_get,
+      crate::agent::plans::cmd_plan_mode_get,
+      crate::agent::plans::cmd_plan_mode_set,
+      crate::agent::plans::cmd_plan_approve,
+      crate::agent::plans::cmd_plan_cancel,
+      crate::agent::team_run::cmd_team_run_get,
+      crate::agent::run_ledger::cmd_long_task_get,
+      crate::agent::run_ledger::cmd_long_task_control,
+      crate::agent::run_ledger::cmd_long_task_resume_prompt,
       crate::coding_agent::commands::cmd_coding_register_stream_channel,
       crate::coding_agent::computer::cmd_capture_screen,
-      crate::voice::cmd_whisper_preload,
-      crate::voice::cmd_whisper_transcribe,
+      crate::instant::stt::cmd_instant_stt_preload,
+      crate::instant::stt::cmd_instant_stt_transcribe,
+      crate::instant::session::cmd_instant_run,
+      crate::instant::session::cmd_instant_abort,
+      crate::instant::session::cmd_instant_steps,
+      crate::instant::session::cmd_instant_cancel_step,
+      crate::instant::window::cmd_instant_set_size,
+      crate::instant::window::cmd_instant_dismiss,
+      crate::instant::pointer::cmd_pointer_point,
+      crate::instant::pointer::cmd_pointer_highlight,
+      crate::instant::pointer::cmd_pointer_hide,
+      crate::overlays::cmd_overlay_ready,
+      crate::instant::stt::cmd_instant_stt_installed,
+      crate::instant::stt::cmd_parakeet_status,
+      crate::activity::cmd_activity_set_size,
+      crate::agent::commands::cmd_activity_stop,
+      crate::instant::stt::cmd_parakeet_download,
+      crate::instant::stt::cmd_parakeet_remove,
       // Automation (scheduled agent tasks)
       crate::automation::cmd_automation_list,
       crate::automation::cmd_automation_create,
@@ -228,6 +398,20 @@ pub fn run() {
       crate::multiplayer::commands::cmd_multiplayer_send_chat,
     ])
     .setup(|app| {
+      // Installed first thing in setup so a panic anywhere in the rest of
+      // startup is still recorded. Chains to the previous hook, so this only
+      // adds a crash file — it never suppresses the normal panic output.
+      crate::agent::telemetry::install_panic_hook(app.package_info().version.to_string());
+
+      // Tray icon + close-to-background. Installed early so the close handler
+      // is attached before the user can possibly reach the close button, and
+      // so Viv Instant's chord keeps working once the window is dismissed.
+      crate::background::init(app.handle());
+      crate::agent::telemetry::track("app.start", serde_json::json!({
+        "version": app.package_info().version.to_string(),
+        "os": format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+      }));
+
       // Abandoned "New chat" threads are persisted on creation, so clear out
       // any that were never used. Safe here specifically: nothing is active
       // at startup — that invariant only requires running before anything
@@ -325,6 +509,9 @@ pub fn run() {
 
         tokio::join!(auth_state_fut, credential_pool_fut)
       });
+      // Also reachable without an AppHandle, for tools that run outside a
+      // command (the web search tool reads a search API key from here).
+      crate::ai::auth::set_global(auth_state.clone());
       app.manage(auth_state);
       app.manage(credential_pool);
 
@@ -385,6 +572,7 @@ pub fn run() {
 
       // PTY-backed terminal sessions (one per open tab).
       app.manage(Arc::new(crate::terminal::TerminalRegistry::new()));
+      app.manage(Arc::new(crate::instant::session::InstantSession::default()));
 
       // Reconnect every MCP server persisted from the previous session.
       // Spawned rather than blocking startup on `block_on` — a slow or
@@ -436,6 +624,10 @@ pub fn run() {
                       .get("engine")
                       .and_then(|v| serde_json::from_value::<crate::agent::llama_manager::LocalEngine>(v.clone()).ok())
                       .unwrap_or_default();
+                    let tuning = config
+                      .get("tuning")
+                      .and_then(|v| serde_json::from_value::<crate::agent::llama_manager::LlamaTuning>(v.clone()).ok())
+                      .unwrap_or_default();
                     Some((
                       config.get("id")?.as_str()?.to_string(),
                       config.get("name")?.as_str()?.to_string(),
@@ -445,6 +637,7 @@ pub fn run() {
                       config.get("ctxSize")?.as_u64()? as u32,
                       auto_start,
                       engine,
+                      tuning,
                     ))
                   })
                   .collect::<Vec<_>>()
@@ -464,7 +657,7 @@ pub fn run() {
         // is a fresh, empty in-process registry every launch; `settings.json`
         // is the only thing that actually persists). Only `autoStart` ones
         // also get their process launched.
-        for (id, name, model_path, port, ngl, ctx_size, auto_start, engine) in endpoints {
+        for (id, name, model_path, port, ngl, ctx_size, auto_start, engine, tuning) in endpoints {
           let manager = app_clone.state::<Arc<LlamaManager>>();
           manager.register(crate::agent::llama_manager::LlamaProcessConfig {
             id: id.clone(),
@@ -475,6 +668,7 @@ pub fn run() {
             ctx_size,
             auto_start,
             engine,
+            tuning,
           });
           if auto_start {
             log::info!("[llama] auto-starting '{}' ({}:{})", name, model_path, port);
@@ -486,13 +680,18 @@ pub fn run() {
         }
       });
 
-      // Register the default global voice-wake shortcut (Ctrl+Shift+V). The
-      // handler above broadcasts a "voice-wake" event that VoiceMode listens for.
+      // Register Viv Instant's global wake chord. The handler above routes it
+      // to `instant::window::toggle`.
       {
         use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
-        let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyV);
+        // Command on macOS, Control elsewhere — see `INSTANT_SHORTCUT_LABEL`.
+        let primary = if cfg!(target_os = "macos") { Modifiers::SUPER } else { Modifiers::CONTROL };
+        let shortcut = Shortcut::new(Some(primary | Modifiers::SHIFT), Code::Space);
         if let Err(e) = app.global_shortcut().register(shortcut) {
-          log::warn!("[voice] failed to register global shortcut Ctrl+Shift+V: {e}");
+          log::warn!("[instant] failed to register global shortcut {INSTANT_SHORTCUT_LABEL}: {e}");
+          if let Ok(mut slot) = INSTANT_SHORTCUT_ERROR.lock() {
+            *slot = Some(e.to_string());
+          }
         }
       }
 
@@ -500,20 +699,53 @@ pub fn run() {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
             .level(log::LevelFilter::Info)
+            // The multiplayer transport logs every UDP packet at INFO — dozens a
+            // second while paired, drowning out everything else in the log.
+            .level_for("iroh", log::LevelFilter::Warn)
+            .level_for("iroh_quinn", log::LevelFilter::Warn)
+            .level_for("iroh_relay", log::LevelFilter::Warn)
+            .level_for("netwatch", log::LevelFilter::Warn)
+            .level_for("portmapper", log::LevelFilter::Warn)
             .build(),
         )?;
       }
 
-      // DIP's snapshot-highlight overlay must never intercept clicks — it
-      // sits on top of whatever window it's highlighting, so without this
-      // every click meant for that window would hit the (invisible) overlay
-      // instead. `set_ignore_cursor_events` has no static tauri.conf.json
-      // equivalent, hence setting it here once at startup.
-      if let Some(overlay) = app.get_webview_window("dip_overlay") {
-        if let Err(e) = overlay.set_ignore_cursor_events(true) {
-          log::warn!("[dip] failed to make the overlay window click-through: {e}");
+      // Keep the configured default window size from exceeding the screen.
+      //
+      // tauri.conf.json's width/height are a single fixed pair applied on every
+      // machine, and nothing here persists a size between runs, so that literal
+      // is what every launch gets. 1280x820 is a good default on a normal
+      // display and taller than the usable area of a 1366x768 laptop, where the
+      // window would open with its bottom edge (and the composer) off-screen.
+      //
+      // Tauri exposes the monitor's full bounds but not its work area, so the
+      // taskbar/dock is approximated by a margin rather than measured. Only ever
+      // shrinks: a screen large enough for the configured size is left alone.
+      if let Some(main) = app.get_window("main") {
+        if let Ok(Some(monitor)) = main.current_monitor() {
+          let scale = monitor.scale_factor();
+          let screen = monitor.size().to_logical::<f64>(scale);
+          // ~8% vertical allowance for a taskbar; horizontal is generous since
+          // side docks are rarely the constraint.
+          let max_w = screen.width * 0.96;
+          let max_h = screen.height * 0.92;
+          if let Ok(current) = main.inner_size() {
+            let cur = current.to_logical::<f64>(scale);
+            let (w, h) = (cur.width.min(max_w), cur.height.min(max_h));
+            if w < cur.width || h < cur.height {
+              log::info!("[window] clamping {}x{} to {w:.0}x{h:.0} for a {:.0}x{:.0} screen",
+                cur.width, cur.height, screen.width, screen.height);
+              let _ = main.set_size(tauri::LogicalSize::new(w, h));
+              // Re-centre: shrinking keeps the original top-left, which after a
+              // centred layout leaves the window sitting low and right.
+              let _ = main.center();
+            }
+          }
         }
       }
+
+      // The overlay windows (DIP, Viv Instant, pointer) aren't created here:
+      // `crate::overlays` builds each on first use, click-through where needed.
 
       Ok(())
     })

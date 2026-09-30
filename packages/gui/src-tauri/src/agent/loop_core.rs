@@ -3,7 +3,7 @@ use crate::agent::state::*;
 use crate::agent::tool_exec::*;
 use crate::agent::types::*;
 use crate::ai::types::{Context, StreamTokenEvent, Message, MessageContent as AiMessageContent};
-use crate::ai::auth::{AuthState, Credential};
+use crate::ai::auth::Credential;
 use std::sync::Arc;
 use tauri::{Manager, Listener, Emitter};
 use tokio::sync::RwLock;
@@ -68,6 +68,92 @@ fn system_reminder(text: &str) -> AgentMessage {
     }
 }
 
+/// Said to a long task's model when it has looped on the same call: step
+/// back and change approach, rather than be stopped.
+const REFLECTION_PROMPT: &str = "You have repeated the same tool call several times without progress. Stop and think before acting again: say in one or two sentences why this approach is not working, list two or three materially different ways forward, then take the most promising one. If the current todo item is truly impossible right now, mark it blocked in your todo list with the reason and move on to the next item.";
+/// Doom-loop reflections a long task gets before it is stopped after all.
+const MAX_REFLECTIONS: u32 = 3;
+
+/// Said to the model when it ends a turn while its goal is still open.
+const CONTINUE_PROMPT: &str = "Your goal is not complete yet, so keep working — nobody is waiting to reply. Check where things stand against the goal and your todo list below, then take the next concrete step. When the whole goal is done and verified, call update_goal with action \"complete\"; if you cannot proceed without the user, call update_goal with action \"blocked\" and say what you need.";
+/// Turns in a row a long task may end without doing anything before it is
+/// marked blocked instead of being nudged again.
+const MAX_IDLE_CONTINUATIONS: u32 = 3;
+
+/// Persist a long task's ledger and tell the UI. A failed write is logged,
+/// not fatal: losing a checkpoint of the ledger is bad, stopping the run
+/// over it is worse.
+fn save_ledger(ledger: &mut crate::agent::run_ledger::RunLedger, emit: &EventSender) {
+    if let Err(e) = ledger.save() {
+        log::warn!("[long-task] {e}");
+    }
+    emit.emit(AgentEvent::LongTask { ledger: ledger.clone() });
+}
+
+/// After compaction has summarised the run's history away, remind a long
+/// task where it stands — its objective, what is done, what is left.
+fn brief_after_compaction(context: &mut AgentContext, ledger: &Option<crate::agent::run_ledger::RunLedger>) {
+    if let Some(l) = ledger {
+        context.messages.push(system_reminder(&l.briefing()));
+    }
+}
+
+/// The plan from the last successful `todo_write` in these results, as
+/// `(title, status, summary)`.
+fn latest_todos(results: &[AgentMessage]) -> Option<Vec<(String, String, Option<String>)>> {
+    results.iter().rev().find_map(|m| {
+        let AgentMessage::ToolResult { tool_name, arguments: Some(args), is_error, .. } = m else { return None };
+        if tool_name != "todo_write" || *is_error == Some(true) {
+            return None;
+        }
+        let items = args.get("todos")?.as_array()?;
+        Some(
+            items
+                .iter()
+                .filter_map(|t| {
+                    let title = t.get("content")?.as_str()?.to_string();
+                    let status = t.get("status")?.as_str()?.to_string();
+                    let summary = t.get("summary").and_then(|v| v.as_str()).map(str::to_string);
+                    Some((title, status, summary))
+                })
+                .collect(),
+        )
+    })
+}
+
+/// Said to a model whose reply hit the output limit mid-reasoning — before it
+/// wrote a single word of answer or a tool call. Without a follow-up the turn
+/// simply ended: the user saw the model think, then nothing happen.
+const TRUNCATED_NUDGE: &str = "Your last reply hit the output-length limit while you were still reasoning, before you wrote any answer or tool call, so none of it reached the user. Don't redo that reasoning. Act now: make the next tool call directly (keep its code and arguments compact), or give the answer. Think only briefly first.";
+
+/// How many times one run will resume after such a cut-off. Two is enough for
+/// a model to recover; past that the limit is simply too small for the task.
+const MAX_TRUNCATED_RESUMES: usize = 2;
+
+/// True for a reply that ran out of output budget having produced nothing
+/// usable: no tool call and no visible text, only reasoning.
+fn cut_off_before_acting(message: &AgentMessage) -> bool {
+    let AgentMessage::Assistant { stop_reason, content, .. } = message else { return false };
+    if stop_reason != "length" {
+        return false;
+    }
+    !content.iter().any(|c| match c {
+        crate::agent::types::MessageContent::ToolCall(_) => true,
+        crate::agent::types::MessageContent::Text { text } => !text.trim().is_empty(),
+        _ => false,
+    })
+}
+
+/// A `dip` call that only looks: repeating one is how a screen is watched
+/// (the answer changes as the app does), not a loop.
+fn observes_the_screen(tc: &AgentToolCall) -> bool {
+    (tc.name == "dip" || tc.name == "computer")
+        && matches!(
+            tc.arguments.get("action").and_then(|v| v.as_str()),
+            Some("screenshot" | "zoom" | "wait" | "snapshot" | "find" | "read_text" | "list_windows" | "cursor_position")
+        )
+}
+
 enum StepAction { Continue, Nudge, Stop }
 
 /// What to do at the start of turn `step` (1-indexed) given the ceiling `max`:
@@ -108,6 +194,33 @@ fn track_doom_loop(
         (last_signature, previous_count + 1)
     } else {
         (Some(new_signature), 1)
+    }
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    use super::cut_off_before_acting;
+    use crate::agent::types::{AgentMessage, MessageContent, ToolCall};
+
+    fn reply(stop: &str, content: Vec<MessageContent>) -> AgentMessage {
+        AgentMessage::Assistant { content, stop_reason: stop.into(), error_message: None, timestamp: 0, usage: None }
+    }
+    fn thinking() -> MessageContent {
+        MessageContent::Thinking { thinking: "Let me work this out...".into() }
+    }
+
+    #[test]
+    fn only_reasoning_at_the_limit_counts_as_cut_off() {
+        assert!(cut_off_before_acting(&reply("length", vec![thinking()])));
+        assert!(cut_off_before_acting(&reply("length", vec![thinking(), MessageContent::Text { text: "  ".into() }])));
+    }
+
+    #[test]
+    fn anything_delivered_is_not_cut_off() {
+        let call = MessageContent::ToolCall(ToolCall { id: "1".into(), name: "math".into(), arguments: serde_json::json!({}) });
+        assert!(!cut_off_before_acting(&reply("length", vec![thinking(), call])));
+        assert!(!cut_off_before_acting(&reply("length", vec![MessageContent::Text { text: "Here is".into() }])));
+        assert!(!cut_off_before_acting(&reply("stop", vec![thinking()])));
     }
 }
 
@@ -344,6 +457,31 @@ pub async fn run_agent_loop_continue(
     let mut tool_calls_since_todo: usize = 0;
     const TODO_NUDGE_THRESHOLD: usize = 8;
 
+    let mut truncated_resumes: usize = 0;
+
+    // ── Staying alive ──────────────────────────────────────────────────
+    // Consecutive waits for the current failure streak (reset by any
+    // success), whether this step already compacted to fit the window, and
+    // the fallback that last rescued the run (tried first for a while).
+    let mut failure_waits: u32 = 0;
+    let mut overflow_compacted = false;
+    let mut sticky_model: Option<(ModelRef, std::time::Instant)> = None;
+    // Long-task mode: doom-loop reflections so far, and turns in a row that
+    // ended without doing anything while the goal was still open.
+    let mut reflections: u32 = 0;
+    let mut idle_continuations: u32 = 0;
+    // Why the run ended, when it ended on a failure — so a long task can be
+    // marked paused with the real reason.
+    let mut ended_on: Option<String> = None;
+    let mut ledger = match state.long_task().await {
+        Some(key) => crate::agent::run_ledger::RunLedger::load(&key),
+        None => None,
+    };
+    if let Some(l) = ledger.as_mut() {
+        l.set_status(crate::agent::run_ledger::RunStatus::Running, None);
+        save_ledger(l, emit);
+    }
+
     /// Emit a synthetic "aborted" assistant message + TurnEnd/AgentEnd, matching
     /// the same shape as the error path below, so the frontend renders it consistently.
     async fn emit_abort(
@@ -391,7 +529,10 @@ pub async fn run_agent_loop_continue(
         // Step ceiling: nudge the model to wrap up on the last allowed turn, and
         // hard-stop past it so a tool-call loop can't run forever.
         step += 1;
-        match step_action(step, MAX_STEPS) {
+        // A long task has no step ceiling: its spend and time caps are what
+        // bound it, checked after every step below.
+        let ceiling = if ledger.is_some() { usize::MAX } else { MAX_STEPS };
+        match step_action(step, ceiling) {
             StepAction::Stop => {
                 let stop_msg = AgentMessage::Assistant {
                     content: vec![crate::agent::types::MessageContent::Text {
@@ -438,7 +579,9 @@ pub async fn run_agent_loop_continue(
         // before any tool has run this turn — the original call site below
         // only fires after tool execution. Cheap (no LLM call) unless
         // actually over budget.
-        maybe_compact_context(context, state, app, &model, false).await;
+        if maybe_compact_context(context, state, app, &model, false).await {
+            brief_after_compaction(context, &ledger);
+        }
 
         #[cfg(debug_assertions)]
         eprintln!("[DEBUG] model.id={:?} model.provider={:?} model.api={:?} max_tokens={}",
@@ -483,9 +626,21 @@ pub async fn run_agent_loop_continue(
         // its own schema list here backs up the runtime depth check in
         // execute_task_tool, so a nested attempt fails closed instead of
         // costing a round-trip to find out.
-        let mut tool_defs = crate::agent::tool_exec::get_agent_tool_definitions().await;
+        // Only what the model may actually call (a disabled tool's schema
+        // used to ride along anyway and get refused at execution), and for a
+        // local model only the lean profile — see `agent::tool_profile`.
+        let mut tool_defs = crate::agent::tool_profile::select_tool_defs(
+            crate::agent::tool_exec::get_agent_tool_definitions().await,
+            &crate::agent::tool_exec::available_tool_names(state).await,
+            crate::agent::tool_profile::is_lean_provider(&model.provider),
+            &context.messages,
+        );
         if context.delegate_depth >= 1 {
-            tool_defs.retain(|t| t.get("name").and_then(|n| n.as_str()) != Some("task"));
+            tool_defs.retain(|t| !matches!(t.get("name").and_then(|n| n.as_str()), Some("task" | "team_run")));
+        }
+        // Only a member of a team run has anyone to message.
+        if state.team_member().await.is_none() {
+            tool_defs.retain(|t| t.get("name").and_then(|n| n.as_str()) != Some("message_agent"));
         }
         let mut llm_context = crate::ai::types::Context {
             messages: llm_messages,
@@ -518,16 +673,107 @@ pub async fn run_agent_loop_continue(
 
         #[cfg(debug_assertions)]
         eprintln!("[DEBUG] calling call_provider_stream_and_await...");
-        // Call provider and await completed AssistantMessage
-        let assistant_message = match call_provider_with_fallback(
+        // Call the provider — the run's model, then its fallback chain.
+        let models = model_chain(&model, &sticky_model).await;
+        let (outcome, used) = call_provider_with_fallback(
             app,
-            &model,
+            &models,
             Arc::new(llm_context),
             thinking_level,
             emit,
             source_tag,
             abort_flag,
-        ).await {
+        ).await;
+        let used_model = models.get(used).cloned().unwrap_or_else(|| model.clone());
+
+        // Every model failed. Before giving up, see whether this is a failure
+        // worth waiting out or fixing in place — the difference between a
+        // run that dies at 3am on a rate limit and one that carries on.
+        let failure = match &outcome {
+            Err(e) => Some(e.clone()),
+            Ok(AgentMessage::Assistant { stop_reason, error_message, .. }) if stop_reason == "error" => {
+                Some(error_message.clone().unwrap_or_else(|| "The model returned an error without saying why.".to_string()))
+            }
+            _ => None,
+        };
+        if let Some(err) = failure.as_ref().filter(|_| !abort_flag.load(Ordering::SeqCst)) {
+            let kind = crate::agent::recovery::classify(err);
+            // A reply that streamed some tokens before failing is still open
+            // in the UI; close it so the retry starts a fresh bubble. It is
+            // not kept in the transcript — the retry replaces it.
+            if let Ok(partial) = &outcome {
+                emit.emit(AgentEvent::MessageEnd { message: partial.clone() });
+            }
+            if kind == crate::agent::recovery::Failure::ContextOverflow && !overflow_compacted {
+                overflow_compacted = true;
+                log::warn!("[loop] request no longer fits the context window; compacting and retrying");
+                maybe_compact_context(context, state, app, &model, true).await;
+                crate::coding_agent::context_shaping::evict_old_images(&mut context.messages, 1);
+                step -= 1;
+                has_more_tool_calls = true;
+                continue;
+            }
+            if let Some(wait) = crate::agent::recovery::next_wait(&kind, failure_waits, ledger.is_some()) {
+                let until = now_ms() + wait.as_millis() as u64;
+                // Waiting past a long task's deadline would only wake up to
+                // stop, so the time cap is the answer instead.
+                let past_deadline = ledger.as_ref().and_then(|l| l.deadline_ms).is_some_and(|d| until > d);
+                if !past_deadline {
+                    failure_waits += 1;
+                    let reason = crate::ai::utils::truncate_error_text(err, 200);
+                    emit.emit(AgentEvent::RunWaiting { until_ms: until, reason: reason.clone() });
+                    if let Some(l) = ledger.as_mut() {
+                        l.set_status(crate::agent::run_ledger::RunStatus::Waiting, Some(reason));
+                        l.wait_until = Some(until);
+                        save_ledger(l, emit);
+                    }
+                    // Sleep in slices so stop and steer both cut the wait short.
+                    while now_ms() < until {
+                        if abort_flag.load(Ordering::SeqCst) || steer_flag.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                    if let Some(l) = ledger.as_mut() {
+                        l.set_status(crate::agent::run_ledger::RunStatus::Running, None);
+                        save_ledger(l, emit);
+                    }
+                    if abort_flag.load(Ordering::SeqCst) {
+                        emit_abort(context, new_messages, state, emit).await;
+                        break 'outer;
+                    }
+                    step -= 1;
+                    has_more_tool_calls = true;
+                    continue;
+                }
+            }
+            ended_on = Some(if kind == crate::agent::recovery::Failure::Transient {
+                format!(
+                    "the connection failed {} more times after retrying ({})",
+                    crate::agent::recovery::NETWORK_MAX_RETRIES,
+                    crate::ai::utils::truncate_error_text(err, 160)
+                )
+            } else {
+                err.clone()
+            });
+        } else if failure.is_none() {
+            failure_waits = 0;
+            overflow_compacted = false;
+            // Remember a fallback that rescued the run, keeping the time it
+            // first did so the run's own model is retried on schedule;
+            // forget it once the run's own model answers again.
+            let own_model = used_model.provider == model.provider && used_model.id == model.id;
+            sticky_model = if own_model {
+                None
+            } else {
+                match sticky_model.take() {
+                    Some((m, since)) if m.provider == used_model.provider && m.id == used_model.id => Some((m, since)),
+                    _ => Some((used_model.clone(), std::time::Instant::now())),
+                }
+            };
+        }
+
+        let assistant_message = match outcome {
             Ok(msg) => {
                 #[cfg(debug_assertions)]
                 eprintln!("[DEBUG] provider returned OK message, role={}", msg.role());
@@ -574,11 +820,29 @@ pub async fn run_agent_loop_continue(
         new_messages.push(assistant_message.clone());
         state.add_message(assistant_message.clone()).await;
 
+        if let (Some(l), AgentMessage::Assistant { usage: Some(usage), .. }) = (ledger.as_mut(), &assistant_message) {
+            let cost = usage
+                .cost
+                .as_ref()
+                .map(|c| c.total)
+                .filter(|t| *t > 0.0)
+                .or_else(|| crate::ai::pricing::compute_cost(&used_model.provider, &used_model.id, usage))
+                .unwrap_or(0.0);
+            l.spent_usd += cost;
+            l.input_tokens += (usage.input + usage.cache_read + usage.cache_write) as u64;
+            l.output_tokens += usage.output as u64;
+            l.steps += 1;
+            l.model = Some(format!("{}/{}", used_model.provider, used_model.id));
+        }
+
         // If the model signalled error/aborted, end the turn immediately without
         // running any tool calls it may have partially emitted (mirrors agent-loop.ts:
         // the stopReason check happens BEFORE tool-call extraction).
         if let AgentMessage::Assistant { stop_reason, .. } = &assistant_message {
             if stop_reason == "error" || stop_reason == "aborted" {
+                if stop_reason == "error" && ended_on.is_none() {
+                    ended_on = Some(failure.clone().unwrap_or_else(|| "the model returned an error".to_string()));
+                }
                 // MessageEnd before TurnEnd: nothing else emits this message
                 // to the frontend on this path. A provider that fails before
                 // producing a single token (out of credits, rate limited,
@@ -606,6 +870,8 @@ pub async fn run_agent_loop_continue(
             }
         }
 
+        let was_cut_off = cut_off_before_acting(&assistant_message);
+
         // Check for tool calls in the assistant message
         let tool_calls: Vec<AgentToolCall> = if let AgentMessage::Assistant { content, .. } = &assistant_message {
             extract_tool_calls(content)
@@ -621,13 +887,17 @@ pub async fn run_agent_loop_continue(
         // still counts as two identical steps in a row, not a reset.
         let sig: Vec<(String, serde_json::Value)> = tool_calls
             .iter()
-            .filter(|tc| !DOOM_LOOP_EXCLUDED_TOOLS.contains(&tc.name.as_str()))
+            .filter(|tc| !DOOM_LOOP_EXCLUDED_TOOLS.contains(&tc.name.as_str()) && !observes_the_screen(tc))
             .map(|tc| (tc.name.clone(), tc.arguments.clone()))
             .collect();
         if !sig.is_empty() {
             let (new_last, new_count) = track_doom_loop(last_tool_signature.take(), sig, repeat_count);
             last_tool_signature = new_last;
             repeat_count = new_count;
+        }
+
+        if !tool_calls.is_empty() {
+            idle_continuations = 0;
         }
 
         // Todo-nudge tracking: reset on any todo_write call,
@@ -651,11 +921,29 @@ pub async fn run_agent_loop_continue(
             state.add_message(result.clone()).await;
         }
 
+        // The plan as the agent last wrote it becomes the long task's
+        // record: completed items turn into checkpoints.
+        if let Some(l) = ledger.as_mut() {
+            if let Some(todos) = latest_todos(&tool_results) {
+                l.record_todos(&todos);
+            }
+        }
+
         // Doom-loop intervention: nudge once at the threshold, hard-stop if
         // the model keeps repeating past it — same shape as the MAX_STEPS
         // stop path (synthetic assistant message, TurnEnd, break), just
         // reachable earlier than the step ceiling when nothing is changing.
-        if repeat_count >= DOOM_LOOP_STOP_THRESHOLD {
+        if repeat_count >= DOOM_LOOP_STOP_THRESHOLD && ledger.is_some() && reflections < MAX_REFLECTIONS {
+            // Nobody is watching a long task to unstick it, so stopping here
+            // would strand it until morning. Make the model step back and
+            // change approach instead; only a run that keeps looping after
+            // that is stopped.
+            reflections += 1;
+            repeat_count = 0;
+            last_tool_signature = None;
+            context.messages.push(system_reminder(REFLECTION_PROMPT));
+        } else if repeat_count >= DOOM_LOOP_STOP_THRESHOLD {
+            ended_on = Some("it kept repeating the same step without making progress".to_string());
             let stop_msg = AgentMessage::Assistant {
                 content: vec![crate::agent::types::MessageContent::Text {
                     text: "Stopped: the same tool call repeated identically several times in a row with no apparent progress. Tell me what you were trying to do and I can help unblock it.".to_string(),
@@ -687,8 +975,8 @@ pub async fn run_agent_loop_continue(
             tool_calls_since_todo = 0;
         }
 
-        if !tool_results.is_empty() {
-            maybe_compact_context(context, state, app, &model, false).await;
+        if !tool_results.is_empty() && maybe_compact_context(context, state, app, &model, false).await {
+            brief_after_compaction(context, &ledger);
         }
 
         emit.emit(AgentEvent::TurnEnd {
@@ -699,6 +987,39 @@ pub async fn run_agent_loop_continue(
         });
 
         has_more_tool_calls = !tool_results.is_empty();
+
+        if let Some(l) = ledger.as_mut() {
+            l.refresh_caps();
+            save_ledger(l, emit);
+            if let Some(reason) = l.cap_reached(now_ms()) {
+                let text = format!("Paused: this task {reason}. Raise the limit to let it carry on from here.");
+                l.set_status(crate::agent::run_ledger::RunStatus::Paused, Some(reason));
+                save_ledger(l, emit);
+                crate::agent::notifications::notify_long_task(app, &text);
+                let msg = AgentMessage::Assistant {
+                    content: vec![crate::agent::types::MessageContent::Text { text }],
+                    stop_reason: "cap".to_string(),
+                    error_message: None,
+                    timestamp: now_ms(),
+                    usage: None,
+                };
+                emit.emit(AgentEvent::MessageStart { message: msg.clone() });
+                emit.emit(AgentEvent::MessageEnd { message: msg.clone() });
+                context.messages.push(msg.clone());
+                new_messages.push(msg.clone());
+                state.add_message(msg).await;
+                break 'outer;
+            }
+        }
+
+        // A reply cut off mid-reasoning did nothing; resume instead of ending
+        // the turn on it. Bounded, so a limit that's simply too small for the
+        // task still ends rather than looping.
+        if was_cut_off && !has_more_tool_calls && truncated_resumes < MAX_TRUNCATED_RESUMES {
+            truncated_resumes += 1;
+            context.messages.push(system_reminder(TRUNCATED_NUDGE));
+            has_more_tool_calls = true;
+        }
 
         if abort_flag.load(Ordering::SeqCst) {
             break 'outer;
@@ -725,11 +1046,78 @@ pub async fn run_agent_loop_continue(
         next = drain_queue(&queues.follow_up_queue, &queues.follow_up_mode).await;
     }
     if next.is_empty() {
+        // A long task does not end just because the model stopped talking:
+        // it ends when its goal is done, blocked, or out of budget.
+        if let Some(l) = ledger.as_mut() {
+            if !abort_flag.load(Ordering::SeqCst) && ended_on.is_none() {
+                use crate::agent::run_ledger::RunStatus;
+                // A planning turn ends by handing a plan over for review;
+                // nudging it to keep working would only fight that.
+                let planning = state.plan_mode().await;
+                match state.goal().await.map(|g| (g.phase, g.blocked_reason)).filter(|_| !planning) {
+                    Some((crate::agent::types::GoalPhase::Complete, _)) => {
+                        l.set_status(RunStatus::Done, None);
+                        crate::agent::notifications::notify_long_task(app, &format!("Done: {}", l.objective));
+                    }
+                    Some((crate::agent::types::GoalPhase::Blocked, reason)) => {
+                        let reason = reason.unwrap_or_else(|| "the agent reported it is blocked".to_string());
+                        crate::agent::notifications::notify_long_task(app, &format!("Blocked: {reason}"));
+                        l.set_status(RunStatus::Blocked, Some(reason));
+                    }
+                    Some((crate::agent::types::GoalPhase::Paused, _)) => {
+                        l.set_status(RunStatus::Paused, Some("the agent paused the goal".to_string()));
+                    }
+                    // Work toward an open goal continues until the goal is
+                    // settled — the model stopping to talk is not the end.
+                    Some((crate::agent::types::GoalPhase::Active, _)) if idle_continuations < MAX_IDLE_CONTINUATIONS => {
+                        idle_continuations += 1;
+                        context.messages.push(system_reminder(&format!("{CONTINUE_PROMPT}
+
+{}", l.briefing())));
+                        save_ledger(l, emit);
+                        has_more_tool_calls = true;
+                        continue 'outer;
+                    }
+                    Some((crate::agent::types::GoalPhase::Active, _)) => {
+                        let reason = "it stopped making progress and needs direction".to_string();
+                        crate::agent::notifications::notify_long_task(app, &format!("Blocked: {reason}"));
+                        l.set_status(RunStatus::Blocked, Some(reason));
+                    }
+                    // No goal: an ordinary exchange, finished when the reply is.
+                    None => l.set_status(RunStatus::Done, None),
+                }
+                save_ledger(l, emit);
+            }
+        }
         break 'outer;
     }
     pending_messages = next;
     has_more_tool_calls = true;
     } // 'outer
+
+    // A task that ended on a failure is paused rather than lost, with the
+    // reason, so resuming is an informed choice. Pressing stop ends it; the
+    // status bar's Pause (written to disk before the abort) pauses it.
+    if let Some(l) = ledger.as_mut() {
+        use crate::agent::run_ledger::RunStatus;
+        let on_disk = crate::agent::run_ledger::RunLedger::load(&l.key).map(|d| d.status);
+        if on_disk == Some(RunStatus::Stopped) {
+            l.set_status(RunStatus::Stopped, None);
+        } else if let Some(reason) = ended_on.take() {
+            crate::agent::notifications::notify_long_task(app, &format!("Task halted and needs your review: {reason}"));
+            l.set_status(RunStatus::Paused, Some(reason));
+        } else if abort_flag.load(Ordering::SeqCst) {
+            if crate::agent::run_ledger::take_pause_request(&l.key) {
+                l.set_status(RunStatus::Paused, Some("paused by you".to_string()));
+            } else {
+                l.set_status(RunStatus::Stopped, None);
+            }
+        } else if l.status == RunStatus::Running {
+            // Ended with nothing left to do (a step that was the last).
+            l.set_status(RunStatus::Done, None);
+        }
+        save_ledger(l, emit);
+    }
 
     // Turn-close auto memory capture (ported from kilo-memory's "turn-close"
     // trigger): deterministic, no extra LLM call — builds a short note from
@@ -737,9 +1125,8 @@ pub async fn run_agent_loop_continue(
     // itself. No-ops when memory/auto-consolidate is off or nothing worth
     // remembering happened (pure Q&A turns don't spam memory).
     if let Some(summary) = build_turn_memory_summary(new_messages) {
-        use tauri::Manager;
-        let root = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_else(|_| ".".to_string());
-        let auth = app.state::<Arc<crate::ai::auth::AuthState>>().inner().clone();
+        let root = crate::agent::commands::memory_root_for(state).await;
+        let auth = crate::ai::auth::wait_for_state(app).await;
         if crate::agent::memory::auto_capture(&root, &summary, Some(auth)).await.is_ok() {
             maybe_trigger_extraction(app, &root, state).await;
         }
@@ -797,11 +1184,11 @@ pub(crate) fn context_budgets(context_window: u32) -> (u32, u32) {
     (reserve, keep_recent)
 }
 
-pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &AgentState, app: &tauri::AppHandle, model: &ModelRef, force: bool) {
+pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &AgentState, app: &tauri::AppHandle, model: &ModelRef, force: bool) -> bool {
     use crate::coding_agent::compaction::{calculate_context_tokens_incremental, find_cut_point, generate_llm_summary, generate_mermaid_summary, CompactionConfig};
 
     if !state.compaction_enabled().await {
-        return;
+        return false;
     }
     // `0` means "scale to the model" (the default). A non-zero stored value
     // is an explicit user override from Settings and wins.
@@ -818,16 +1205,23 @@ pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &Ag
     let current_tokens = calculate_context_tokens_incremental(&context.messages, &mut context.token_cache_len, &mut context.token_cache_sum);
     let budget = model.context_window.saturating_sub(reserve_tokens);
     if !force && current_tokens <= budget {
-        return;
+        return false;
     }
 
     let config = CompactionConfig { enabled: true, threshold_tokens: keep_recent_tokens.saturating_mul(2), min_messages: 10 };
     let cut_point = find_cut_point(&context.messages, &config);
     if cut_point == 0 || cut_point >= context.messages.len() {
-        return;
+        return false;
     }
 
     let compacted: Vec<AgentMessage> = context.messages.drain(..cut_point).collect();
+    // The model only needs the summary; the user wants everything they ever
+    // said. Keep the originals where the conversation view can find them.
+    if let Some(path) = state.history_archive().await {
+        if let Err(e) = crate::agent::conversation::append_archive(&path, &compacted) {
+            log::warn!("[compaction] couldn't archive compacted messages: {e}");
+        }
+    }
     let summary_text = if state.llm_summary_enabled().await {
         match generate_llm_summary(app, model, &compacted).await {
             Some(text) => text,
@@ -851,6 +1245,7 @@ pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &Ag
         "[DEBUG] compacted {} messages ({} tokens -> budget {}), 1 summary message inserted",
         cut_point, current_tokens, budget
     );
+    true
 }
 
 /// Check whether an L1 extraction batch is due and, if so, spawn it
@@ -904,7 +1299,7 @@ async fn resolve_api_key(app: &tauri::AppHandle, provider: &str) -> Option<Strin
         return Some("local-dummy-key".to_string());
     }
 
-    let auth_state = app.state::<Arc<AuthState>>();
+    let auth_state = crate::ai::auth::wait_for_state(app).await;
     let mut api_key = auth_state
         .store
         .read(provider)
@@ -1041,19 +1436,55 @@ async fn call_provider_with_retry(
     unreachable!("loop always returns on its last iteration")
 }
 
-/// Read the `fallbackModel` object from settings.json (written by Settings
-/// → Engine's fallback-model picker). The frontend saves the full model
-/// shape it already has from `availableModels` (the same live-discovered,
-/// actually-authenticated list the primary model picker uses), so this is
-/// a plain deserialize — no live model-discovery round trip needed here on
-/// the turn-loop hot path.
-async fn read_fallback_model() -> Option<ModelRef> {
+/// The fallback chain from settings.json, in the order to try it.
+///
+/// `fallbackModels` is a list the Settings → Engine picker writes; the older
+/// single `fallbackModel` is still honoured, as the chain's first entry, so a
+/// configuration saved before the chain existed keeps working unchanged. The
+/// frontend saves each full model shape it already has from
+/// `availableModels`, so this is a plain deserialize — no live discovery on
+/// the hot path.
+async fn read_fallback_models() -> Vec<ModelRef> {
     let settings = crate::agent::tool_exec::read_settings_json().await;
-    let raw = settings.get("fallbackModel")?;
-    if raw.is_null() {
-        return None;
+    let mut out: Vec<ModelRef> = Vec::new();
+    if let Some(m) = settings.get("fallbackModel").filter(|v| !v.is_null()).and_then(|v| serde_json::from_value(v.clone()).ok()) {
+        out.push(m);
     }
-    serde_json::from_value(raw.clone()).ok()
+    if let Some(list) = settings.get("fallbackModels").and_then(|v| v.as_array()) {
+        for v in list {
+            if let Ok(m) = serde_json::from_value::<ModelRef>(v.clone()) {
+                out.push(m);
+            }
+        }
+    }
+    out
+}
+
+/// How long a run keeps using the fallback that rescued it before trying its
+/// own model again. Every turn going back to a model that is rate limited
+/// for the next hour would pay the full retry cycle each time just to learn
+/// that again.
+const STICKY_FALLBACK: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// The models to try this turn, first to last: the run's own model, then the
+/// fallback chain — unless a fallback recently rescued the run, in which case
+/// it goes first until `STICKY_FALLBACK` has passed.
+async fn model_chain(primary: &ModelRef, sticky: &Option<(ModelRef, std::time::Instant)>) -> Vec<ModelRef> {
+    let mut chain = vec![primary.clone()];
+    for m in read_fallback_models().await {
+        if !chain.iter().any(|c| c.provider == m.provider && c.id == m.id) {
+            chain.push(m);
+        }
+    }
+    if let Some((m, since)) = sticky {
+        if since.elapsed() < STICKY_FALLBACK {
+            if let Some(pos) = chain.iter().position(|c| c.provider == m.provider && c.id == m.id) {
+                let preferred = chain.remove(pos);
+                chain.insert(0, preferred);
+            }
+        }
+    }
+    chain
 }
 
 /// Wraps `call_provider_with_retry` with same-provider credential-pool
@@ -1139,88 +1570,56 @@ async fn call_provider_with_pool_rotation(
     }
 }
 
-/// Wraps `call_provider_with_retry` with a single fallback attempt against
-/// a user-configured fallback model when the primary model's entire retry
-/// budget is exhausted (or its very first attempt was a non-retryable
-/// failure — an invalid/expired key on the primary provider is exactly
-/// the case a fallback with a different provider's key should rescue).
-/// Falls back at most once per turn: the fallback model gets its own full
-/// retry cycle via `call_provider_with_retry`, but if that also fails, the
-/// failure is returned as-is rather than chaining further fallbacks.
+/// Tries each model in `models` until one answers, returning the result and
+/// the index of the model that produced it.
 ///
-/// Deliberately does NOT fall back on `stop_reason == "aborted"` — a
-/// user-cancelled turn should stay cancelled, not silently retry on a
-/// different model behind their back. That case never reaches here since
-/// `succeeded` below treats anything other than `"error"` as success.
+/// Each model gets its full retry and credential-rotation cycle
+/// (`call_provider_with_pool_rotation`) before the next is tried, and a
+/// model with no usable credential is skipped rather than failing the turn
+/// on a missing key. Every switch is announced (`ModelFallback`), because
+/// "you are talking to a different model than you picked" must never be
+/// silent.
+///
+/// Deliberately does NOT move on after an abort — a user-cancelled turn stays
+/// cancelled, not silently retried on a different model behind their back.
 async fn call_provider_with_fallback(
     app: &tauri::AppHandle,
-    model: &ModelRef,
+    models: &[ModelRef],
     context: Arc<Context>,
     thinking_level: ThinkingLevel,
     emit: &EventSender,
     source_tag: &str,
     abort_flag: &Arc<std::sync::atomic::AtomicBool>,
-) -> Result<AgentMessage, String> {
-    let primary_result = call_provider_with_pool_rotation(
-        app,
-        model,
-        context.clone(),
-        thinking_level.clone(),
-        emit,
-        source_tag,
-        abort_flag,
-    ).await;
-
-    let succeeded = matches!(
-        &primary_result,
-        Ok(AgentMessage::Assistant { stop_reason, .. }) if stop_reason != "error"
-    );
-    if succeeded {
-        return primary_result;
+) -> (Result<AgentMessage, String>, usize) {
+    let mut last: Option<(Result<AgentMessage, String>, usize)> = None;
+    for (i, model) in models.iter().enumerate() {
+        if i > 0 {
+            if resolve_api_key(app, &model.provider).await.is_none() {
+                continue;
+            }
+            let (prev, prev_i) = last.as_ref().expect("a later model is only tried after an earlier one failed");
+            let reason = match prev {
+                Ok(AgentMessage::Assistant { error_message, .. }) => error_message.clone().unwrap_or_default(),
+                Err(e) => e.clone(),
+                _ => String::new(),
+            };
+            emit.emit(AgentEvent::ModelFallback {
+                from_provider: models[*prev_i].provider.clone(),
+                from_model: models[*prev_i].id.clone(),
+                to_provider: model.provider.clone(),
+                to_model: model.id.clone(),
+                reason: crate::ai::utils::truncate_error_text(&reason, 200),
+            });
+        }
+        let result =
+            call_provider_with_pool_rotation(app, model, context.clone(), thinking_level.clone(), emit, source_tag, abort_flag).await;
+        let succeeded = matches!(&result, Ok(AgentMessage::Assistant { stop_reason, .. }) if stop_reason != "error");
+        if succeeded || abort_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            return (result, i);
+        }
+        last = Some((result, i));
     }
-
-    // A user-cancelled call must not silently retry on the fallback model —
-    // the whole point of pressing stop is that nothing further runs.
-    if abort_flag.load(std::sync::atomic::Ordering::SeqCst) {
-        return primary_result;
-    }
-
-    let Some(fallback_model) = read_fallback_model().await else { return primary_result; };
-    if fallback_model.provider == model.provider && fallback_model.id == model.id {
-        return primary_result;
-    }
-
-    let reason = match &primary_result {
-        Ok(AgentMessage::Assistant { error_message, .. }) => error_message.clone().unwrap_or_default(),
-        Err(e) => e.clone(),
-        _ => return primary_result,
-    };
-
-    let fallback_api_key = resolve_api_key(app, &fallback_model.provider).await;
-    if fallback_api_key.is_none() {
-        // No usable credential for the fallback provider either — nothing
-        // more to try, surface the primary failure.
-        return primary_result;
-    }
-
-    emit.emit(AgentEvent::ModelFallback {
-        from_provider: model.provider.clone(),
-        from_model: model.id.clone(),
-        to_provider: fallback_model.provider.clone(),
-        to_model: fallback_model.id.clone(),
-        reason: crate::ai::utils::truncate_error_text(&reason, 200),
-    });
-
-    call_provider_with_retry(
-        app,
-        &fallback_model,
-        context,
-        fallback_api_key,
-        thinking_level,
-        emit,
-        source_tag,
-        abort_flag,
-    ).await
+    last.unwrap_or_else(|| (Err("No model is configured to answer.".to_string()), 0))
 }
 
 /// Emit a terminal error `AssistantMessage` directly on `ai-stream-token`,
@@ -1385,9 +1784,18 @@ async fn call_provider_stream_and_await(
                 // routing local models through the pre-migration Rust path
                 // sidesteps the whole class of browser-security-policy
                 // failures instead of trying to configure around them.
+                // Thinking Off used to change nothing for a local model: a
+                // hybrid-reasoning GGUF (Qwen3 and its kin) went on spending
+                // hundreds of tokens thinking before every tool call. Their
+                // chat templates read `enable_thinking`; templates without
+                // it ignore unknown variables, so this is safe to send to any
+                // model. Every other level leaves the template's default.
+                let chat_template_kwargs = matches!(thinking_level_clone, ThinkingLevel::Off)
+                    .then(|| serde_json::json!({ "enable_thinking": false }));
                 let options = crate::ai::api::openai_completions::OpenAICompletionsOptions {
                     max_tokens: Some(model_clone.max_tokens),
                     api_key: api_key_clone,
+                    chat_template_kwargs,
                     ..Default::default()
                 };
                 let _ = crate::ai::api::openai_completions::stream_chat_completions(
@@ -1833,35 +2241,32 @@ fn build_turn_memory_summary(messages: &[AgentMessage]) -> Option<String> {
     let mut final_text = String::new();
 
     for msg in messages {
-        match msg {
-            AgentMessage::Assistant { content, .. } => {
-                for c in content {
-                    if let crate::agent::types::MessageContent::ToolCall(tc) = c {
-                        if MUTATING_TOOLS.contains(&tc.name.as_str()) {
-                            did_real_work = true;
-                        }
-                        match tc.name.as_str() {
-                            "write" | "edit" | "apply_patch" => {
-                                if let Some(p) = tc.arguments.get("path").and_then(|v| v.as_str()) {
-                                    if !touched_files.iter().any(|f| f == p) {
-                                        touched_files.push(p.to_string());
-                                    }
-                                }
-                            }
-                            "bash" | "powershell" => {
-                                if let Some(cmd) = tc.arguments.get("command").and_then(|v| v.as_str()) {
-                                    commands.push(cmd.chars().take(80).collect());
-                                }
-                            }
-                            _ => {}
-                        }
-                    } else if let crate::agent::types::MessageContent::Text { text } = c {
-                        // Last assistant text block wins — later ones overwrite earlier.
-                        final_text = text.clone();
+        if let AgentMessage::Assistant { content, .. } = msg {
+            for c in content {
+                if let crate::agent::types::MessageContent::ToolCall(tc) = c {
+                    if MUTATING_TOOLS.contains(&tc.name.as_str()) {
+                        did_real_work = true;
                     }
+                    match tc.name.as_str() {
+                        "write" | "edit" | "apply_patch" => {
+                            if let Some(p) = tc.arguments.get("path").and_then(|v| v.as_str()) {
+                                if !touched_files.iter().any(|f| f == p) {
+                                    touched_files.push(p.to_string());
+                                }
+                            }
+                        }
+                        "bash" | "powershell" => {
+                            if let Some(cmd) = tc.arguments.get("command").and_then(|v| v.as_str()) {
+                                commands.push(cmd.chars().take(80).collect());
+                            }
+                        }
+                        _ => {}
+                    }
+                } else if let crate::agent::types::MessageContent::Text { text } = c {
+                    // Last assistant text block wins — later ones overwrite earlier.
+                    final_text = text.clone();
                 }
             }
-            _ => {}
         }
     }
 
@@ -1928,10 +2333,8 @@ fn estimate_context_json_size(ctx: &Context) -> usize {
             &msg.model_id,
             &msg.stop_reason,
             &msg.error_message,
-        ] {
-            if let Some(s) = s {
-                total += s.len();
-            }
+        ].into_iter().flatten() {
+            total += s.len();
         }
         for block in &msg.content_blocks {
             total += estimate_content_block_raw_str_len(block);
@@ -1964,10 +2367,8 @@ fn estimate_messages_json_size(messages: &[Message]) -> usize {
             &msg.model_id,
             &msg.stop_reason,
             &msg.error_message,
-        ] {
-            if let Some(s) = s {
-                total += s.len();
-            }
+        ].into_iter().flatten() {
+            total += s.len();
         }
         for block in &msg.content_blocks {
             total += estimate_content_block_raw_str_len(block);
@@ -2013,7 +2414,7 @@ fn estimate_content_block_raw_str_len(block: &AiMessageContent) -> usize {
             tool_call_id.len()
                 + content
                     .iter()
-                    .map(|c| estimate_content_block_raw_str_len(c))
+                    .map(estimate_content_block_raw_str_len)
                     .sum::<usize>()
         }
     }

@@ -1,6 +1,5 @@
 import { useRef } from 'react'
-import IconButton from '@mui/material/IconButton'
-import Tooltip from '@mui/material/Tooltip'
+import { IconButton, Tooltip } from '../../../ui'
 import { PaperclipLinear } from '../../../icons'
 import type { ImageAttachment, FileAttachment } from '../lib/types'
 import { buildAttachments } from '../lib/attachments'

@@ -56,6 +56,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
         name: "Browse and interact with the live web",
         when: "Anything involving a real website: searching, reading a page, following links, filling a form, clicking through a flow, or checking how a page behaves.",
         tools: &[
+            "browser_start",
             "web_search",
             "web_fetch",
             "web_preview",
@@ -67,18 +68,28 @@ pub const GROUPS: &[CapabilityGroup] = &[
             "browser_evaluate",
             "browser_read_console",
             "browser_read_network",
+            "browser_session_status",
+            "browser_import_cookies",
         ],
         how: Some(
-            "All of these run through camoufox — a real, local Firefox-based browser — so treat browsing as something you \
-             genuinely do, not something you approximate. It starts itself on first use; you never need to ask the user to \
-             launch it, and 'the browser isn't running' is not a reason to refuse. \
+            "START: call browser_start first when a task involves the browser. The other tools do start it themselves, \
+             but a cold start can take minutes (npm install + a ~300MB engine download) and folded into a web_preview \
+             call that reads as a hang. It also reports which sites you are already signed in to. \
+             All of these run through camoufox — a real, local Firefox-based browser — so treat browsing as something you \
+             genuinely do, not something you approximate. You never need to ask the user to launch it, and 'the browser \
+             isn't running' is not a reason to refuse. \
              To SEARCH: web_search (it drives that same real browser, so it works on sites that block plain scrapers). \
              To READ a page you already have the URL for: web_fetch. \
-             To actually USE a site — click, type, log in, work through a flow — web_preview(url) opens it, \
+             To actually USE a site — click, type, work through a flow — web_preview(url) opens it, \
              then browser_snapshot returns the page's structure with an element ref (e1, e2, ...) for everything interactive, \
              and browser_click/browser_type act on those refs. Re-run browser_snapshot after anything that changes the page: \
              refs from a stale snapshot can point at the wrong element. If a snapshot reports it was truncated, call it again \
              with the offset it gives you instead of assuming the rest of the page isn't there. \
+             LOGGED-OUT SITES: the browsing session persists across restarts, so check browser_session_status before assuming \
+             you need access — you may already be signed in from a previous day. If you genuinely are not, ask the user (with \
+             question) to export that site's cookies from the browser they are already signed in with, then import them with \
+             browser_import_cookies. Never type a password into a page, and never create an account: the user authenticates \
+             where their password manager and 2FA already are, and hands over the resulting session only. \
              Read the `camoufox-browser` skill before your first browser_* call.",
         ),
         triggers: &["google", "search the web", "search for", "look up", "look it up", "browse", "website", "web site", "web page", "webpage", "the internet", "online", "http://", "https://", ".com", ".org", ".io", "open a site", "go to "],
@@ -86,15 +97,17 @@ pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Control this computer",
         when: "Driving a desktop application, or anything that needs the real mouse, keyboard, or screen rather than a browser.",
-        tools: &["computer"],
+        tools: &["dip"],
         how: Some(
             "One tool with an `action`. On Windows, prefer structured mode over guessing pixels: \
-             action=list_windows to see what's open, action=focus_window to bring one forward \
-             (action=launch_app first if it isn't running), action=snapshot to read that window's real UI tree \
-             with an id for each element, then action=interact to click or type into one by id. \
+             action=list_windows to see what's open, then action=snapshot WITH that window's id to read its \
+             real UI tree with an id for each element, then action=interact to click or type into one by id. \
+             Always pass the window id to snapshot — without it snapshot reads whatever currently has focus, \
+             which is normally Vivianne itself rather than the app you mean. \
+             action=launch_app first if the app isn't running. \
              Re-snapshot after each interact — ids only last until the next snapshot. \
              Fall back to action=screenshot plus coordinate clicks only when snapshot finds nothing \
-             (canvas-drawn apps and games). Read the `computer-use` skill before your first call.",
+             (canvas-drawn apps and games). Read the `dip` skill before your first call.",
         ),
         triggers: &["screenshot", "screen shot", "my screen", "click on", "desktop", "open the app", "launch ", "window", "type into", "gui"],
     },
@@ -119,11 +132,11 @@ pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Produce documents and images",
         when: "The user wants an actual FILE they can open or share — a report, spreadsheet, deck, or picture — rather than text in the chat.",
-        tools: &["create_document", "generate_image"],
+        tools: &["create_document", "inspect_document", "edit_document", "generate_image"],
         how: Some(
-            "create_document writes a real pdf/docx/xlsx/pptx to disk. pdf and docx share a `blocks`              vocabulary (heading/paragraph/bullets/table); xlsx takes `sheets` with rows, and numbers              stay numeric so the user can sum them; pptx takes `slides` of title + bullets.              generate_image produces a picture. Write into the workspace and tell the user the path.",
+            "create_document writes a NEW pdf/docx/xlsx/pptx to disk. pdf and docx share a `blocks`              vocabulary (heading/paragraph/bullets/table); xlsx takes `sheets` with rows, and numbers              stay numeric so the user can sum them; pptx takes `slides` of title + bullets.              If the file ALREADY exists, do not regenerate it — that throws away every change the user              made by hand. Call inspect_document to list its parts, then edit_document to replace one              by id, which leaves styles, formulas and images untouched. generate_image produces a              picture. Write into the workspace and tell the user the path.",
         ),
-        triggers: &["make a report", "spreadsheet", "excel", "word document", "powerpoint", "slide deck", "presentation", "pdf", "docx", "xlsx", "pptx", "generate an image", "draw me"],
+        triggers: &["make a report", "spreadsheet", "excel", "word document", "powerpoint", "slide deck", "presentation", "pdf", "docx", "xlsx", "pptx", "generate an image", "draw me", "edit the document", "change the doc", "update the spreadsheet", "fix the slide"],
     },
     CapabilityGroup {
         name: "Run commands",
@@ -149,7 +162,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Delegate to subagents",
         when: "A self-contained chunk of work that would otherwise flood your own context — a broad search, an independent investigation.",
-        tools: &["task", "list_subagent_profiles", "task_output", "kill_task"],
+        tools: &["task", "list_subagent_profiles", "task_output", "kill_task", "hire_agent"],
         how: Some(
             "list_subagent_profiles first: pointing at an existing profile costs far fewer tokens than writing a full prompt. \
              Runs in the background by default — keep working while it does, then collect with task_output. \
@@ -160,9 +173,9 @@ pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Plan and track work",
         when: "A task with several steps, so progress is visible rather than held in your head.",
-        tools: &["todo_write", "enter_plan_mode", "exit_plan_mode", "present_plan"],
+        tools: &["todo_write", "present_plan", "submit_plan", "assign_plan_steps", "team_run", "message_agent"],
         how: None,
-        triggers: &[],
+        triggers: &["plan ", "make a plan", "step by step", "break this down", "roadmap", "keep track", "todo", "checklist", "what's left", "progress"],
     },
     CapabilityGroup {
         name: "Remember across sessions",
@@ -181,14 +194,14 @@ pub const GROUPS: &[CapabilityGroup] = &[
         when: "Surfacing something visually instead of describing it in prose.",
         tools: &["set_panel", "present_snippet", "generate_image"],
         how: None,
-        triggers: &[],
+        triggers: &["show me", "open the panel", "display", "preview", "snippet", "example of"],
     },
     CapabilityGroup {
         name: "Ask the user",
         when: "A decision only they can make, or an action that needs their go-ahead.",
         tools: &["question", "confirm_action"],
         how: Some("Ask when genuinely blocked on their answer — not to seek approval for ordinary work you were already asked to do."),
-        triggers: &[],
+        triggers: &["ask me", "check with me", "confirm", "are you sure", "which one", "should i"],
     },
     CapabilityGroup {
         name: "Schedule and track goals",
@@ -203,12 +216,58 @@ pub const GROUPS: &[CapabilityGroup] = &[
             "update_goal",
         ],
         how: None,
-        triggers: &[],
+        triggers: &["every day", "every week", "schedule", "remind me", "recurring", "automation", "goal", "objective", "keep working toward"],
+    },
+    CapabilityGroup {
+        name: "GitHub",
+        when: "Anything on GitHub: issues, pull requests, reviews, CI/Actions runs, releases — for this repository or another.",
+        tools: &["github", "github_act", "github_api"],
+        how: Some(
+            "Use these rather than running gh or curl: they are faster and return exactly what you need. Read with github \
+             (pr gives files, reviews and checks in one call; run gives the failing jobs' logs). Change things with github_act — \
+             create_pr pushes the current branch for you. The repository defaults to the workspace's origin remote. \
+             Before merging, check the PR's checks and reviews.",
+        ),
+        triggers: &["github", "pull request", " pr ", "pr #", "issue #", "ci ", "workflow", "actions run", "release", "merge", "review"],
+    },
+    CapabilityGroup {
+        name: "Working with a partner",
+        when: "A multiplayer project: someone else and their agent work on the same code.",
+        tools: &["pair_activity"],
+        how: Some(
+            "What your partner's agent did arrives on its own before each of your runs; pair_activity has the full log \
+             (filter by file to see who last touched it). Don't undo their changes without asking your user.",
+        ),
+        triggers: &["partner", "pair", "teammate", "they changed", "who changed"],
+    },
+    CapabilityGroup {
+        name: "Mathematics",
+        when: "Any calculation beyond trivial arithmetic — algebra, calculus, equations, linear algebra, statistics, optimisation, differential equations, modelling, or a plot.",
+        tools: &["math"],
+        how: Some(
+            "Compute with math rather than in your head, and show the result it gave. Prefer an exact symbolic answer, \
+             then its numeric value. Write mathematics in your reply as LaTeX — $...$ inline, $$...$$ on its own lines for \
+             display — it is rendered. For a model, state its assumptions and variables before the result.",
+        ),
+        triggers: &[
+            "solve", "equation", "integral", "integrate", "derivative", "differentiate", "calculate", "compute", "prove",
+            "matrix", "eigen", "probability", "statistic", "regression", "optimi", "simulate", "model the", "plot", "graph of",
+            "latex", "limit of", "series",
+        ],
+    },
+    CapabilityGroup {
+        name: "Your tools",
+        when: "A task needs something no tool does, and it will likely come up again — or the set of tools you've written needs tidying.",
+        tools: &["create_tool", "list_custom_tools", "delete_tool"],
+        how: Some(
+            "Write it once with create_tool (Python, `def run(**args)`, always with test_args) and it becomes a tool for every model              from your next step. Reuse beats rewriting: check your tool list first, and improve an existing tool with replace: true              rather than adding a near-duplicate. Tools you wrote are marked [Your tool].",
+        ),
+        triggers: &["make a tool", "create a tool", "write a tool", "custom tool", "reusable", "shred"],
     },
     CapabilityGroup {
         name: "Other",
         when: "Occasional needs.",
-        tools: &["run_script", "connect_mcp_server", "list_tools", "get_current_time", "sleep"],
+        tools: &["run_script", "connect_mcp_server", "list_tools", "load_tools", "get_current_time", "sleep"],
         how: Some(
             "list_tools returns your full live tool list with descriptions — call it if you are ever unsure whether \
              you have some capability, instead of telling the user you lack it.",
@@ -253,10 +312,44 @@ pub fn capability_section(available: &HashSet<String>) -> String {
     if !extra.is_empty() {
         extra.sort_unstable();
         out.push_str("\n## Custom and connected tools\n");
-        out.push_str("When: These come from your playbooks and connected MCP servers — check their descriptions in your tool list.\n");
+        out.push_str("When: These come from tools you wrote, your playbooks and connected MCP servers — check their descriptions in your tool list.\n");
         out.push_str(&format!("Tools: {}\n", extra.join(", ")));
     }
 
+    out
+}
+
+/// The capability section for a model on the lean tool profile (see
+/// `agent::tool_profile`). Every group is still named — a capability that
+/// isn't loaded must stay one `load_tools` call away, not become invisible —
+/// but as one line each, with the `how` kept only for the groups whose tools
+/// are always loaded. Roughly a third of `capability_section`'s size, and
+/// deliberately independent of which groups are loaded right now, so the
+/// system prompt doesn't change (and invalidate the prompt cache) when the
+/// tool list grows.
+pub fn capability_section_lean(available: &HashSet<String>) -> String {
+    let core: HashSet<&str> = crate::agent::tool_profile::CORE_TOOLS.iter().copied().collect();
+    let mut out = String::from(
+        "Every tool below is real and yours. To keep you fast, only the core ones start in your function list. \
+         If you need one that isn't there, call load_tools with its group — e.g. load_tools({\"groups\": [\"GitHub\"]}) — \
+         and it is callable on your next step. Never tell the user you lack a capability listed here.\n",
+    );
+    for group in GROUPS {
+        let present: Vec<&str> = group.tools.iter().copied().filter(|t| available.contains(*t)).collect();
+        if present.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("\n## {} — {}\nTools: {}\n", group.name, group.when, present.join(", ")));
+        if let Some(how) = group.how.filter(|_| present.iter().all(|t| core.contains(t))) {
+            out.push_str(&format!("How: {how}\n"));
+        }
+    }
+    let grouped: HashSet<&str> = GROUPS.iter().flat_map(|g| g.tools.iter().copied()).collect();
+    let mut extra: Vec<&str> = available.iter().map(String::as_str).filter(|t| !grouped.contains(t)).collect();
+    if !extra.is_empty() {
+        extra.sort_unstable();
+        out.push_str(&format!("\n## Custom and connected tools — load with group \"custom\"\nTools: {}\n", extra.join(", ")));
+    }
     out
 }
 

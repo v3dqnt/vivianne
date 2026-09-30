@@ -1,12 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import IconButton from '@mui/material/IconButton'
-import Dialog from '@mui/material/Dialog'
-import Tooltip from '@mui/material/Tooltip'
-import CircularProgress from '@mui/material/CircularProgress'
-import InputBase from '@mui/material/InputBase'
+import { Box, Stack, Typography, IconButton, Dialog, Tooltip, CircularProgress, InputBase, useTheme } from '../../../ui'
 import {
   FolderLinear,
   DocumentLinear,
@@ -17,9 +10,12 @@ import {
   SearchNormalLinear,
 } from '../../../icons'
 import { call } from '../../../ipc'
-import { useTheme } from '@mui/material/styles'
 import { useActiveWorkspace } from '../useActiveWorkspace'
 import { FileContent } from './FilePreview'
+import { useWorkspace } from '../../workspace/layout'
+import { usePanelStore } from '../store/panelStore'
+import { isDocument } from '../../office/lib/docs'
+import { useIdeStore } from '../../ide/store/ideStore'
 
 interface TreeNode {
   name: string
@@ -101,6 +97,14 @@ function filterTree(nodes: TreeNode[], q: string): TreeNode[] {
  * workspace state. */
 export function WorkspaceTree() {
   const theme = useTheme()
+  // With an Editor panel open, this tree is the editor's file tree, so a
+  // click opens the file there instead of expanding a read-only preview under
+  // the row. Two behaviours rather than two components: the tree, its filter
+  // and its multi-root handling are identical either way, and a second copy
+  // would drift.
+  const ideLayout = useWorkspace((s) => s.open.includes('ide'))
+  const openInEditor = useIdeStore((s) => s.openFile)
+  const editingPath = useIdeStore((s) => s.activePath)
   const folders = useActiveWorkspace()
   const [trees, setTrees] = useState<RootTree[] | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -171,12 +175,26 @@ export function WorkspaceTree() {
       const isDir = node.type === 'directory'
       // While filtering, directories default to open so matches deep in the
       // tree are actually visible without hand-expanding every level.
-      const isOpen = isDir ? (q ? true : expanded.has(node.path)) : openFile === node.path
+      const isOpen = isDir
+        ? q
+          ? true
+          : expanded.has(node.path)
+        : ideLayout
+          ? editingPath === node.path
+          : openFile === node.path
       return (
         <Box key={node.path}>
           <Stack
             direction="row"
-            onClick={() => (isDir ? toggleDir(node.path) : setOpenFile(isOpen ? null : node.path))}
+            onClick={() =>
+              isDir
+                ? toggleDir(node.path)
+                : isDocument(node.path)
+                  ? usePanelStore.getState().openDocument(node.path)
+                  : ideLayout
+                    ? void openInEditor(node.path)
+                    : setOpenFile(isOpen ? null : node.path)
+            }
             sx={{
               alignItems: 'center',
               gap: 0.625,
@@ -272,7 +290,11 @@ export function WorkspaceTree() {
             )}
           </Stack>
 
-          {!isDir && isOpen && (
+          {/* Not in the IDE layout — there the file opens in the center
+              editor, and an inline copy under the row would be a second,
+              read-only view of the same file fighting the one you are
+              actually editing. */}
+          {!isDir && isOpen && !ideLayout && (
             <Box
               sx={{
                 // Seamless, not a card: no fill, no radius, no dark code
@@ -397,7 +419,7 @@ export function WorkspaceTree() {
                                 fontWeight: 700,
                                 textTransform: 'uppercase',
                                 letterSpacing: 0.4,
-                                fontSize: '0.625rem',
+                                fontSize: '0.6875rem',
                                 color: 'text.secondary',
                               }}
                             >
@@ -429,7 +451,7 @@ export function WorkspaceTree() {
         <Stack sx={{ height: '100%', minHeight: 0 }}>
           <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 2, py: 1.25, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
             <DocumentLinear size={14} color="currentColor" />
-            <Typography variant="body2" sx={{ flex: 1, minWidth: 0, fontFamily: '"JetBrains Mono", ui-monospace, monospace' }} noWrap title={fullscreen ?? ''}>
+            <Typography variant="body2" sx={{ flex: 1, minWidth: 0, fontFamily: '"Geist Mono", ui-monospace, monospace' }} noWrap title={fullscreen ?? ''}>
               {fullscreen}
             </Typography>
             <IconButton size="small" onClick={() => setFullscreen(null)}>

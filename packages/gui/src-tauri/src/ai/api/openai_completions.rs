@@ -44,6 +44,8 @@ pub struct OpenAICompletionsOptions {
     pub max_retries: Option<u32>,
     pub reasoning_effort: Option<String>,
     pub tool_choice: Option<Value>,
+    /// Passed through as `chat_template_kwargs` (llama.cpp server only).
+    pub chat_template_kwargs: Option<Value>,
 }
 
 // ─── Message building ────────────────────────────────────────────────────────
@@ -293,6 +295,7 @@ fn build_request_body(
         mistral_reasoning_effort: None,
         max_tokens_camel: None,
         tool_choice_camel: None,
+        chat_template_kwargs: options.chat_template_kwargs.clone(),
     }
 }
 
@@ -408,6 +411,26 @@ pub async fn stream_chat_completions(
         reqwest::header::CONTENT_TYPE,
         reqwest::header::HeaderValue::from_static("application/json"),
     );
+    // OpenRouter identifies the CALLING APPLICATION by these two headers —
+    // they're how a request gets attributed to an app in its `/apps`
+    // directory and its per-app analytics/rankings. Without them, OpenRouter
+    // sees an anonymous API call with no known app behind it.
+    //
+    // That's exactly what breaks a model gated as "only available on agentic
+    // harnesses" (e.g. thinkingmachines/inkling:free): OpenRouter's gate for
+    // that restriction checks whether the request carries a recognized app
+    // identity, not just whether `tools` is present in the body. Sending
+    // these unconditionally is harmless for every other provider and every
+    // other model — a base_url that isn't OpenRouter's API simply ignores
+    // unknown headers — so there's no need to gate this on `provider`.
+    header_map.insert(
+        reqwest::header::HeaderName::from_static("http-referer"),
+        reqwest::header::HeaderValue::from_static("https://vivianne.app"),
+    );
+    header_map.insert(
+        reqwest::header::HeaderName::from_static("x-title"),
+        reqwest::header::HeaderValue::from_static("Vivianne"),
+    );
     if let Some(ref custom) = options.headers {
         for (k, v) in custom {
             if let (Ok(name), Ok(val)) = (
@@ -512,7 +535,13 @@ pub async fn stream_chat_completions(
     };
 
     let mut byte_stream = response.bytes_stream();
-    let mut buffer = String::new();
+    // Bytes, not a String: a network chunk can end in the middle of a
+    // multi-byte UTF-8 character, and decoding each chunk on its own dropped
+    // any such chunk whole — every token in it, including tool-call JSON, for
+    // any reply with non-ASCII text in it. Lines are only decoded once
+    // complete, and a newline byte can never occur inside a multi-byte
+    // sequence, so splitting on it first is safe.
+    let mut buffer: Vec<u8> = Vec::new();
 
     'outer: loop {
         match byte_stream.next().await {
@@ -523,14 +552,13 @@ pub async fn stream_chat_completions(
                 break;
             }
             Some(Ok(chunk)) => {
-                if let Ok(text) = std::str::from_utf8(&chunk) {
-                    buffer.push_str(text);
-                }
+                buffer.extend_from_slice(&chunk);
 
                 // Process complete lines
-                while let Some(newline_pos) = buffer.find('\n') {
-                    let line = buffer[..newline_pos].to_string();
-                    buffer = buffer[newline_pos + 1..].to_string();
+                let mut consumed = 0;
+                while let Some(offset) = buffer[consumed..].iter().position(|b| *b == b'\n') {
+                    let line = String::from_utf8_lossy(&buffer[consumed..consumed + offset]).into_owned();
+                    consumed += offset + 1;
 
                     if let Some(data) = parse_sse_data(&line) {
                         match serde_json::from_str::<ChatCompletionChunk>(data) {
@@ -560,6 +588,9 @@ pub async fn stream_chat_completions(
                         }
                     }
                 }
+                // One drain per chunk rather than a copy of the remainder per
+                // line, which made a long stream quadratic in its length.
+                buffer.drain(..consumed);
             }
         }
     }
@@ -704,7 +735,7 @@ fn process_chunk(
                     let partial = state
                         .tool_partial_args
                         .entry(idx)
-                        .or_insert_with(String::new);
+                        .or_default();
                     partial.push_str(args);
 
                     // Try to parse partial JSON

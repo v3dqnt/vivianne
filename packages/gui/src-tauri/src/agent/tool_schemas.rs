@@ -3,6 +3,72 @@
 //! schemas, the execution loop, and per-tool handlers) so the two concerns
 //! don't have to be scrolled through together.
 
+/// Every top-level tool name a playbook must NOT be allowed to take:
+/// every built-in tool's own name, plus `"computer"` — not itself a schema
+/// entry, but a name `agent::tool_exec` still dispatches as a silent alias
+/// for `dip` (see its match arm), so it needs to be off-limits too.
+///
+/// `coding_agent::playbooks::load_playbooks` is the ONE place both the
+/// schema list (`agent::tool_exec::get_agent_tool_definitions`) and the
+/// `Tool` registry (`coding_agent::tool_exec::create_coding_tools`) source
+/// playbooks from, so filtering there — rather than in each caller — closes
+/// both problems a same-named playbook would otherwise cause with one check:
+/// a literal duplicate `"name"` entry in the JSON array sent to the model,
+/// and a playbook that can never actually run because the registry lookup
+/// returns the built-in with the same name first and stops looking.
+pub(crate) fn reserved_tool_names() -> std::collections::HashSet<String> {
+    let mut names: std::collections::HashSet<String> =
+        static_tool_definitions().iter().filter_map(|d| d.get("name").and_then(|v| v.as_str())).map(String::from).collect();
+    names.insert("computer".to_string());
+    names
+}
+
+/// The `powershell` tool's description, which has to tell the truth about the
+/// host it is running on.
+///
+/// Windows always has `powershell.exe`. Everywhere else the executor shells
+/// out to `pwsh` (PowerShell Core), which is an optional install almost nobody
+/// has on a Mac — so advertising it as a peer of `bash` there just invites the
+/// model to spend a turn discovering it does not exist. When it IS installed,
+/// it works fine and is described normally; the probe is cached for the
+/// process, since a shell does not appear or vanish mid-session.
+fn powershell_description() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "Execute a PowerShell command. Preferred on Windows for shell operations. Streams live output to the GUI as it runs, same as bash."
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::sync::OnceLock;
+        static AVAILABLE: OnceLock<bool> = OnceLock::new();
+        if *AVAILABLE.get_or_init(|| which::which("pwsh").is_ok()) {
+            "Execute a PowerShell (Core) command via `pwsh`. This is not Windows, so `bash` is the native shell here and is what you should reach for by default; use this only when a task genuinely calls for PowerShell. Streams live output to the GUI as it runs."
+        } else {
+            "UNAVAILABLE on this machine: PowerShell Core (`pwsh`) is not installed and this is not Windows. Use `bash` instead — it is the native shell here. Calling this tool will fail."
+        }
+    }
+}
+
+/// Documents the narration cursor, which is not control and is easy to
+/// mistake for it. Appended on every platform: it is only a window.
+const NARRATION_DOC: &str = "
+
+SHOWING THE USER (point_at / highlight / clear_pointer) — draws a second, decorative cursor. It does NOT move the real mouse, click, or take focus. point_at{x,y,text} marks a point with a caption, highlight{x,y,width,height,text} rings a region, clear_pointer removes it. Use it when explaining rather than doing.";
+
+/// The Windows-only half of the `dip` description — structured mode.
+#[cfg(target_os = "windows")]
+const STRUCTURED_MODE_DOC: &str = "
+
+STRUCTURED MODE — Windows. PREFER THIS for any normal app: it is faster and far more reliable than pixels.
+- list_windows: every open window, front to back, with ids.
+- launch_app{command, args?}: start an app, document, folder or URI (notepad, calc, a file path, ms-settings:display, https://...). Waits for its window and makes it the target — you can type into it straight away.
+- focus_window{id}: bring a window forward and make it the target. window_action{id, window_state}: minimize/maximize/restore/close.
+- snapshot{id?}: the window's UI as an indented list, e.g. `[12] Edit \"File name\" = \"report.txt\" *focused`, read in one fast pass. Without an id it reads the target window.
+- find{query}: only the elements matching a name, value or type — the quick way to one element in a big window.
+- interact{id, element_action, value?}: act on an element by id. element_action: click, double_click, right_click, invoke, focus, set_value (REPLACES the field's text), toggle, select, expand, collapse, scroll_into_view.
+- read_text{id?}: the full text of a document, field or the whole window.
+Ids last until the next snapshot/find; after anything that changes the UI, snapshot again. Use pixel mode only for what snapshot can't see (games, canvas, custom-drawn UI).";
+
 #[allow(unused_mut)] // `mut` on `computer_actions` only needed on Windows, extended below
 pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
     // The `computer` tool's action list — cross-platform "pixel mode" plus,
@@ -11,11 +77,26 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
     // Vec so the schema's `enum` only ever lists actions that actually
     // dispatch on this platform — see `computer::execute_computer_tool`.
     let mut computer_actions = vec![
-        "screenshot", "mouse_move", "left_click", "left_click_drag", "right_click",
-        "middle_click", "double_click", "type", "key", "cursor_position",
+        "screenshot", "zoom", "mouse_move", "left_click", "left_click_drag", "right_click",
+        "middle_click", "double_click", "triple_click", "scroll", "type", "key", "cursor_position", "wait",
+        // Narration, not control: these draw a marker on screen and move
+        // nothing. Cross-platform, because they are only a Tauri window.
+        "point_at", "highlight", "clear_pointer",
     ];
     #[cfg(target_os = "windows")]
-    computer_actions.extend(["snapshot", "interact", "list_windows", "focus_window", "window_action", "launch_app"]);
+    computer_actions.extend([
+        "snapshot", "find", "read_text", "interact", "list_windows", "focus_window", "window_action", "launch_app",
+        "hold_key", "key_down", "key_up",
+    ]);
+
+    // The description has to be gated the same way the `enum` above is. It
+    // was not, so on macOS and Linux the model was told at length to prefer
+    // structured mode, then rejected for calling an action the schema does
+    // not list — an unforced error loop on every non-Windows host.
+    #[cfg(target_os = "windows")]
+    let structured_mode = STRUCTURED_MODE_DOC;
+    #[cfg(not(target_os = "windows"))]
+    let structured_mode = "\n\nSTRUCTURED MODE (reading an app's real UI tree instead of guessing pixels) is Windows-only and unavailable on this machine, so pixel mode is the only option here. Take a screenshot, act on what you see in it, then screenshot again to confirm the action landed.";
 
     let mut defs = vec![
         serde_json::json!({
@@ -108,38 +189,83 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
             }
         }),
         serde_json::json!({
-            "name": "computer",
-            "description": "Control the computer: mouse, keyboard, and screen. Read the 'computer-use' skill before your first call if you haven't already — it has the full decision process and worked examples. Two modes, pick per situation:\n\nPIXEL MODE (screenshot / mouse_move / left_click / left_click_drag / right_click / middle_click / double_click / type / key / cursor_position) — cross-platform. Take a screenshot first to see what's on screen, then act on pixel coordinates read off it. left_click/right_click/double_click accept an optional 'coordinate' to move-then-click in one call. Works on anything, including canvas-rendered apps and games, but coordinates are a guess you verify visually with another screenshot.\n\nSTRUCTURED MODE (snapshot / interact / list_windows / focus_window / window_action / launch_app) — Windows only, PREFERRED for real application UI over guessing pixels. snapshot reads the focused window's actual UI Automation tree (buttons, fields, text, each with a reliable numeric id) and briefly highlights every found element on screen. interact then acts on one element by id — the real cursor visibly moves there first, then clicks/types, exactly like a person would. list_windows/focus_window/window_action manage which window is in front (snapshot/interact only ever act on whichever window is currently focused); launch_app starts a new process. Typical flow: list_windows -> focus_window (or launch_app if it isn't open yet) -> snapshot -> interact -> snapshot again (ids only last one snapshot call, so re-snapshot after anything that could have changed the UI). Fall back to pixel mode only when snapshot finds nothing useful (canvas/game UI).",
+            "name": "dip",
+            "description": "Control the computer: apps, windows, mouse, keyboard and screen.\n\nPIXEL MODE — works on anything. screenshot{window?, monitor?} returns a scaled image; every coordinate you pass afterwards is in THAT image's pixels and is mapped to the screen for you. zoom{region:[x0,y0,x1,y1]} gives a closer look to read small text. Clicks: left_click / right_click / middle_click / double_click / triple_click with optional coordinate; mouse_move; left_click_drag{coordinate, start_coordinate?}; scroll{direction, amount, coordinate?}. Keyboard: type{text} (any text, emoji and newlines included); key{text:\"ctrl+s\", repeat?} — names like enter, tab, esc, win, alt, shift, f1-f24, up/down/left/right, home, end, pagedown, delete, volume_up, or a single character; hold_key{text, duration}; key_down / key_up. Typing and keys go to the TARGET window (the app you last launched, focused, snapshotted or clicked in) even while Vivianne is in front — you never type into the chat by accident. wait{duration} pauses for loading. cursor_position.".to_string() + structured_mode + NARRATION_DOC,
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "enum": computer_actions,
-                        "description": "Which action to perform — see the tool description for the full pixel-mode / structured-mode split."
+                        "description": "Which action to perform."
                     },
                     "coordinate": {
                         "type": "array",
                         "items": { "type": "number" },
-                        "description": "X,Y screen coordinates. Required for mouse_move and left_click_drag; optional for left_click/right_click/double_click (moves the cursor there first, then clicks)."
+                        "description": "[x, y] in the last screenshot's pixels (screen pixels if you haven't taken one)."
                     },
-                    "text": { "type": "string", "description": "Text to type (action=type), or a key combination such as 'Control+C' (action=key)." },
-                    "id": { "type": "number", "description": "Element id from the last snapshot (action=interact), or window id from the last list_windows (action=focus_window, action=window_action)." },
+                    "start_coordinate": { "type": "array", "items": { "type": "number" }, "description": "left_click_drag: where to start (default: the current cursor)." },
+                    "text": { "type": "string", "description": "type: the text. key / hold_key / key_down / key_up: a key or combination like \"ctrl+shift+t\". point_at / highlight: a caption." },
+                    "repeat": { "type": "number", "description": "key: press it this many times (e.g. down x5)." },
+                    "duration": { "type": "number", "description": "Seconds — wait, or how long hold_key holds." },
+                    "direction": { "type": "string", "enum": ["up", "down", "left", "right"], "description": "scroll direction." },
+                    "amount": { "type": "number", "description": "scroll: wheel notches (default 3)." },
+                    "region": { "type": "array", "items": { "type": "number" }, "description": "zoom: [x0, y0, x1, y1] in the last screenshot's pixels." },
+                    "window": { "type": "boolean", "description": "screenshot: capture just the target window instead of the whole screen." },
+                    "monitor": { "type": "number", "description": "screenshot: which monitor (0-based); default is the one the target window is on." },
+                    "id": { "type": "number", "description": "interact / read_text: an element id from the last snapshot or find. snapshot / find / focus_window / window_action: a window id from list_windows." },
+                    "query": { "type": "string", "description": "find: part of the element's name, text or type." },
                     "element_action": {
                         "type": "string",
-                        "enum": ["click", "focus", "set_value", "scroll_into_view"],
-                        "description": "What to do with the element — required for action=interact."
+                        "enum": ["click", "double_click", "right_click", "invoke", "focus", "set_value", "toggle", "select", "expand", "collapse", "scroll_into_view"],
+                        "description": "interact: what to do (default click)."
                     },
+                    "value": { "type": "string", "description": "interact with set_value: the text the field should contain." },
                     "window_state": {
                         "type": "string",
                         "enum": ["minimize", "maximize", "restore", "close"],
-                        "description": "Required for action=window_action."
+                        "description": "window_action: what to do to the window."
                     },
-                    "value": { "type": "string", "description": "Text to type into the element — required when action=interact and element_action=set_value." },
-                    "command": { "type": "string", "description": "Executable name (resolved via PATH) or full path — required for action=launch_app." },
-                    "args": { "type": "array", "items": { "type": "string" }, "description": "Command-line arguments, if any — for action=launch_app." }
+                    "command": { "type": "string", "description": "launch_app: an app name, path, document, folder or URI." },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "launch_app: arguments." },
+                    "highlight": { "type": "boolean", "description": "snapshot: also ring the window on screen for the user." },
+                    "x": { "type": "number", "description": "point_at / highlight: x in screenshot pixels." },
+                    "y": { "type": "number", "description": "point_at / highlight: y in screenshot pixels." },
+                    "width": { "type": "number", "description": "highlight: width." },
+                    "height": { "type": "number", "description": "highlight: height." }
                 },
                 "required": ["action"]
+            }
+        }),
+        serde_json::json!({
+            "name": "inspect_document",
+            "description": "List the addressable parts of an existing PDF, Word, Excel or PowerPoint file, each with a stable id you can pass to edit_document. Call this FIRST whenever you need to change part of a document that already exists — the ids are positional, so guessing one edits the wrong thing. Part ids: docx \"p:3\" (4th paragraph), xlsx \"Sheet1!B4\" (one cell), pptx \"slide:2:1\" (2nd text box on slide 2), pdf \"page:5\". Each part reports whether it is editable — PDF pages are listed so you can read them but their text cannot be edited in place.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to the .pdf/.docx/.xlsx/.pptx file" }
+                },
+                "required": ["path"]
+            }
+        }),
+        serde_json::json!({
+            "name": "edit_document",
+            "description": "Change one part of an EXISTING document in place, leaving the rest of the file byte-identical — styles, formulas, charts and images all survive. Use this instead of regenerating with create_document whenever the file already exists, because regenerating discards every change the user made by hand.
+
+Always call inspect_document first to get the part id. Pass 'part' plus the replacement 'text'.
+
+PDF: text CANNOT be edited — a PDF stores positioned glyphs rather than sentences, so there is nothing to rewrite. Page deletion works via 'delete_pages'; for new wording, regenerate with create_document.
+
+XLSX edits existing cells only; use create_document to build a sheet with new ones.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to the existing document" },
+                    "part": { "type": "string", "description": "Part id from inspect_document, e.g. \"p:3\", \"Sheet1!B4\", \"slide:2:1\"" },
+                    "text": { "type": "string", "description": "Replacement text for that part" },
+                    "delete_pages": { "type": "array", "items": { "type": "number" }, "description": "PDF only: page numbers to delete. Use instead of part/text." }
+                },
+                "required": ["path"]
             }
         }),
         serde_json::json!({
@@ -201,7 +327,7 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
         }),
         serde_json::json!({
             "name": "powershell",
-            "description": "Execute a PowerShell command. Preferred on Windows for shell operations. Streams live output to the GUI as it runs, same as bash.",
+            "description": powershell_description(),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -372,6 +498,31 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
             "parameters": { "type": "object", "properties": {} }
         }),
         serde_json::json!({
+            "name": "browser_start",
+            "description": "Start the browser and report its state. CALL THIS FIRST, before any other browser tool, at the start of a browsing task.
+
+The other browser tools do start it themselves, so this is not required for them to work — but a cold start can mean an npm install, a native rebuild and a ~300MB engine download, and folded into a web_preview call that looks like a hang. Doing it as its own step makes the wait attributable, reports a failure once with the server's own reason attached, and tells you which sites you are already signed in to before you plan around a login wall.",
+            "parameters": { "type": "object", "properties": {} }
+        }),
+        serde_json::json!({
+            "name": "browser_session_status",
+            "description": "List which sites the browser is currently signed in to. Call this BEFORE telling the user a site needs a login — the session persists across restarts, so you may already have access from a previous day.",
+            "parameters": { "type": "object", "properties": {} }
+        }),
+        serde_json::json!({
+            "name": "browser_import_cookies",
+            "description": "Import a Netscape-format cookies.txt file to sign the browser in to a site. The user exports cookies from the browser they are already signed in with; you never handle their password. Once imported the sign-in persists across restarts.
+
+When you hit a login wall: call browser_session_status first, and if there is genuinely no session, use `question` to ask the user to export cookies for that site into the cookies folder, then call this with the file name. Do NOT try to type credentials into the page, and do not offer to create an account.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file": { "type": "string", "description": "File name inside ~/.camofox/cookies/, or an absolute path" }
+                },
+                "required": ["file"]
+            }
+        }),
+        serde_json::json!({
             "name": "web_search",
             "description": "Search the web and return result titles and URLs. Follow up with web_fetch to read a result.",
             "parameters": {
@@ -480,7 +631,7 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
         }),
         serde_json::json!({
             "name": "todo_write",
-            "description": "Create and manage a structured task checklist for the session. Replaces the whole list each call. At most one item may be 'in_progress' at a time, and content must be unique across items — both are rejected as errors.",
+            "description": "Create and manage a structured task checklist for the session. Each completed item becomes a visible checkpoint of your progress, so plan real milestones, mark each completed (with a summary) as soon as it is done, and keep the list current. Replaces the whole list each call. At most one item may be 'in_progress' at a time, and content must be unique across items — both are rejected as errors.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -491,7 +642,8 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
                             "type": "object",
                             "properties": {
                                 "content": { "type": "string" },
-                                "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] }
+                                "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] },
+                                "summary": { "type": "string", "description": "When marking an item completed: one short line on what was actually done (e.g. 'added /login route and form, 4 tests pass'). Shown to the user as a checkpoint." }
                             },
                             "required": ["content", "status"]
                         }
@@ -502,14 +654,14 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
         }),
         serde_json::json!({
             "name": "generate_image",
-            "description": "Generate a new image from a text description using an image-generation model. Defaults to OpenAI's gpt-image-1; pass provider=\"google\" to use Google's Imagen instead. Requires an API key for whichever provider is used, configured in Settings → API Keys — if none is set, this returns an error saying so. Use for creating original images (illustrations, mockups, icons), not for analysing an existing image (that's just done by looking at it, no tool needed).",
+            "description": "Generate a new image from a text description using an image-generation model. Defaults to OpenAI's gpt-image-2; pass provider=\"google\" to use Google's Imagen instead. Requires an API key for whichever provider is used, configured in Settings → API Keys — if none is set, this returns an error saying so. Use for creating original images (illustrations, mockups, icons), not for analysing an existing image (that's just done by looking at it, no tool needed).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "prompt": { "type": "string", "description": "Description of the image to generate" },
                     "size": { "type": "string", "description": "OpenAI only. Image size, e.g. \"1024x1024\", \"1536x1024\", \"1024x1536\" (default \"1024x1024\")" },
                     "provider": { "type": "string", "enum": ["openai", "google"], "description": "Which provider to generate with (default \"openai\")" },
-                    "model": { "type": "string", "description": "Override the default model for the chosen provider, e.g. \"dall-e-3\" for openai or \"imagen-4.0-generate-001\" for google" }
+                    "model": { "type": "string", "description": "Override the default model for the chosen provider, e.g. \"gpt-image-1-mini\" (cheaper) for openai, or \"imagen-4.0-ultra-generate-001\" for google" }
                 },
                 "required": ["prompt"]
             }
@@ -542,7 +694,7 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "panel": { "type": "string", "description": "One of: review (diff/review panel), files (workspace file tree), preview_dev (the Preview panel in dev-server mode), preview_browser (the Preview panel in browser mode — web_preview/browser_* activity), tasks (background subagent tasks), terminal (the bottom terminal panel). Or \"custom:<name>\" for a panel-type playbook (see list_tools for what's installed — Settings → Mods → Playbooks)." },
+                    "panel": { "type": "string", "description": "One of: review (diff/review panel), files (workspace file tree), preview_dev (the Preview panel in dev-server mode), preview_browser (the Preview panel in browser mode — web_preview/browser_* activity), documents (the Preview panel in Documents mode — where the user views and edits pdf/docx/xlsx/pptx files; open it when working on a document with them), tasks (background subagent tasks), plan (the Plan panel — plans under review or being carried out), terminal (the bottom terminal panel). Or \"custom:<name>\" for a panel-type playbook (see list_tools for what's installed — Settings → Mods → Playbooks)." },
                     "action": { "type": "string", "enum": ["open", "close"] }
                 },
                 "required": ["panel", "action"]
@@ -555,7 +707,7 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
         }),
         serde_json::json!({
             "name": "create_goal",
-            "description": "Set this session's goal, replacing any existing one. Use for a task substantial enough that keeping the underlying objective explicit (separate from the moment-to-moment todo checklist) helps you stay on track across many turns — not for quick asks.",
+            "description": "Set the goal of the task you were given, replacing any existing one. Do this for any task that takes more than a few steps. While the goal is active you keep working on it — ending a turn does not end the task; you will be prompted to continue — through as many steps, hours or days as it takes, until you call update_goal with action 'complete' (done and verified) or 'blocked' (you need the user). Rate limits, model outages and app restarts are handled for you. Not for quick questions.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -575,6 +727,17 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
                     "blocked_reason": { "type": "string", "description": "Why it's blocked — action='blocked' only" }
                 },
                 "required": ["action"]
+            }
+        }),
+        serde_json::json!({
+            "name": "load_tools",
+            "description": "Add tools to your function list. To keep you fast, only core tools are loaded at first; your system prompt names every group you have. If a tool you need isn't in your function list, call this with its group, and it is callable from your next step. Loaded tools stay loaded for the rest of the conversation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "groups": { "type": "array", "items": { "type": "string" }, "description": "Group names from your capability list, e.g. [\"GitHub\"] or [\"browse\"]. \"custom\" loads MCP and playbook tools." },
+                    "tools": { "type": "array", "items": { "type": "string" }, "description": "Exact tool names, when you know them." }
+                }
             }
         }),
         serde_json::json!({
@@ -686,7 +849,7 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
         }),
         serde_json::json!({
             "name": "task",
-            "description": "Launch a subagent. By default (run_in_background=true) this returns a task_id immediately — poll or block on it with task_output/wait_tasks — instead of blocking your own turn, and it shows up live in the Background Tasks panel so the user can see it running. Call this once per subagent — spawn multiple concurrently rather than looping serial blocking calls, and keep making progress yourself (other tool calls, or delegating more independent chunks) instead of idling on task_output while one runs. Set run_in_background=false only for a single one-off subtask where you have nothing else to do until it returns. Single-level depth cap — a subagent spawned by task cannot itself call task again. Call list_subagent_profiles first if you're not sure whether a profile with a preset prompt already exists for this — pointing at one (subagent_type + a short context) costs far fewer tokens than writing the full prompt yourself.",
+            "description": "Launch a subagent. By default (run_in_background=true) this returns a task_id immediately — poll or block on it with task_output/wait_tasks — instead of blocking your own turn, and it shows up live in the Background Tasks panel so the user can see it running. Call this once per subagent — spawn multiple concurrently rather than looping serial blocking calls, and keep making progress yourself (other tool calls, or delegating more independent chunks) instead of idling on task_output while one runs. Set run_in_background=false only for a single one-off subtask where you have nothing else to do until it returns. Delegation is at most three tiers: you, then the agents you spawn; a project employee may spawn plain subagents of its own, and those cannot delegate further. Call list_subagent_profiles first if you're not sure whether a profile with a preset prompt already exists for this — pointing at one (subagent_type + a short context) costs far fewer tokens than writing the full prompt yourself.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -698,6 +861,23 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
                     "run_in_background": { "type": "boolean", "description": "If true (default), return a task_id immediately instead of blocking", "default": true }
                 },
                 "required": ["description"]
+            }
+        }),
+        serde_json::json!({
+            "name": "hire_agent",
+            "description": "Propose a specialist agent for this project's team. It is saved as a proposal in .viv/agents/ and the user approves or declines it; once approved you delegate to it with task (subagent_type = its id). Hire for a lasting area of responsibility (e.g. frontend, API, tests), not a one-off task. Only works in a project with a master agent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Short display name, e.g. 'Frontend Engineer'" },
+                    "role": { "type": "string", "description": "One sentence: what this agent is responsible for" },
+                    "instructions": { "type": "string", "description": "Standing instructions it receives on every task: conventions, the charter decisions that apply to its area, how to verify its work" },
+                    "reason": { "type": "string", "description": "Why the project needs this hire now — shown to the user when they decide" },
+                    "owns": { "type": "array", "items": { "type": "string" }, "description": "Project-relative paths it is responsible for, e.g. ['src/ui/', 'styles/']. Keep specialists' paths from overlapping." },
+                    "allowed_tools": { "type": "array", "items": { "type": "string" }, "description": "Optional tool allowlist; omit for full access" },
+                    "reports_to": { "type": "string", "description": "Id of the agent it reports to; omit to report to the master" }
+                },
+                "required": ["name", "role", "instructions", "reason"]
             }
         }),
         serde_json::json!({
@@ -731,19 +911,92 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
             }
         }),
         serde_json::json!({
-            "name": "enter_plan_mode",
-            "description": "Enter plan mode. While active, mutating tools (write, edit, apply_patch, bash, powershell, notebook_edit, terminal_open, terminal_send) are refused — you can only read, search, and think. Use to sketch a plan before making changes. Provide an optional 'plan' summary.",
+            "name": "team_run",
+            "description": "Give a task to this project's team of agents (the ones the user built in the Agents panel). Every chosen member works on it at the same time with its own prompt, model and tools, and they message each other as they go. Returns when all have finished, with each member's report and what they said to each other, for you to combine into one answer.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "plan": { "type": "string", "description": "Optional summary of the plan you're proposing" }
-                }
+                    "task": { "type": "string", "description": "The task, complete and self-contained — members don't see this conversation" },
+                    "agents": { "type": "array", "items": { "type": "string" }, "description": "Member ids or names to involve; omit for the whole team" }
+                },
+                "required": ["task"]
             }
         }),
         serde_json::json!({
-            "name": "exit_plan_mode",
-            "description": "Exit plan mode, re-enabling mutating tools. Returns the plan you recorded with enter_plan_mode, if any.",
-            "parameters": { "type": "object", "properties": {} }
+            "name": "message_agent",
+            "description": "Send a message to a teammate in this team run, or to everyone. It reaches them between their steps. Use it to split work, share what another member needs, ask something only they know, or flag a conflict.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": { "type": "string", "description": "A teammate's id or name, or \"all\"" },
+                    "text": { "type": "string" }
+                },
+                "required": ["to", "text"]
+            }
+        }),
+        serde_json::json!({
+            "name": "submit_plan",
+            "description": "Submit a plan for the user to review — the end of every plan-mode turn, and how you revise a plan after feedback. The plan opens in the user's Plan panel, where they comment on individual sections and steps, then ask for changes or approve. Write it for a reader deciding whether to approve: concrete, specific to this project, grounded in what you found. Sections should cover the goal, what you found (the relevant code, the dependencies involved with their current versions, and anything learned from the web, with sources), the approach, risks and open questions, and how the result will be verified. Steps are the units of work the team will carry out, each sized for one specialist, with dependencies where one needs another's result. To revise, submit the whole plan again with the same plan_id and say what changed in 'changes'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan_id": { "type": "string", "description": "Only when revising: the id of the plan being revised. Omit for a new plan." },
+                    "title": { "type": "string", "description": "Short name of the plan" },
+                    "summary": { "type": "string", "description": "Two or three sentences: what will be done and why" },
+                    "sections": {
+                        "type": "array",
+                        "description": "The body of the plan, in reading order",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "string", "description": "Stable id, kept across revisions (e.g. 'findings') — comments attach to it" },
+                                "heading": { "type": "string" },
+                                "body": { "type": "string", "description": "Markdown" }
+                            },
+                            "required": ["id", "heading", "body"]
+                        }
+                    },
+                    "steps": {
+                        "type": "array",
+                        "description": "The work, in order",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "string", "description": "Stable id, kept across revisions (e.g. 'db-schema')" },
+                                "title": { "type": "string" },
+                                "detail": { "type": "string", "description": "What exactly to do, which files, and how to verify it" },
+                                "owner": { "type": "string", "description": "Suggested team member (agent id), if the project has a team" },
+                                "depends_on": { "type": "array", "items": { "type": "string" }, "description": "Ids of steps that must finish first" }
+                            },
+                            "required": ["id", "title", "detail"]
+                        }
+                    },
+                    "changes": { "type": "string", "description": "When revising: what changed from the previous version and how it answers the feedback" }
+                },
+                "required": ["title", "summary", "sections", "steps"]
+            }
+        }),
+        serde_json::json!({
+            "name": "assign_plan_steps",
+            "description": "Carry out a plan the user approved: give each step to a member of your team, and the steps run — independent ones in parallel, each only once the steps it depends on are done, each step's agent getting the reports of the steps it builds on. Returns when every step has finished, with each step's report, for you to review, integrate and verify. Steps without an assignment keep the owner the plan suggested, or go to a general-purpose agent. Calling it again on a plan that partly failed re-runs only the unfinished steps.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan_id": { "type": "string" },
+                    "assignments": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "step_id": { "type": "string" },
+                                "agent_id": { "type": "string", "description": "An approved team member's id, or \"general-purpose\"" }
+                            },
+                            "required": ["step_id", "agent_id"]
+                        }
+                    }
+                },
+                "required": ["plan_id"]
+            }
         }),
         serde_json::json!({
             "name": "sandbox_execute",
@@ -758,9 +1011,44 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
                 "required": ["language", "code"]
             }
         }),
+        crate::agent::math::schema(),
+        serde_json::json!({
+            "name": "create_tool",
+            "description": "Write a new tool in Python and save it for reuse. Use it when a task needs something the other tools don't do and it's likely to come up again (a format conversion, a query against an API, an analysis the user keeps asking for). The saved tool joins the tool list of every model the user runs, in every project, from your next step. The code is a Python module defining `def run(**args)` that returns a string or anything JSON-serialisable; the standard library and whatever is pip-installed are available, and it runs in the project folder. Give `test_args` to run it once before saving: if that run fails, nothing is saved and you get the traceback. Before creating one, check your tool list for an existing tool that already does it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "snake_case, 3-48 characters, saying what it does (e.g. \"csv_to_parquet\")." },
+                    "description": { "type": "string", "description": "What it does, its inputs and output, and when to use it. Other models choose the tool by this text alone." },
+                    "parameters": { "type": "object", "description": "JSON schema for its arguments: {\"type\": \"object\", \"properties\": {...}, \"required\": [...]}. The keys become run()'s keyword arguments." },
+                    "code": { "type": "string", "description": "The Python module. Must define run(**args)." },
+                    "test_args": { "type": "object", "description": "Arguments for a test run before saving. Strongly recommended." },
+                    "replace": { "type": "boolean", "description": "Update an existing tool of this name (to fix or improve it)." },
+                    "timeout_secs": { "type": "integer", "description": "How long one call may run (default 120, at most 600)." }
+                },
+                "required": ["name", "description", "parameters", "code"]
+            }
+        }),
+        serde_json::json!({
+            "name": "delete_tool",
+            "description": "Retire a custom tool you or another model created, when it is unused for a long time, duplicated by another tool, or superseded. It leaves every tool list; its files are kept in ~/.viv/tools/.retired/.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "reason": { "type": "string", "description": "Why, in a sentence. The user sees it." }
+                },
+                "required": ["name", "reason"]
+            }
+        }),
+        serde_json::json!({
+            "name": "list_custom_tools",
+            "description": "List the custom tools (the ones created with create_tool) with how often and how recently each was used, and when it was made. For reviewing the set.",
+            "parameters": { "type": "object", "properties": {} }
+        }),
         serde_json::json!({
             "name": "run_script",
-            "description": "Experimental. Run a short JavaScript script that can call several of your own tools directly, in one turn, instead of one tool call per round-trip — use it to chain several reads/searches before a write, or to loop over a list of files, in a single call. Available async functions inside the script (all return Promises — use await):\n  bash(command, timeoutSeconds?) -> string\n  read(path, opts?: {offset?, limit?, pages?, ocr?}) -> string\n  write(path, content) -> string\n  edit(path, oldString, newString) -> string\n  ls(path?, opts?: {depth?, show_hidden?}) -> string\n  grep(pattern, path?) -> string\n  glob(pattern, path?) -> string\nEach call goes through the same approval/gating as calling the tool directly. A failed call throws a catchable JS exception — wrap calls in try/catch if the script should recover instead of aborting. Only use this for genuine multi-step chains; call a tool directly for a single step.",
+            "description": "Run a short JavaScript script that calls your own tools directly, in one turn, instead of one tool call per round-trip — chain several reads/searches before a write, loop over a list of files, fan out web searches, or post-process results before you see them. EVERY tool you have is callable from the script (all async — use await; each returns the tool's text output):\n  callTool(name, args) — any tool by name with its normal JSON arguments, e.g. callTool(\"web_search\", {query: \"...\"})\n  tools.<name>(args) — same thing, e.g. tools.web_fetch({url})\n  <name>(args) — tools whose names are plain identifiers are also globals, e.g. await todo_write({todos})\n  listTools() — the names available\nShorthands with positional arguments:\n  bash(command, timeoutSeconds?)  read(path, opts?)  write(path, content)  edit(path, oldString, newString)  ls(path?, opts?)  grep(pattern, path?)  glob(pattern, path?)\nconsole.log output is returned above the script's return value. Each call goes through the same approval/gating as calling the tool directly. A failed call throws a catchable JS exception. A script cannot start another run_script. Use this for genuine multi-step work; call a tool directly for a single step.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -772,5 +1060,8 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
         }),
     ];
 
+    let mut defs = defs;
+    defs.extend(crate::coding_agent::github::schemas());
+    defs.push(crate::multiplayer::collab::pair_activity_schema());
     defs
 }

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS bundle metadata. Tauri merges this file into the generated
+  Contents/Info.plist at bundle time; it is ignored on every other platform.
+
+  The usage-description strings are not optional polish. macOS terminates a
+  process outright the first time it touches a TCC-protected resource without
+  a matching *UsageDescription key present — so omitting one turns "the mic
+  permission prompt appears" into "the app disappears".
+-->
+<plist version="1.0">
+<dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Vivianne uses the microphone for voice mode, so you can talk to it instead of typing.</string>
+
+    <!-- The `dip` tool's screenshot action captures the display through xcap,
+         which is Screen Recording under TCC. -->
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Vivianne captures your screen when you ask it to see or operate an app on your behalf.</string>
+
+    <!-- Synthesised mouse and keyboard input (enigo) is Accessibility, and
+         `launch_app`/window control goes through Apple Events. -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Vivianne controls other applications when you ask it to perform a task on your computer.</string>
+
+    <!-- Voice mode records to a temporary file before transcription. -->
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Vivianne transcribes your speech locally, on this machine, for voice mode.</string>
+
+    <!-- The app draws its own title bar (decorations: false), so let the
+         window extend under the menu bar area cleanly on notched displays. -->
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>

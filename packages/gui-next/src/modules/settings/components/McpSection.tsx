@@ -1,17 +1,5 @@
 import { useEffect, useState } from 'react'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import Divider from '@mui/material/Divider'
-import Button from '@mui/material/Button'
-import ButtonBase from '@mui/material/ButtonBase'
-import IconButton from '@mui/material/IconButton'
-import CircularProgress from '@mui/material/CircularProgress'
-import Dialog from '@mui/material/Dialog'
-import TextField from '@mui/material/TextField'
-import Select from '@mui/material/Select'
-import MenuItem from '@mui/material/MenuItem'
-import Chip from '@mui/material/Chip'
-import Collapse from '@mui/material/Collapse'
+import { Stack, Typography, Divider, Button, ButtonBase, IconButton, CircularProgress, Dialog, TextField, Select, MenuItem, Chip, Collapse } from '../../../ui'
 import { ImportLinear, TrashLinear, Link2Linear, CommandLinear, GlobalLinear, ArrowDownLinear } from '../../../icons'
 import { useMcpStore } from '../store/mcpStore'
 import { DEFAULT_MCP_TIMEOUT_MS, type McpServerConfig, type McpTransportConfig } from '../lib/mcp'
@@ -248,7 +236,7 @@ function AddServerDialog({ open, onClose }: { open: boolean; onClose: () => void
                     placeholder={'{\n  "MY_API_KEY": "your-key"\n}'}
                     value={envJson}
                     onChange={(e) => setEnvJson(e.target.value)}
-                    sx={{ '& .MuiInputBase-input': { fontFamily: '"JetBrains Mono", ui-monospace, monospace', fontSize: '0.8125rem' } }}
+                    sx={{ '& .ui-InputBase-input': { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.8125rem' } }}
                   />
                 </Collapse>
               </Stack>
@@ -266,7 +254,7 @@ function AddServerDialog({ open, onClose }: { open: boolean; onClose: () => void
               placeholder={JSON_PLACEHOLDER}
               value={rawJson}
               onChange={(e) => setRawJson(e.target.value)}
-              sx={{ '& .MuiInputBase-input': { fontFamily: '"JetBrains Mono", ui-monospace, monospace', fontSize: '0.8125rem' } }}
+              sx={{ '& .ui-InputBase-input': { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.8125rem' } }}
             />
             <Typography variant="caption" color="text.secondary">
               You can paste {'{"server-name": {...}}'} or {'{"mcpServers": {"server-name": {...}}}'}.

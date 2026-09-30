@@ -1,16 +1,5 @@
 import { useEffect, useState } from 'react'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import InputBase from '@mui/material/InputBase'
-import IconButton from '@mui/material/IconButton'
-import CircularProgress from '@mui/material/CircularProgress'
-import Popover from '@mui/material/Popover'
-import Tooltip from '@mui/material/Tooltip'
-import Select from '@mui/material/Select'
-import MenuItem from '@mui/material/MenuItem'
-import Divider from '@mui/material/Divider'
-import Button from '@mui/material/Button'
+import { Box, Stack, Typography, InputBase, IconButton, CircularProgress, Popover, Tooltip, Select, MenuItem, Divider, Button } from '../../../ui'
 import { TickCircleLinear, TrashLinear, KeyLinear, LayerLinear, AddLinear, RefreshLinear } from '../../../icons'
 import type { ProviderMeta } from '../lib/providers'
 import { useAuthStore, type RotationStrategy, type PoolEntryInfo } from '../store/authStore'
@@ -101,7 +90,7 @@ export function ProviderRow({ provider }: { provider: ProviderMeta }) {
             onKeyDown={(e) => e.key === 'Enter' && void save()}
             sx={{
               fontSize: '0.8125rem',
-              fontFamily: 'monospace',
+              fontFamily: '"Geist Mono", ui-monospace, monospace',
               bgcolor: 'rgba(255,255,255,0.05)',
               borderRadius: 999,
               px: 1.5,
@@ -184,7 +173,7 @@ function KeyPoolPanel({ providerId, providerLabel }: { providerId: string; provi
       <Stack sx={{ gap: 0.25, mt: 0.5 }}>
         {entries.map((entry) => (
           <Stack key={entry.id} direction="row" sx={{ alignItems: 'center', gap: 1, py: 0.5 }}>
-            <Typography variant="caption" sx={{ flex: 1, minWidth: 0, fontFamily: '"JetBrains Mono", ui-monospace, monospace' }} noWrap>
+            <Typography variant="caption" sx={{ flex: 1, minWidth: 0, fontFamily: '"Geist Mono", ui-monospace, monospace' }} noWrap>
               {entry.label} {entry.source === 'primary' && <Box component="span" sx={{ color: 'text.secondary' }}>(primary)</Box>}
             </Typography>
             <Typography variant="caption" sx={{ color: statusColor(entry.status, entry.inCooldown), flexShrink: 0 }}>
@@ -217,7 +206,7 @@ function KeyPoolPanel({ providerId, providerLabel }: { providerId: string; provi
             value={key}
             onChange={(e) => setKey(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && void add()}
-            sx={{ fontSize: '0.8125rem', fontFamily: 'monospace', bgcolor: 'action.hover', borderRadius: 1.5, px: 1.25, py: 0.5 }}
+            sx={{ fontSize: '0.8125rem', fontFamily: '"Geist Mono", ui-monospace, monospace', bgcolor: 'action.hover', borderRadius: 1.5, px: 1.25, py: 0.5 }}
           />
           <IconButton size="small" onClick={() => void add()} disabled={busy || !key.trim()}>
             {busy ? <CircularProgress size={14} /> : <AddLinear size={16} color="currentColor" />}
@@ -236,7 +225,7 @@ function KeyPoolPanel({ providerId, providerLabel }: { providerId: string; provi
           value={strategy}
           onChange={(e) => void setStrategy(providerId, e.target.value as RotationStrategy)}
           disabled={extraKeys.length === 0}
-          sx={{ fontSize: '0.75rem', flex: 1, '& .MuiSelect-select': { py: 0.5 } }}
+          sx={{ fontSize: '0.75rem', flex: 1, '& .ui-Select-select': { py: 0.5 } }}
         >
           {(Object.keys(STRATEGY_LABELS) as RotationStrategy[]).map((s) => (
             <MenuItem key={s} value={s} sx={{ fontSize: '0.75rem' }}>

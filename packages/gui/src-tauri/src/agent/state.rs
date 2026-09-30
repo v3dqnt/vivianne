@@ -9,16 +9,13 @@ use tokio::sync::RwLock;
 /// possible restriction source alongside Settings-disabled and persona mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum WorkspaceAccessMode {
+    #[default]
     Full,
     ReadOnly,
 }
 
-impl Default for WorkspaceAccessMode {
-    fn default() -> Self {
-        WorkspaceAccessMode::Full
-    }
-}
 
 /// Thread-safe mutable agent state using RwLock for concurrent reads/writes.
 ///
@@ -68,7 +65,39 @@ struct AgentStateInner {
     /// agent's own `AgentState` — only `execute_task_tool` sets it, on the
     /// freshly-constructed `sub_state` a spawned subagent runs with.
     subagent_allowed_tools: Option<Vec<String>>,
+    /// Skip the approval prompt for gated tools, for THIS session only.
+    ///
+    /// The existing `bypassMode` lives in `settings.json` and is global, so
+    /// using it to make one surface run unattended would silently strip
+    /// approval prompts from the user's main chat as well. Viv Instant is
+    /// spoken to, not watched — there is no one at the keyboard to answer a
+    /// prompt — so it needs its own unattended mode that cannot leak.
+    ///
+    /// Defaults to `false` everywhere and is never persisted.
+    auto_approve: bool,
+    /// Where messages compacted out of the live context are appended, so the
+    /// user can still scroll back through them. `None` (the default) means
+    /// compaction simply drops them — right for subagents and Viv Instant,
+    /// whose transcripts nobody reopens. Set for the project conversation by
+    /// `agent::conversation`.
+    history_archive: Option<std::path::PathBuf>,
+    /// Whether this *subagent* may itself call `task`. Only project
+    /// employees (`agent::team`) get it: they fan work out to parallel
+    /// subagents of their own, which is the third tier of the hierarchy.
+    /// Irrelevant at the top level, which can always delegate.
+    delegation_allowed: bool,
     goal: Option<Goal>,
+    /// The ledger key of the long task this conversation is running, if any
+    /// (see `agent::run_ledger`). Set means: no step ceiling, spend and time
+    /// caps instead, wait out rate limits, keep going until the goal is done.
+    long_task: Option<String>,
+    /// Plan mode: research only, ending in a plan for the user to review
+    /// (see `agent::plans`). Per conversation — the old process-wide flag
+    /// switched every project and every subagent into it at once.
+    plan_mode: bool,
+    /// `(run id, member id)` while this agent works in a team run (see
+    /// `agent::team_run`) — what lets it message its teammates.
+    team_member: Option<(String, String)>,
 }
 
 impl AgentState {
@@ -112,7 +141,13 @@ impl AgentState {
                 workspace_folders: Vec::new(),
                 access_mode: WorkspaceAccessMode::Full,
                 subagent_allowed_tools: None,
+                auto_approve: false,
+                history_archive: None,
+                delegation_allowed: false,
                 goal: None,
+                long_task: None,
+                plan_mode: false,
+                team_member: None,
             })),
         };
         if !workspace_folders.is_empty() {
@@ -199,6 +234,54 @@ impl AgentState {
 
     pub async fn set_subagent_allowed_tools(&self, value: Option<Vec<String>>) {
         self.inner.write().await.subagent_allowed_tools = value;
+    }
+
+    pub async fn auto_approve(&self) -> bool {
+        self.inner.read().await.auto_approve
+    }
+
+    pub async fn delegation_allowed(&self) -> bool {
+        self.inner.read().await.delegation_allowed
+    }
+
+    pub async fn set_delegation_allowed(&self, value: bool) {
+        self.inner.write().await.delegation_allowed = value;
+    }
+
+    pub async fn history_archive(&self) -> Option<std::path::PathBuf> {
+        self.inner.read().await.history_archive.clone()
+    }
+
+    pub async fn set_history_archive(&self, path: Option<std::path::PathBuf>) {
+        self.inner.write().await.history_archive = path;
+    }
+
+    pub async fn set_auto_approve(&self, value: bool) {
+        self.inner.write().await.auto_approve = value;
+    }
+
+    pub async fn long_task(&self) -> Option<String> {
+        self.inner.read().await.long_task.clone()
+    }
+
+    pub async fn set_long_task(&self, key: Option<String>) {
+        self.inner.write().await.long_task = key;
+    }
+
+    pub async fn plan_mode(&self) -> bool {
+        self.inner.read().await.plan_mode
+    }
+
+    pub async fn set_plan_mode(&self, on: bool) {
+        self.inner.write().await.plan_mode = on;
+    }
+
+    pub async fn team_member(&self) -> Option<(String, String)> {
+        self.inner.read().await.team_member.clone()
+    }
+
+    pub async fn set_team_member(&self, member: Option<(String, String)>) {
+        self.inner.write().await.team_member = member;
     }
 
     pub async fn set_system_prompt(&self, value: String) {

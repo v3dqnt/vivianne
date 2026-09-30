@@ -1,18 +1,15 @@
 import { useWorkspaceStore } from '../ai/store/workspaceStore'
-import { useThreadsStore } from '../sessions/store/threadsStore'
 
 /**
- * The workspace the dock panels should be showing: the focused thread pane's
- * own workspace when one is focused, otherwise the app-global workspace (the
- * primary sidebar chat's). One hook so Files/Preview/Git/Terminal can't drift
- * apart on which workspace they think is active.
+ * The workspace the dock panels should be showing.
+ *
+ * One hook so Files/Preview/Git/Terminal can't drift apart on which workspace
+ * they think is active. It used to prefer a focused thread pane's own
+ * workspace; with one conversation per project there is only ever one, the
+ * active project's.
  */
 export function useActiveWorkspace(): string[] {
-  const globalFolders = useWorkspaceStore((s) => s.folders)
-  const focusedId = useThreadsStore((s) => s.focusedId)
-  const workspaces = useThreadsStore((s) => s.workspaces)
-  const threadFolders = focusedId ? workspaces[focusedId] : undefined
-  return threadFolders && threadFolders.length > 0 ? threadFolders : globalFolders
+  return useWorkspaceStore((s) => s.folders)
 }
 
 /** Convenience: the primary (first) folder, or null. */

@@ -1,6 +1,4 @@
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
+import { Box, Stack, Typography } from '../../../ui'
 import { MagicpenLinear, DocumentLinear, FolderLinear } from '../../../icons'
 
 export interface MentionableSkill {
@@ -50,7 +48,7 @@ export function UnifiedMentionMenu({ items, activeIndex, onSelect, onHover }: Un
     <Box sx={{ position: 'absolute', bottom: '100%', left: 0, mb: 1.5, width: '100%', maxWidth: 420, borderRadius: 2, border: 1, borderColor: 'divider', bgcolor: 'background.paper', boxShadow: 4, overflow: 'hidden', zIndex: 50 }}>
       {skills.length > 0 && (
         <>
-          <Typography variant="caption" sx={{ display: 'block', px: 1.5, py: 0.75, fontSize: '0.5625rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary', borderBottom: 1, borderColor: 'divider' }}>
+          <Typography variant="caption" sx={{ display: 'block', px: 1.5, py: 0.75, fontSize: '0.6875rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary', borderBottom: 1, borderColor: 'divider' }}>
             Skills
           </Typography>
           <Box sx={{ p: 0.5 }}>
@@ -82,7 +80,7 @@ export function UnifiedMentionMenu({ items, activeIndex, onSelect, onHover }: Un
                     <MagicpenLinear size={13} color="currentColor" />
                   </Box>
                   <Box sx={{ minWidth: 0, flex: 1 }}>
-                    <Typography variant="body2" sx={{ fontSize: '0.8125rem', fontWeight: 500, fontFamily: '"JetBrains Mono", ui-monospace, monospace' }}>
+                    <Typography variant="body2" sx={{ fontSize: '0.8125rem', fontWeight: 500, fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
                       @{it.skill.name}
                     </Typography>
                     <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
@@ -97,7 +95,7 @@ export function UnifiedMentionMenu({ items, activeIndex, onSelect, onHover }: Un
       )}
       {files.length > 0 && (
         <>
-          <Typography variant="caption" sx={{ display: 'block', px: 1.5, py: 0.75, fontSize: '0.5625rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary', borderBottom: 1, borderColor: 'divider', borderTop: skills.length > 0 ? 1 : 0 }}>
+          <Typography variant="caption" sx={{ display: 'block', px: 1.5, py: 0.75, fontSize: '0.6875rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary', borderBottom: 1, borderColor: 'divider', borderTop: skills.length > 0 ? 1 : 0 }}>
             Files
           </Typography>
           <Box sx={{ maxHeight: 280, overflowY: 'auto', p: 0.5 }}>
@@ -129,11 +127,11 @@ export function UnifiedMentionMenu({ items, activeIndex, onSelect, onHover }: Un
                     {it.file.isDir ? <FolderLinear size={13} color="currentColor" /> : <DocumentLinear size={13} color="currentColor" />}
                   </Box>
                   <Box sx={{ minWidth: 0, flex: 1 }}>
-                    <Typography variant="body2" sx={{ fontSize: '0.8125rem', fontWeight: 500, fontFamily: '"JetBrains Mono", ui-monospace, monospace' }} noWrap>
+                    <Typography variant="body2" sx={{ fontSize: '0.8125rem', fontWeight: 500, fontFamily: '"Geist Mono", ui-monospace, monospace' }} noWrap>
                       {it.file.name}
                       {it.file.isDir ? '/' : ''}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block', fontFamily: '"JetBrains Mono", ui-monospace, monospace' }}>
+                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
                       {it.file.relPath}
                     </Typography>
                   </Box>

@@ -1,6 +1,4 @@
-import Stack from '@mui/material/Stack'
-import Box from '@mui/material/Box'
-import Typography from '@mui/material/Typography'
+import { Stack, Box, Typography } from '../../../ui'
 import type { ChangelogEntry } from '../store/updateStore'
 
 /** Muted per-section accent. The changelog's own vocabulary is Added /
@@ -60,7 +58,7 @@ export function ChangelogBody({ entries, limit }: { entries: ChangelogEntry[]; l
                   fontWeight: 700,
                   textTransform: 'uppercase',
                   letterSpacing: 0.5,
-                  fontSize: '0.625rem',
+                  fontSize: '0.6875rem',
                   color: sectionColor(section.title),
                 }}
               >

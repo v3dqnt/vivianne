@@ -1,8 +1,7 @@
 import { StrictMode, useMemo } from 'react'
 import { createRoot } from 'react-dom/client'
-import { ThemeProvider } from '@mui/material/styles'
-import CssBaseline from '@mui/material/CssBaseline'
-import { buildTheme } from './theme'
+import { CssBaseline, ThemeProvider } from './ui'
+import { baselineExtras, buildTheme } from './theme'
 import { useThemeStore } from './modules/settings/store/themeStore'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { hasTauri } from './ipc'
@@ -16,13 +15,17 @@ import './tailwind.css'
 // of the primary thread's `agentStore.init()`) — if that never ran, or ran
 // late, requests went nowhere and every turn died on Rust's 120s idle guard.
 //
-// Main window ONLY. The `notch` window (voice UI, hidden at startup) has no
-// route of its own here, so Vite's SPA fallback serves it this same bundle —
-// without this guard both webviews answer every `provider_stream_request`,
-// firing two concurrent API calls per turn whose tokens interleave under one
-// stream id (garbled/doubled replies, double spend, and a stall whenever the
-// two disagree about who finished).
-if (hasTauri() && getCurrentWindow().label !== 'notch') void initProviderDispatcher()
+// Main window ONLY, as an ALLOWlist. Every secondary window (the DIP overlay,
+// Viv Instant) has no route of its own here, so Vite's SPA fallback serves each
+// of them this same bundle — and without this guard every one of them would
+// answer every `provider_stream_request`, firing concurrent API calls per turn
+// whose tokens interleave under one stream id (garbled/doubled replies, double
+// spend, and a stall whenever they disagree about who finished).
+//
+// Deliberately `=== 'main'` rather than excluding known labels: a denylist has
+// to be updated every time a window is added, and forgetting silently doubles
+// every API call rather than failing.
+if (hasTauri() && getCurrentWindow().label === 'main') void initProviderDispatcher()
 
 function ThemedApp() {
   const mode = useThemeStore((s) => s.mode)
@@ -32,7 +35,7 @@ function ThemedApp() {
     <ThemeProvider theme={theme}>
       {/* CssBaseline applies the theme's resets — including the no-root-scroll
           rule a desktop window needs. */}
-      <CssBaseline />
+      <CssBaseline extra={baselineExtras(mode)} />
       <App />
     </ThemeProvider>
   )

@@ -46,3 +46,21 @@ fn hex_to_bytes32(hex: &str) -> Result<[u8; 32], String> {
     }
     Ok(out)
 }
+
+/// The pairing code of the profile whose data lives in `profile_home`,
+/// creating that profile's identity if it has none yet — so a test partner's
+/// code is known (and can be authorized) before it is ever launched.
+pub fn id_for_profile_home(profile_home: &std::path::Path) -> Result<String, String> {
+    let dir = profile_home.join("agent");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("couldn't create {}: {e}", dir.display()))?;
+    let path = dir.join("multiplayer_key");
+    let key = match std::fs::read_to_string(&path).ok().and_then(|h| hex_to_bytes32(h.trim()).ok()) {
+        Some(bytes) => SecretKey::from_bytes(&bytes),
+        None => {
+            let key = SecretKey::generate();
+            std::fs::write(&path, bytes_to_hex(&key.to_bytes())).map_err(|e| format!("couldn't save the identity: {e}"))?;
+            key
+        }
+    };
+    Ok(key.public().to_string())
+}

@@ -1,11 +1,5 @@
 import { useEffect, useState } from 'react'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import Divider from '@mui/material/Divider'
-import Button from '@mui/material/Button'
-import IconButton from '@mui/material/IconButton'
-import Switch from '@mui/material/Switch'
-import InputBase from '@mui/material/InputBase'
+import { Stack, Typography, Divider, Button, IconButton, Switch, InputBase } from '../../../ui'
 import { ClockLinear, PlayLinear, TrashLinear, AddLinear, EditLinear } from '../../../icons'
 import { call } from '../../../ipc'
 
@@ -119,7 +113,7 @@ export function AutomationsSection() {
               placeholder="Cron expression (e.g. 0 9 * * 1)"
               value={cron}
               onChange={(e) => setCron(e.target.value)}
-              sx={{ fontSize: '0.75rem', fontFamily: '"JetBrains Mono", ui-monospace, monospace', bgcolor: 'action.hover', borderRadius: 1, px: 1, py: 0.5 }}
+              sx={{ fontSize: '0.75rem', fontFamily: '"Geist Mono", ui-monospace, monospace', bgcolor: 'action.hover', borderRadius: 1, px: 1, py: 0.5 }}
             />
             <Button size="small" onClick={() => void save()} disabled={!name.trim() || !prompt.trim()} sx={{ textTransform: 'none', flexShrink: 0 }}>
               {editing ? 'Save' : 'Create'}

@@ -1,19 +1,5 @@
 import { useEffect, useState } from 'react'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import ButtonBase from '@mui/material/ButtonBase'
-import Button from '@mui/material/Button'
-import IconButton from '@mui/material/IconButton'
-import TextField from '@mui/material/TextField'
-import Select from '@mui/material/Select'
-import MenuItem from '@mui/material/MenuItem'
-import Dialog from '@mui/material/Dialog'
-import DialogTitle from '@mui/material/DialogTitle'
-import DialogContent from '@mui/material/DialogContent'
-import DialogActions from '@mui/material/DialogActions'
-import Collapse from '@mui/material/Collapse'
-import CircularProgress from '@mui/material/CircularProgress'
+import { Box, Stack, Typography, ButtonBase, Button, IconButton, TextField, Select, MenuItem, Dialog, DialogTitle, DialogContent, DialogActions, Collapse, CircularProgress } from '../../../ui'
 import { AddLinear, TrashLinear, ArrowDownLinear } from '../../../icons'
 import { CLOUD_PROVIDERS } from '../lib/providers'
 import { API_FORMAT_OPTIONS, type CustomApiFormat, type CustomModel } from '../lib/customProviders'
@@ -282,7 +268,7 @@ function CustomProviderForm({ providerId, onSaved, onRemoved }: { providerId: st
         ) : (
           models.map((m) => (
             <Stack key={m.id} direction="row" sx={{ alignItems: 'center', gap: 1, py: 0.5, px: 1, borderRadius: 1.5, bgcolor: 'action.hover' }}>
-              <Typography variant="body2" sx={{ flex: 1, minWidth: 0, fontFamily: '"JetBrains Mono", ui-monospace, monospace', fontSize: '0.75rem' }} noWrap>
+              <Typography variant="body2" sx={{ flex: 1, minWidth: 0, fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem' }} noWrap>
                 {m.id}
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
@@ -349,7 +335,7 @@ export function ProvidersSection() {
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.625rem', px: 1, mb: 0.5 }}
+            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.6875rem', px: 1, mb: 0.5 }}
           >
             Providers
           </Typography>
@@ -362,7 +348,7 @@ export function ProvidersSection() {
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.625rem', px: 1, mb: 0.5 }}
+            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.6875rem', px: 1, mb: 0.5 }}
           >
             Custom providers
           </Typography>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import Box from '@mui/material/Box'
-import Typography from '@mui/material/Typography'
-import { on } from '../../../ipc'
+import { Box, Typography } from '../../../ui'
+import { call, on } from '../../../ipc'
+import { useTransparentWindowBody } from '../../../lib/transparentWindow'
 
 interface OverlayBox {
   x: number
@@ -20,6 +20,9 @@ interface OverlayBox {
  * nothing here is interactive (the window is click-through from the moment
  * it's created — see `lib.rs`'s `set_ignore_cursor_events` call). */
 export function DipOverlay() {
+  // The overlay sits over other applications; an opaque body would
+  // black out whatever it is highlighting.
+  useTransparentWindowBody()
   const [boxes, setBoxes] = useState<OverlayBox[]>([])
 
   useEffect(() => {
@@ -42,6 +45,9 @@ export function DipOverlay() {
       }, durationMs)
     }).then((fn) => {
       unlisten = fn
+      // Now listening: the backend delivers anything it queued while this
+      // window was still loading (see `overlays.rs`).
+      void call('cmd_overlay_ready')
     })
 
     return () => {
@@ -78,7 +84,7 @@ export function DipOverlay() {
               py: 0.125,
               bgcolor: '#4a9eff',
               color: '#fff',
-              fontSize: '0.625rem',
+              fontSize: '0.6875rem',
               fontWeight: 600,
               borderRadius: 0.5,
               whiteSpace: 'nowrap',

@@ -1,8 +1,5 @@
 import { useEffect, useState } from 'react'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import IconButton from '@mui/material/IconButton'
-import InputBase from '@mui/material/InputBase'
+import { Stack, Typography, IconButton, InputBase } from '../../../ui'
 import { CloseCircleLinear, AddLinear } from '../../../icons'
 import { useAgentStore } from '../store/agentStore'
 import { contentToText, type AgentMessage } from '../lib/types'
@@ -69,7 +66,7 @@ export function QueuePanel() {
           <Typography variant="caption" noWrap sx={{ flex: 1, minWidth: 0, color: 'text.secondary' }}>
             {row.text}
           </Typography>
-          <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.625rem', flexShrink: 0 }}>
+          <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.6875rem', flexShrink: 0 }}>
             {row.key === 'steering' ? 'next up' : 'after this turn'}
           </Typography>
           <IconButton size="small" onClick={() => void removeQueued(row.key, row.index)} sx={{ p: 0.25, flexShrink: 0 }}>

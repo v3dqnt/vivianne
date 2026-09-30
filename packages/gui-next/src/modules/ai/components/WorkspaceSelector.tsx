@@ -1,14 +1,5 @@
 import { useEffect, useState } from 'react'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Button from '@mui/material/Button'
-import Popover from '@mui/material/Popover'
-import Typography from '@mui/material/Typography'
-import InputBase from '@mui/material/InputBase'
-import IconButton from '@mui/material/IconButton'
-import ButtonBase from '@mui/material/ButtonBase'
-import Divider from '@mui/material/Divider'
-import CircularProgress from '@mui/material/CircularProgress'
+import { Box, Stack, Button, Popover, Typography, InputBase, IconButton, ButtonBase, Divider, CircularProgress } from '../../../ui'
 import { FolderLinear, LockLinear, UnlockLinear, TrashLinear, AddLinear, FolderAddLinear } from '../../../icons'
 import { useWorkspaceStore } from '../store/workspaceStore'
 
@@ -25,6 +16,7 @@ export function WorkspaceSelector() {
   const createFolder = useWorkspaceStore((s) => s.createFolder)
   const removeFolder = useWorkspaceStore((s) => s.removeFolder)
   const toggleAccessMode = useWorkspaceStore((s) => s.toggleAccessMode)
+  const wholeComputer = useWorkspaceStore((s) => s.wholeComputer)
 
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const [creating, setCreating] = useState(false)
@@ -40,7 +32,13 @@ export function WorkspaceSelector() {
     setCreating(false)
   }
 
-  const label = folders.length === 0 ? 'No workspace' : folders.length === 1 ? folderName(folders[0]) : `${folders.length} folders`
+  const label = wholeComputer
+    ? 'This PC'
+    : folders.length === 0
+      ? 'No workspace'
+      : folders.length === 1
+        ? folderName(folders[0])
+        : `${folders.length} folders`
 
   return (
     <>
@@ -63,7 +61,7 @@ export function WorkspaceSelector() {
           '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
         }}
       >
-        <Typography variant="caption" noWrap>
+        <Typography className="cq-label-sm" variant="caption" noWrap>
           {label}
         </Typography>
       </Button>
@@ -99,7 +97,7 @@ export function WorkspaceSelector() {
                   variant="caption"
                   noWrap
                   title={f}
-                  sx={{ flex: 1, minWidth: 0, fontFamily: '"JetBrains Mono", ui-monospace, monospace' }}
+                  sx={{ flex: 1, minWidth: 0, fontFamily: '"Geist Mono", ui-monospace, monospace' }}
                 >
                   {folderName(f)} {i === 0 && <Box component="span" sx={{ color: 'text.secondary' }}>(primary)</Box>}
                 </Typography>
@@ -150,7 +148,7 @@ export function WorkspaceSelector() {
                   fontSize: '0.75rem',
                   bgcolor: 'primary.main',
                   color: 'primary.contrastText',
-                  '&.Mui-disabled': { bgcolor: 'action.disabledBackground', color: 'text.disabled' },
+                  '&:disabled, &[aria-disabled="true"]': { bgcolor: 'action.disabledBackground', color: 'text.disabled' },
                 }}
               >
                 {loading ? <CircularProgress size={13} sx={{ color: 'inherit' }} /> : 'Choose location…'}

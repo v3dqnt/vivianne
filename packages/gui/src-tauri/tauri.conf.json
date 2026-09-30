@@ -13,35 +13,22 @@
     "windows": [
       {
         "title": "Vivianne",
-        "width": 800,
-        "height": 600,
+        "width": 1280,
+        "height": 820,
         "resizable": true,
         "fullscreen": false,
         "decorations": false,
-        "transparent": true
-      },
-      {
-        "label": "notch",
-        "title": "Vivianne Voice",
-        "url": "notch",
-        "width": 520,
-        "height": 96,
-        "resizable": false,
-        "decorations": false,
         "transparent": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "focus": false,
-        "visible": false,
-        "shadow": false,
-        "center": false,
-        "x": 400,
-        "y": 12
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --use-fake-ui-for-media-stream",
+        "minWidth": 880,
+        "minHeight": 600,
+        "center": true
       },
       {
         "label": "dip_overlay",
+        "create": false,
         "title": "DIP Overlay",
-        "url": "dip-overlay",
+        "url": "overlay.html",
         "width": 100,
         "height": 100,
         "resizable": false,
@@ -54,12 +41,74 @@
         "shadow": false,
         "center": false,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --use-fake-ui-for-media-stream"
+      },
+      {
+        "label": "viv_instant",
+        "create": false,
+        "title": "Viv Instant",
+        "url": "overlay.html",
+        "width": 260,
+        "height": 44,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "visible": false,
+        "shadow": false,
+        "center": false,
+        "x": 0,
+        "y": 0,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --use-fake-ui-for-media-stream"
+      },
+      {
+        "label": "viv_pointer",
+        "create": false,
+        "title": "Viv Pointer",
+        "url": "overlay.html",
+        "width": 120,
+        "height": 120,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "visible": false,
+        "shadow": false,
+        "center": false,
+        "x": 0,
+        "y": 0,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --use-fake-ui-for-media-stream"
+      },
+      {
+        "label": "viv_activity",
+        "create": false,
+        "title": "Vivianne Activity",
+        "url": "overlay.html",
+        "width": 240,
+        "height": 34,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "visible": false,
+        "shadow": false,
+        "center": false,
+        "x": 0,
+        "y": 0,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --use-fake-ui-for-media-stream"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: http://127.0.0.1:* http://localhost:*; img-src 'self' data: blob: asset: http://asset.localhost; media-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; frame-src 'self' http://127.0.0.1:* http://localhost:*"
-    }
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: http://127.0.0.1:* http://localhost:*; img-src 'self' data: blob: asset: http://asset.localhost; media-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; frame-src 'self' blob: http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'self'; form-action 'self'"
+    },
+    "macOSPrivateApi": true
   },
   "plugins": {
     "updater": {
@@ -82,6 +131,10 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    },
+    "macOS": {
+      "entitlements": "Entitlements.plist",
+      "minimumSystemVersion": "10.15"
     }
   }
 }

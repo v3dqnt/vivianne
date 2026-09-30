@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { call } from '../../../ipc'
 import { useWorkspaceStore } from '../../ai/store/workspaceStore'
+import { useDaysStore, GENERAL_SCOPE } from './daysStore'
 
 // snake_case fields, matching `Project`'s own wire shape (`created_at`) —
 // neither struct uses `rename_all = "camelCase"` on the Rust side.
@@ -17,6 +18,17 @@ export interface Project {
   path: string | null
   color: string | null
   multiplayer: MultiplayerProjectInfo | null
+  /** How work is organised (`projects::Project::mode`). Absent on projects
+   * made before the choice existed; those work as `company`. */
+  mode?: ProjectMode | null
+}
+
+/** Threads: separate chats. Company: a master that hires and delegates.
+ * Team: agents the user builds, working a task in parallel and talking. */
+export type ProjectMode = 'threads' | 'company' | 'team'
+
+export function modeOf(project: Pick<Project, 'mode'> | null | undefined): ProjectMode {
+  return project?.mode ?? 'company'
 }
 
 /** Accent colors for the sidebar project rail. */
@@ -63,7 +75,7 @@ interface ProjectsStoreState {
   activeProjectId: string | null
   loading: boolean
   refresh: () => Promise<void>
-  create: (name: string, path?: string | null, color?: string | null) => Promise<Project | null>
+  create: (name: string, path?: string | null, color?: string | null, mode?: ProjectMode | null) => Promise<Project | null>
   createMultiplayer: (
     name: string,
     path: string,
@@ -79,6 +91,18 @@ interface ProjectsStoreState {
   setActiveProject: (id: string | null) => void
   /** Open the active project's folder in Explorer or a terminal. */
   openExternal: (target: 'explorer' | 'terminal') => Promise<void>
+}
+
+/** Open today's conversation for the active project, if it isn't already.
+ *
+ * Guarded on scope rather than always calling through, because `refresh()`
+ * runs after every rename and assignment, and re-opening would re-fetch the
+ * live transcript each time for nothing. */
+function openActiveDay(activeProjectId: string | null) {
+  if (!activeProjectId) return
+  const scope = activeProjectId === GENERAL_PROJECT_ID ? GENERAL_SCOPE : activeProjectId
+  if (useDaysStore.getState().scope === scope) return
+  void useDaysStore.getState().openScope(scope)
 }
 
 /** The project whose folder the workspace was last synced to. Guards against
@@ -130,15 +154,16 @@ export const useProjectsStore = create<ProjectsStoreState>((set, get) => ({
       // Covers app start, where the first project resolves here rather than
       // through an explicit click.
       syncWorkspaceToProject(list.find((p) => p.id === get().activeProjectId))
+      openActiveDay(get().activeProjectId)
     } finally {
       set({ loading: false })
     }
   },
 
-  create: async (name, path = null, color = null) => {
+  create: async (name, path = null, color = null, mode = null) => {
     const trimmed = name.trim()
     if (!trimmed) return null
-    const project = await call<Project>('cmd_create_project', { name: trimmed, path, color })
+    const project = await call<Project>('cmd_create_project', { name: trimmed, path, color, mode })
     await get().refresh()
     // Via the action, not a raw `set` — a new project should point the
     // workspace at its folder straight away.
@@ -183,9 +208,14 @@ export const useProjectsStore = create<ProjectsStoreState>((set, get) => ({
 
   setActiveProject: (id) => {
     set({ activeProjectId: id })
-    // General has no folder of its own to point the workspace at — leave it
-    // exactly as it was rather than forcing a change.
-    if (id !== GENERAL_PROJECT_ID) syncWorkspaceToProject(get().projects.find((p) => p.id === id))
+    // General's workspace (the whole computer) is applied when its thread
+    // opens. Forget the last synced project, so coming back to it re-points
+    // the workspace at its folder instead of staying on the whole computer.
+    if (id === GENERAL_PROJECT_ID) lastSyncedProjectId = GENERAL_PROJECT_ID
+    else syncWorkspaceToProject(get().projects.find((p) => p.id === id))
+    // Each project has exactly one live conversation — today's. Switching
+    // projects switches to it.
+    openActiveDay(id)
   },
 
   openExternal: async (target) => {

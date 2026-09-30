@@ -1,11 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import IconButton from '@mui/material/IconButton'
-import Divider from '@mui/material/Divider'
-import CircularProgress from '@mui/material/CircularProgress'
-import Tooltip from '@mui/material/Tooltip'
+import { Box, Stack, Typography, IconButton, Divider, CircularProgress, Tooltip } from '../../../ui'
 import { CommandSquareLinear, AddLinear, StopCircleLinear, UserOctagonLinear, CloseCircleLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { useSubagentStore } from '../../ai/store/subagentStore'
@@ -110,7 +104,7 @@ export function BackgroundTasksPanel() {
     <Stack sx={{ flex: 1, minHeight: 0, minWidth: 0 }}>
       <Box sx={{ flexShrink: 0, maxHeight: '45%', overflowY: 'auto', px: 1, py: 1 }}>
         <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, mb: 0.5 }}>
-          <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4, fontSize: '0.625rem', flex: 1 }}>
+          <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4, fontSize: '0.6875rem', flex: 1 }}>
             Terminals ({sessions.length})
           </Typography>
           <Tooltip title="New terminal">
@@ -146,7 +140,7 @@ export function BackgroundTasksPanel() {
               <Typography variant="caption" noWrap sx={{ fontSize: '0.6875rem' }}>
                 {s.shellId}
               </Typography>
-              <Typography variant="caption" noWrap title={s.cwd} sx={{ color: 'text.disabled', fontSize: '0.625rem' }}>
+              <Typography variant="caption" noWrap title={s.cwd} sx={{ color: 'text.disabled', fontSize: '0.6875rem' }}>
                 {basename(s.cwd)}
               </Typography>
             </Stack>
@@ -167,7 +161,7 @@ export function BackgroundTasksPanel() {
           <>
             <Divider sx={{ my: 1 }} />
             <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, mb: 0.5 }}>
-              <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4, fontSize: '0.625rem', flex: 1 }}>
+              <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4, fontSize: '0.6875rem', flex: 1 }}>
                 Commands ({runningShell.length ? `${runningShell.length} running` : shellTasks.length})
               </Typography>
               {shellTasks.some((t) => t.endedAt !== undefined) && (
@@ -198,13 +192,13 @@ export function BackgroundTasksPanel() {
                       title={t.command}
                       sx={{
                         fontSize: '0.6875rem',
-                        fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+                        fontFamily: '"Geist Mono", ui-monospace, monospace',
                         color: t.isError ? 'error.main' : running ? 'text.primary' : 'text.secondary',
                       }}
                     >
                       {t.command || t.tool}
                     </Typography>
-                    <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.625rem' }}>
+                    <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.6875rem' }}>
                       {t.tool} ·{' '}
                       {running
                         ? `running · ${formatElapsed(now - t.startedAt)}`
@@ -220,7 +214,7 @@ export function BackgroundTasksPanel() {
         {subagents.length > 0 && (
           <>
             <Divider sx={{ my: 1 }} />
-            <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4, fontSize: '0.625rem', display: 'block', mb: 0.5 }}>
+            <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4, fontSize: '0.6875rem', display: 'block', mb: 0.5 }}>
               Subagents ({subagents.length})
             </Typography>
             {subagents.map((a) => (
@@ -234,7 +228,7 @@ export function BackgroundTasksPanel() {
                   <Typography variant="caption" noWrap sx={{ fontSize: '0.6875rem' }} title={a.description}>
                     {a.description}
                   </Typography>
-                  <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.625rem' }}>
+                  <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.6875rem' }}>
                     {a.status} · {formatElapsed(a.elapsedMs)}
                   </Typography>
                 </Stack>

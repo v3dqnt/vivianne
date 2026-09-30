@@ -31,6 +31,21 @@ pub struct Project {
     /// (`.is_some()`) instead of several fields that could disagree.
     #[serde(default)]
     pub multiplayer: Option<MultiplayerProjectInfo>,
+    /// How work is organised in this project, chosen when it is created:
+    /// `threads` (separate chats), `company` (a master agent that hires and
+    /// delegates), or `team` (agents the user defines, working a task in
+    /// parallel and messaging each other). `None` is a project from before
+    /// the choice existed, which works as `company`.
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+pub const PROJECT_MODES: &[&str] = &["threads", "company", "team"];
+
+/// The mode of the project whose folder is `root`.
+pub fn mode_for_workspace(root: &str) -> Option<String> {
+    let data = load().ok()?;
+    data.projects.into_iter().find(|p| p.path.as_deref() == Some(root)).and_then(|p| p.mode)
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -84,10 +99,15 @@ pub async fn cmd_list_projects() -> Result<Vec<Project>, String> {
 }
 
 #[tauri::command]
-pub async fn cmd_create_project(name: String, path: Option<String>, color: Option<String>) -> Result<Project, String> {
+pub async fn cmd_create_project(name: String, path: Option<String>, color: Option<String>, mode: Option<String>) -> Result<Project, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("Project name must not be empty".to_string());
+    }
+    if let Some(m) = &mode {
+        if !PROJECT_MODES.contains(&m.as_str()) {
+            return Err(format!("Unknown project mode '{m}' — threads, company or team"));
+        }
     }
     let mut data = load()?;
     let project = Project {
@@ -103,6 +123,7 @@ pub async fn cmd_create_project(name: String, path: Option<String>, color: Optio
         path,
         color,
         multiplayer: None,
+        mode,
     };
     data.projects.push(project.clone());
     save(&data)?;
@@ -196,6 +217,7 @@ pub async fn cmd_create_multiplayer_project(
             peer_display_name,
             git_remote,
         }),
+        mode: None,
     };
     data.projects.push(project.clone());
     save(&data)?;
@@ -262,12 +284,30 @@ pub async fn cmd_open_external(path: String, target: String) -> Result<(), Strin
         } else {
             std::process::Command::new("explorer").arg(&path).spawn().map(|_| ())
         };
-        return result.map_err(|e| format!("Failed to open {target}: {e}"));
+        result.map_err(|e| format!("Failed to open {target}: {e}"))
     }
 
-    #[cfg(not(windows))]
+    // macOS has no `x-terminal-emulator`; that name is a Debian alternatives
+    // symlink and picking it here meant every "open in terminal" on a Mac
+    // failed with ENOENT. `open -a Terminal <dir>` is the supported way to
+    // hand a directory to the terminal, and plain `open <dir>` reveals it in
+    // Finder — the same two intents Windows serves with powershell/explorer.
+    #[cfg(target_os = "macos")]
     {
-        let program = if target == "terminal" { "x-terminal-emulator" } else if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        let mut cmd = std::process::Command::new("open");
+        if target == "terminal" {
+            cmd.args(["-a", "Terminal"]);
+        }
+        return cmd
+            .arg(&path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("Failed to open {target}: {e}"));
+    }
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        let program = if target == "terminal" { "x-terminal-emulator" } else { "xdg-open" };
         std::process::Command::new(program)
             .arg(if target == "terminal" { "." } else { path.as_str() })
             .current_dir(&path)
@@ -299,4 +339,52 @@ pub async fn cmd_assign_session_project(session_id: String, project_id: Option<S
         }
     }
     save(&data)
+}
+
+/// Add a multiplayer project to a `projects.json` other than this instance's
+/// own — used to set up the matching project in a test partner's profile
+/// before launching it. A project already pointing at this peer and folder is
+/// reused. Returns the project's id.
+pub fn add_multiplayer_project_to(
+    projects_json: &std::path::Path,
+    name: &str,
+    path: &str,
+    peer_id: &str,
+    peer_display_name: Option<String>,
+) -> Result<String, String> {
+    let mut data: ProjectsData = std::fs::read_to_string(projects_json)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    if let Some(existing) = data
+        .projects
+        .iter()
+        .find(|p| p.path.as_deref() == Some(path) && p.multiplayer.as_ref().is_some_and(|m| m.peer_id == peer_id))
+    {
+        return Ok(existing.id.clone());
+    }
+    let id = format!(
+        "project_{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()
+    );
+    data.projects.push(Project {
+        id: id.clone(),
+        name: name.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        path: Some(path.to_string()),
+        color: None,
+        multiplayer: Some(MultiplayerProjectInfo { peer_id: peer_id.to_string(), peer_display_name, git_remote: None }),
+        mode: None,
+    });
+    if let Some(parent) = projects_json.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    std::fs::write(projects_json, json).map_err(|e| format!("Failed to write {}: {e}", projects_json.display()))?;
+    Ok(id)
+}
+
+/// Every project, for lookups outside this module.
+pub fn list_all() -> Vec<Project> {
+    load().map(|d| d.projects).unwrap_or_default()
 }

@@ -1,6 +1,5 @@
 import { useEffect, useId, useState } from 'react'
-import Box from '@mui/material/Box'
-import Typography from '@mui/material/Typography'
+import { Box, Typography } from '../../../ui'
 import type { default as Mermaid } from 'mermaid'
 
 // `mermaid` is 1MB+ and was previously a static top-level import, so every

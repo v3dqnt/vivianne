@@ -1,12 +1,13 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { call, on } from '../../../ipc'
-import type { AgentEvent, AgentMessage, ImageAttachment, MessageContent, QuestionSpec } from '../lib/types'
+import type { AgentEvent, AgentMessage, ImageAttachment, MessageContent, QuestionSpec, RunLedger } from '../lib/types'
 import { useModelStore } from './modelStore'
-import { usePlanModeStore } from './planModeStore'
 import { useSubagentStore } from './subagentStore'
 import { useShellTaskStore, isShellTool } from '../../dock/store/shellTaskStore'
 import { useWebPreviewStore } from './webPreviewStore'
 import { usePanelStore, type RightPanelKind } from '../../dock/store/panelStore'
+import { notifyFileChanged, resolveAgentPath } from '../../ide/lib/fileChangeBus'
+import { useWorkspaceStore } from './workspaceStore'
 
 /** Wall-clock start of the current streaming assistant message — set on
  * `message_start`, consumed on `message_end` to compute tokens/sec. Plain
@@ -18,7 +19,17 @@ const streamStartedAt = new Map<string, number>()
 /** Tool names whose start/end also drives a side-panel store, so agentStore
  * (the one place already subscribed to every tool event) can just forward
  * instead of every panel needing its own duplicate listener. */
-const PLAN_MODE_TOOLS = new Set(['enter_plan_mode', 'exit_plan_mode'])
+
+/** Computer-use tool names that should light the "Vivianne is driving the
+ * screen" indicator. The tool is `dip`; `computer` is still accepted by the
+ * backend as an alias for it (see `agent/tool_exec.rs`), so a model that calls
+ * it by that name must light the indicator too — otherwise the agent takes
+ * over the mouse with nothing on screen saying so. */
+const COMPUTER_USE_TOOLS = new Set(['dip', 'computer'])
+
+function isComputerUseTool(name: string): boolean {
+  return COMPUTER_USE_TOOLS.has(name)
+}
 
 export interface PendingPermission {
   requestId: string
@@ -117,6 +128,16 @@ interface AgentStoreState {
   setDraft: (text: string) => void
   /** What's sitting in the backend steering + follow-up queues. */
   queuedMessages: QueuedMessages
+  /** Every model failed and the run is waiting before trying again. */
+  runWaiting: { untilMs: number; reason: string } | null
+  /** The ledger of this conversation's current task (`agent::run_ledger`):
+   * status, spend, checkpoints. Every task has one. */
+  longTask: RunLedger | null
+  /** Re-read the long task for the open conversation; picks a running one
+   * back up after a relaunch. */
+  refreshLongTask: () => Promise<void>
+  /** Pause, stop, raise the caps of, or resume the long task. */
+  controlLongTask: (action: 'pause' | 'stop' | 'extend' | 'resume', add?: { usd?: number; hours?: number }) => Promise<void>
   init: () => Promise<void>
   sendMessage: (text: string, images?: ImageAttachment[]) => Promise<void>
   /** Fold older history into a summary. Returns how many messages were folded (0 = nothing to compact). */
@@ -162,7 +183,14 @@ interface ThreadScopedEvent {
 }
 
 export function createAgentStore(threadId: string): UseBoundStore<StoreApi<AgentStoreState>> {
-  return create<AgentStoreState>((set, get) => ({
+  return create<AgentStoreState>((set, get) => {
+  /** Resume the long task by sending its briefing as a message, so picking
+   * the task back up is visible in the conversation like any other turn. */
+  const resumeLongTask = async () => {
+    const prompt = await call<string | null>('cmd_long_task_resume_prompt', { threadId })
+    if (prompt) await get().sendMessage(prompt)
+  }
+  return {
     messages: [],
     isBusy: false,
     streamingIndex: null,
@@ -179,6 +207,32 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
     draft: '',
     setDraft: (text: string) => set({ draft: text }),
     queuedMessages: { steering: [], followUp: [] },
+    runWaiting: null,
+    longTask: null,
+
+    refreshLongTask: async () => {
+      if (!isPrimary(threadId)) return
+      const ledger = (await call<RunLedger | null>('cmd_long_task_get', { threadId })) ?? null
+      set({ longTask: ledger })
+      // A task that was running (or waiting out a rate limit) when the app
+      // closed carries on by itself.
+      if (ledger && (ledger.status === 'running' || ledger.status === 'waiting') && !get().isBusy) {
+        await resumeLongTask()
+      }
+    },
+
+    controlLongTask: async (action, add) => {
+      if (!isPrimary(threadId)) return
+      const ledger = await call<RunLedger | null>('cmd_long_task_control', {
+        threadId,
+        action,
+        addUsd: add?.usd ?? null,
+        addHours: add?.hours ?? null,
+      })
+      set({ longTask: action === 'stop' ? null : (ledger ?? null) })
+      if (action === 'pause' || action === 'stop') set({ runWaiting: null })
+      if (action === 'resume' && ledger && !get().isBusy) await resumeLongTask()
+    },
 
     init: async () => {
       if (get().initialized) return
@@ -193,6 +247,10 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
         }
         if (event.type !== 'credential_rotated') {
           set((s) => (s.credentialRotated ? { credentialRotated: null } : s))
+        }
+        // A wait is over the moment anything else happens on the run.
+        if (event.type !== 'run_waiting' && event.type !== 'long_task') {
+          set((s) => (s.runWaiting ? { runWaiting: null } : s))
         }
         switch (event.type) {
           case 'memory_injected': {
@@ -284,7 +342,7 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             break
           }
           case 'tool_execution_start': {
-            if (event.payload.tool_name === 'computer') set({ computerUseActive: true })
+            if (isComputerUseTool(event.payload.tool_name)) set({ computerUseActive: true })
             if (isPrimary(threadId) && event.payload.tool_name === 'task') void useSubagentStore.getState().refresh()
             // Shell tools run as one-shot processes, not PTY sessions, so the
             // Background Tasks panel (which lists terminal sessions) can only
@@ -320,11 +378,10 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             break
           }
           case 'tool_execution_end': {
-            if (event.payload.tool_name === 'computer') set({ computerUseActive: false })
+            if (isComputerUseTool(event.payload.tool_name)) set({ computerUseActive: false })
             if (isShellTool(event.payload.tool_name)) {
               useShellTaskStore.getState().finish(event.payload.tool_call_id, !!event.payload.is_error)
             }
-            if (isPrimary(threadId) && PLAN_MODE_TOOLS.has(event.payload.tool_name)) void usePlanModeStore.getState().refresh()
             if (isPrimary(threadId) && event.payload.tool_name === 'task') void useSubagentStore.getState().refresh()
             set((s) => {
               const idx = s.messages.findIndex(
@@ -334,6 +391,22 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
               const messages = [...s.messages]
               const prev = messages[idx]
               if (prev.type !== 'toolResult') return s
+              // Tell any open IDE tab for this file that it just changed on
+              // disk. `write`/`edit`/`apply_patch` all use `path`;
+              // `notebook_edit` uses `notebook_path`. Skipped on error — a
+              // failed edit didn't touch the file, so there's nothing to warn
+              // the editor about.
+              if (
+                !event.payload.is_error &&
+                ['write', 'edit', 'apply_patch', 'notebook_edit'].includes(event.payload.tool_name)
+              ) {
+                const args = prev.arguments as Record<string, unknown> | undefined
+                const rawPath = (args?.path ?? args?.notebook_path) as string | undefined
+                if (rawPath) {
+                  const root = useWorkspaceStore.getState().folders[0] ?? null
+                  notifyFileChanged(resolveAgentPath(rawPath, root))
+                }
+              }
               messages[idx] = {
                 ...prev,
                 content: event.payload.result.content,
@@ -406,6 +479,14 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             })
             break
           }
+          case 'run_waiting': {
+            set({ runWaiting: { untilMs: event.payload.until_ms, reason: event.payload.reason } })
+            break
+          }
+          case 'long_task': {
+            set({ longTask: event.payload.ledger })
+            break
+          }
           case 'credential_rotated': {
             const p = event.payload
             set({
@@ -421,13 +502,18 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             // browsing (web_preview, or any browser_* interaction tool) is
             // actually visible without the user having to go find it.
             usePanelStore.getState().openRight('preview')
-            usePanelStore.getState().setPreviewMode('browser')
+            // 'live', not 'browser'. The agent now drives the embedded webview,
+            // so this is the same page and the same session the user can click
+            // — not a parallel screenshot feed of a second browser. Sending them
+            // to 'browser' here is what kept the live view unreachable in
+            // practice, however many times it was built.
+            usePanelStore.getState().setPreviewMode('live')
             break
           }
           case 'panel_focus_requested': {
             if (!isPrimary(threadId)) break
             const p = event.payload
-            const RIGHT_PANEL_KINDS: RightPanelKind[] = ['review', 'files', 'preview', 'tasks']
+            const RIGHT_PANEL_KINDS: RightPanelKind[] = ['review', 'files', 'preview', 'tasks', 'plan']
             if (p.panel.startsWith('custom:')) {
               // Always "open" — set_panel's backend-side validation already
               // confirmed this id exists, and there's no sensible "close the
@@ -438,6 +524,14 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             } else if (p.panel === 'terminal') {
               if (p.action === 'open') usePanelStore.getState().openBottom()
               else usePanelStore.getState().closeBottom()
+            } else if (p.panel === 'documents') {
+              // Documents are a mode of the Preview panel.
+              if (p.action === 'open') {
+                usePanelStore.getState().openRight('preview')
+                usePanelStore.getState().setPreviewMode('documents')
+              } else {
+                usePanelStore.getState().closeRight('preview')
+              }
             } else if (p.panel === 'preview_dev' || p.panel === 'preview_browser') {
               if (p.action === 'open') {
                 usePanelStore.getState().openRight('preview')
@@ -606,11 +700,14 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
       set({ pendingConfirmation: null })
       await call('cmd_agent_respond_confirmation', { requestId: p.requestId, approved })
     },
-  }))
+  }
+  })
 }
 
-/** The default/primary chat thread — unchanged name and shape, so every
- * existing `useAgentStore(s => ...)` call site keeps working exactly as
- * before. Secondary threads (opened via drag-to-dock) get their own instance
- * from `threadRegistry.ts` instead of sharing this one. */
+/** The app's one live conversation — the active project's today.
+ *
+ * `createAgentStore` still takes a thread id because the backend's
+ * `AgentRegistry` is keyed that way (Viv Instant runs on its own id), but the
+ * frontend no longer opens secondary threads: split panes and tabs went away
+ * with daily conversations. */
 export const useAgentStore = createAgentStore(PRIMARY_THREAD_ID)

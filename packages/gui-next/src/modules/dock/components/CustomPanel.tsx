@@ -1,7 +1,5 @@
 import { useEffect } from 'react'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
+import { Box, Stack, Typography } from '../../../ui'
 import { usePlaybookStore } from '../../settings/store/playbookStore'
 import { isPanel } from '../../settings/lib/playbooks'
 

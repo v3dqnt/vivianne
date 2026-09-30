@@ -5,7 +5,7 @@
  * provider's history into the same `Message[]` shape, so the SDK-message
  * conversion only needs to be written once.
  */
-import { jsonSchema, tool, type AssistantContent, type ModelMessage, type ToolSet } from 'ai'
+import { APICallError, jsonSchema, tool, type AssistantContent, type ModelMessage, type ToolSet } from 'ai'
 import type { AssistantMessage, MessageContent, Message, StreamTokenEvent, ToolCall } from './types'
 import { emptyUsage, now } from './types'
 import type { IdleWatchdog } from './shared'
@@ -199,7 +199,7 @@ export async function runSdkStream(opts: {
       }
       case 'error': {
         output.stopReason = 'error'
-        output.errorMessage = part.error instanceof Error ? part.error.message : String(part.error)
+        output.errorMessage = describeProviderError(opts.provider, part.error)
         break consume
       }
       case 'abort': {
@@ -229,4 +229,29 @@ export async function runSdkStream(opts: {
   }
 
   return output
+}
+
+/**
+ * A provider failure as one line the Rust loop can act on: the HTTP status
+ * and any `retry-after` the provider sent ride along in the text, because a
+ * string is all that crosses to Rust. Without them a rate limit looks like
+ * any other failure, and the loop can only guess how long to wait — when the
+ * provider has already said exactly how long.
+ */
+export function describeProviderError(provider: string, e: unknown): string {
+  if (!APICallError.isInstance(e)) return e instanceof Error ? e.message : String(e)
+  const headers = e.responseHeaders ?? {}
+  const header = (name: string) => Object.entries(headers).find(([k]) => k.toLowerCase() === name)?.[1]
+  const ms = Number(header('retry-after-ms'))
+  const raw = header('retry-after')
+  let retryAfterSecs: number | null = null
+  if (Number.isFinite(ms) && ms > 0) retryAfterSecs = ms / 1000
+  else if (raw) {
+    // Either delta-seconds or an HTTP date.
+    const secs = Number(raw)
+    retryAfterSecs = Number.isFinite(secs) ? secs : Math.max(0, (Date.parse(raw) - Date.now()) / 1000)
+  }
+  const status = e.statusCode ? `(HTTP ${e.statusCode}) ` : ''
+  const retry = retryAfterSecs !== null && Number.isFinite(retryAfterSecs) ? ` [retry-after: ${Math.ceil(retryAfterSecs)}s]` : ''
+  return `${provider}: ${status}${e.message}${retry}`
 }

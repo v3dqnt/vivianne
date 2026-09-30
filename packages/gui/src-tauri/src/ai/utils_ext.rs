@@ -113,7 +113,7 @@ pub fn calculate_context_tokens(usage: &Usage) -> u32 {
 }
 
 pub fn estimate_text_tokens(text: &str) -> u32 {
-    ((text.len() + CHARS_PER_TOKEN - 1) / CHARS_PER_TOKEN) as u32
+    text.len().div_ceil(CHARS_PER_TOKEN) as u32
 }
 
 pub fn estimate_context_tokens(context: &Context) -> ContextUsageEstimate {
@@ -343,7 +343,7 @@ fn should_proxy_hostname(hostname: &str, port: u16, env: Option<&ProviderEnv>) -
     if no_proxy.is_empty() { return true; }
     if no_proxy == "*" { return false; }
 
-    no_proxy.split(|c| c == ',' || c == ' ').all(|entry| {
+    no_proxy.split([',', ' ']).all(|entry| {
         let entry = entry.trim();
         if entry.is_empty() { return true; }
 

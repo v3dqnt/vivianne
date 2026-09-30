@@ -271,7 +271,7 @@ pub async fn generate_llm_summary(
 /// collapsed to their name + a short preview (full tool output would blow
 /// the summarization call's own context for no benefit; the point of
 /// compaction is to shed exactly that bulk).
-fn render_transcript_for_summary(messages: &[AgentMessage]) -> String {
+pub(crate) fn render_transcript_for_summary(messages: &[AgentMessage]) -> String {
     use crate::agent::types::MessageContent;
     let mut out = String::new();
     for msg in messages {

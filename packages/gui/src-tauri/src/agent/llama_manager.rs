@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
+use tokio::io::AsyncBufReadExt;
 use tokio::process::Child;
 
 /// Which local inference server backend an endpoint runs. Both speak GGUF
@@ -53,6 +54,159 @@ pub struct LlamaProcessConfig {
     pub auto_start: bool,
     #[serde(default)]
     pub engine: LocalEngine,
+    /// Performance tuning. Every field is optional and defaults to "let the
+    /// engine decide", so an endpoint saved before these existed behaves
+    /// exactly as it did.
+    #[serde(default)]
+    pub tuning: LlamaTuning,
+}
+
+/// Optional llama.cpp performance knobs.
+///
+/// Measured on this machine (RTX 4060 Laptop, Qwen2.5-Coder-7B Q4_K_M, Vulkan
+/// build 10068, llama-bench pp512/tg64) to decide which of these are worth
+/// exposing at all:
+///
+///   auto device      pp 1954 t/s   tg 48.9 t/s
+///   pinned Vulkan1   pp 1952 t/s   tg 48.0 t/s   (the discrete GPU)
+///   pinned Vulkan0   pp   80 t/s   tg  7.7 t/s   (the Intel iGPU)
+///   Vulkan1 + q8_0 KV pp 1952 t/s  tg 48.0 t/s
+///
+/// Two conclusions drove what is here. Auto device selection already picks the
+/// right GPU, so `device` is an escape hatch rather than a fix — but the 24x
+/// spread between the two devices is why an escape hatch has to exist at all.
+/// And q8_0 KV cache costs nothing measurable in throughput while halving KV
+/// memory, which on an 8GB card is what decides how much context actually
+/// fits.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlamaTuning {
+    /// `-t`. None lets llama.cpp choose; it defaults to a count derived from
+    /// the whole CPU, which over-subscribes on hybrid P+E-core machines.
+    #[serde(default)]
+    pub threads: Option<u32>,
+    /// `--device`, e.g. "Vulkan1". None keeps auto-selection.
+    #[serde(default)]
+    pub device: Option<String>,
+    /// `-ctk`/`-ctv`, e.g. "q8_0". None means q8_0 (see the measurements
+    /// above: same throughput, half the KV memory); "f16" opts back out.
+    #[serde(default)]
+    pub kv_cache_type: Option<String>,
+    /// `--mlock`. Keeps weights resident instead of letting the OS page them
+    /// out; can fail without the privilege, so it stays opt-in.
+    #[serde(default)]
+    pub mlock: bool,
+    /// `--cache-reuse`. Server default is 0 (off); None here means
+    /// `DEFAULT_CACHE_REUSE`, Some(0) turns it off. Lets the server salvage
+    /// chunks of the KV cache when the prompt diverges mid-way and then
+    /// re-converges — which is what a compaction pass, or the agent loop
+    /// shrinking an old tool result, does to an agent's conversation.
+    #[serde(default)]
+    pub cache_reuse: Option<u32>,
+    /// `--spec-type`. None means `ngram-mod`: lossless speculative decoding
+    /// that drafts from n-grams already seen in the context, so it needs no
+    /// draft model and costs ~16 MB. An agent rewriting code it just read is
+    /// the best case for it — measured here (MiniCPM 1B, RTX 4060, 900-token
+    /// code rewrite) at 265 → 511 tokens/s once the prompt was cached.
+    /// "none" turns it off; any other value is passed through verbatim.
+    #[serde(default)]
+    pub speculative: Option<String>,
+    /// `--cache-ram` in MiB: host-RAM prompt cache that idle slots are saved
+    /// to. The server's default is 8192 MiB, which on a 16 GB laptop is half
+    /// the machine held for cache hits between conversations. None means
+    /// `DEFAULT_CACHE_RAM_MIB`; -1 is unlimited, 0 disables it.
+    #[serde(default)]
+    pub cache_ram_mib: Option<i32>,
+    /// `--sleep-idle-seconds`: unload the model after this long without a
+    /// request, and reload it on the next one. Returns the whole VRAM/RAM
+    /// allocation to the machine while nobody is talking to the model. The
+    /// health poll does not count as a request (checked against build
+    /// 10068), so a sleeping server still reads as Running. None/0 = never.
+    #[serde(default)]
+    pub sleep_idle_seconds: Option<u32>,
+    /// Raw extra flags, split on whitespace. The escape hatch: llama.cpp gains
+    /// flags faster than this struct can track them, and without this the only
+    /// way to pass one was to not use the app.
+    #[serde(default)]
+    pub extra_args: Option<String>,
+}
+
+/// How many trailing stderr lines to keep per instance. llama.cpp is chatty at
+/// load time; the last few lines are where the actual failure appears.
+const STDERR_TAIL_LINES: usize = 40;
+
+/// How long a starting server gets to answer its health check.
+const STARTUP_TIMEOUT_SECS: u32 = 120;
+
+/// The UI's "offload everything" value for `ngl`. Passing it literally
+/// disables llama.cpp's `--fit` (which only adjusts arguments the user left
+/// unset), so a model plus context that doesn't fit in VRAM fails to load or
+/// spills unpredictably instead of being fitted layer by layer — and a MoE
+/// model never gets its experts moved to the CPU. Treated as "unset".
+pub const NGL_ALL: u32 = 999;
+const DEFAULT_KV_CACHE_TYPE: &str = "q8_0";
+const DEFAULT_CACHE_REUSE: u32 = 256;
+const DEFAULT_SPECULATIVE: &str = "ngram-mod";
+const DEFAULT_CACHE_RAM_MIB: i32 = 2048;
+
+/// llama-server arguments for an endpoint. Split out of `start` so the
+/// defaulting rules above can be tested without spawning a process.
+fn llama_cpp_args(config: &LlamaProcessConfig) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-m".into(), config.model_path.clone(),
+        "--port".into(), config.port.to_string(),
+        "--ctx-size".into(), config.ctx_size.to_string(),
+        "--host".into(), "127.0.0.1".into(),
+        // Without this, llama-server ignores the GGUF's embedded chat
+        // template and falls back to a plain completion format: the model
+        // still sees the `tools` schema in the prompt and tries to answer
+        // with one, but the reply comes back as markdown-fenced JSON in
+        // `content` with `finish_reason: "stop"` — never a real `tool_calls`
+        // field — so Vivianne's agent loop can't act on it.
+        "--jinja".into(),
+    ];
+    if config.ngl < NGL_ALL {
+        args.extend(["-ngl".into(), config.ngl.to_string()]);
+    }
+
+    let t = &config.tuning;
+    let set = |v: &Option<String>| v.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from);
+    if let Some(dev) = set(&t.device) {
+        args.extend(["--device".into(), dev]);
+    }
+    if let Some(threads) = t.threads.filter(|n| *n > 0) {
+        args.extend(["-t".into(), threads.to_string()]);
+    }
+    let kv = set(&t.kv_cache_type).unwrap_or_else(|| DEFAULT_KV_CACHE_TYPE.into());
+    if kv != "f16" {
+        // Quantising V requires Flash Attention. It defaults to `auto`;
+        // asking for it explicitly means a build where auto declines still
+        // gets a working K/V pair rather than failing to start.
+        args.extend(["-fa".into(), "on".into(), "-ctk".into(), kv.clone(), "-ctv".into(), kv]);
+    }
+    if t.mlock {
+        args.push("--mlock".into());
+    }
+    let reuse = t.cache_reuse.unwrap_or(DEFAULT_CACHE_REUSE);
+    if reuse > 0 {
+        args.extend(["--cache-reuse".into(), reuse.to_string()]);
+    }
+    let spec = set(&t.speculative).unwrap_or_else(|| DEFAULT_SPECULATIVE.into());
+    if spec != "none" {
+        args.extend(["--spec-type".into(), spec]);
+    }
+    args.extend(["--cache-ram".into(), t.cache_ram_mib.unwrap_or(DEFAULT_CACHE_RAM_MIB).to_string()]);
+    if let Some(secs) = t.sleep_idle_seconds.filter(|s| *s > 0) {
+        args.extend(["--sleep-idle-seconds".into(), secs.to_string()]);
+    }
+    if let Some(extra) = t.extra_args.as_deref() {
+        // Whitespace split, not a shell parse: these go straight to
+        // `Command::args`, so nothing is interpreted by a shell and a quoted
+        // value with spaces is not supported (nor needed by any flag). Last,
+        // so a flag repeated here overrides the default above.
+        args.extend(extra.split_whitespace().map(String::from));
+    }
+    args
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -134,22 +288,7 @@ impl LlamaManager {
 
         match config.engine {
             LocalEngine::LlamaCpp => {
-                cmd.args([
-                    "-m", &config.model_path,
-                    "--port", &config.port.to_string(),
-                    "--ctx-size", &config.ctx_size.to_string(),
-                    "-ngl", &config.ngl.to_string(),
-                    "--host", "127.0.0.1",
-                    // Without this, llama-server ignores the GGUF's embedded
-                    // chat template and falls back to a plain completion
-                    // format: the model still sees the `tools` schema in the
-                    // prompt and tries to answer with one, but the reply
-                    // comes back as markdown-fenced JSON in `content` with
-                    // `finish_reason: "stop"` — never a real `tool_calls`
-                    // field — so Vivianne's agent loop can't act on it and
-                    // the model is left unable to actually use anything.
-                    "--jinja",
-                ]);
+                cmd.args(llama_cpp_args(&config));
             }
             LocalEngine::MistralRs => {
                 cmd.args([
@@ -169,8 +308,12 @@ impl LlamaManager {
             }
         }
 
+        // stderr was piped to null, so a model that failed to load, a flag the
+        // build rejected, or an out-of-VRAM abort all surfaced as the same
+        // generic "didn't become ready within 30s". Capture it instead and put
+        // the tail in the crash status.
         cmd.stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::null());
 
         #[cfg(windows)]
@@ -191,6 +334,27 @@ impl LlamaManager {
             }
         };
 
+        // Drain stderr into a bounded tail. This is not optional bookkeeping:
+        // with `Stdio::piped()` and nothing reading it, the pipe buffer fills
+        // and llama-server blocks forever inside its own logging.
+        let mut child = child;
+        let stderr_tail: Arc<Mutex<std::collections::VecDeque<String>>> =
+            Arc::new(Mutex::new(std::collections::VecDeque::with_capacity(STDERR_TAIL_LINES)));
+        if let Some(pipe) = child.stderr.take() {
+            let tail = stderr_tail.clone();
+            tokio::spawn(async move {
+                let mut lines = tokio::io::BufReader::new(pipe).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if let Ok(mut buf) = tail.lock() {
+                        if buf.len() == STDERR_TAIL_LINES {
+                            buf.pop_front();
+                        }
+                        buf.push_back(line);
+                    }
+                }
+            });
+        }
+
         // Create a stop flag for this instance and store child + flag
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_flag_clone = stop_flag.clone();
@@ -208,6 +372,7 @@ impl LlamaManager {
         let id_clone = id.to_string();
         let port = config.port;
         let engine = config.engine;
+        let stderr_tail_for_monitor = stderr_tail.clone();
         tokio::spawn(async move {
             let health_url = match engine {
                 LocalEngine::LlamaCpp => format!("http://127.0.0.1:{port}/v1/models"),
@@ -218,14 +383,30 @@ impl LlamaManager {
                 .build()
                 .unwrap_or_default();
 
-            // Phase 1: wait up to 30s for the server to start responding
+            // Phase 1: wait for the server to start responding. Generous,
+            // because `--fit` probes device memory before loading and a
+            // multi-GB GGUF off a cold disk can take a while — but a process
+            // that has already exited is reported at once rather than after
+            // the full window.
             let mut ready = false;
-            for _ in 0..30 {
+            for _ in 0..STARTUP_TIMEOUT_SECS {
                 if stop_flag_clone.load(Ordering::SeqCst) {
                     ready = false;
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let exited = app_clone
+                    .try_state::<Arc<LlamaManager>>()
+                    .map(|m| {
+                        let mut map = m.instances.lock().expect("llama manager lock");
+                        map.get_mut(&id_clone)
+                            .and_then(|i| i.child.as_mut())
+                            .is_some_and(|c| matches!(c.try_wait(), Ok(Some(_))))
+                    })
+                    .unwrap_or(false);
+                if exited {
+                    break;
+                }
                 if client.get(&health_url).send().await
                     .map(|r| r.status().is_success())
                     .unwrap_or(false)
@@ -242,9 +423,19 @@ impl LlamaManager {
                     if ready {
                         inst.status = LlamaStatus::Running;
                     } else if inst.status == LlamaStatus::Starting {
+                        // The generic timeout said nothing about WHY. The
+                        // real reason — a bad GGUF, a flag this build rejects,
+                        // out of VRAM — is always in llama.cpp's own output.
+                        let detail = stderr_tail_for_monitor
+                            .lock()
+                            .ok()
+                            .map(|b| b.iter().cloned().collect::<Vec<_>>().join("\n"))
+                            .filter(|t| !t.trim().is_empty())
+                            .map(|t| format!("\n\nLast output from {binary}:\n{t}"))
+                            .unwrap_or_default();
                         inst.status = LlamaStatus::Crashed(format!(
-                            "{binary} started but didn't become ready within 30s — \
-                             check that the model file is valid and {binary} can load it."
+                            "{binary} exited or didn't become ready within {STARTUP_TIMEOUT_SECS}s — \
+                             check that the model file is valid and {binary} can load it.{detail}"
                         ));
                     }
                 }
@@ -382,6 +573,10 @@ impl LlamaManager {
                     "ctxSize": i.config.ctx_size,
                     "autoStart": i.config.auto_start,
                     "engine": i.config.engine,
+                    // Without this the frontend never saw an endpoint's
+                    // tuning: the edit dialog opened blank, and the next save
+                    // (which persists what this list returns) wiped it.
+                    "tuning": i.config.tuning,
                     "status": i.status,
                 })
             })
@@ -461,6 +656,9 @@ pub async fn cmd_llama_register(
     // confirmed-working way to keep old frontend calls (pre-dating this
     // field) from breaking on a missing `engine` key in the invoke payload.
     engine: Option<LocalEngine>,
+    // Same Option-not-serde-default reasoning as `engine` above: endpoints
+    // saved before tuning existed simply omit the key.
+    tuning: Option<LlamaTuning>,
     manager: tauri::State<'_, Arc<LlamaManager>>,
 ) -> Result<(), String> {
     let config = LlamaProcessConfig {
@@ -472,6 +670,7 @@ pub async fn cmd_llama_register(
         ctx_size,
         auto_start,
         engine: engine.unwrap_or_default(),
+        tuning: tuning.unwrap_or_default(),
     };
     manager.register(config);
     Ok(())
@@ -486,4 +685,64 @@ pub async fn cmd_llama_unregister(
     manager.stop(&id).await?;
     manager.remove(&id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(ngl: u32, tuning: LlamaTuning) -> LlamaProcessConfig {
+        LlamaProcessConfig {
+            id: "t".into(),
+            name: "t".into(),
+            model_path: "m.gguf".into(),
+            port: 8081,
+            ngl,
+            ctx_size: 32768,
+            auto_start: false,
+            engine: LocalEngine::LlamaCpp,
+            tuning,
+        }
+    }
+
+    fn has(args: &[String], pair: &[&str]) -> bool {
+        args.windows(pair.len()).any(|w| w.iter().zip(pair).all(|(a, b)| a == b))
+    }
+
+    #[test]
+    fn untuned_endpoint_gets_the_memory_and_speed_defaults() {
+        let args = llama_cpp_args(&config(NGL_ALL, LlamaTuning::default()));
+        assert!(!args.iter().any(|a| a == "-ngl"), "offload-all must leave -ngl unset so --fit can work: {args:?}");
+        assert!(has(&args, &["-ctk", "q8_0"]) && has(&args, &["-ctv", "q8_0"]) && has(&args, &["-fa", "on"]));
+        assert!(has(&args, &["--cache-reuse", "256"]));
+        assert!(has(&args, &["--spec-type", "ngram-mod"]));
+        assert!(has(&args, &["--cache-ram", "2048"]));
+        assert!(!args.iter().any(|a| a == "--sleep-idle-seconds"));
+        assert!(args.iter().any(|a| a == "--jinja"));
+    }
+
+    #[test]
+    fn explicit_values_opt_out_of_each_default() {
+        let args = llama_cpp_args(&config(20, LlamaTuning {
+            kv_cache_type: Some("f16".into()),
+            cache_reuse: Some(0),
+            speculative: Some("none".into()),
+            cache_ram_mib: Some(0),
+            sleep_idle_seconds: Some(600),
+            extra_args: Some("--no-context-shift  -np 1".into()),
+            ..Default::default()
+        }));
+        assert!(has(&args, &["-ngl", "20"]));
+        assert!(!args.iter().any(|a| a == "-ctk" || a == "--cache-reuse" || a == "--spec-type"));
+        assert!(has(&args, &["--cache-ram", "0"]));
+        assert!(has(&args, &["--sleep-idle-seconds", "600"]));
+        assert!(args.ends_with(&["--no-context-shift".to_string(), "-np".into(), "1".into()]));
+    }
+
+    #[test]
+    fn tuning_saved_before_the_new_fields_still_deserializes() {
+        let t: LlamaTuning = serde_json::from_value(serde_json::json!({ "kvCacheType": "q4_0", "mlock": true })).unwrap();
+        assert_eq!(t.kv_cache_type.as_deref(), Some("q4_0"));
+        assert!(t.speculative.is_none() && t.cache_ram_mib.is_none() && t.sleep_idle_seconds.is_none());
+    }
 }

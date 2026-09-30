@@ -1,18 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import Box from '@mui/material/Box'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import IconButton from '@mui/material/IconButton'
-import Button from '@mui/material/Button'
-import ButtonBase from '@mui/material/ButtonBase'
-import TextField from '@mui/material/TextField'
-import Select from '@mui/material/Select'
-import MenuItem from '@mui/material/MenuItem'
-import Chip from '@mui/material/Chip'
-import Checkbox from '@mui/material/Checkbox'
-import Switch from '@mui/material/Switch'
-import CircularProgress from '@mui/material/CircularProgress'
-import Tooltip from '@mui/material/Tooltip'
+import { Box, Stack, Typography, IconButton, Button, ButtonBase, TextField, Select, MenuItem, Chip, Checkbox, Switch, CircularProgress, Tooltip } from '../../../ui'
 import { AddLinear, RefreshLinear, SearchNormalLinear, ArrowLeftLinear, TrashLinear, EditLinear, UserOctagonLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { useModelStore } from '../../ai/store/modelStore'
@@ -33,7 +20,7 @@ interface ToolInfo {
  * than a shared import so this section doesn't risk destabilizing the
  * already-verified picker; the two lists are small enough that the
  * duplication is cheap). */
-function useModelOptions(): SubagentModelOverride[] {
+export function useModelOptions(): SubagentModelOverride[] {
   const cloudModels = useModelStore((s) => s.models)
   const init = useModelStore((s) => s.init)
   const llamaEndpoints = useLlamaStore((s) => s.endpoints)
@@ -108,8 +95,8 @@ function BuiltinRow({
           <Typography variant="body2" sx={{ fontWeight: 700 }}>
             {profile.name}
           </Typography>
-          <Chip size="small" label="Built-in" sx={{ fontSize: '0.625rem', height: 18 }} />
-          <Chip size="small" label={toolSummary(profile.allowedTools)} sx={{ fontSize: '0.625rem', height: 18 }} />
+          <Chip size="small" label="Built-in" sx={{ fontSize: '0.6875rem', height: 18 }} />
+          <Chip size="small" label={toolSummary(profile.allowedTools)} sx={{ fontSize: '0.6875rem', height: 18 }} />
         </Stack>
         <Typography variant="caption" color="text.secondary">
           {profile.description}
@@ -157,8 +144,8 @@ function CustomRow({ profile, onEdit, onDelete }: { profile: SubagentProfile; on
           <Typography variant="body2" sx={{ fontWeight: 700 }}>
             {profile.name}
           </Typography>
-          <Chip size="small" label={toolSummary(profile.allowedTools)} sx={{ fontSize: '0.625rem', height: 18 }} />
-          {profile.model && <Chip size="small" label={profile.model.name} sx={{ fontSize: '0.625rem', height: 18 }} />}
+          <Chip size="small" label={toolSummary(profile.allowedTools)} sx={{ fontSize: '0.6875rem', height: 18 }} />
+          {profile.model && <Chip size="small" label={profile.model.name} sx={{ fontSize: '0.6875rem', height: 18 }} />}
         </Stack>
         <Typography variant="caption" color="text.secondary">
           {profile.description || 'No description.'}

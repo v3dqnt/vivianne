@@ -1,10 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import ButtonBase from '@mui/material/ButtonBase'
-import Popover from '@mui/material/Popover'
-import InputBase from '@mui/material/InputBase'
-import CircularProgress from '@mui/material/CircularProgress'
+import { Stack, Typography, ButtonBase, Popover, InputBase, CircularProgress } from '../../../ui'
 import { Hierarchy2Linear, SearchNormalLinear, TickCircleLinear, AddLinear, ArrowDownLinear } from '../../../icons'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useGitStore } from '../../git/store/gitStore'
@@ -87,7 +82,7 @@ export function BranchIndicator() {
         sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.375, borderRadius: 999, color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } }}
       >
         <Hierarchy2Linear size={13} color="currentColor" />
-        <Typography variant="caption" noWrap sx={{ fontWeight: 500 }}>
+        <Typography className="cq-label-sm" variant="caption" noWrap sx={{ fontWeight: 500 }} title={branch}>
           {branch}
         </Typography>
         <ArrowDownLinear size={10} color="currentColor" />
@@ -107,7 +102,7 @@ export function BranchIndicator() {
         </Stack>
 
         <Stack sx={{ maxHeight: 280, overflowY: 'auto', py: 0.5 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ px: 1.5, py: 0.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, fontSize: '0.625rem' }}>
+          <Typography variant="caption" color="text.secondary" sx={{ px: 1.5, py: 0.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, fontSize: '0.6875rem' }}>
             Branches
           </Typography>
           {filtered.length === 0 ? (

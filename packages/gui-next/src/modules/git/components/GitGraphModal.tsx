@@ -1,10 +1,4 @@
-import Dialog from '@mui/material/Dialog'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import IconButton from '@mui/material/IconButton'
-import Box from '@mui/material/Box'
-import Chip from '@mui/material/Chip'
-import Tooltip from '@mui/material/Tooltip'
+import { Dialog, Stack, Typography, IconButton, Box, Chip, Tooltip } from '../../../ui'
 import { Hierarchy2Linear, RefreshLinear, CloseCircleLinear } from '../../../icons'
 import { useGitStore } from '../store/gitStore'
 
@@ -59,8 +53,8 @@ export function GitGraphModal({ open, onClose, root }: { open: boolean; onClose:
               >
                 <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: i === 0 ? 'warning.main' : 'text.disabled' }} />
                 <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, minWidth: 0 }}>
-                  {i === 0 && <Chip size="small" label="HEAD" variant="outlined" sx={{ height: 18, fontSize: '0.625rem', borderColor: 'warning.main', color: 'warning.main' }} />}
-                  {i === 0 && branchesByHead.map((b) => <Chip key={b} size="small" label={b} sx={{ height: 18, fontSize: '0.625rem' }} />)}
+                  {i === 0 && <Chip size="small" label="HEAD" variant="outlined" sx={{ height: 18, fontSize: '0.6875rem', borderColor: 'warning.main', color: 'warning.main' }} />}
+                  {i === 0 && branchesByHead.map((b) => <Chip key={b} size="small" label={b} sx={{ height: 18, fontSize: '0.6875rem' }} />)}
                   <Typography variant="body2" noWrap sx={{ fontSize: '0.8125rem' }}>
                     {c.message}
                   </Typography>
@@ -71,7 +65,7 @@ export function GitGraphModal({ open, onClose, root }: { open: boolean; onClose:
                 <Typography variant="caption" color="text.secondary" noWrap>
                   {c.author}
                 </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ fontFamily: '"JetBrains Mono", ui-monospace, monospace' }}>
+                <Typography variant="caption" color="text.secondary" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
                   {c.hash.slice(0, 7)}
                 </Typography>
               </Box>

@@ -177,6 +177,10 @@ pub struct ChatCompletionRequest {
     /// Mistral tool_choice variant (any | required | …)
     #[serde(rename = "toolChoice", skip_serializing_if = "Option::is_none")]
     pub tool_choice_camel: Option<Value>,
+    /// llama.cpp server: extra variables for the model's Jinja chat template,
+    /// e.g. `{"enable_thinking": false}` for hybrid-reasoning models.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_template_kwargs: Option<Value>,
 }
 
 /// `stream_options` object (usage reporting during streaming).
@@ -568,8 +572,7 @@ pub fn build_header_map(
 #[allow(dead_code)]
 pub fn parse_sse_data(line: &str) -> Option<&str> {
     let line = line.trim();
-    if line.starts_with("data: ") {
-        let payload = &line["data: ".len()..];
+    if let Some(payload) = line.strip_prefix("data: ") {
         if payload == "[DONE]" {
             None
         } else {

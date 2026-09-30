@@ -164,16 +164,20 @@ impl PersonaMode {
 
     /// Tool names withheld from the model in this mode (in addition to
     /// whatever the user has disabled in Settings). Empty for `Agent`.
+    ///
+    /// Computer control is listed under BOTH its names (`dip`, and the
+    /// `computer` alias `tool_exec` still accepts). Listing only one would
+    /// leave the read-only modes a working name for the same tool.
     pub fn restricted_tools(&self) -> &'static [&'static str] {
         match self {
             PersonaMode::Agent => &[],
             PersonaMode::Ask => &[
-                "write", "edit", "apply_patch", "bash", "powershell", "computer", "task", "connect_mcp_server",
+                "write", "edit", "apply_patch", "bash", "powershell", "dip", "computer", "task", "connect_mcp_server",
                 "create_automation", "delete_automation", "set_automation_enabled", "terminal_open", "terminal_send",
             ],
             PersonaMode::Debug => &["write", "edit", "apply_patch", "task"],
             PersonaMode::Explore => &[
-                "write", "edit", "apply_patch", "bash", "powershell", "computer", "task",
+                "write", "edit", "apply_patch", "bash", "powershell", "dip", "computer", "task",
                 "web_fetch", "web_search", "connect_mcp_server", "terminal_open", "terminal_send",
                 "create_automation", "delete_automation", "set_automation_enabled",
             ],

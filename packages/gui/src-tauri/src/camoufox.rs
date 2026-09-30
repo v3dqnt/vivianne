@@ -26,9 +26,14 @@ use tokio::sync::Mutex;
 
 const DEFAULT_BASE_URL: &str = "http://localhost:9377";
 const CAMOUFOX_PACKAGE: &str = "@askjo/camofox-browser";
+/// The version installed and expected. Pinned rather than "latest at first
+/// install": the old unpinned install stayed on whatever version it first got
+/// forever (1.13.0, missing the later tab-timeout and Windows fixes). An older
+/// install is replaced on the next launch; see `is_installed`.
+const CAMOUFOX_VERSION: &str = "1.17.0";
 /// Fixed single-user identity — Vivianne is a personal desktop app, not a
 /// multi-tenant server, so there's no real "which user" to distinguish.
-const USER_ID: &str = "vivianne";
+pub(crate) const USER_ID: &str = "vivianne";
 /// Fixed session key scoping Vivianne's browsing profile/cookie-jar on the
 /// camoufox-browser server. Required by `POST /tabs` (returns 400 "userId
 /// and sessionKey required" without it) despite being documented as optional.
@@ -106,7 +111,22 @@ fn camoufox_js_path() -> Result<PathBuf, String> {
 /// what let a broken install persist across restarts instead of being
 /// repaired on the next launch.
 fn is_installed() -> bool {
-    server_entry().ok().is_some_and(|p| p.exists()) && native_modules_built()
+    server_entry().ok().is_some_and(|p| p.exists()) && native_modules_built() && installed_version_current()
+}
+
+/// Whether the installed package is at least `CAMOUFOX_VERSION`.
+fn installed_version_current() -> bool {
+    let Ok(dir) = install_dir() else { return false };
+    let manifest = dir.join("node_modules").join("@askjo").join("camofox-browser").join("package.json");
+    let Some(version) = std::fs::read_to_string(manifest)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("version").and_then(|x| x.as_str()).map(String::from))
+    else {
+        return false;
+    };
+    let parse = |v: &str| v.split('.').map(|n| n.parse::<u32>().unwrap_or(0)).collect::<Vec<_>>();
+    parse(&version) >= parse(CAMOUFOX_VERSION)
 }
 
 /// Same check, for `optional_components::status` to report — this only
@@ -129,11 +149,11 @@ async fn install() -> Result<(), String> {
 
     let mut cmd = if cfg!(windows) {
         let mut c = tokio::process::Command::new("cmd");
-        c.args(["/C", "npm", "install", "--ignore-scripts", CAMOUFOX_PACKAGE]);
+        c.args(["/C", "npm", "install", "--ignore-scripts", &format!("{CAMOUFOX_PACKAGE}@{CAMOUFOX_VERSION}")]);
         c
     } else {
         let mut c = tokio::process::Command::new("npm");
-        c.args(["install", "--ignore-scripts", CAMOUFOX_PACKAGE]);
+        c.args(["install", "--ignore-scripts", &format!("{CAMOUFOX_PACKAGE}@{CAMOUFOX_VERSION}")]);
         c
     };
 
@@ -255,7 +275,7 @@ fn native_modules_built() -> bool {
 
 // ── Base URL ──────────────────────────────────────────────────────────────
 
-async fn base_url() -> String {
+pub(crate) async fn base_url() -> String {
     crate::agent::tool_exec::read_settings_json()
         .await
         .get("camoufoxUrl")
@@ -267,27 +287,59 @@ async fn base_url() -> String {
 
 // ── HTTP client ───────────────────────────────────────────────────────────
 
-fn client() -> reqwest::Client {
+pub(crate) fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
-fn not_running_err(base: &str, detail: impl std::fmt::Display) -> String {
-    format!(
-        "Error: couldn't reach camoufox-browser at {base} ({detail}). \
-         Vivianne tried to start it automatically — if it keeps failing, try running \
-         `npm install @askjo/camofox-browser` in your terminal to check for errors, \
-         or set the URL under Settings if you run it on a non-default port."
-    )
+pub(crate) fn not_running_err(base: &str, detail: impl std::fmt::Display) -> String {
+    // The old message always blamed the install and told the user to reinstall.
+    // That is simultaneously the least likely cause and the most expensive fix.
+    // The actual reason is in the launch log, so lead with it when there is one.
+    let hint = match launch_log_tail() {
+        Some(t) => format!("\n\ncamofox-browser's own last output:\n{t}"),
+        None => " Vivianne tried to start it automatically. If this persists, check that Node.js is on \
+                  PATH and that nothing else holds the port, or set the URL under Settings if you run \
+                  it on a non-default port."
+            .to_string(),
+    };
+    format!("Error: couldn't reach camoufox-browser at {base} ({detail}).{hint}")
+}
+
+/// The last few lines the server printed on its way down, if it left any.
+///
+/// Deliberately short, and error/warn lines first: the point is to put the one
+/// line that names the cause ("port in use", a missing browser engine) in front
+/// of the user, not a wall of plugin-load chatter.
+fn launch_log_tail() -> Option<String> {
+    let path = install_dir().ok()?.join("camofox-launch.log");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let flagged: Vec<&str> = raw
+        .lines()
+        .filter(|l| l.contains("\"error\"") || l.contains("\"warn\""))
+        .collect();
+    let source = if flagged.is_empty() { raw.lines().collect::<Vec<_>>() } else { flagged };
+    let tail: Vec<&str> = source.into_iter().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let joined = tail.join("\n");
+    if joined.trim().is_empty() { None } else { Some(joined) }
 }
 
 // ── Health check ──────────────────────────────────────────────────────────
 
 pub async fn health() -> bool {
     let base = base_url().await;
-    client()
+    // A short connect timeout, not the 30s general client: on Windows a
+    // connection to a closed local port isn't refused instantly — it takes
+    // ~2s of retries — and every web search starts with this check. A local
+    // server that's up answers in milliseconds.
+    let quick = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_millis(400))
+        .timeout(std::time::Duration::from_millis(1500))
+        .build()
+        .unwrap_or_else(|_| client());
+    quick
         .get(format!("{base}/health"))
         .send()
         .await
@@ -312,10 +364,22 @@ fn spawn_camoufox() -> Result<(), String> {
 
     let dir = install_dir()?;
     let mut cmd = std::process::Command::new("node");
+    // stderr went to /dev/null, so every launch failure looked identical from
+    // the outside: "couldn't reach camoufox-browser". The server itself reports
+    // exactly what went wrong — the failure that prompted this change was
+    // `{"level":"error","msg":"port in use","port":9377}`, which the user never
+    // saw and which the generic error message then mis-diagnosed as a broken
+    // install. Redirected to a file rather than a pipe because the process is
+    // spawned detached, so there is no parent left to drain a pipe.
+    let log_path = dir.join("camofox-launch.log");
+    let log = std::fs::File::create(&log_path).ok();
     cmd.arg(&bin)
         .current_dir(&dir)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(match log {
+            Some(f) => std::process::Stdio::from(f),
+            None => std::process::Stdio::null(),
+        })
         .stdin(std::process::Stdio::null());
 
     #[cfg(windows)]
@@ -336,7 +400,7 @@ fn spawn_camoufox() -> Result<(), String> {
 /// Make sure camoufox-browser is installed and running before doing anything
 /// else. Installs the package if missing, launches the server if not running.
 /// Called at the top of every entry point (`navigate`, `search`).
-async fn ensure_running() -> Result<(), String> {
+pub(crate) async fn ensure_running() -> Result<(), String> {
     if health().await {
         INSTALL_CONFIRMED.store(true, Ordering::SeqCst);
         return Ok(());
@@ -532,6 +596,24 @@ async fn current_tab() -> Result<String, String> {
     CURRENT_TAB.lock().await.clone().ok_or_else(|| "Error: no active browser tab — navigate somewhere first.".to_string())
 }
 
+/// Whether a server error means the tab we were holding is gone.
+///
+/// camofox closes idle tabs and restarts the browser process on its own
+/// (`BROWSER_IDLE_TIMEOUT_MS`, an RSS threshold), answering HTTP 410 with
+/// `browser_restarted` afterwards. Nothing here noticed: `CURRENT_TAB` kept the
+/// dead id forever, so every later screenshot and every later interaction
+/// failed against a tab that no longer existed. The preview panel's poll
+/// swallowed those failures by design, which is why it appeared to update only
+/// when a tool happened to fire rather than on its timer.
+fn is_stale_tab_error(msg: &str) -> bool {
+    msg.contains("browser_restarted") || msg.contains("Tab no longer exists") || msg.contains("(410")
+}
+
+/// Drop the remembered tab so the next call creates a fresh one.
+async fn forget_tab() {
+    *CURRENT_TAB.lock().await = None;
+}
+
 /// POST to `/tabs/{tab_id}/{path}` with `body`, then return a fresh
 /// screenshot — same "act, then re-screenshot" shape as `history_action`, so
 /// every interaction tool keeps the (to-be-merged) preview panel current.
@@ -550,6 +632,32 @@ async fn interact(tab_id: &str, path: &str, body: Value) -> Result<NavigateResul
     }
     let screenshot_base64 = take_screenshot(tab_id).await.ok();
     Ok(NavigateResult { tab_id: tab_id.to_string(), screenshot_base64, title_hint: None })
+}
+
+/// Same as `interact`, but recovers from the tab having been reaped.
+///
+/// An idle timeout between two agent steps used to surface as a hard failure
+/// mid-flow ("Tab no longer exists"), which the model could only respond to by
+/// starting the whole browsing task again. Re-opening the last URL and retrying
+/// once turns that into a hiccup. Only ONE retry, and only for the stale-tab
+/// case: a click that genuinely fails must still fail.
+async fn interact_recovering(path: &str, mut body: Value) -> Result<NavigateResult, String> {
+    let tab_id = current_tab().await?;
+    match interact(&tab_id, path, body.clone()).await {
+        Err(e) if is_stale_tab_error(&e) => {
+            log::info!("[camoufox] tab was reaped; reopening and retrying {path}");
+            forget_tab().await;
+            let url = CURRENT_URL.lock().await.clone();
+            let Some(url) = url else { return Err(e) };
+            navigate(&url).await?;
+            let fresh = current_tab().await?;
+            if let Some(obj) = body.as_object_mut() {
+                obj.insert("tabId".to_string(), Value::String(fresh.clone()));
+            }
+            interact(&fresh, path, body).await
+        }
+        other => other,
+    }
 }
 
 /// The server's error responses (click/type/press/scroll, tab creation,
@@ -622,29 +730,25 @@ pub async fn snapshot(offset: Option<u32>) -> Result<SnapshotResult, String> {
 
 /// Click the element with accessibility ref `r` (from `snapshot`).
 pub async fn click(r: &str) -> Result<NavigateResult, String> {
-    let tab_id = current_tab().await?;
-    interact(&tab_id, "click", json!({ "userId": USER_ID, "ref": r })).await
+    interact_recovering("click", json!({ "userId": USER_ID, "ref": r })).await
 }
 
 /// Fill `text` into the element with accessibility ref `r`; `submit` presses
 /// Enter afterward (e.g. to submit a search box).
 pub async fn type_text(r: &str, text: &str, submit: bool) -> Result<NavigateResult, String> {
-    let tab_id = current_tab().await?;
-    interact(&tab_id, "type", json!({ "userId": USER_ID, "ref": r, "text": text, "mode": "fill", "submit": submit })).await
+    interact_recovering("type", json!({ "userId": USER_ID, "ref": r, "text": text, "mode": "fill", "submit": submit })).await
 }
 
 /// Press a single key or combo (e.g. `"Enter"`, `"Control+A"`) at whatever
 /// currently has focus.
 pub async fn press_key(key: &str) -> Result<NavigateResult, String> {
-    let tab_id = current_tab().await?;
-    interact(&tab_id, "press", json!({ "userId": USER_ID, "key": key })).await
+    interact_recovering("press", json!({ "userId": USER_ID, "key": key })).await
 }
 
 /// Scroll the page. `direction` is `up`/`down`/`left`/`right`, `amount` is
 /// pixels (camoufox-browser defaults this to 500 when omitted).
 pub async fn scroll(direction: &str, amount: i64) -> Result<NavigateResult, String> {
-    let tab_id = current_tab().await?;
-    interact(&tab_id, "scroll", json!({ "userId": USER_ID, "direction": direction, "amount": amount })).await
+    interact_recovering("scroll", json!({ "userId": USER_ID, "direction": direction, "amount": amount })).await
 }
 
 /// Evaluate arbitrary JS in the page context and return its result. The only
@@ -801,4 +905,118 @@ pub async fn fetch_with_progress(app: &tauri::AppHandle) -> Result<(), String> {
     }
     crate::optional_components::emit(app, "camoufox", Some(100), "Camoufox is ready.");
     Ok(())
+}
+
+/// Screenshot whatever tab is currently open, without touching it.
+///
+/// Distinct from `refresh()`, which reloads the page: the preview panel needs a
+/// fresh *picture* every second or so while the agent works, and reloading to
+/// get one would discard form state, scroll position, and any half-finished
+/// flow — turning a passive view into an action with side effects.
+///
+/// `Ok(None)` means there is simply no tab open yet, which is the normal state
+/// before the first navigation and not worth surfacing as an error.
+pub async fn live_screenshot() -> Result<Option<String>, String> {
+    let tab_id = { CURRENT_TAB.lock().await.clone() };
+    let Some(tab_id) = tab_id else { return Ok(None) };
+    // Deliberately does NOT call `ensure_running`: this runs on a timer, and a
+    // poll must never be what triggers a multi-minute install, nor retry-storm
+    // a server that is down. If the browser is not up there is nothing to show.
+    if !health().await {
+        return Ok(None);
+    }
+    match take_screenshot(&tab_id).await {
+        Ok(shot) => Ok(Some(shot)),
+        // A reaped tab is the normal end of an idle session, not an error worth
+        // reporting once a second. Forget it so the next real navigation opens
+        // a fresh one, and let the panel keep its last good frame.
+        Err(e) if is_stale_tab_error(&e) => {
+            forget_tab().await;
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+// ── Human input into the same tab ─────────────────────────────────────────
+//
+// The agent acts on elements by accessibility ref, which it gets from a
+// snapshot. A person looking at the preview panel has no refs — they have a
+// picture and a pointer. So their input arrives as coordinates instead, and the
+// two paths meet at the same tab: whatever the user clicks, the agent's next
+// snapshot sees.
+//
+// Coordinates arrive as a FRACTION of the viewport (0.0–1.0), not as pixels.
+// The panel scales the screenshot to whatever width the dock happens to be, and
+// the screenshot's own pixel size depends on the device scale factor, so a pixel
+// value would be wrong in two independent ways. A fraction is invariant to both;
+// this end multiplies it back out by the page's real viewport.
+
+/// The page's CSS viewport, used to turn a fractional click into page pixels.
+async fn viewport_size() -> Result<(f64, f64), String> {
+    let v = evaluate("({ w: window.innerWidth, h: window.innerHeight })").await?;
+    // `evaluate` returns the raw server envelope; the value may be nested under
+    // `result` depending on the route's shape.
+    let obj = v.get("result").unwrap_or(&v);
+    let w = obj.get("w").and_then(|x| x.as_f64());
+    let h = obj.get("h").and_then(|x| x.as_f64());
+    match (w, h) {
+        (Some(w), Some(h)) if w > 0.0 && h > 0.0 => Ok((w, h)),
+        _ => Err("couldn't read the page viewport size".to_string()),
+    }
+}
+
+/// Click at a fractional position within the viewport.
+///
+/// NOT via the server's `/click` route. Its OpenAPI description advertises
+/// "Click by element ref, CSS selector, or coordinates" and documents a
+/// `coordinates: {x, y}` body, but the handler destructures only
+/// `{ userId, ref, selector }` and rejects anything else with
+/// `400 ref or selector required`. The documented feature does not exist.
+///
+/// So the click is performed in the page instead: `elementFromPoint` resolves
+/// what is actually under the pointer, and a full mousedown/mouseup/click
+/// sequence is dispatched on it rather than bare `.click()`, because plenty of
+/// real UI listens for the press rather than the synthesised click. Focusing
+/// first is what makes subsequent typing land in the field the user just
+/// clicked.
+pub async fn click_at_fraction(fx: f64, fy: f64) -> Result<NavigateResult, String> {
+    let (vw, vh) = viewport_size().await?;
+    // Clamp rather than reject: a pointer one pixel past the edge from rounding
+    // is normal, not an error worth surfacing.
+    let x = (fx.clamp(0.0, 1.0) * vw).round();
+    let y = (fy.clamp(0.0, 1.0) * vh).round();
+    let js = format!(
+        "(() => {{ const el = document.elementFromPoint({x}, {y}); if (!el) return 'none';          if (el.focus) try {{ el.focus(); }} catch (e) {{}}          const o = {{ bubbles: true, cancelable: true, clientX: {x}, clientY: {y}, view: window }};          el.dispatchEvent(new MouseEvent('mousedown', o));          el.dispatchEvent(new MouseEvent('mouseup', o));          el.dispatchEvent(new MouseEvent('click', o));          return el.tagName + (el.id ? '#' + el.id : ''); }})()"
+    );
+    evaluate(&js).await?;
+    // The click may have navigated, so re-read the URL the page ended on rather
+    // than assuming it is unchanged.
+    if let Ok(v) = evaluate("location.href").await {
+        if let Some(href) = v.get("result").unwrap_or(&v).as_str() {
+            *CURRENT_URL.lock().await = Some(href.to_string());
+        }
+    }
+    let tab_id = current_tab().await?;
+    let screenshot_base64 = take_screenshot(&tab_id).await.ok();
+    Ok(NavigateResult { tab_id, screenshot_base64, title_hint: None })
+}
+
+/// Type text at whatever currently has focus — i.e. after a click.
+///
+/// Uses `press` per character rather than the `type` route, because that route
+/// fills a *named element* and the user has just focused one by clicking, not by
+/// ref. Sending the whole string as one `insertText` would also skip the
+/// per-keystroke events that search suggestions and validation listen for.
+pub async fn type_at_focus(text: &str) -> Result<NavigateResult, String> {
+    let mut last = None;
+    for ch in text.chars() {
+        let key = if ch == ' ' { "Space".to_string() } else { ch.to_string() };
+        last = Some(interact_recovering("press", json!({ "userId": USER_ID, "key": key })).await?);
+    }
+    match last {
+        Some(r) => Ok(r),
+        // An empty string is a no-op, not a failure; return current state.
+        None => press_key("Shift").await,
+    }
 }

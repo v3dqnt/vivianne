@@ -1,3 +1,10 @@
+# NOTE (cross-platform): every value below is Windows-specific, but Cargo's
+# `[env]` table has no cfg support and is applied on every host. It does not
+# force, though: a variable already set in the process environment wins. macOS
+# and Linux builds therefore go through `packages/gui/scripts/dev-env.mjs`,
+# which sets correct values for the host before invoking the Tauri CLI. Do not
+# add `force = true` to any entry here without also fixing that script.
+
 # Point whisper-rs's bindgen at the LLVM install so it can find libclang.dll
 # without requiring a manually-set LIBCLANG_PATH environment variable.
 # Installed via `winget install LLVM.LLVM`.

@@ -1,22 +1,69 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { AgentMessage } from '../lib/types'
+
+type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
+import { findAssignments, type Assignment } from '../lib/review'
+import { ChangeSummary } from './ChangeSummary'
 import { Virtualizer } from 'virtua'
-import Box from '@mui/material/Box'
-import Typography from '@mui/material/Typography'
-import Dialog from '@mui/material/Dialog'
-import DialogTitle from '@mui/material/DialogTitle'
-import DialogContent from '@mui/material/DialogContent'
-import DialogContentText from '@mui/material/DialogContentText'
-import DialogActions from '@mui/material/DialogActions'
-import Button from '@mui/material/Button'
+import { Box, Typography, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Button } from '../../../ui'
 import { useAgentStore } from '../store/agentStore'
 import { MessageBubble } from './MessageBubble'
+import { RunSummary } from './RunSummary'
+import { ToolGroup } from './ToolGroup'
+import { groupTranscript } from '../lib/toolGroups'
+import { findCheckpoints } from '../lib/checkpoints'
+import { CheckpointCard } from './CheckpointCard'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { TodoPanel } from './TodoPanel'
 
-export function MessageList() {
-  const messages = useAgentStore((s) => s.messages)
-  const isBusy = useAgentStore((s) => s.isBusy)
-  const streamingIndex = useAgentStore((s) => s.streamingIndex)
+/**
+ * The conversation transcript.
+ *
+ * With no props it renders the live conversation from the agent store. Given
+ * `messages` + `readOnly`, it renders a saved conversation instead — a past
+ * day, or an archived thread — through the same renderer, so history looks
+ * exactly like it did live. Read-only drops everything that would act on the
+ * live agent: revert, edit, the busy indicator and the todo panel.
+ */
+export function MessageList({
+  messages: savedMessages,
+  earlier,
+  earlierStart = 0,
+  onLoadOlder,
+  loadingOlder = false,
+  readOnly = false,
+  sessionId,
+  emptyText,
+}: {
+  messages?: AgentMessage[]
+  /** Messages compacted out of the model's context, shown read-only above
+   * the live ones so nothing the user said ever disappears. */
+  earlier?: AgentMessage[]
+  /** Archive index of `earlier[0]`. Above 0, older pages can be loaded. */
+  earlierStart?: number
+  onLoadOlder?: () => void
+  loadingOlder?: boolean
+  /** Replaces the default empty-state line. */
+  emptyText?: string
+  readOnly?: boolean
+  /** The saved conversation's id, when showing one — its change reviews live
+   * under that id rather than today's. */
+  sessionId?: string
+} = {}) {
+  const liveMessages = useAgentStore((s) => s.messages)
+  const messages = savedMessages ?? liveMessages
+  // True for the one render in which older archive messages were prepended.
+  const lastStart = useRef(earlierStart)
+  const prepending = earlierStart < lastStart.current
+  useEffect(() => {
+    lastStart.current = earlierStart
+  }, [earlierStart])
+  const liveBusy = useAgentStore((s) => s.isBusy)
+  const lastRun = useAgentStore((s) => s.longTask)
+  // A saved conversation is never "busy", whatever today's live one is doing.
+  const isBusy = readOnly ? false : liveBusy
+  const liveStreamingIndex = useAgentStore((s) => s.streamingIndex)
+  const streamingIndex = readOnly ? null : liveStreamingIndex
   const revertToIndex = useAgentStore((s) => s.revertToIndex)
   const setDraft = useAgentStore((s) => s.setDraft)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -25,6 +72,20 @@ export function MessageList() {
   // something earlier in a long reply.
   const nearBottomRef = useRef(true)
   const scrollRafRef = useRef<number | null>(null)
+
+  // Which message closes which assignment, so each one's change review can
+  // sit under its last message. Recomputed only when the transcript changes.
+  const assignmentsByEnd = useMemo(() => {
+    const map = new Map<number, Assignment>()
+    for (const a of findAssignments(messages)) if (a.editedFiles) map.set(a.endIndex, a)
+    return map
+  }, [messages])
+
+  const checkpoints = useMemo(() => findCheckpoints(messages), [messages])
+  const transcript = useMemo(
+    () => groupTranscript(messages, streamingIndex, new Set(checkpoints.keys())),
+    [messages, streamingIndex, checkpoints],
+  )
 
   const [revertTarget, setRevertTarget] = useState<number | null>(null)
   const [reverting, setReverting] = useState(false)
@@ -81,12 +142,12 @@ export function MessageList() {
     }
   }
 
-  if (messages.length === 0) {
+  if (messages.length === 0 && !earlier?.length) {
     return (
       <Box sx={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <TodoPanel />
+        {!readOnly && <TodoPanel />}
         <Typography variant="body2" color="text.secondary">
-          Ask anything to get started.
+          {emptyText ?? (readOnly ? 'Nothing was said in this conversation.' : 'Ask anything to get started.')}
         </Typography>
       </Box>
     )
@@ -105,14 +166,82 @@ export function MessageList() {
   // component's own scroll container) as the scrollable ancestor rather than
   // owning its own — so the existing near-bottom / scroll-position logic
   // above needs no changes to keep working.
-  const items = messages.map((m, i) => (
-    // Index key is acceptable here: this list is append-only within a
-    // session (no reordering/filtering), which is exactly the case index
-    // keys are safe for.
-    <Box key={i} sx={{ pb: 1.5 }}>
-      <MessageBubble message={m} index={i} onRevert={setRevertTarget} onEdit={startEdit} />
+  // Archived messages carry no actions: reverting or editing is only
+  // meaningful for what is still in the model's context.
+  // Keyed by position in the whole archive, so loading an older page in
+  // front doesn't remount (and re-highlight) everything already on screen.
+  const earlierItems = (earlier ?? []).map((m, i) => (
+    <Box key={`e${earlierStart + i}`} sx={{ pb: 1.5 }}>
+      <MessageBubble message={m} index={i} />
     </Box>
   ))
+  if (earlierStart > 0 && onLoadOlder) {
+    earlierItems.unshift(
+      <Box key="load-older" sx={{ display: 'flex', justifyContent: 'center', pb: 1.5 }}>
+        <Button size="small" color="inherit" onClick={onLoadOlder} disabled={loadingOlder} sx={{ color: 'text.secondary' }}>
+          {loadingOlder ? 'Loading…' : `Show earlier messages (${earlierStart})`}
+        </Button>
+      </Box>,
+    )
+  }
+  // Omitting the callbacks is what hides a bubble's revert and edit
+  // actions — history is not editable.
+  const renderMessage = (i: number, compact = false) => (
+    <MessageBubble
+      message={messages[i]}
+      index={i}
+      streaming={isBusy && streamingIndex === i}
+      onRevert={readOnly ? undefined : setRevertTarget}
+      onEdit={readOnly ? undefined : startEdit}
+      compact={compact}
+    />
+  )
+  /** The review appears once an assignment is over — never under the one
+   * still running, whose change set isn't final yet. */
+  const reviewAfter = (indices: number[]) => {
+    const end = indices.find((i) => assignmentsByEnd.has(i))
+    if (end === undefined) return null
+    const assignment = assignmentsByEnd.get(end)!
+    if (isBusy && assignment.toMs === null) return null
+    return (
+      <Box sx={{ mt: 1 }}>
+        <ChangeSummary assignment={assignment} sessionId={sessionId} readOnly={readOnly} />
+      </Box>
+    )
+  }
+  // Keys are the first message index of each row: the list is append-only
+  // within a session, and a group keeps its first index as it grows, so a
+  // row's key never changes under it.
+  const items = transcript.map((item) =>
+    item.kind === 'checkpoint' ? (
+      <Box key={`c${item.index}`} sx={{ pb: 1.5 }}>
+        <CheckpointCard checkpoint={checkpoints.get(item.index)!} />
+      </Box>
+    ) : item.kind === 'message' ? (
+      <Box key={item.index} sx={{ pb: 1.5 }}>
+        {renderMessage(item.index)}
+        {reviewAfter([item.index])}
+      </Box>
+    ) : (
+      <Box key={`g${item.start}`} sx={{ pb: 1.5 }}>
+        <ToolGroup tools={item.toolIndices.map((i) => messages[i] as ToolResultMessage)}>
+          {item.indices.map((i) => (
+            <Box key={i}>{renderMessage(i, true)}</Box>
+          ))}
+        </ToolGroup>
+        {reviewAfter(item.indices)}
+      </Box>
+    ),
+  )
+  // The last task's receipt, once it has ended — only in the live
+  // conversation, and only for work that took more than a single reply.
+  if (!readOnly && !isBusy && lastRun && ['done', 'stopped', 'paused', 'blocked'].includes(lastRun.status) && lastRun.steps > 1) {
+    items.push(
+      <Box key={`summary-${lastRun.key}`} sx={{ pb: 1.5 }}>
+        <RunSummary ledger={lastRun} />
+      </Box>,
+    )
+  }
   if (showTrailingIndicator) {
     items.push(
       <Box key="trailing-indicator" sx={{ pb: 1.5 }}>
@@ -122,12 +251,25 @@ export function MessageList() {
   }
 
   return (
-    <Box ref={containerRef} sx={{ position: 'relative', flex: 1, minHeight: 0, overflowY: 'auto', px: 2, py: 1.5 }}>
-      <TodoPanel />
-      {/* Capped and centred so the reading measure stays stable as the window
-          resizes, and lines up with the Composer's matching maxWidth below it. */}
-      <Box sx={{ maxWidth: 820, mx: 'auto' }}>
-        <Virtualizer scrollRef={containerRef}>{items}</Virtualizer>
+    // TodoPanel is a SIBLING of the scroller, not a child of it. An
+    // absolutely-positioned element inside a scroll container is positioned
+    // against that container's content box, so it scrolled away with the
+    // messages — the todo list vanished exactly when a long run made it most
+    // useful. Anchoring it to this non-scrolling wrapper keeps it pinned.
+    <Box sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      {!readOnly && <TodoPanel />}
+      <Box ref={containerRef} sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 2, py: 1.5 }}>
+        {/* Capped and centred so the reading measure stays stable as the window
+            resizes, and lines up with the Composer's matching maxWidth below it. */}
+        {/* The conversation is content, so it's selectable; the chrome
+            around it isn't (see baselineExtras). */}
+        <Box className="select-text" sx={{ maxWidth: 880, mx: 'auto' }}>
+          {/* `shift` while an older page is being put in front, so the view
+              stays on what the user was reading instead of jumping. */}
+          <Virtualizer scrollRef={containerRef} shift={prepending}>
+            {earlierItems.length ? [...earlierItems, ...items] : items}
+          </Virtualizer>
+        </Box>
       </Box>
 
       <Dialog open={revertTarget !== null} onClose={() => setRevertTarget(null)} maxWidth="xs" fullWidth>

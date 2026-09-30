@@ -3,7 +3,7 @@
   "version": "1.7.3",
   "private": true,
   "scripts": {
-    "tauri": "scripts\\dev-env.cmd"
+    "tauri": "node scripts/dev-env.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4"

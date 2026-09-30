@@ -2,20 +2,22 @@ import { create } from 'zustand'
 
 export type SettingsSection =
   | 'account'
-  | 'multiplayer'
   | 'providers'
+  | 'reliability'
   | 'local'
   | 'mods'
   | 'subagents'
   | 'mcp'
   | 'memory'
   | 'usage'
+  | 'diagnostics'
   | 'skills'
   | 'automations'
   | 'themes'
   | 'components'
   | 'updates'
-  | 'voice'
+  | 'instant'
+  | 'websearch'
 
 interface SettingsUiState {
   open: boolean

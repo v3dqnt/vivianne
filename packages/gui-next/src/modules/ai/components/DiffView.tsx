@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import Box from '@mui/material/Box'
+import { Box } from '../../../ui'
 import { diffLines } from '../lib/diff'
 
 const LINE_STYLE = {
@@ -18,8 +18,9 @@ export const DiffView = memo(function DiffView({ before, after }: { before: stri
 
   return (
     <Box
+      className="select-text"
       sx={{
-        fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+        fontFamily: '"Geist Mono", ui-monospace, monospace',
         fontSize: '0.75rem',
         lineHeight: 1.6,
         maxHeight: 360,

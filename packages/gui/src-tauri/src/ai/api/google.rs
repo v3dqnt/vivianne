@@ -282,7 +282,7 @@ async fn stream_inner(
     let api_key = options
         .api_key
         .clone()
-        .ok_or_else(|| format!("No API key for provider: google-generative-ai"))?;
+        .ok_or_else(|| "No API key for provider: google-generative-ai".to_string())?;
 
     let base = base_url
         .as_deref()

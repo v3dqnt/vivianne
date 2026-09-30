@@ -1,9 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import Box from '@mui/material/Box'
-import Tooltip from '@mui/material/Tooltip'
-import ButtonBase from '@mui/material/ButtonBase'
+import { Stack, Typography, Box, Tooltip, ButtonBase } from '../../../ui'
 import { call } from '../../../ipc'
 
 export interface UsageDay {
@@ -23,8 +19,19 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 
 type ViewMode = 'daily' | 'weekly' | 'cumulative'
 
+/** Local calendar date as `YYYY-MM-DD`.
+ *
+ * Deliberately NOT `toISOString().slice(0, 10)`: that converts to UTC first,
+ * so east-of-Greenwich a `Date` sitting at LOCAL midnight formats as the
+ * PREVIOUS day. The Rust side keys every entry by
+ * `chrono::Local::now().format("%Y-%m-%d")` (see `agent::usage_store`), so a
+ * UTC-derived key missed the matching row entirely — at UTC+5:30 that shifted
+ * every heatmap cell a day and made "current streak" permanently 0, because
+ * today's real row could never be found. */
 function formatDate(d: Date): string {
-  return d.toISOString().slice(0, 10)
+  const month = `${d.getMonth() + 1}`.padStart(2, '0')
+  const day = `${d.getDate()}`.padStart(2, '0')
+  return `${d.getFullYear()}-${month}-${day}`
 }
 
 /** 12.4M / 340K / 512 — the reference stat tiles read as magnitudes, and a
@@ -348,7 +355,7 @@ export function UsageSection() {
               <Typography variant="body2" color="text.secondary">
                 {row.label}
               </Typography>
-              <Typography variant="body2" sx={{ fontWeight: 500, fontFamily: '"JetBrains Mono", ui-monospace, monospace' }}>
+              <Typography variant="body2" sx={{ fontWeight: 500, fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
                 {row.value}
               </Typography>
             </Stack>

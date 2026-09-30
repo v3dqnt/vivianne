@@ -1,11 +1,5 @@
 import { useEffect, useState } from 'react'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import Divider from '@mui/material/Divider'
-import Switch from '@mui/material/Switch'
-import Button from '@mui/material/Button'
-import TextField from '@mui/material/TextField'
-import CircularProgress from '@mui/material/CircularProgress'
+import { Stack, Typography, Divider, Switch, Button, TextField, CircularProgress } from '../../../ui'
 import { ArchiveBookLinear, SearchNormalLinear, TrashLinear } from '../../../icons'
 import { useMemoryStore } from '../store/memoryStore'
 

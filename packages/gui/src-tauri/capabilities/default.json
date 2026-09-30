@@ -4,8 +4,10 @@
   "description": "enables the default permissions",
   "windows": [
     "main",
-    "notch",
-    "dip_overlay"
+    "dip_overlay",
+    "viv_instant",
+    "viv_pointer",
+    "viv_activity"
   ],
   "permissions": [
     "core:default",
@@ -21,6 +23,9 @@
     "core:window:allow-set-focus",
     "core:window:allow-set-position",
     "core:window:allow-set-size",
+    "core:window:allow-primary-monitor",
+    "core:window:allow-current-monitor",
+    "core:window:allow-set-ignore-cursor-events",
     {
       "identifier": "core:webview:allow-create-webview-window",
       "allow": [
@@ -36,19 +41,6 @@
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered",
     "dialog:default",
-    "shell:default",
-    "shell:allow-stdin-write",
-    "shell:allow-kill",
-    {
-      "identifier": "shell:allow-spawn",
-      "allow": [
-        {
-          "name": "node",
-          "cmd": "node",
-          "args": true
-        }
-      ]
-    },
     "updater:default",
     "process:default",
     "process:allow-restart",

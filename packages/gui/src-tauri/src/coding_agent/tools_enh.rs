@@ -427,7 +427,7 @@ async fn read_pdf_summary(display_path: &str, full: &PathBuf, pages: &str) -> To
         Ok(Ok((pages_n, text, size))) => {
             let (clipped, truncated) = truncate_text(&text, MAX_READ_LINES, MAX_READ_BYTES);
             let body = if clipped.trim().is_empty() {
-                format!("(no text extracted — PDF may be image-only, encrypted, or use custom fonts)")
+                "(no text extracted — PDF may be image-only, encrypted, or use custom fonts)".to_string()
             } else { clipped };
             ToolResult {
                 content: format!(

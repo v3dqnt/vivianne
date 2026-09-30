@@ -1,11 +1,5 @@
 import { useEffect } from 'react'
-import Dialog from '@mui/material/Dialog'
-import DialogTitle from '@mui/material/DialogTitle'
-import DialogContent from '@mui/material/DialogContent'
-import DialogActions from '@mui/material/DialogActions'
-import Typography from '@mui/material/Typography'
-import Button from '@mui/material/Button'
-import Stack from '@mui/material/Stack'
+import { Dialog, DialogTitle, DialogContent, DialogActions, Typography, Button, Stack } from '../../../ui'
 import { hasTauri } from '../../../ipc'
 import { useOptionalComponentsStore } from '../store/optionalComponentsStore'
 

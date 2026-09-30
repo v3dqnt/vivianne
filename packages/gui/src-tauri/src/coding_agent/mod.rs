@@ -12,12 +12,28 @@ pub mod tool_exec;
 pub mod computer;
 #[cfg(target_os = "windows")]
 pub mod dip;
+#[cfg(target_os = "windows")]
+pub mod win;
+
+/// Stop any typing or key presses in progress (the activity notch's Stop).
+pub fn win_cancel() {
+    #[cfg(target_os = "windows")]
+    win::cancel();
+}
+
+/// A new action starts un-cancelled.
+pub fn win_cancel_reset() {
+    #[cfg(target_os = "windows")]
+    win::cancel_reset();
+}
 pub mod tools_ext;
 pub mod apply_patch;
 pub mod repo_tools;
 pub mod compaction;
 pub mod documents;
+pub mod document_edit;
 pub mod playbooks;
+pub mod custom_tools;
 pub mod skills;
 pub mod subagent_profiles;
 pub mod commands;
@@ -31,3 +47,7 @@ pub mod tools_enh;
 pub mod streaming;
 pub mod context_shaping;
 pub mod ocr;
+mod tool_audit;
+pub mod semantic_index;
+pub mod checkers;
+pub mod github;

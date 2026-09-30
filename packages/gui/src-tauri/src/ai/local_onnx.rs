@@ -61,12 +61,47 @@ fn engine() -> &'static Mutex<Option<OnnxEngine>> {
     ENGINE.get_or_init(|| Mutex::new(None))
 }
 
+/// The model is only the offline fallback for embeddings (when no embedding
+/// API is configured), used in bursts — indexing a project, a memory search.
+/// Holding its weights and optimized plan for the whole session costs ~100 MB
+/// for nothing, so it's dropped after this long unused and reloaded (in well
+/// under a second) on the next call.
+const IDLE_UNLOAD: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Milliseconds since process start of the last embedding call.
+static LAST_USED_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+}
+
+fn touch() {
+    LAST_USED_MS.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn start_idle_unloader() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        tauri::async_runtime::spawn(async {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                let idle = now_ms().saturating_sub(LAST_USED_MS.load(std::sync::atomic::Ordering::Relaxed));
+                if idle >= IDLE_UNLOAD.as_millis() as u64 {
+                    let mut guard = engine().lock().await;
+                    if guard.take().is_some() {
+                        log::info!("[local_onnx] unloaded after {}s idle", idle / 1000);
+                    }
+                }
+            }
+        });
+    });
+}
+
 // ── Model directory helpers ───────────────────────────────────────────────
 
 fn model_dir() -> Result<PathBuf, String> {
-    let home =
-        dirs::home_dir().ok_or_else(|| "cannot determine home directory".to_string())?;
-    Ok(home.join(".vivianne").join("models").join(MODEL_DIR_NAME))
+    Ok(crate::agent::paths::viv_home_path(&["models", MODEL_DIR_NAME]))
 }
 
 fn model_path() -> Result<PathBuf, String> {
@@ -80,8 +115,8 @@ fn tokenizer_path() -> Result<PathBuf, String> {
 /// Check whether both model files exist on disk. Fast — no I/O beyond the
 /// `Path::exists()` call.
 pub fn is_model_installed() -> bool {
-    model_path().map_or(false, |p| p.exists())
-        && tokenizer_path().map_or(false, |p| p.exists())
+    model_path().is_ok_and(|p| p.exists())
+        && tokenizer_path().is_ok_and(|p| p.exists())
 }
 
 /// Download the ONNX model + tokenizer files from HuggingFace into
@@ -163,6 +198,7 @@ async fn download_file(url: &str, dest: PathBuf) -> Result<(), String> {
 /// empty cache and both try to load. The last one wins; the wasted work is
 /// ~50ms of CPU time — negligible for infrequent cold-start loads.
 async fn ensure_loaded() -> Result<(), String> {
+    touch();
     // Fast path: already loaded (lock held briefly, no .await inside)
     {
         let guard = engine().lock().await;
@@ -170,6 +206,7 @@ async fn ensure_loaded() -> Result<(), String> {
             return Ok(());
         }
     }
+    start_idle_unloader();
 
     // Slow path: load from disk
     let model_p = model_path()?;
@@ -442,7 +479,7 @@ mod tests {
         // never matched and this test failed on every run there.
         let dir = model_dir().unwrap();
         let parts: Vec<String> = dir.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
-        for expected in [".vivianne", "models", "onnx-minilm"] {
+        for expected in [".viv", "models", "onnx-minilm"] {
             assert!(parts.iter().any(|p| p == expected), "expected component {expected:?} in {dir:?}");
         }
     }

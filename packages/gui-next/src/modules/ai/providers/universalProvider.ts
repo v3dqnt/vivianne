@@ -34,7 +34,7 @@ type SdkProviderOptions = Parameters<typeof streamText>[0]['providerOptions']
 import type { AssistantMessage, ProviderStreamRequest, StreamTokenEvent } from './types'
 import { emptyUsage, now } from './types'
 import { transformMessages, normalizeAnthropicToolCallId } from './transformMessages'
-import { toModelMessages, toSdkTools, runSdkStream } from './sdkShared'
+import { toModelMessages, toSdkTools, runSdkStream, describeProviderError } from './sdkShared'
 import { IdleWatchdog, parseOpenRouterAffordableTokens } from './shared'
 
 function emitToken(payload: StreamTokenEvent) {
@@ -205,8 +205,13 @@ export async function streamUniversal(req: ProviderStreamRequest): Promise<void>
   // afford — retry once at that budget instead of failing outright. Applies
   // uniformly to all four providers here; it's a no-op for the other three
   // since their error bodies never match the OpenRouter-specific pattern.
-  const baseMaxTokens = req.provider === 'openrouter' ? Math.min(req.maxTokens, 4096) : req.maxTokens
-  let attemptMaxTokens = baseMaxTokens || undefined
+  //
+  // The model's full output limit is requested — no pre-emptive cap. OpenRouter
+  // used to be clamped to 4096 "to avoid" that 402, which the retry below
+  // already handles precisely; the clamp's real effect was that a reasoning
+  // model on high effort spent all 4096 tokens thinking and never got to write
+  // its answer or tool call.
+  let attemptMaxTokens = req.maxTokens || undefined
   let retriedForCredits = false
   let setupApi: string = req.apiKind
 
@@ -317,8 +322,7 @@ export async function streamUniversal(req: ProviderStreamRequest): Promise<void>
         emitErr(setupApi, `${req.provider}: out of credits — even a reduced-size request was rejected. Add credits or switch to a different model/provider.`)
         return
       }
-      const msg = APICallError.isInstance(e) ? `${req.provider}: (${e.statusCode}) ${e.message}` : e instanceof Error ? e.message : String(e)
-      emitErr(setupApi, msg)
+      emitErr(setupApi, describeProviderError(req.provider, e))
       return
     } finally {
       watchdog.stop()

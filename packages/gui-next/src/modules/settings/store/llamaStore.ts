@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { call } from '../../../ipc'
-import type { LlamaEndpoint, LocalEngine } from '../lib/llama'
+import type { LlamaEndpoint, LlamaTuning, LocalEngine } from '../lib/llama'
 import { llamaModelId } from '../lib/llama'
 
 /**
@@ -14,29 +14,39 @@ async function syncPersistedEndpoints(endpoints: LlamaEndpoint[]) {
   const settings = (await call<Record<string, unknown>>('cmd_get_settings')) ?? {}
   const all = Array.isArray(settings.localEndpoints) ? (settings.localEndpoints as { kind?: string }[]) : []
   const nonLlama = all.filter((e) => e?.kind !== 'llama')
-  const llama = endpoints.map(({ id, name, modelPath, port, ngl, ctxSize, autoStart, engine }) => ({
+  const llama = endpoints.map(({ id, name, modelPath, port, ngl, ctxSize, autoStart, engine, tuning }) => ({
     kind: 'llama',
-    config: { id, name, modelPath, port, ngl, ctxSize, autoStart, engine },
+    config: { id, name, modelPath, port, ngl, ctxSize, autoStart, engine, tuning },
   }))
   await call('cmd_save_settings', { settings: { ...settings, localEndpoints: [...nonLlama, ...llama] } })
 }
 
-/** Default context window for a new local model. Deliberately NOT 8192:
- * Vivianne's agent system prompt + tool schemas alone run ~25k tokens, so an
- * 8k context overflows on the very first message ("request exceeds the
- * available context size"). 32768 is the trained context of the common
- * coding models (Qwen2.5-Coder etc.) and leaves real room for a conversation.
- * Users can lower it per-model if VRAM is tight. */
+/** Default context window for a new local model. Local models get the lean
+ * tool profile (`agent::tool_profile`), so the first request is ~6–8k tokens
+ * rather than the ~20k a cloud model is sent — but 8192 would still leave
+ * almost nothing for the conversation. 32768 is the trained context of the
+ * common coding models and, with the default q8_0 KV cache, fits beside a
+ * 9B Q4 model on an 8 GB card. */
 export const DEFAULT_CTX_SIZE = 32768
 export const DEFAULT_NGL = 999
 
 interface LlamaStoreState {
   endpoints: LlamaEndpoint[]
   refresh: () => Promise<void>
-  addEndpoint: (modelPath: string, name: string, ctxSize?: number, ngl?: number, engine?: LocalEngine) => Promise<void>
+  addEndpoint: (
+    modelPath: string,
+    name: string,
+    ctxSize?: number,
+    ngl?: number,
+    engine?: LocalEngine,
+    tuning?: LlamaTuning,
+  ) => Promise<void>
   /** Change an existing endpoint's config (context size, GPU layers, name).
    * Stops the server if running — the change only takes effect on next start. */
-  updateEndpoint: (id: string, patch: { name?: string; ctxSize?: number; ngl?: number; engine?: LocalEngine }) => Promise<void>
+  updateEndpoint: (
+    id: string,
+    patch: { name?: string; ctxSize?: number; ngl?: number; engine?: LocalEngine; tuning?: LlamaTuning },
+  ) => Promise<void>
   removeEndpoint: (id: string) => Promise<void>
   start: (id: string) => Promise<void>
   stop: (id: string) => Promise<void>
@@ -67,14 +77,14 @@ export const useLlamaStore = create<LlamaStoreState>((set, get) => ({
     return !selected || Array.isArray(selected) ? null : selected
   },
 
-  addEndpoint: async (modelPath, name, ctxSize = DEFAULT_CTX_SIZE, ngl = DEFAULT_NGL, engine = 'llamaCpp') => {
+  addEndpoint: async (modelPath, name, ctxSize = DEFAULT_CTX_SIZE, ngl = DEFAULT_NGL, engine = 'llamaCpp', tuning) => {
     const id = crypto.randomUUID()
     // Default port steps past whatever's already claimed, so a second/third
     // endpoint doesn't collide with one already running.
     const usedPorts = new Set(get().endpoints.map((e) => e.port))
     let port = 8081
     while (usedPorts.has(port)) port++
-    await call('cmd_llama_register', { id, name, modelPath, port, ngl, ctxSize, autoStart: false, engine })
+    await call('cmd_llama_register', { id, name, modelPath, port, ngl, ctxSize, autoStart: false, engine, tuning: tuning ?? null })
     await get().refresh()
     await syncPersistedEndpoints(get().endpoints)
   },
@@ -98,6 +108,7 @@ export const useLlamaStore = create<LlamaStoreState>((set, get) => ({
       ctxSize: next.ctxSize,
       autoStart: next.autoStart,
       engine: next.engine,
+      tuning: next.tuning ?? null,
     })
     await get().refresh()
     await syncPersistedEndpoints(get().endpoints)

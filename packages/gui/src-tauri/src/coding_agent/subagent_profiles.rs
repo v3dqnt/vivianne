@@ -113,7 +113,7 @@ pub fn builtin_profiles() -> Vec<SubagentProfile> {
         SubagentProfile {
             id: "code-reviewer".to_string(),
             name: "code-reviewer".to_string(),
-            color: Some("rose".to_string()),
+            color: Some("pink".to_string()),
             model: None,
             description: "Reviews a change for real defects — logic errors, unhandled edge cases, security issues, and anything that contradicts the surrounding code's conventions. Reports findings; never edits.".to_string(),
             allowed_tools: Some(
@@ -176,7 +176,7 @@ pub fn builtin_profiles() -> Vec<SubagentProfile> {
         SubagentProfile {
             id: "doc-writer".to_string(),
             name: "doc-writer".to_string(),
-            color: Some("violet".to_string()),
+            color: Some("purple".to_string()),
             model: None,
             description: "Writes and updates documentation — READMEs, API docs, comments, runbooks — grounded in what the code actually does.".to_string(),
             allowed_tools: Some(
@@ -225,7 +225,7 @@ pub fn load_profiles_from_dir(dir: &str) -> Vec<SubagentProfile> {
             }
         }
     }
-    profiles.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    profiles.sort_by_key(|a| a.name.to_lowercase());
     profiles
 }
 

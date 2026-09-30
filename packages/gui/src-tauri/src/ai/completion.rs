@@ -11,7 +11,7 @@
 //! already-selected chat model rather than a dedicated cheap model.
 
 use std::sync::Arc;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::agent::types::ModelRef;
 use crate::ai::auth::{AuthState, Credential};
@@ -58,7 +58,7 @@ pub async fn complete_text(app: &AppHandle, model: &ModelRef, system_prompt: &st
         .ok_or_else(|| format!("Provider '{}' has no default base URL and none was configured on the model.", model.provider))?
         .to_string();
 
-    let auth_state = app.state::<Arc<AuthState>>().inner().clone();
+    let auth_state = crate::ai::auth::wait_for_state(app).await;
     let api_key = resolve_api_key(&auth_state, &model.provider)
         .await
         .ok_or_else(|| format!("No API key configured for provider '{}'.", model.provider))?;
@@ -97,7 +97,10 @@ async fn complete_openai_compatible(
             { "role": "user", "content": user_prompt },
         ],
         "stream": false,
-        "max_completion_tokens": 2048,
+        // Room for reasoning models: they spend output tokens thinking before
+        // they answer, and at 2048 a charter draft could exhaust the budget
+        // mid-thought and come back with no content at all.
+        "max_completion_tokens": 8192,
     });
     let resp = client
         .post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
@@ -112,13 +115,98 @@ async fn complete_openai_compatible(
         let msg = json.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("unknown error");
         return Err(format!("completion API error ({status}): {msg}"));
     }
-    json.get("choices")
+    openai_text(&json)
+}
+
+/// The reply text from an OpenAI-style completion, or the real reason there
+/// isn't one.
+///
+/// A failed completion does not reliably come back as an HTTP error.
+/// OpenRouter in particular answers **200** with `{"error": {...}}` in the
+/// body when the upstream provider refuses — a model withdrawn from its free
+/// tier, a rate limit — and before this that fell through to a bare "missing
+/// choices[0].message.content", which hid the one sentence that said what was
+/// wrong and how to fix it.
+fn openai_text(json: &serde_json::Value) -> Result<String, String> {
+    let error_message = |v: &serde_json::Value| {
+        v.get("error").map(|e| {
+            e.get("message")
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| e.to_string())
+        })
+    };
+    if let Some(msg) = error_message(json) {
+        return Err(format!("the provider returned an error: {msg}"));
+    }
+    let choice = json
+        .get("choices")
         .and_then(|c| c.get(0))
-        .and_then(|c0| c0.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|t| t.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| "completion response missing choices[0].message.content".to_string())
+        .ok_or_else(|| format!("the provider's reply had no choices: {}", truncate(&json.to_string(), 300)))?;
+    if let Some(msg) = error_message(choice) {
+        return Err(format!("the provider returned an error: {msg}"));
+    }
+    let message = choice.get("message");
+    let content = message.and_then(|m| m.get("content")).and_then(|t| t.as_str()).unwrap_or("");
+    if !content.trim().is_empty() {
+        return Ok(content.to_string());
+    }
+
+    let finish = choice.get("finish_reason").and_then(|f| f.as_str()).unwrap_or("unknown");
+    let reasoned = message.is_some_and(|m| {
+        ["reasoning", "reasoning_content"]
+            .iter()
+            .any(|k| m.get(*k).and_then(|r| r.as_str()).is_some_and(|r| !r.trim().is_empty()))
+    });
+    Err(if reasoned && finish == "length" {
+        "the model spent its whole output budget reasoning and never wrote an answer — try again, or a non-reasoning model".to_string()
+    } else if finish == "length" {
+        "the model hit its output limit before writing anything".to_string()
+    } else if finish == "content_filter" {
+        "the provider's content filter blocked the reply".to_string()
+    } else {
+        format!("the model returned an empty reply (finish reason: {finish})")
+    })
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(max).collect::<String>())
+    }
+}
+
+#[cfg(test)]
+mod openai_text_tests {
+    use super::openai_text;
+    use serde_json::json;
+
+    #[test]
+    fn an_error_in_a_200_body_is_surfaced_verbatim() {
+        // What OpenRouter sends when the upstream refuses — status 200.
+        let body = json!({ "error": { "message": "This model is unavailable for free.", "code": 404 } });
+        let err = openai_text(&body).unwrap_err();
+        assert!(err.contains("This model is unavailable for free."), "{err}");
+    }
+
+    #[test]
+    fn an_error_inside_the_choice_is_surfaced() {
+        let body = json!({ "choices": [{ "error": { "message": "upstream timeout" }, "finish_reason": "error" }] });
+        assert!(openai_text(&body).unwrap_err().contains("upstream timeout"));
+    }
+
+    #[test]
+    fn a_reasoning_model_that_ran_out_says_so() {
+        let body = json!({ "choices": [{ "message": { "content": null, "reasoning": "Let me think…" }, "finish_reason": "length" }] });
+        assert!(openai_text(&body).unwrap_err().contains("reasoning"));
+    }
+
+    #[test]
+    fn normal_content_comes_through() {
+        let body = json!({ "choices": [{ "message": { "content": "hello" }, "finish_reason": "stop" }] });
+        assert_eq!(openai_text(&body).unwrap(), "hello");
+    }
 }
 
 async fn complete_anthropic(
@@ -170,8 +258,14 @@ async fn complete_google(
         "contents": [{ "role": "user", "parts": [{ "text": user_prompt }] }],
         "systemInstruction": { "parts": [{ "text": system_prompt }] },
     });
-    let url = format!("{}/v1/models/{}:generateContent?key={}", base_url.trim_end_matches('/'), model_id, api_key);
-    let resp = client.post(url).json(&body).send().await.map_err(|e| format!("completion request failed: {e}"))?;
+    let url = format!("{}/v1/models/{}:generateContent", base_url.trim_end_matches('/'), model_id);
+    let resp = client
+        .post(url)
+        .header("x-goog-api-key", api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("completion request failed: {}", e.without_url()))?;
     let status = resp.status();
     let json: serde_json::Value = resp.json().await.map_err(|e| format!("failed to parse completion response: {e}"))?;
     if !status.is_success() {
