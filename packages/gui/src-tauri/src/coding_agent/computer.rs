@@ -418,7 +418,13 @@ fn windows_pointer_action(args: &serde_json::Value, app: &tauri::AppHandle) -> T
             let t = text.ok_or("'text' is required for type")?;
             keyboard_ready()?;
             let (n, pasted) = win::type_text(t)?;
-            Ok(format!("{} {n} character(s).{}", if pasted { "Pasted" } else { "Typed" }, front_note()))
+            // Sent is not landed: an app can drop or mangle input. Say so,
+            // so the model checks before telling the user it's done.
+            Ok(format!(
+                "{} {n} character(s).{} Before saying it's done, check it landed with read_text (no id reads the window's document).",
+                if pasted { "Pasted" } else { "Typed" },
+                front_note()
+            ))
         }
         "key" => {
             let combo = text.ok_or("'text' is required for key — e.g. \"enter\", \"ctrl+s\", \"alt+f4\"")?;

@@ -538,8 +538,30 @@ pub(crate) async fn execute_dip_read_text_tool(args: &serde_json::Value) -> Tool
                 }
             }
         }
-        // Last resort: every name under it, in order.
         let cond = ctx.automation.create_true_condition().map_err(|e| e.to_string())?;
+        // A window has no text of its own: what it holds is in a document or
+        // edit control inside it. Read the fullest one, so "what's in the
+        // Notepad window" is the document, not the menu labels around it.
+        if id.is_none() {
+            let best = element
+                .find_all(TreeScope::Descendants, &cond)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|e| {
+                    if let Ok(p) = e.get_pattern::<UITextPattern>() {
+                        if let Ok(t) = p.get_document_range().and_then(|r| r.get_text(200_000)) {
+                            return Some(t);
+                        }
+                    }
+                    e.get_pattern::<UIValuePattern>().and_then(|p| p.get_value()).ok()
+                })
+                .filter(|t| !t.trim().is_empty())
+                .max_by_key(|t| t.len());
+            if let Some(t) = best {
+                return Ok(t);
+            }
+        }
+        // Last resort: every name under it, in order.
         let names: Vec<String> = element
             .find_all(TreeScope::Subtree, &cond)
             .unwrap_or_default()

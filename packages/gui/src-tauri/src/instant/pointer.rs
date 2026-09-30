@@ -64,7 +64,27 @@ fn show_at(app: &tauri::AppHandle, x: f64, y: f64, w: f64, h: f64, paint: Pointe
 
     crate::overlays::emit(app, LABEL, "pointer:paint", paint);
     win.show().map_err(|e| e.to_string())?;
+    hide_when_idle(app);
     Ok(())
+}
+
+/// Bumped on every show, so only the latest show's timer hides it.
+static SHOWN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// How long the pointer lingers after the last thing it pointed at. It marks
+/// where the agent is acting; once the agent stops, a dot left on screen is
+/// just a mystery.
+const LINGER: std::time::Duration = std::time::Duration::from_secs(4);
+
+fn hide_when_idle(app: &tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+    let generation = SHOWN.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(LINGER).await;
+        if SHOWN.load(Ordering::SeqCst) == generation {
+            hide(&app);
+        }
+    });
 }
 
 /// Aim the pointer at a screen coordinate.
