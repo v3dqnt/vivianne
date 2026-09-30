@@ -370,63 +370,211 @@ fn unicode_input(unit: u16, up: bool) -> INPUT {
     }
 }
 
-/// The input events that type `text`. Line breaks are real Enter presses and
-/// tabs real Tab presses (a Unicode "\n" is ignored by most edit controls);
-/// everything else is sent as UTF-16, so emoji and any script type as-is.
-pub fn text_inputs(text: &str) -> Vec<INPUT> {
-    let mut out = Vec::with_capacity(text.len() * 2);
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\r' => {
-                if chars.peek() == Some(&'\n') {
-                    chars.next();
+/// One character as keyboard events. A character the keyboard layout can
+/// produce (with at most Shift) is sent as that real key; anything else —
+/// emoji, accents the layout lacks, dead keys — as a Unicode packet.
+///
+/// Real keys first because of how Windows delivers packets: a `VK_PACKET`
+/// keystroke carries its character in a single per-thread slot that
+/// `TranslateMessage` reads when the app gets round to it. An app that falls
+/// behind (the new Notepad, re-laying out a long document) reads several
+/// queued packets from the same slot, typing one character many times and
+/// losing the rest — "lllllllllll" where a sentence should be. A real key
+/// carries its own scan code, so a slow app still gets every character.
+fn char_inputs(c: char, caps_lock: bool) -> Vec<INPUT> {
+    match c {
+        '\n' => return vec![key_input(VK_RETURN, false), key_input(VK_RETURN, true)],
+        '\t' => return vec![key_input(VK_TAB, false), key_input(VK_TAB, true)],
+        _ => {}
+    }
+    let mut buf = [0u16; 2];
+    let units = c.encode_utf16(&mut buf);
+    if units.len() == 1 {
+        let scanned = unsafe { VkKeyScanW(units[0]) };
+        if scanned != -1 {
+            let vk = VIRTUAL_KEY((scanned as u16) & 0xff);
+            let mods = ((scanned as u16) >> 8) & 0xff;
+            // Dead keys (^ ` ~ on many layouts) would wait to combine with
+            // the next character instead of typing themselves.
+            let dead = unsafe { MapVirtualKeyW(vk.0 as u32, MAPVK_VK_TO_CHAR) } & 0x8000_0000 != 0;
+            if mods & !1 == 0 && !dead {
+                // Caps Lock inverts letters, so Shift is inverted to match.
+                let shift = (mods & 1 == 1) != (caps_lock && c.is_alphabetic());
+                let mut out = Vec::with_capacity(4);
+                if shift {
+                    out.push(key_input(VK_SHIFT, false));
                 }
-                out.extend([key_input(VK_RETURN, false), key_input(VK_RETURN, true)]);
-            }
-            '\n' => out.extend([key_input(VK_RETURN, false), key_input(VK_RETURN, true)]),
-            '\t' => out.extend([key_input(VK_TAB, false), key_input(VK_TAB, true)]),
-            _ => {
-                let mut buf = [0u16; 2];
-                for unit in c.encode_utf16(&mut buf).iter() {
-                    out.push(unicode_input(*unit, false));
-                    out.push(unicode_input(*unit, true));
+                out.push(key_input(vk, false));
+                out.push(key_input(vk, true));
+                if shift {
+                    out.push(key_input(VK_SHIFT, true));
                 }
+                return out;
             }
         }
     }
-    out
+    units.iter().flat_map(|u| [unicode_input(*u, false), unicode_input(*u, true)]).collect()
 }
 
-/// Type text into whatever has the keyboard.
+/// The input events that type `text`, one group per character. Line breaks
+/// are real Enter presses and tabs real Tab presses (a Unicode "\n" is
+/// ignored by most edit controls).
+pub fn text_inputs(text: &str) -> Vec<Vec<INPUT>> {
+    let caps_lock = unsafe { GetKeyState(VK_CAPITAL.0 as i32) } & 1 == 1;
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    text.chars().map(|c| char_inputs(c, caps_lock)).collect()
+}
+
+/// Wait until the foreground app is back in its message loop, so keystrokes
+/// never pile up faster than it reads them. A hung or very slow app costs
+/// at most `timeout_ms`, never a stuck agent.
+fn wait_for_foreground(timeout_ms: u32) {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return;
+        }
+        let mut result = 0usize;
+        let _ = SendMessageTimeoutW(
+            hwnd,
+            WM_NULL,
+            WPARAM(0),
+            LPARAM(0),
+            SMTO_ABORTIFHUNG | SMTO_BLOCK,
+            timeout_ms,
+            Some(&mut result),
+        );
+    }
+}
+
+/// Past this many characters, text is pasted rather than typed.
+const PASTE_OVER_CHARS: usize = 200;
+
+/// Type text into whatever has the keyboard. Returns how many characters,
+/// and whether they were pasted.
 ///
-/// One character at a time — each character's events in their own
-/// `SendInput`, with a moment between. A single large batch is faster on
-/// paper and wrong in practice: modern apps (the new Notepad, anything
-/// WinUI) coalesce a flood of Unicode key events, dropping accents and emoji
-/// and repeating characters. Paced like this it still types ~300 characters
-/// a second, and every one lands.
-pub fn type_text(text: &str) -> Result<usize, String> {
-    let inputs = text_inputs(text);
-    let mut chars = 0usize;
-    let mut i = 0;
-    while i < inputs.len() {
-        // One character: a down/up pair, or two pairs for a surrogate pair
-        // (the high and low halves must arrive together).
-        let unit = unsafe { inputs[i].Anonymous.ki };
-        let is_high = unit.dwFlags.contains(KEYEVENTF_UNICODE) && (0xD800..0xDC00).contains(&unit.wScan);
-        let len = if is_high { 4 } else { 2 };
-        let end = (i + len).min(inputs.len());
-        if (send(&inputs[i..end]) as usize) < end - i {
+/// Long text goes through the clipboard: one Ctrl+V lands thousands of
+/// characters exactly and at once, where typing them would take a minute.
+/// The clipboard's text is put back afterwards, and paste is only used when
+/// the clipboard holds text or nothing, never over an image or files.
+///
+/// Shorter text is typed one character at a time, each as real keys where
+/// the layout allows (see `char_inputs`), waiting for the app to take each
+/// one before sending the next.
+pub fn type_text(text: &str) -> Result<(usize, bool), String> {
+    let count = text.chars().count();
+    if count > PASTE_OVER_CHARS {
+        match paste_text(text) {
+            Ok(()) => return Ok((count, true)),
+            Err(e) => log::info!("[win] paste unavailable, typing instead: {e}"),
+        }
+    }
+    for group in text_inputs(text) {
+        if (send(&group) as usize) < group.len() {
             return Err(
                 "Windows blocked the input partway (another program may have locked input, or the target runs as administrator)".into(),
             );
         }
-        chars += 1;
-        i = end;
-        std::thread::sleep(std::time::Duration::from_millis(3));
+        wait_for_foreground(1_000);
     }
-    Ok(chars)
+    Ok((count, false))
+}
+
+// ── Clipboard ──────────────────────────────────────────────────────────────
+
+const CF_UNICODETEXT: u32 = 13;
+
+struct ClipboardGuard;
+
+impl ClipboardGuard {
+    fn open() -> Result<Self, String> {
+        use windows::Win32::System::DataExchange::OpenClipboard;
+        // Another app can hold it for a moment; try a few times.
+        for _ in 0..10 {
+            if unsafe { OpenClipboard(None) }.is_ok() {
+                return Ok(Self);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        Err("the clipboard is busy".into())
+    }
+}
+
+impl Drop for ClipboardGuard {
+    fn drop(&mut self) {
+        let _ = unsafe { windows::Win32::System::DataExchange::CloseClipboard() };
+    }
+}
+
+/// `Some(text)` for text, `Some("")` for empty, `None` for anything else
+/// (an image, files) that a text restore would destroy.
+fn clipboard_text() -> Result<Option<String>, String> {
+    use windows::Win32::System::DataExchange::{CountClipboardFormats, GetClipboardData, IsClipboardFormatAvailable};
+    use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+    use windows::Win32::Foundation::HGLOBAL;
+    let _guard = ClipboardGuard::open()?;
+    unsafe {
+        if CountClipboardFormats() == 0 {
+            return Ok(Some(String::new()));
+        }
+        if IsClipboardFormatAvailable(CF_UNICODETEXT).is_err() {
+            return Ok(None);
+        }
+        let handle = GetClipboardData(CF_UNICODETEXT).map_err(|e| e.to_string())?;
+        let mem = HGLOBAL(handle.0);
+        let ptr = GlobalLock(mem) as *const u16;
+        if ptr.is_null() {
+            return Ok(None);
+        }
+        let max = GlobalSize(mem) / 2;
+        let slice = std::slice::from_raw_parts(ptr, max);
+        let len = slice.iter().position(|&u| u == 0).unwrap_or(max);
+        let text = String::from_utf16_lossy(&slice[..len]);
+        let _ = GlobalUnlock(mem);
+        Ok(Some(text))
+    }
+}
+
+fn set_clipboard_text(text: &str) -> Result<(), String> {
+    use windows::Win32::System::DataExchange::{EmptyClipboard, SetClipboardData};
+    use windows::Win32::Foundation::GlobalFree;
+    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    let _guard = ClipboardGuard::open()?;
+    unsafe {
+        EmptyClipboard().map_err(|e| e.to_string())?;
+        if text.is_empty() {
+            return Ok(());
+        }
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let mem = GlobalAlloc(GMEM_MOVEABLE, wide.len() * 2).map_err(|e| e.to_string())?;
+        let ptr = GlobalLock(mem) as *mut u16;
+        if ptr.is_null() {
+            let _ = GlobalFree(Some(mem));
+            return Err("couldn't lock clipboard memory".into());
+        }
+        std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+        let _ = GlobalUnlock(mem);
+        if let Err(e) = SetClipboardData(CF_UNICODETEXT, Some(HANDLE(mem.0))) {
+            let _ = GlobalFree(Some(mem));
+            return Err(e.to_string());
+        }
+        // The clipboard owns the memory now.
+        Ok(())
+    }
+}
+
+/// Paste `text` with Ctrl+V, then put the clipboard's text back.
+pub fn paste_text(text: &str) -> Result<(), String> {
+    let previous = clipboard_text()?.ok_or("the clipboard holds something other than text")?;
+    set_clipboard_text(text)?;
+    let result = press(&[VK_CONTROL, VIRTUAL_KEY(b'V' as u16)], 1);
+    // The app reads the clipboard when it handles the keystroke, which can
+    // be a moment after we send it: wait for it before restoring.
+    wait_for_foreground(2_000);
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    wait_for_foreground(2_000);
+    let _ = set_clipboard_text(&previous);
+    result
 }
 
 /// A key by name or character: "enter", "ctrl", "f5", "a", "/", "volume_up".
@@ -644,19 +792,24 @@ mod tests {
     }
 
     #[test]
-    fn text_becomes_unicode_events_with_real_enter() {
-        // "a" = down+up; emoji = a surrogate pair, each unit down+up; "\n" = Enter.
-        let events = text_inputs("a👋\nb");
-        assert_eq!(events.len(), 2 + 4 + 2 + 2);
-        let ki = |i: usize| unsafe { events[i].Anonymous.ki };
-        assert_eq!(ki(0).wScan, 'a' as u16);
-        assert!(ki(0).dwFlags.contains(KEYEVENTF_UNICODE));
-        assert_eq!(ki(2).wScan, 0xD83D); // high surrogate of 👋
-        assert_eq!(ki(4).wScan, 0xDC4B); // low surrogate
-        assert_eq!(ki(6).wVk, VK_RETURN);
-        assert!(!ki(6).dwFlags.contains(KEYEVENTF_UNICODE));
-        // "\r\n" is one Enter, not two.
-        assert_eq!(text_inputs("x\r\ny").len(), 6);
+    fn text_becomes_one_group_per_character() {
+        let groups = text_inputs("a👋\nb");
+        assert_eq!(groups.len(), 4);
+        let ki = |g: &Vec<INPUT>, i: usize| unsafe { g[i].Anonymous.ki };
+        // An emoji is no key on any layout: a surrogate pair of packets,
+        // sent together.
+        assert_eq!(groups[1].len(), 4);
+        assert_eq!(ki(&groups[1], 0).wScan, 0xD83D);
+        assert_eq!(ki(&groups[1], 2).wScan, 0xDC4B);
+        assert!(ki(&groups[1], 0).dwFlags.contains(KEYEVENTF_UNICODE));
+        // A line break is a real Enter; "\r\n" is one, not two.
+        assert_eq!(ki(&groups[2], 0).wVk, VK_RETURN);
+        assert_eq!(text_inputs("x\r\ny").len(), 3);
+        // Every group releases what it pressed.
+        for g in &groups {
+            let downs = g.iter().filter(|e| unsafe { !e.Anonymous.ki.dwFlags.contains(KEYEVENTF_KEYUP) }).count();
+            assert_eq!(downs * 2, g.len());
+        }
     }
 
     #[test]

@@ -417,8 +417,8 @@ fn windows_pointer_action(args: &serde_json::Value, app: &tauri::AppHandle) -> T
         "type" => {
             let t = text.ok_or("'text' is required for type")?;
             keyboard_ready()?;
-            let n = win::type_text(t)?;
-            Ok(format!("Typed {n} character(s).{}", front_note()))
+            let (n, pasted) = win::type_text(t)?;
+            Ok(format!("{} {n} character(s).{}", if pasted { "Pasted" } else { "Typed" }, front_note()))
         }
         "key" => {
             let combo = text.ok_or("'text' is required for key — e.g. \"enter\", \"ctrl+s\", \"alt+f4\"")?;
