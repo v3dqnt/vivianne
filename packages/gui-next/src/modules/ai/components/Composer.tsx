@@ -387,7 +387,6 @@ export function Composer() {
             it is about the run in progress, which is this box's business. */}
         <ComputerUseBanner />
 
-        <RunStatusBar />
         <SubagentPanel />
         <StreamStatusLine />
 
@@ -396,6 +395,8 @@ export function Composer() {
 
         {/* Mention menu still needs its own anchor to float over the input. */}
         <Box sx={{ position: 'relative' }}>
+          {/* Docked on the composer's top edge — part of the box, not a card above it. */}
+          <RunStatusBar />
           {mentionOpen && <UnifiedMentionMenu items={mentionItems} activeIndex={mentionIndex} onSelect={applyMention} onHover={setMentionIndex} />}
 
           <Paper

@@ -747,7 +747,15 @@ pub async fn run_agent_loop_continue(
                     continue;
                 }
             }
-            ended_on = Some(err.clone());
+            ended_on = Some(if kind == crate::agent::recovery::Failure::Transient {
+                format!(
+                    "the connection failed {} more times after retrying ({})",
+                    crate::agent::recovery::NETWORK_MAX_RETRIES,
+                    crate::ai::utils::truncate_error_text(err, 160)
+                )
+            } else {
+                err.clone()
+            });
         } else if failure.is_none() {
             failure_waits = 0;
             overflow_compacted = false;
@@ -821,6 +829,8 @@ pub async fn run_agent_loop_continue(
                 .or_else(|| crate::ai::pricing::compute_cost(&used_model.provider, &used_model.id, usage))
                 .unwrap_or(0.0);
             l.spent_usd += cost;
+            l.input_tokens += (usage.input + usage.cache_read + usage.cache_write) as u64;
+            l.output_tokens += usage.output as u64;
             l.steps += 1;
             l.model = Some(format!("{}/{}", used_model.provider, used_model.id));
         }
@@ -1094,7 +1104,7 @@ pub async fn run_agent_loop_continue(
         if on_disk == Some(RunStatus::Stopped) {
             l.set_status(RunStatus::Stopped, None);
         } else if let Some(reason) = ended_on.take() {
-            crate::agent::notifications::notify_long_task(app, &format!("Paused: {reason}"));
+            crate::agent::notifications::notify_long_task(app, &format!("Task halted and needs your review: {reason}"));
             l.set_status(RunStatus::Paused, Some(reason));
         } else if abort_flag.load(Ordering::SeqCst) {
             if crate::agent::run_ledger::take_pause_request(&l.key) {

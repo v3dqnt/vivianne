@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Box, ButtonBase, Collapse, Stack, Typography } from '../../../ui'
 import { TickCircleLinear } from '../../../icons'
 import type { Checkpoint } from '../lib/checkpoints'
+import { TOOL_BLOCK_SX } from './ToolCallCard'
 
 /** "40 s", "15 min", "2 h 5 min" — how long a piece of work took, without
  * a countdown's precision. */
@@ -34,7 +35,7 @@ export function CheckpointCard({ checkpoint: c }: { checkpoint: Checkpoint }) {
   const allDone = c.done === c.total
 
   return (
-    <Stack sx={{ maxWidth: '80%' }}>
+    <Stack sx={TOOL_BLOCK_SX}>
       <ButtonBase
         onClick={() => c.files.length && setOpen((v) => !v)}
         aria-expanded={c.files.length ? open : undefined}

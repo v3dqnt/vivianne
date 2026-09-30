@@ -96,6 +96,10 @@ pub fn classify(msg: &str) -> Failure {
 const INTERACTIVE_MAX_WAIT: Duration = Duration::from_secs(5 * 60);
 /// How many times an ordinary chat waits a failure out before giving up.
 const INTERACTIVE_MAX_WAITS: u32 = 4;
+/// How many times a network or server failure is retried before the task
+/// halts for review — in any run. A connection that fails three times in a
+/// row over several minutes needs a person to look, not a longer wait.
+pub const NETWORK_MAX_RETRIES: u32 = 3;
 /// Longest single wait in a long task — long enough for a daily or hourly
 /// quota window to roll over.
 const LONG_MAX_WAIT: Duration = Duration::from_secs(6 * 3600);
@@ -111,6 +115,7 @@ const BACKOFF_CAP: Duration = Duration::from_secs(15 * 60);
 pub fn next_wait(failure: &Failure, waits: u32, long_task: bool) -> Option<Duration> {
     let hint = match failure {
         Failure::RateLimited { retry_after } => *retry_after,
+        Failure::Transient if waits >= NETWORK_MAX_RETRIES => return None,
         Failure::Transient => None,
         Failure::ContextOverflow | Failure::Final => return None,
     };
@@ -166,10 +171,13 @@ mod tests {
         assert_eq!(next_wait(&rl(20), 0, false), Some(Duration::from_secs(21)));
         // No hint: exponential backoff from 30s, capped at 15 minutes.
         assert_eq!(next_wait(&Failure::Transient, 0, true), Some(Duration::from_secs(30)));
+        assert_eq!(next_wait(&Failure::Transient, 1, true), Some(Duration::from_secs(60)));
         assert_eq!(next_wait(&Failure::Transient, 2, true), Some(Duration::from_secs(120)));
-        assert_eq!(next_wait(&Failure::Transient, 20, true), Some(Duration::from_secs(900)));
-        // A chat gives up after a few waits or a long one; a long task keeps going.
-        assert_eq!(next_wait(&Failure::Transient, 4, false), None);
+        // Network and server failures: three retries, then the task halts.
+        assert_eq!(next_wait(&Failure::Transient, 3, true), None);
+        assert_eq!(next_wait(&Failure::Transient, 3, false), None);
+        // Rate limits keep being waited out in a long task.
+        assert_eq!(next_wait(&Failure::RateLimited { retry_after: None }, 20, true), Some(Duration::from_secs(900)));
         assert_eq!(next_wait(&rl(3600), 0, false), None);
         assert_eq!(next_wait(&rl(3600), 0, true), Some(Duration::from_secs(3601)));
         assert_eq!(next_wait(&rl(86_400), 0, true), Some(Duration::from_secs(6 * 3600)));

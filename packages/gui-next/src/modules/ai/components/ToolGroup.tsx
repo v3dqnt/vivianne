@@ -3,7 +3,7 @@ import { Box, CircularProgress, Collapse, Stack, Typography } from '../../../ui'
 import { ArrowDownLinear, LayerLinear } from '../../../icons'
 import type { AgentMessage } from '../lib/types'
 import { summarizeTools } from '../lib/toolGroups'
-import { argSummary, declarationFor, iconFor, toolImages } from './ToolCallCard'
+import { argSummary, declarationFor, iconFor, toolImages, TOOL_BLOCK_SX } from './ToolCallCard'
 import { ImageBlock } from './ImageBlock'
 
 type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
@@ -35,7 +35,7 @@ export function ToolGroup({ tools, children }: { tools: ToolResultMessage[]; chi
   }
 
   return (
-    <Stack spacing={0.75} sx={{ maxWidth: '80%' }}>
+    <Stack spacing={0.75} sx={TOOL_BLOCK_SX}>
       <Box
         sx={{
           border: 1,

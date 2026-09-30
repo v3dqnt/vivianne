@@ -8,6 +8,7 @@ import { Virtualizer } from 'virtua'
 import { Box, Typography, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Button } from '../../../ui'
 import { useAgentStore } from '../store/agentStore'
 import { MessageBubble } from './MessageBubble'
+import { RunSummary } from './RunSummary'
 import { ToolGroup } from './ToolGroup'
 import { groupTranscript } from '../lib/toolGroups'
 import { findCheckpoints } from '../lib/checkpoints'
@@ -58,6 +59,7 @@ export function MessageList({
     lastStart.current = earlierStart
   }, [earlierStart])
   const liveBusy = useAgentStore((s) => s.isBusy)
+  const lastRun = useAgentStore((s) => s.longTask)
   // A saved conversation is never "busy", whatever today's live one is doing.
   const isBusy = readOnly ? false : liveBusy
   const liveStreamingIndex = useAgentStore((s) => s.streamingIndex)
@@ -231,6 +233,15 @@ export function MessageList({
       </Box>
     ),
   )
+  // The last task's receipt, once it has ended — only in the live
+  // conversation, and only for work that took more than a single reply.
+  if (!readOnly && !isBusy && lastRun && ['done', 'stopped', 'paused', 'blocked'].includes(lastRun.status) && lastRun.steps > 1) {
+    items.push(
+      <Box key={`summary-${lastRun.key}`} sx={{ pb: 1.5 }}>
+        <RunSummary ledger={lastRun} />
+      </Box>,
+    )
+  }
   if (showTrailingIndicator) {
     items.push(
       <Box key="trailing-indicator" sx={{ pb: 1.5 }}>

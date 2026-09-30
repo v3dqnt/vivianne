@@ -96,6 +96,9 @@ export interface RunLedger {
   startedAt: number
   updatedAt: number
   spentUsd: number
+  /** Tokens read and written over the whole task. */
+  inputTokens?: number
+  outputTokens?: number
   steps: number
   model: string | null
   waitUntil: number | null

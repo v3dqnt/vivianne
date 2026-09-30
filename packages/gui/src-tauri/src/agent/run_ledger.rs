@@ -75,6 +75,11 @@ pub struct RunLedger {
     pub updated_at: u64,
     #[serde(default)]
     pub spent_usd: f64,
+    /// Tokens read (including cache reads) and written over the task.
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
     #[serde(default)]
     pub steps: u64,
     #[serde(default)]
@@ -139,6 +144,8 @@ impl RunLedger {
             started_at: now,
             updated_at: now,
             spent_usd: 0.0,
+            input_tokens: 0,
+            output_tokens: 0,
             steps: 0,
             model: None,
             wait_until: None,

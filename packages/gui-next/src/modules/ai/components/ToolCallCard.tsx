@@ -27,6 +27,11 @@ import { CodeBlock } from './CodeBlock'
 
 type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
 
+/** One width for everything a tool leaves in the chat — groups, cards,
+ * checkpoints, team runs — so they line up as a column instead of each
+ * being as wide as its own text. */
+export const TOOL_BLOCK_SX = { width: '100%', maxWidth: 'min(80%, 640px)' } as const
+
 const MEMORY_TOOLS: Record<string, string> = {
   memory_get: 'Recalling memory…',
   memory_search: 'Searching memory…',
@@ -217,7 +222,7 @@ export function ToolCallCard({
   return (
     // Open, a card takes the full width it's given: its output shouldn't be
     // squeezed to the width of its header.
-    <Stack spacing={0.5} sx={{ maxWidth: compact ? '100%' : '80%', width: open ? '100%' : undefined }}>
+    <Stack spacing={0.5} sx={compact ? { width: '100%' } : TOOL_BLOCK_SX}>
     <Box
       sx={{
         border: 1,

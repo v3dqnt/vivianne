@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Box, Button, Stack, TextField, Typography } from '../../../ui'
+import { Box, Button, ButtonBase, Stack, TextField, Typography } from '../../../ui'
 import { useAgentStore } from '../store/agentStore'
 import type { RunStatus } from '../lib/types'
+
+/** "12.4k", "1.2M". */
+export function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
 
 /** "2h 13m", "4m 05s", "3d 2h" — durations at the precision that matters. */
 export function formatDuration(ms: number): string {
@@ -91,29 +98,58 @@ export function RunStatusBar() {
 
   const meta: string[] = []
   if (ledger) {
-    meta.push(ledger.capUsd !== null ? `$${ledger.spentUsd.toFixed(2)} of $${ledger.capUsd.toFixed(2)}` : `$${ledger.spentUsd.toFixed(2)} spent`)
-    meta.push(`${formatDuration(now - ledger.startedAt)} elapsed`)
-    if (ledger.todos.length) meta.push(`${ledger.milestones.length} of ${ledger.todos.length} done`)
-    else if (ledger.milestones.length) meta.push(`${ledger.milestones.length} checkpoints`)
-    if (ledger.model) meta.push(ledger.model.split('/').pop() ?? ledger.model)
+    const tokens = (ledger.inputTokens ?? 0) + (ledger.outputTokens ?? 0)
+    if (ledger.spentUsd > 0 || ledger.capUsd !== null) {
+      meta.push(ledger.capUsd !== null ? `$${ledger.spentUsd.toFixed(2)} of $${ledger.capUsd.toFixed(2)}` : `$${ledger.spentUsd.toFixed(2)}`)
+    }
+    if (tokens > 0) meta.push(`${formatTokens(tokens)} tokens`)
+    meta.push(formatDuration(now - ledger.startedAt))
+    if (ledger.todos.length) meta.push(`${ledger.milestones.length}/${ledger.todos.length} done`)
   }
+  const note = status !== 'running' && reason ? reason : null
 
-  return (
-    <Box
+  const textButton = (label: string, onClick: () => void, strong = false) => (
+    <ButtonBase
+      onClick={onClick}
       sx={{
-        border: 1,
-        borderColor: 'divider',
-        borderRadius: '12px',
-        bgcolor: 'background.paper',
-        px: 1.5,
-        py: 1,
+        px: 0.75,
+        py: 0.25,
+        borderRadius: '6px',
+        fontSize: '0.6875rem',
+        fontWeight: 600,
+        color: strong ? 'text.primary' : 'text.secondary',
+        flexShrink: 0,
+        '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
       }}
     >
-      <Stack direction="row" sx={{ alignItems: 'center', gap: 1, minWidth: 0 }}>
+      {label}
+    </ButtonBase>
+  )
+
+  return (
+    // A tab on the composer's top edge: the same surface and hairline, open
+    // at the bottom so it reads as part of the box it sits on, and inset so
+    // the composer's own corners stay visible.
+    <Box
+      sx={{
+        mx: 2,
+        mb: '-1px',
+        position: 'relative',
+        zIndex: 1,
+        border: 1,
+        borderBottom: 0,
+        borderColor: 'divider',
+        borderRadius: '12px 12px 0 0',
+        bgcolor: 'background.card',
+        px: 1.25,
+        py: 0.5,
+      }}
+    >
+      <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, minWidth: 0, minHeight: 24 }}>
         <Box
           sx={{
-            width: 7,
-            height: 7,
+            width: 6,
+            height: 6,
             borderRadius: '50%',
             bgcolor: color,
             flexShrink: 0,
@@ -121,57 +157,34 @@ export function RunStatusBar() {
             '@keyframes vivPulse': { '0%, 100%': { opacity: 1 }, '50%': { opacity: 0.35 } },
           }}
         />
-        <Typography variant="caption" sx={{ fontWeight: 600, color, flexShrink: 0 }}>
+        <Typography variant="caption" sx={{ fontWeight: 600, color, flexShrink: 0, fontSize: '0.6875rem' }}>
           {label}
-          {status === 'waiting' && waitUntil ? ` — resumes in ${formatDuration(waitUntil - now)}` : ''}
+          {status === 'waiting' && waitUntil ? ` · ${formatDuration(waitUntil - now)}` : ''}
         </Typography>
-        {ledger && (
-          <Typography variant="caption" color="text.secondary" noWrap sx={{ minWidth: 0 }} title={ledger.objective}>
-            {ledger.objective}
+        <Typography variant="caption" color="text.secondary" noWrap sx={{ minWidth: 0, flex: 1, fontSize: '0.6875rem' }} title={note ?? ledger?.objective}>
+          {note ?? ledger?.objective ?? ''}
+        </Typography>
+        {meta.length > 0 && (
+          <Typography className="cq-label" variant="caption" color="text.disabled" noWrap sx={{ flexShrink: 0, fontSize: '0.6875rem' }}>
+            {meta.join(' · ')}
           </Typography>
         )}
-        <Box sx={{ flex: 1 }} />
-        {ledger && (status === 'running' || status === 'waiting') && (
-          <Button size="small" color="inherit" onClick={() => void run(() => control('pause'))}>
-            Pause
-          </Button>
-        )}
-        {!ledger && status === 'waiting' && (
-          <Button size="small" color="inherit" onClick={() => void abort()}>
-            Stop
-          </Button>
-        )}
-        {ledger && (status === 'paused' || status === 'blocked') && !capHit && (
-          <Button size="small" variant="contained" onClick={() => void run(() => control('resume'))}>
-            Resume
-          </Button>
-        )}
-        {ledger && (
-          <Button size="small" color="inherit" onClick={() => void run(() => control('stop'))}>
-            End task
-          </Button>
-        )}
+        {ledger && (status === 'running' || status === 'waiting') && textButton('Pause', () => void run(() => control('pause')))}
+        {!ledger && status === 'waiting' && textButton('Stop', () => void abort())}
+        {ledger && (status === 'paused' || status === 'blocked') && !capHit && textButton('Resume', () => void run(() => control('resume')), true)}
+        {ledger && textButton('End', () => void run(() => control('stop')))}
       </Stack>
-      {(meta.length > 0 || (reason && status !== 'running')) && (
-        <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 0.5, pl: 2 }}>
-          {[...meta, status !== 'running' && reason ? reason : null].filter(Boolean).join(' · ')}
-        </Typography>
-      )}
       {ledger && capHit && (status === 'paused' || status === 'blocked') && (
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 1, pl: 2 }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', py: 0.75 }}>
           <TextField label="Add budget ($)" size="small" value={addUsd} onChange={(e) => setAddUsd(e.target.value)} sx={{ width: 120 }} />
           <TextField label="Add time (h)" size="small" value={addHours} onChange={(e) => setAddHours(e.target.value)} sx={{ width: 120 }} />
-          <Button
-            size="small"
-            variant="contained"
-            onClick={() => void run(() => control('resume', { usd: numberOr(addUsd), hours: numberOr(addHours) }))}
-          >
+          <Button size="small" variant="contained" onClick={() => void run(() => control('resume', { usd: numberOr(addUsd), hours: numberOr(addHours) }))}>
             Raise and resume
           </Button>
         </Stack>
       )}
       {error && (
-        <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.5, pl: 2 }}>
+        <Typography variant="caption" color="error.main" sx={{ display: 'block', pb: 0.5 }}>
           {error}
         </Typography>
       )}

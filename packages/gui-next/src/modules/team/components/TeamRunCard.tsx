@@ -5,6 +5,7 @@ import { Markdown } from '../../ai/components/Markdown'
 import { AgentMark } from '../../../ui/brand/AgentMark'
 import { SUBAGENT_COLORS, SUBAGENT_COLOR_HEX } from '../../settings/lib/subagentProfiles'
 import { useTeamRunStore, type TeamRunMember } from '../store/teamRunStore'
+import { TOOL_BLOCK_SX } from '../../ai/components/ToolCallCard'
 
 function hex(color: string | null): string {
   const key = color as (typeof SUBAGENT_COLORS)[number] | null
@@ -113,7 +114,7 @@ export function TeamRunCard({ runId, pending }: { runId: string | null; pending:
   const done = run.members.filter((m) => m.status === 'done').length
 
   return (
-    <Box sx={{ border: 1, borderColor: 'divider', borderRadius: '12px', bgcolor: 'background.paper', maxWidth: '80%', overflow: 'hidden' }}>
+    <Box sx={{ ...TOOL_BLOCK_SX, border: 1, borderColor: 'divider', borderRadius: '12px', bgcolor: 'background.paper', overflow: 'hidden' }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider' }}>
         <Stack direction="row" sx={{ gap: 0.25 }}>
           {run.members.slice(0, 5).map((m) => (
