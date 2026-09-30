@@ -113,6 +113,10 @@ async fn get_or_load(
     app: &tauri::AppHandle,
     id: &str,
 ) -> Result<Arc<std::sync::Mutex<WhisperState>>, String> {
+    // One load at a time: the overlay's preload and its first transcription
+    // arrive together, and each would otherwise build its own ~200 MB model.
+    static LOADING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _loading = LOADING.lock().await;
     {
         let guard = MODEL.lock().await;
         if let Some(m) = guard.as_ref() {
@@ -312,5 +316,36 @@ pub async fn unload() {
     let mut guard = MODEL.lock().await;
     if guard.take().is_some() {
         log::info!("[instant/stt] released whisper model");
+    }
+}
+
+#[cfg(test)]
+mod load_tests {
+    use whisper_rs::{WhisperContext, WhisperContextParameters};
+
+    fn model() -> Option<String> {
+        let base = std::env::var_os("APPDATA")?;
+        let p = std::path::PathBuf::from(base).join("com.vivianne.app").join("whisper-models").join(std::env::var("WHISPER_TEST_MODEL").unwrap_or_else(|_| "ggml-base.en.bin".into()));
+        p.is_file().then(|| p.to_string_lossy().to_string())
+    }
+
+    /// One load, as the app does it. Ignored: needs the model on disk.
+    #[test]
+    #[ignore]
+    fn loads_whisper_once() {
+        let Some(path) = model() else { return };
+        let ctx = WhisperContext::new_with_params(&path, WhisperContextParameters::default()).expect("load");
+        ctx.create_state().expect("state");
+    }
+
+    /// Two loads at once: what the overlay's preload racing its first
+    /// transcription did. Ignored: needs the model on disk.
+    #[test]
+    #[ignore]
+    fn loads_whisper_twice_at_once() {
+        let Some(path) = model() else { return };
+        let a = { let p = path.clone(); std::thread::spawn(move || WhisperContext::new_with_params(&p, WhisperContextParameters::default()).map(|c| c.create_state().is_ok())) };
+        let b = std::thread::spawn(move || WhisperContext::new_with_params(&path, WhisperContextParameters::default()).map(|c| c.create_state().is_ok()));
+        assert!(a.join().unwrap().is_ok() && b.join().unwrap().is_ok());
     }
 }

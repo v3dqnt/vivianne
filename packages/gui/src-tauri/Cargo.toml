@@ -19,6 +19,18 @@ lto = "fat"
 codegen-units = 1
 strip = true
 
+# sherpa-rs-sys built without debug assertions. Its build script links
+# the DEBUG C runtime (msvcrtd) whenever it was itself compiled with them,
+# i.e. in every dev build, although the sherpa-onnx DLLs it downloads are
+# release builds. Rust and whisper.cpp use the release runtime, so a dev
+# build had two: whisper.cpp opened its model with one and read it with the
+# other, and aborted ("_osfile(fh) & FOPEN") — the app closed the moment Viv
+# Instant started listening. Release builds were never affected.
+# Only this package: Tauri's code generator also runs at build time and must
+# keep debug assertions to match the Tauri runtime.
+[profile.dev.package.sherpa-rs-sys]
+debug-assertions = false
+
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 
