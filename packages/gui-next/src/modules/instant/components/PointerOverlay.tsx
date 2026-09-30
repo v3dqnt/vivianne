@@ -66,6 +66,8 @@ export function PointerOverlay() {
     )
   }
 
+  // The window is placed so the target is 18px in from its top-left
+  // (`instant::pointer::point`); the arrow's tip sits exactly there.
   return (
     <Box sx={{ position: 'relative', width: '100vw', height: '100vh' }}>
       <Box
@@ -76,15 +78,35 @@ export function PointerOverlay() {
           width: 20,
           height: 20,
           borderRadius: '50%',
-          bgcolor: alpha(accent, 0.9),
-          boxShadow: `0 0 0 6px ${alpha(accent, 0.28)}, 0 0 18px 6px ${alpha(accent, 0.5)}`,
+          bgcolor: alpha(accent, 0.35),
           animation: `${breathe} 1.3s ease-in-out infinite`,
         }}
       />
-      {paint.label && <Caption text={paint.label} accent={accent} sx={{ top: 4, left: 40 }} />}
+      <Box
+        component="svg"
+        viewBox="0 0 512 512"
+        aria-hidden
+        sx={{
+          position: 'absolute',
+          // Tip of the path is at (136, 84) of 512: at 30px that is (8, 5).
+          top: 13,
+          left: 10,
+          width: 30,
+          height: 30,
+          overflow: 'visible',
+          filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.45))',
+        }}
+      >
+        <path d={ARROW} fill="#0a0a0a" stroke="#ffffff" strokeWidth={34} strokeLinejoin="round" paintOrder="stroke" />
+      </Box>
+      {paint.label && <Caption text={paint.label} accent={accent} sx={{ top: 4, left: 44 }} />}
     </Box>
   )
 }
+
+/** The pointer: a rounded arrow, tip at top-left. */
+const ARROW =
+  'M128 116 C126 74 172 52 208 80 L428 262 C458 287 446 334 404 334 L326 334 C302 334 282 346 266 367 L214 432 C190 462 146 450 144 408 Z'
 
 function Caption({
   text,
