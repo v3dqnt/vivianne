@@ -2,15 +2,14 @@ import { lazy, Suspense } from 'react'
 import { Box, Stack, Typography, Button, ButtonBase, Tooltip, CircularProgress } from '../../../ui'
 import { CloseLinear, DocumentTextLinear, AddLinear } from '../../../icons'
 import { usePanelStore } from '../../dock/store/panelStore'
-import { fileName } from '../lib/docs'
+import { fileName, kindOf } from '../lib/docs'
+import { FileViewer } from '../../dock/components/FilePreview'
 
 const DocumentViewer = lazy(() => import('./DocumentViewer').then((m) => ({ default: m.DocumentViewer })))
 
-const EXTENSIONS = ['pdf', 'docx', 'xlsx', 'xlsm', 'xls', 'ods', 'csv', 'pptx']
-
 async function pickDocument(): Promise<string | null> {
   const { open } = await import('@tauri-apps/plugin-dialog')
-  const picked = await open({ multiple: false, filters: [{ name: 'Documents', extensions: EXTENSIONS }] })
+  const picked = await open({ multiple: false })
   return typeof picked === 'string' ? picked : null
 }
 
@@ -34,13 +33,13 @@ export function DocumentsMode() {
       <Stack sx={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 1, p: 3, textAlign: 'center' }}>
         <DocumentTextLinear size={24} color="currentColor" />
         <Typography variant="body2" sx={{ fontWeight: 600 }}>
-          No document open
+          Nothing open
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 300 }}>
-          Open a PDF, Word, Excel or PowerPoint file to preview it and edit it in place — or click one in All files.
+          Open any file to preview it: code, images, video, audio, 3D models, PDFs, and Word, Excel or PowerPoint files you can edit in place. Or click a file name in the chat.
         </Typography>
         <Button size="small" variant="outlined" onClick={() => void openFromDisk()} sx={{ mt: 0.5, borderRadius: '8px' }}>
-          Open a document
+          Open a file
         </Button>
       </Stack>
     )
@@ -82,7 +81,7 @@ export function DocumentsMode() {
             </Stack>
           )
         })}
-        <Tooltip title="Open a document">
+        <Tooltip title="Open a file">
           <ButtonBase onClick={() => void openFromDisk()} sx={{ p: 0.5, borderRadius: '6px', color: 'text.secondary', flexShrink: 0, '&:hover': { bgcolor: 'action.hover' } }}>
             <AddLinear size={13} color="currentColor" />
           </ButtonBase>
@@ -95,8 +94,10 @@ export function DocumentsMode() {
           </Stack>
         }
       >
-        {/* Keyed by path: each document gets a fresh viewer (and its own undo history). */}
-        <DocumentViewer key={active} path={active} />
+        {/* Keyed by path: each document gets a fresh viewer (and its own undo
+            history). Office files and PDFs get the editor; anything else the
+            general viewer. */}
+        {kindOf(active) ? <DocumentViewer key={active} path={active} /> : <FileViewer key={active} path={active} />}
       </Suspense>
     </Stack>
   )

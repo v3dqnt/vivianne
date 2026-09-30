@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react'
-import { Box, Stack, Typography } from '../../../ui'
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Box, ButtonBase, Stack, Typography } from '../../../ui'
 import { call } from '../../../ipc'
 import { CodeBlock } from '../../ai/components/CodeBlock'
+import { Markdown } from '../../ai/components/Markdown'
+
+const Model3DBlock = lazy(() => import('../../ai/components/Model3DBlock').then((m) => ({ default: m.Model3DBlock })))
 
 function langFromPath(path: string): string {
   const ext = path.split('.').pop()?.toLowerCase() ?? ''
@@ -21,6 +24,29 @@ function langFromPath(path: string): string {
     yaml: 'yaml',
     sh: 'bash',
     bash: 'bash',
+    zsh: 'bash',
+    ps1: 'powershell',
+    go: 'go',
+    java: 'java',
+    kt: 'kotlin',
+    swift: 'swift',
+    c: 'c',
+    h: 'c',
+    cpp: 'cpp',
+    cc: 'cpp',
+    hpp: 'cpp',
+    cs: 'csharp',
+    rb: 'ruby',
+    php: 'php',
+    lua: 'lua',
+    r: 'r',
+    jl: 'julia',
+    sql: 'sql',
+    xml: 'xml',
+    scss: 'scss',
+    vue: 'vue',
+    svelte: 'svelte',
+    tex: 'latex',
   }
   return map[ext] ?? 'text'
 }
@@ -31,6 +57,7 @@ export type FilePreviewData =
   | { kind: 'image'; base64: string; mediaType: string; width: number; height: number; bytes: number; downscaled: boolean }
   | { kind: 'svg'; source: string }
   | { kind: 'pdf'; base64: string; bytes: number }
+  | { kind: 'media'; media: 'video' | 'audio' | 'model'; base64: string; mediaType: string; bytes: number }
   | { kind: 'binary'; bytes: number; hex: string; mediaType: string | null; note: string }
 
 /** Settled-content cache: expanding a tree row (or reopening the fullscreen
@@ -78,10 +105,17 @@ export function FileContent({
   path,
   wrap = true,
   bare = false,
+  full = false,
+  fresh = false,
 }: {
   path: string
   wrap?: boolean
   bare?: boolean
+  /** Filling a panel: no height caps, and Markdown, HTML and CSV are shown
+   * rendered (with their source a click away) rather than as source. */
+  full?: boolean
+  /** Skip the cache: a viewer opened to see the file as it is now. */
+  fresh?: boolean
 }) {
   const [data, setData] = useState<FilePreviewData | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -90,7 +124,7 @@ export function FileContent({
     setData(null)
     setError(null)
     let stale = false
-    const cached = previewCache.get(path)
+    const cached = fresh ? undefined : previewCache.get(path)
     if (cached !== undefined) {
       setData(cached)
       return
@@ -109,7 +143,7 @@ export function FileContent({
     return () => {
       stale = true
     }
-  }, [path])
+  }, [path, fresh])
 
   if (error) {
     return (
@@ -141,7 +175,7 @@ export function FileContent({
           alt={path}
           sx={{
             maxWidth: '100%',
-            maxHeight: 320,
+            maxHeight: full ? 'none' : 320,
             objectFit: 'contain',
             borderRadius: '6px',
             display: 'block',
@@ -171,7 +205,7 @@ export function FileContent({
           component="img"
           alt=""
           src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(data.source)}`}
-          sx={{ maxHeight: 320, maxWidth: '100%', height: 'auto', display: 'block' }}
+          sx={{ maxHeight: full ? 'none' : 320, maxWidth: '100%', height: 'auto', display: 'block' }}
         />
         {meta('SVG · rendered from source')}
       </Box>
@@ -185,11 +219,15 @@ export function FileContent({
           component="iframe"
           src={`data:application/pdf;base64,${data.base64}`}
           title={path}
-          sx={{ width: '100%', height: 400, border: 0, borderRadius: '6px', bgcolor: 'common.white' }}
+          sx={{ width: '100%', height: full ? 'calc(100vh - 180px)' : 400, border: 0, borderRadius: '6px', bgcolor: 'common.white' }}
         />
         {meta(`PDF · ${formatBytes(data.bytes)}`)}
       </Box>
     )
+  }
+
+  if (data.kind === 'media') {
+    return <MediaView data={data} full={full} caption={meta(`${data.mediaType} · ${formatBytes(data.bytes)}`)} />
   }
 
   if (data.kind === 'binary') {
@@ -216,6 +254,11 @@ export function FileContent({
         {meta(`${formatBytes(data.bytes)} · first ${Math.min(512, data.bytes)} bytes shown`)}
       </Stack>
     )
+  }
+
+  if (full) {
+    const rendered = renderedKind(path)
+    if (rendered) return <RenderedText kind={rendered} path={path} content={data.content} />
   }
 
   // Text. minWidth: 0 at every level is what lets the code area shrink below
@@ -245,6 +288,206 @@ export function FileContent({
     <Box sx={{ minWidth: 0, '& > *': { minWidth: 0 } }}>
       <CodeBlock code={data.content} lang={langFromPath(path)} wrap={wrap} bare={bare} />
       {data.truncated && meta(`Truncated — showing the first ${MAX_HIGHLIGHT_CHARS.toLocaleString()} characters`)}
+    </Box>
+  )
+}
+
+type MediaData = Extract<FilePreviewData, { kind: 'media' }>
+
+/** Plays video and audio, and draws `.glb`/`.gltf` models, from a blob URL
+ * made from the bytes the backend read, revoked when the view goes. */
+function MediaView({ data, full, caption }: { data: MediaData; full: boolean; caption: ReactNode }) {
+  const url = useMemo(() => {
+    const bin = atob(data.base64)
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    return URL.createObjectURL(new Blob([bytes], { type: data.mediaType }))
+  }, [data])
+  useEffect(() => () => URL.revokeObjectURL(url), [url])
+
+  return (
+    <Box sx={{ minWidth: 0 }}>
+      {data.media === 'video' ? (
+        <Box
+          component="video"
+          src={url}
+          controls
+          sx={{ width: '100%', maxHeight: full ? 'calc(100vh - 200px)' : 320, borderRadius: '8px', bgcolor: 'common.black', display: 'block' }}
+        />
+      ) : data.media === 'audio' ? (
+        <Box component="audio" src={url} controls sx={{ width: '100%', display: 'block' }} />
+      ) : (
+        <Suspense
+          fallback={
+            <Typography variant="caption" color="text.secondary">
+              Loading the 3D viewer…
+            </Typography>
+          }
+        >
+          <Model3DBlock code={JSON.stringify({ src: url })} />
+        </Suspense>
+      )}
+      {caption}
+    </Box>
+  )
+}
+
+type Rendered = 'markdown' | 'html' | 'csv' | 'tsv'
+
+function renderedKind(path: string): Rendered | null {
+  const ext = path.split('.').pop()?.toLowerCase() ?? ''
+  if (ext === 'md' || ext === 'markdown' || ext === 'mdx') return 'markdown'
+  if (ext === 'html' || ext === 'htm') return 'html'
+  if (ext === 'csv') return 'csv'
+  if (ext === 'tsv') return 'tsv'
+  return null
+}
+
+/** Quote-aware CSV/TSV split: enough for the files people preview, with
+ * quoted fields, doubled quotes, and newlines inside quotes. */
+export function parseDelimited(text: string, sep: string, maxRows: number): string[][] {
+  const rows: string[][] = []
+  let row: string[] = []
+  let field = ''
+  let quoted = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') {
+        field += '"'
+        i++
+      } else if (c === '"') quoted = false
+      else field += c
+    } else if (c === '"' && field === '') quoted = true
+    else if (c === sep) {
+      row.push(field)
+      field = ''
+    } else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++
+      row.push(field)
+      rows.push(row)
+      row = []
+      field = ''
+      if (rows.length >= maxRows) return rows
+    } else field += c
+  }
+  if (field !== '' || row.length) {
+    row.push(field)
+    rows.push(row)
+  }
+  return rows
+}
+
+const MAX_TABLE_ROWS = 1000
+
+/** Markdown as a document, HTML as a page, CSV as a table, each with a
+ * toggle back to the source. */
+function RenderedText({ kind, path, content }: { kind: Rendered; path: string; content: string }) {
+  const [source, setSource] = useState(false)
+  const rows = useMemo(
+    () => (kind === 'csv' || kind === 'tsv' ? parseDelimited(content, kind === 'csv' ? ',' : '\t', MAX_TABLE_ROWS + 1) : []),
+    [kind, content],
+  )
+
+  let body: ReactNode
+  if (source) {
+    body = <CodeBlock code={content} lang={langFromPath(path)} wrap />
+  } else if (kind === 'markdown') {
+    body = (
+      <Box sx={{ fontSize: '0.875rem', maxWidth: 760 }}>
+        <Markdown text={content} />
+      </Box>
+    )
+  } else if (kind === 'html') {
+    // A sandbox with nothing allowed: the page is drawn, but its scripts,
+    // forms and links can't run with the app's access.
+    body = (
+      <Box
+        component="iframe"
+        title={path}
+        sandbox=""
+        srcDoc={content}
+        sx={{ width: '100%', height: 'calc(100vh - 200px)', border: 1, borderColor: 'divider', borderRadius: '8px', bgcolor: 'common.white' }}
+      />
+    )
+  } else {
+    const [head, ...rest] = rows
+    body = (
+      <Box sx={{ overflow: 'auto', maxHeight: 'calc(100vh - 200px)', border: 1, borderColor: 'divider', borderRadius: '8px' }}>
+        <Box
+          component="table"
+          sx={{
+            borderCollapse: 'collapse',
+            fontSize: '0.75rem',
+            fontFamily: '"Geist Mono", ui-monospace, monospace',
+            '& td, & th': { px: 1, py: 0.5, borderBottom: 1, borderRight: 1, borderColor: 'divider', whiteSpace: 'nowrap', textAlign: 'left' },
+            '& th': { position: 'sticky', top: 0, bgcolor: 'background.paper', fontWeight: 600 },
+          }}
+        >
+          {head && (
+            <thead>
+              <tr>
+                {head.map((h, i) => (
+                  <th key={i}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+          )}
+          <tbody>
+            {rest.slice(0, MAX_TABLE_ROWS).map((r, i) => (
+              <tr key={i}>
+                {r.map((c, j) => (
+                  <td key={j}>{c}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </Box>
+      </Box>
+    )
+  }
+
+  return (
+    <Stack sx={{ minWidth: 0, gap: 1 }}>
+      <Stack direction="row" sx={{ gap: 0.5, alignItems: 'center' }}>
+        {(['Rendered', 'Source'] as const).map((label) => {
+          const on = (label === 'Source') === source
+          return (
+            <ButtonBase
+              key={label}
+              onClick={() => setSource(label === 'Source')}
+              sx={{
+                px: 1,
+                py: 0.25,
+                borderRadius: '6px',
+                fontSize: '0.6875rem',
+                fontWeight: 600,
+                color: on ? 'text.primary' : 'text.secondary',
+                bgcolor: on ? 'action.selected' : 'transparent',
+                '&:hover': { bgcolor: on ? 'action.selected' : 'action.hover' },
+              }}
+            >
+              {label}
+            </ButtonBase>
+          )
+        })}
+        {rows.length > MAX_TABLE_ROWS && !source && (
+          <Typography variant="caption" color="text.disabled" sx={{ ml: 1 }}>
+            First {MAX_TABLE_ROWS.toLocaleString()} rows
+          </Typography>
+        )}
+      </Stack>
+      {body}
+    </Stack>
+  )
+}
+
+/** A whole panel given to one file of any kind: the Preview panel's view
+ * for everything that isn't an office document. */
+export function FileViewer({ path }: { path: string }) {
+  return (
+    <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', p: 1.5 }}>
+      <FileContent path={path} wrap full fresh />
     </Box>
   )
 }

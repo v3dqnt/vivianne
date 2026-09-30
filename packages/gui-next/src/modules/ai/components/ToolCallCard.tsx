@@ -24,6 +24,7 @@ import { contentToText, contentImages } from '../lib/types'
 import { ImageBlock } from './ImageBlock'
 import { DiffView } from './DiffView'
 import { CodeBlock } from './CodeBlock'
+import { FileLink, filePathArg } from './FileLink'
 
 type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
 
@@ -194,6 +195,7 @@ export function ToolCallCard({
   const Icon = iconFor(message.toolName)
   const summary = argSummary(message.arguments)
   const [label, target] = declarationFor(message.toolName, pending, summary)
+  const file = target !== null ? filePathArg(message.arguments) : null
   const output = contentToText(message.content).trim()
   const images = compact ? [] : toolImages(message)
   // Declared AFTER `output`, because it reads it. Putting this above the
@@ -250,15 +252,19 @@ export function ToolCallCard({
         <Typography variant="caption" sx={{ fontWeight: 600, flexShrink: 0 }} title={message.toolName}>
           {label}
         </Typography>
-        {target && (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            noWrap
-            sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', minWidth: 0 }}
-          >
-            {target}
-          </Typography>
+        {file ? (
+          <FileLink path={file} />
+        ) : (
+          target && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              noWrap
+              sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', minWidth: 0 }}
+            >
+              {target}
+            </Typography>
+          )
         )}
         <Box sx={{ flex: 1 }} />
         {pending ? (
@@ -317,13 +323,9 @@ export function ToolCallCard({
             <>
               {diffs.map((d, i) => (
                 <Box key={i}>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ display: 'block', px: 1.5, pt: 1, borderTop: i === 0 ? 1 : 0, borderColor: 'divider', fontFamily: '"Geist Mono", ui-monospace, monospace' }}
-                  >
-                    {d.path}
-                  </Typography>
+                  <Box sx={{ display: 'flex', px: 1.5, pt: 1, borderTop: i === 0 ? 1 : 0, borderColor: 'divider' }}>
+                    <FileLink path={d.path} />
+                  </Box>
                   <DiffView before={d.before} after={d.after} />
                 </Box>
               ))}

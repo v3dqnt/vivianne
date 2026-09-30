@@ -31,6 +31,16 @@ const HEX_PREVIEW_BYTES: usize = 512;
 
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "avif"];
 
+/// Formats the webview can play or draw from bytes: video and audio through
+/// its own media element, `.glb` through the 3D viewer.
+const VIDEO_EXTS: &[&str] = &["mp4", "m4v", "webm", "mov", "ogv"];
+const AUDIO_EXTS: &[&str] = &["mp3", "wav", "ogg", "oga", "flac", "m4a", "aac", "opus", "weba"];
+const MODEL_EXTS: &[&str] = &["glb", "gltf"];
+
+/// Media past this isn't pushed through IPC as base64: a feature film would
+/// stall the app to show a player nobody asked to buffer whole.
+const MAX_MEDIA_BYTES: u64 = 64 * 1024 * 1024;
+
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum FilePreview {
@@ -45,6 +55,10 @@ pub enum FilePreview {
     Svg { source: String },
     #[serde(rename_all = "camelCase")]
     Pdf { base64: String, bytes: u64 },
+    /// Video, audio or a 3D model, as bytes for a blob URL. `media` is
+    /// `video`, `audio` or `model`.
+    #[serde(rename_all = "camelCase")]
+    Media { media: &'static str, base64: String, media_type: String, bytes: u64 },
     #[serde(rename_all = "camelCase")]
     Binary { bytes: u64, hex: String, media_type: Option<String>, note: String },
 }
@@ -64,9 +78,20 @@ fn media_type_for(ext: &str) -> Option<&'static str> {
         "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "mp4" => "video/mp4",
-        "mp3" => "audio/mpeg",
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "ogv" => "video/ogg",
         "wav" => "audio/wav",
+        "ogg" | "oga" => "audio/ogg",
+        "flac" => "audio/flac",
+        "m4a" => "audio/mp4",
+        "aac" => "audio/aac",
+        "opus" => "audio/opus",
+        "weba" => "audio/webm",
+        "glb" => "model/gltf-binary",
+        "gltf" => "model/gltf+json",
+        "mp3" => "audio/mpeg",
         _ => return None,
     })
 }
@@ -80,8 +105,9 @@ fn describe_binary(ext: &str) -> String {
         "xlsx" => "Excel workbook (zipped OOXML) — no text extractor is built in yet".into(),
         "pptx" => "PowerPoint deck (zipped OOXML) — no text extractor is built in yet".into(),
         "exe" | "dll" | "so" | "dylib" => "Compiled binary".into(),
-        "mp4" | "mov" | "avi" | "mkv" => "Video file".into(),
-        "mp3" | "wav" | "flac" | "ogg" => "Audio file".into(),
+        "mp4" | "mov" | "avi" | "mkv" | "webm" | "m4v" => "Video file — too large to preview here (over 64 MB), or a format the webview can't play".into(),
+        "mp3" | "wav" | "flac" | "ogg" | "m4a" | "aac" => "Audio file — too large to preview here (over 64 MB)".into(),
+        "glb" | "gltf" => "3D model — too large to preview here (over 64 MB)".into(),
         "woff" | "woff2" | "ttf" | "otf" => "Font file".into(),
         "" => "Binary file (no extension)".into(),
         other => format!("Binary .{other} file"),
@@ -169,6 +195,27 @@ pub async fn cmd_read_file_preview(path: String) -> Result<FilePreview, String> 
                 bytes: size,
                 downscaled,
             });
+        }
+
+        let media = if VIDEO_EXTS.contains(&ext.as_str()) {
+            Some("video")
+        } else if AUDIO_EXTS.contains(&ext.as_str()) {
+            Some("audio")
+        } else if MODEL_EXTS.contains(&ext.as_str()) {
+            Some("model")
+        } else {
+            None
+        };
+        if let Some(media) = media {
+            if size <= MAX_MEDIA_BYTES {
+                let raw = std::fs::read(&p).map_err(|e| format!("Couldn't read file: {e}"))?;
+                return Ok(FilePreview::Media {
+                    media,
+                    base64: base64_encode(&raw),
+                    media_type: media_type_for(&ext).unwrap_or("application/octet-stream").to_string(),
+                    bytes: size,
+                });
+            }
         }
 
         if ext == "pdf" {

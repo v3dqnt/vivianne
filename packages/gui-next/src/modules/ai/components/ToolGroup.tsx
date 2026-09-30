@@ -5,6 +5,7 @@ import type { AgentMessage } from '../lib/types'
 import { summarizeTools } from '../lib/toolGroups'
 import { argSummary, declarationFor, iconFor, toolImages, TOOL_BLOCK_SX } from './ToolCallCard'
 import { ImageBlock } from './ImageBlock'
+import { FileLink, filePathArg } from './FileLink'
 
 type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
 
@@ -27,9 +28,11 @@ export function ToolGroup({ tools, children }: { tools: ToolResultMessage[]; chi
   let Icon = LayerLinear
   let label: string
   let target: string | null = null
+  let file: string | null = null
   if (running) {
     Icon = iconFor(running.toolName)
     ;[label, target] = declarationFor(running.toolName, true, argSummary(running.arguments))
+    file = target !== null ? filePathArg(running.arguments) : null
   } else {
     label = summarizeTools(tools)
   }
@@ -72,7 +75,9 @@ export function ToolGroup({ tools, children }: { tools: ToolResultMessage[]; chi
           <Typography variant="caption" sx={{ fontWeight: 600, flexShrink: 0 }}>
             {label}
           </Typography>
-          {target && (
+          {file ? (
+            <FileLink path={file} />
+          ) : target && (
             <Typography
               variant="caption"
               color="text.secondary"
