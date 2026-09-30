@@ -109,10 +109,18 @@ pub fn run() {
     .plugin(
       tauri_plugin_global_shortcut::Builder::new()
         .with_handler(|app, shortcut, event| {
-          // Fire on key-press, not release: a wake chord that acted on release
-          // would trigger again when the user lifts the same keys they used to
-          // dismiss it.
-          if event.state() != tauri_plugin_global_shortcut::ShortcutState::Pressed {
+          // The wake chord is push-to-talk: pressed starts listening,
+          // released sends what was said. Escape acts on press only.
+          let pressed = event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed;
+          if shortcut.key != tauri_plugin_global_shortcut::Code::Escape {
+            if pressed {
+              crate::instant::window::press(app);
+            } else {
+              crate::instant::window::release(app);
+            }
+            return;
+          }
+          if !pressed {
             return;
           }
           // Two chords share this one handler, told apart by key. Escape is
@@ -122,11 +130,7 @@ pub fn run() {
           // deliberately never takes focus: if it did, the keystrokes Viv
           // Instant is typing would land in the overlay instead of the app it
           // is driving.
-          if shortcut.key == tauri_plugin_global_shortcut::Code::Escape {
-            crate::instant::window::abort_from_shortcut(app);
-          } else {
-            crate::instant::window::toggle(app);
-          }
+          crate::instant::window::abort_from_shortcut(app);
         })
         .build(),
     )
@@ -359,6 +363,7 @@ pub fn run() {
       crate::instant::session::cmd_instant_steps,
       crate::instant::session::cmd_instant_cancel_step,
       crate::instant::window::cmd_instant_set_size,
+      crate::instant::window::cmd_instant_dismiss,
       crate::instant::pointer::cmd_pointer_point,
       crate::instant::pointer::cmd_pointer_highlight,
       crate::instant::pointer::cmd_pointer_hide,

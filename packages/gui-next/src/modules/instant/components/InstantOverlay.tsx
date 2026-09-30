@@ -104,6 +104,11 @@ export function InstantOverlay() {
       if (talkingRef.current) return
 
       const s = store.getState()
+      // Held and released without a word (or a tap too short to hear).
+      if (!text) {
+        if (s.phase === 'listening' || s.phase === 'transcribing') s.fail("Didn't catch that — hold the keys while you speak.")
+        return
+      }
 
       // During a destructive step's countdown, speech is the affordance that
       // actually fits: the premise is that the user is looking at the app being
@@ -131,7 +136,7 @@ export function InstantOverlay() {
   // a second and the bars don't need more.
   const [level, setLevel] = useState(0)
   const levelAt = useRef(0)
-  const { start, stop } = useInstantMic({
+  const { start, stop, release } = useInstantMic({
     onLevel: (l) => {
       const now = performance.now()
       if (now - levelAt.current < 60) return
@@ -159,7 +164,10 @@ export function InstantOverlay() {
     const subscribed: Array<Promise<void>> = []
     const track = (p: Promise<() => void>) => subscribed.push(p.then((off) => void offs.push(off)))
 
-    track(on('instant:activate', () => {
+    track(on<{ hold?: boolean } | null>('instant:activate', (payload) => {
+      speechRef.current?.abort()
+      stopSpeaking()
+      talkingRef.current = false
       store.getState().activate()
       void (async () => {
         const cfg = await call<{ instantSttModel?: string }>('cmd_get_settings').catch(() => null)
@@ -169,7 +177,13 @@ export function InstantOverlay() {
         // chord should never pay the model download or its ~190MB of buffers.
         await call('cmd_instant_stt_preload', { model: chosen }).catch(() => {})
       })()
-      void start()
+      void start({ hold: !!payload?.hold })
+    }))
+
+    // Push-to-talk: the chord came up — what was said is transcribed and run.
+    track(on('instant:release', () => {
+      if (store.getState().phase === 'listening') store.getState().setPhase('transcribing')
+      release()
     }))
 
     track(on('instant:dismiss', () => {
@@ -245,7 +259,25 @@ export function InstantOverlay() {
       stopSpeaking()
       talkingRef.current = false
     }
-  }, [say, start, stop, store])
+  }, [say, start, stop, release, store])
+
+  // Once it has answered (and finished saying so), the notch goes by itself.
+  useEffect(() => {
+    if (phase !== 'done' && phase !== 'error') return
+    let timer = 0
+    const check = () => {
+      if (talkingRef.current) {
+        timer = window.setTimeout(check, 500)
+        return
+      }
+      timer = window.setTimeout(() => {
+        const now = store.getState().phase
+        if ((now === 'done' || now === 'error') && !talkingRef.current) void call('cmd_instant_dismiss').catch(() => {})
+      }, phase === 'error' ? 6000 : 4000)
+    }
+    check()
+    return () => window.clearTimeout(timer)
+  }, [phase, store])
 
   const working = phase === 'working'
   const heard = interim || transcript
@@ -267,7 +299,7 @@ export function InstantOverlay() {
     ? `Downloading speech model ${download.index}/${download.count} · ${download.percent}%`
     : phase === 'working' && current
       ? current.summary
-      : heard || (phase === 'listening' ? 'Say what to do' : null)
+      : heard || (phase === 'listening' ? 'Speak while holding, release to send' : phase === 'transcribing' ? 'Getting that…' : null)
 
   // A second line only for what must be read: the answer, an error, or a
   // risky step about to run.

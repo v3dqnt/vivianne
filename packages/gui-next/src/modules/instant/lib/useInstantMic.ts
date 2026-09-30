@@ -100,7 +100,12 @@ export function useInstantMic({ onUtterance, onSpeechStart, onInterim, onError, 
   const cbs = useRef({ onUtterance, onSpeechStart, onInterim, onError, onLevel, model })
   cbs.current = { onUtterance, onSpeechStart, onInterim, onError, onLevel, model }
 
+  // Push-to-talk: set while a hold capture runs, and called on release.
+  const finishRef = useRef<(() => Promise<void>) | null>(null)
+  const releasedEarly = useRef(false)
+
   const stop = useCallback(() => {
+    finishRef.current = null
     nodeRef.current?.port.close()
     nodeRef.current?.disconnect()
     nodeRef.current = null
@@ -110,8 +115,15 @@ export function useInstantMic({ onUtterance, onSpeechStart, onInterim, onError, 
     ctxRef.current = null
   }, [])
 
-  const start = useCallback(async () => {
-    if (ctxRef.current) return
+  /**
+   * Start listening. `hold`: record everything until `release()` (the chord
+   * is held), then transcribe it in one go. Otherwise: listen, and send each
+   * utterance when the speaker pauses.
+   */
+  const start = useCallback(async (opts?: { hold?: boolean }) => {
+    const hold = !!opts?.hold
+    releasedEarly.current = false
+    if (ctxRef.current) stop()
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -210,6 +222,55 @@ export function useInstantMic({ onUtterance, onSpeechStart, onInterim, onError, 
         }
       }
 
+      if (hold) {
+        let heardVoice = false
+        let startedAt = performance.now()
+        node.port.onmessage = (ev: MessageEvent<Float32Array>) => {
+          const frame = ev.data
+          const now = performance.now()
+          const level = rms(frame)
+          cbs.current.onLevel?.(level)
+          buffer.push(frame)
+          if (level > ENERGY_THRESHOLD && !heardVoice) {
+            heardVoice = true
+            startedAt = now
+            cbs.current.onSpeechStart?.()
+          }
+          if (heardVoice && now - lastInterimAt > INTERIM_EVERY_MS && now - startedAt > MIN_UTTERANCE_MS) {
+            lastInterimAt = now
+            void interim()
+          }
+        }
+        finishRef.current = async () => {
+          finishRef.current = null
+          const frames = buffer
+          buffer = []
+          stop()
+          if (!heardVoice) {
+            cbs.current.onUtterance('')
+            return
+          }
+          // Let an interim decode in flight finish first: one decode at a time.
+          while (busy) await new Promise((r) => setTimeout(r, 30))
+          const total = frames.reduce((n, f) => n + f.length, 0)
+          const pcm = new Float32Array(total)
+          let at = 0
+          for (const f of frames) {
+            pcm.set(f, at)
+            at += f.length
+          }
+          try {
+            const text = await call<string>('cmd_instant_stt_transcribe', { pcm: Array.from(pcm), model: cbs.current.model, partial: false })
+            cbs.current.onUtterance((text ?? '').trim())
+          } catch (e) {
+            cbs.current.onError?.(e instanceof Error ? e.message : String(e))
+          }
+        }
+        // Released while the microphone was still starting.
+        if (releasedEarly.current) void finishRef.current()
+        return
+      }
+
       node.port.onmessage = (ev: MessageEvent<Float32Array>) => {
         const frame = ev.data
         const now = performance.now()
@@ -255,9 +316,15 @@ export function useInstantMic({ onUtterance, onSpeechStart, onInterim, onError, 
     }
   }, [stop])
 
+  /** The chord was released: stop recording and transcribe what was said. */
+  const release = useCallback(() => {
+    if (finishRef.current) void finishRef.current()
+    else releasedEarly.current = true
+  }, [])
+
   // Capture must never outlive the overlay — a live mic in a hidden window is
   // exactly the thing a user would be upset to discover.
   useEffect(() => stop, [stop])
 
-  return { start, stop }
+  return { start, stop, release }
 }

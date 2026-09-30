@@ -73,7 +73,7 @@ export function InstantSection() {
           Viv Instant
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          Press the chord from anywhere, say what you want done, and it operates your computer.
+          Hold the chord from anywhere, say what you want done, and let go: it operates your computer.
           It runs without asking for approval on each step — the overlay shows a live log of
           everything it does, and anything that could destroy your work is held for three seconds
           first.

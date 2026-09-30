@@ -57,6 +57,38 @@ pub fn position(win: &tauri::WebviewWindow) -> Result<(), String> {
         .map_err(|e| format!("couldn't position the overlay: {e}"))
 }
 
+/// Whether the chord is down. Holding a key makes Windows repeat the press,
+/// and every repeat arrives as another press: only the first one counts.
+static HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The chord went down: listen. Whatever was running is stopped first, since
+/// holding the chord again means a new instruction.
+pub fn press(app: &tauri::AppHandle) {
+    if HELD.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        crate::instant::session::abort(&app);
+        show_and_activate(&app, true);
+    });
+}
+
+/// The chord came up: stop listening and act on what was said.
+pub fn release(app: &tauri::AppHandle) {
+    if !HELD.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    crate::overlays::emit(app, LABEL, "instant:release", ());
+}
+
+/// The overlay hides itself a moment after it has answered.
+#[tauri::command]
+pub async fn cmd_instant_dismiss(app: tauri::AppHandle) -> Result<(), String> {
+    dismiss(&app);
+    Ok(())
+}
+
 /// The wake chord. Summons the overlay, or — if it is already up — cancels
 /// whatever is running and dismisses it.
 ///
@@ -75,6 +107,13 @@ fn toggle_now(app: &tauri::AppHandle) {
         dismiss(app);
         return;
     }
+    // From the tray there is no key to hold: listen until a pause instead.
+    show_and_activate(app, false);
+}
+
+/// Show the notch and start listening; `hold` listens until the chord is
+/// released, otherwise until the speaker pauses.
+fn show_and_activate(app: &tauri::AppHandle, hold: bool) {
     // Created on first summon (and again after it has been closed for
     // sitting idle) — see `crate::overlays`.
     let win = match crate::overlays::ensure(app, LABEL) {
@@ -105,7 +144,7 @@ fn toggle_now(app: &tauri::AppHandle) {
     // overlay must never hold the keyboard, or the text Viv Instant types goes
     // to the overlay instead of the app being driven.
     // Through the overlay queue: on a first summon the page is still loading.
-    crate::overlays::emit(app, LABEL, "instant:activate", ());
+    crate::overlays::emit(app, LABEL, "instant:activate", serde_json::json!({ "hold": hold }));
 }
 
 /// Cancel any run and hide the overlay.

@@ -86,7 +86,7 @@ fn install_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>
 
     TrayIconBuilder::with_id("viv_tray")
         .icon(app.default_window_icon().cloned().ok_or("no bundled window icon")?)
-        .tooltip("Vivianne — press Ctrl+Shift+Space for Viv Instant")
+        .tooltip("Vivianne — hold Ctrl+Shift+Space and speak for Viv Instant")
         .menu(&menu)
         // The menu must NOT open on a left click: left click is bound to
         // "show the app", which is what every other tray app on Windows does
