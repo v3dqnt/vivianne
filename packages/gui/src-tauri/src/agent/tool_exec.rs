@@ -36,6 +36,9 @@ const GATED_TOOLS: &[&str] = &[
     // GitHub writes (issues, PRs, merges, releases, workflow runs) and the raw
     // API. Reads (`github`) stay ungated.
     "github_act", "github_api",
+    // Runs the Python it is given as a test before saving it. Calls to the
+    // saved tools themselves are gated too (see `custom_names` below).
+    "create_tool",
 ];
 
 /// The only tools plan mode allows: reading the project and the web, and
@@ -247,6 +250,7 @@ pub async fn get_agent_tool_definitions() -> Vec<serde_json::Value> {
             "parameters": def.parameters,
         }));
     }
+    defs.extend(crate::coding_agent::custom_tools::tool_definitions());
     for (server, tool) in crate::mcp::list_all_tools().await {
         defs.push(serde_json::json!({
             "name": format!("mcp__{server}__{}", tool.name),
@@ -357,6 +361,9 @@ pub async fn execute_tool_calls(
     let workspace_folders = state.workspace_folders().await;
     let cwd = workspace_folders.first().cloned().unwrap_or_else(|| ".".to_string());
     let tools = crate::coding_agent::tool_exec::create_coding_tools(cwd.clone());
+    // Custom tools are Python the agent wrote: they run with the same reach
+    // as `math` or `bash`, so they take the same approval.
+    let custom_names = crate::coding_agent::custom_tools::custom_tool_names();
     // Global setting OR this session's own unattended flag. Viv Instant sets
     // the latter because it is spoken to rather than watched — there is no one
     // at the keyboard to answer an approval prompt — and it must not have to
@@ -654,7 +661,7 @@ pub async fn execute_tool_calls(
         // the workspace reason wins when both apply, since it's the more
         // specific/useful thing to tell the user.
         let mut approval_reason: Option<String> = None;
-        let mut needs_approval = GATED_TOOLS.contains(&tool_call.name.as_str());
+        let mut needs_approval = GATED_TOOLS.contains(&tool_call.name.as_str()) || custom_names.contains(&tool_call.name);
         if PATH_SCOPED_TOOLS.contains(&tool_call.name.as_str()) && !workspace_folders.is_empty() {
             if let Some(path_arg) = tool_call.arguments.get("path").and_then(|v| v.as_str()) {
                 let resolved = crate::coding_agent::tool_exec::resolve_path(&cwd, path_arg);
@@ -2044,6 +2051,7 @@ async fn execute_list_tools_tool(disabled_tools: &[String]) -> AgentToolResult {
     // question.
     let playbook_names: std::collections::HashSet<String> =
         crate::coding_agent::playbooks::load_playbooks().into_iter().filter(|p| p.is_tool()).map(|p| p.name).collect();
+    let custom_names = crate::coding_agent::custom_tools::custom_tool_names();
     let disabled: std::collections::HashSet<&str> = disabled_tools.iter().map(String::as_str).collect();
 
     let mut lines = Vec::with_capacity(defs.len());
@@ -2053,6 +2061,8 @@ async fn execute_list_tools_tool(disabled_tools: &[String]) -> AgentToolResult {
             format!("mcp:{server}")
         } else if playbook_names.contains(name) {
             "playbook".to_string()
+        } else if custom_names.contains(name) {
+            "custom".to_string()
         } else {
             "built-in".to_string()
         };
@@ -2942,11 +2952,12 @@ mod schema_registry_consistency_tests {
     fn every_constructed_tool_has_a_schema_entry() {
         let playbook_names: std::collections::HashSet<String> =
             crate::coding_agent::playbooks::load_playbooks().into_iter().filter(|p| p.is_tool()).map(|p| p.name).collect();
+        let custom_names = crate::coding_agent::custom_tools::custom_tool_names();
 
         let constructed: Vec<String> = crate::coding_agent::tool_exec::create_coding_tools(".".to_string())
             .iter()
             .map(|t| t.name().to_string())
-            .filter(|name| !playbook_names.contains(name))
+            .filter(|name| !playbook_names.contains(name) && !custom_names.contains(name))
             .collect();
 
         let schema_names: std::collections::HashSet<String> = static_tool_definitions()

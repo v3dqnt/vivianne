@@ -89,6 +89,9 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         // than wired up, since a working one already exists.
         Box::new(super::orchestration::TaskOutputTool::new()),
         Box::new(super::orchestration::KillTaskTool::new()),
+        Box::new(super::custom_tools::CreateToolTool::new(cwd.clone())),
+        Box::new(super::custom_tools::DeleteToolTool),
+        Box::new(super::custom_tools::ListCustomToolsTool),
     ];
     // ── User-defined: playbooks (~/.viv/playbooks/*.json) ──────────────────
     // A playbook is a tool if it has `command`, a panel if it has `panel`
@@ -98,6 +101,8 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
     for def in super::playbooks::load_playbooks().into_iter().filter(|d| d.is_tool()) {
         tools.push(Box::new(super::playbooks::PlaybookTool::new(def, cwd.clone())));
     }
+    // ── Agent-written: custom tools (~/.viv/tools/<name>/) ─────────────────
+    tools.extend(super::custom_tools::registry(&cwd));
     tools
 }
 

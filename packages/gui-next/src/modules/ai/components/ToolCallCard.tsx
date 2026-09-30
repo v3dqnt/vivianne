@@ -66,6 +66,9 @@ const DECLARATIONS: Record<string, [string, string]> = {
   create_document: ['Creating', 'Created'],
   generate_image: ['Generating image', 'Generated image'],
   math: ['Calculating', 'Calculated'],
+  create_tool: ['Writing a tool', 'Made a tool'],
+  delete_tool: ['Retiring a tool', 'Retired a tool'],
+  list_custom_tools: ['Reviewing its tools', 'Reviewed its tools'],
   todo_write: ['Updating the plan', 'Updated the plan'],
   submit_plan: ['Writing the plan', 'Proposed a plan'],
   message_agent: ['Messaging a teammate', 'Messaged a teammate'],
@@ -118,7 +121,7 @@ export function iconFor(name: string) {
 
 export function argSummary(args: Record<string, unknown> | undefined): string | null {
   if (!args) return null
-  const key = ['path', 'file_path', 'command', 'query', 'pattern', 'url'].find((k) => typeof args[k] === 'string')
+  const key = ['path', 'file_path', 'command', 'query', 'pattern', 'url', 'name'].find((k) => typeof args[k] === 'string')
   if (!key) return null
   return String(args[key])
 }

@@ -1013,6 +1013,40 @@ When you hit a login wall: call browser_session_status first, and if there is ge
         }),
         crate::agent::math::schema(),
         serde_json::json!({
+            "name": "create_tool",
+            "description": "Write a new tool in Python and save it for reuse. Use it when a task needs something the other tools don't do and it's likely to come up again (a format conversion, a query against an API, an analysis the user keeps asking for). The saved tool joins the tool list of every model the user runs, in every project, from your next step. The code is a Python module defining `def run(**args)` that returns a string or anything JSON-serialisable; the standard library and whatever is pip-installed are available, and it runs in the project folder. Give `test_args` to run it once before saving: if that run fails, nothing is saved and you get the traceback. Before creating one, check your tool list for an existing tool that already does it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "snake_case, 3-48 characters, saying what it does (e.g. \"csv_to_parquet\")." },
+                    "description": { "type": "string", "description": "What it does, its inputs and output, and when to use it. Other models choose the tool by this text alone." },
+                    "parameters": { "type": "object", "description": "JSON schema for its arguments: {\"type\": \"object\", \"properties\": {...}, \"required\": [...]}. The keys become run()'s keyword arguments." },
+                    "code": { "type": "string", "description": "The Python module. Must define run(**args)." },
+                    "test_args": { "type": "object", "description": "Arguments for a test run before saving. Strongly recommended." },
+                    "replace": { "type": "boolean", "description": "Update an existing tool of this name (to fix or improve it)." },
+                    "timeout_secs": { "type": "integer", "description": "How long one call may run (default 120, at most 600)." }
+                },
+                "required": ["name", "description", "parameters", "code"]
+            }
+        }),
+        serde_json::json!({
+            "name": "delete_tool",
+            "description": "Retire a custom tool you or another model created, when it is unused for a long time, duplicated by another tool, or superseded. It leaves every tool list; its files are kept in ~/.viv/tools/.retired/.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "reason": { "type": "string", "description": "Why, in a sentence. The user sees it." }
+                },
+                "required": ["name", "reason"]
+            }
+        }),
+        serde_json::json!({
+            "name": "list_custom_tools",
+            "description": "List the custom tools (the ones created with create_tool) with how often and how recently each was used, and when it was made. For reviewing the set.",
+            "parameters": { "type": "object", "properties": {} }
+        }),
+        serde_json::json!({
             "name": "run_script",
             "description": "Run a short JavaScript script that calls your own tools directly, in one turn, instead of one tool call per round-trip — chain several reads/searches before a write, loop over a list of files, fan out web searches, or post-process results before you see them. EVERY tool you have is callable from the script (all async — use await; each returns the tool's text output):\n  callTool(name, args) — any tool by name with its normal JSON arguments, e.g. callTool(\"web_search\", {query: \"...\"})\n  tools.<name>(args) — same thing, e.g. tools.web_fetch({url})\n  <name>(args) — tools whose names are plain identifiers are also globals, e.g. await todo_write({todos})\n  listTools() — the names available\nShorthands with positional arguments:\n  bash(command, timeoutSeconds?)  read(path, opts?)  write(path, content)  edit(path, oldString, newString)  ls(path?, opts?)  grep(pattern, path?)  glob(pattern, path?)\nconsole.log output is returned above the script's return value. Each call goes through the same approval/gating as calling the tool directly. A failed call throws a catchable JS exception. A script cannot start another run_script. Use this for genuine multi-step work; call a tool directly for a single step.",
             "parameters": {

@@ -256,6 +256,15 @@ pub const GROUPS: &[CapabilityGroup] = &[
         ],
     },
     CapabilityGroup {
+        name: "Your tools",
+        when: "A task needs something no tool does, and it will likely come up again — or the set of tools you've written needs tidying.",
+        tools: &["create_tool", "list_custom_tools", "delete_tool"],
+        how: Some(
+            "Write it once with create_tool (Python, `def run(**args)`, always with test_args) and it becomes a tool for every model              from your next step. Reuse beats rewriting: check your tool list first, and improve an existing tool with replace: true              rather than adding a near-duplicate. Tools you wrote are marked [Your tool].",
+        ),
+        triggers: &["make a tool", "create a tool", "write a tool", "custom tool", "reusable", "shred"],
+    },
+    CapabilityGroup {
         name: "Other",
         when: "Occasional needs.",
         tools: &["run_script", "connect_mcp_server", "list_tools", "load_tools", "get_current_time", "sleep"],
@@ -303,7 +312,7 @@ pub fn capability_section(available: &HashSet<String>) -> String {
     if !extra.is_empty() {
         extra.sort_unstable();
         out.push_str("\n## Custom and connected tools\n");
-        out.push_str("When: These come from your playbooks and connected MCP servers — check their descriptions in your tool list.\n");
+        out.push_str("When: These come from tools you wrote, your playbooks and connected MCP servers — check their descriptions in your tool list.\n");
         out.push_str(&format!("Tools: {}\n", extra.join(", ")));
     }
 

@@ -21,6 +21,7 @@ pub mod compaction;
 pub mod documents;
 pub mod document_edit;
 pub mod playbooks;
+pub mod custom_tools;
 pub mod skills;
 pub mod subagent_profiles;
 pub mod commands;

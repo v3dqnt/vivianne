@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Stack, Typography, Divider, Switch, Button, IconButton, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Checkbox, MenuItem, ButtonGroup } from '../../../ui'
-import { FlashLinear, ImportLinear, TrashLinear, BookLinear, LayerLinear, AddLinear, EditLinear } from '../../../icons'
+import { FlashLinear, ImportLinear, TrashLinear, BookLinear, LayerLinear, AddLinear, EditLinear, CodeLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { usePlaybookStore } from '../store/playbookStore'
+import { useSettingsUi } from '../store/uiStore'
+import { useAgentStore } from '../../ai/store/agentStore'
+import { CodeBlock } from '../../ai/components/CodeBlock'
 import { isPanel, type PlaybookDef } from '../lib/playbooks'
 
 // ── Playbook parameter editor: a small list-builder over the JSON-schema
@@ -501,6 +504,133 @@ function PlaybooksSubsection() {
   )
 }
 
+interface CustomTool {
+  name: string
+  description: string
+  createdAt: string
+  updatedAt: string
+  uses: number
+  lastUsed: string | null
+}
+
+/** What the shredder asks: a review of the whole set, not a purge. */
+const SHREDDER_PROMPT = `Review the custom tools you and other models have written. Call list_custom_tools, and for each one decide whether it still earns its place. Retire with delete_tool the ones that are:
+- unused for over a month, or used once and never again,
+- duplicates or near-duplicates of another tool (keep the better one, and improve it with create_tool replace: true if the other had something it lacks),
+- superseded by a built-in tool.
+Keep anything used regularly. Then tell me in a short list what you retired and why, and what you kept.`
+
+function shortDate(iso: string | null): string {
+  if (!iso) return 'never'
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? 'never' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function CustomToolRow({ tool, onRetire }: { tool: CustomTool; onRetire: () => Promise<void> }) {
+  const [source, setSource] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const toggleSource = async () => {
+    if (source !== null) return setSource(null)
+    setSource((await call<string>('cmd_custom_tool_source', { name: tool.name }).catch(() => null)) ?? '')
+  }
+  return (
+    <Stack sx={{ py: 1, px: 1, borderRadius: 2, '&:hover': { bgcolor: 'action.hover' } }}>
+      <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
+        <CodeLinear size={15} color="currentColor" style={{ flexShrink: 0 }} />
+        <Stack sx={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => void toggleSource()}>
+          <Typography variant="body2" sx={{ fontWeight: 500, fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.8125rem' }} noWrap>
+            {tool.name}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" noWrap title={tool.description}>
+            {tool.description}
+          </Typography>
+        </Stack>
+        <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0, textAlign: 'right' }}>
+          {tool.uses} use{tool.uses === 1 ? '' : 's'} · last {shortDate(tool.lastUsed)}
+        </Typography>
+        <IconButton
+          size="small"
+          aria-label={`Retire ${tool.name}`}
+          title="Retire (kept in ~/.viv/tools/.retired)"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true)
+            void onRetire().finally(() => setBusy(false))
+          }}
+        >
+          {busy ? <CircularProgress size={14} /> : <TrashLinear size={15} color="currentColor" />}
+        </IconButton>
+      </Stack>
+      {source !== null && (
+        <Stack sx={{ mt: 1, maxHeight: 280, overflow: 'auto' }}>
+          <CodeBlock code={source || '(empty)'} lang="python" dense />
+        </Stack>
+      )}
+    </Stack>
+  )
+}
+
+/** Tools the agent wrote for itself with `create_tool` — available to every
+ * model — and the shredder that reviews them when they pile up. */
+function CustomToolsSubsection() {
+  const [tools, setTools] = useState<CustomTool[] | null>(null)
+  const sendMessage = useAgentStore((s) => s.sendMessage)
+  const closeSettings = useSettingsUi((s) => s.closeSettings)
+
+  const refresh = async () => setTools((await call<CustomTool[]>('cmd_list_custom_tools').catch(() => null)) ?? [])
+  useEffect(() => {
+    void refresh()
+  }, [])
+
+  const shred = () => {
+    closeSettings()
+    void sendMessage(SHREDDER_PROMPT)
+  }
+
+  return (
+    <Stack sx={{ gap: 1 }}>
+      <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
+        <Stack sx={{ flex: 1 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+            Tools Vivianne made
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            Python tools written with create_tool when a task needed one. Every model you use gets them, in every project. Calls ask for approval like any code that runs.
+          </Typography>
+        </Stack>
+        <Button size="small" variant="outlined" disabled={!tools?.length} onClick={shred} sx={{ flexShrink: 0 }}>
+          Run shredder
+        </Button>
+      </Stack>
+      {tools === null ? (
+        <CircularProgress size={16} />
+      ) : tools.length === 0 ? (
+        <Typography variant="caption" color="text.disabled" sx={{ px: 1 }}>
+          None yet. Ask for something no tool does and Vivianne can write one, or say "make a tool that…".
+        </Typography>
+      ) : (
+        <Stack>
+          {tools.length > 30 && (
+            <Typography variant="caption" color="warning.main" sx={{ px: 1, pb: 0.5 }}>
+              {tools.length} tools: past 30 they cost context on every request. Run the shredder to retire stale ones.
+            </Typography>
+          )}
+          {tools.map((t) => (
+            <CustomToolRow
+              key={t.name}
+              tool={t}
+              onRetire={async () => {
+                await call('cmd_delete_custom_tool', { name: t.name }).catch(() => null)
+                await refresh()
+              }}
+            />
+          ))}
+        </Stack>
+      )}
+    </Stack>
+  )
+}
+
 /** Playbooks are switched off in Settings for now: the agent's own tool
  * creator covers the same ground. Flip to bring the section back. */
 const PLAYBOOKS_ENABLED = false
@@ -509,6 +639,8 @@ export function ModsSection() {
   return (
     <Stack sx={{ gap: 2.5 }}>
       <ToolsSubsection />
+      <Divider />
+      <CustomToolsSubsection />
       <Divider />
       <ExperimentalSubsection />
       {PLAYBOOKS_ENABLED && (
