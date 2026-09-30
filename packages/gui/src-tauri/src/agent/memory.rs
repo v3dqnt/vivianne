@@ -214,7 +214,7 @@ pub struct MemoryStatus {
     pub preview: String,
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
@@ -230,7 +230,7 @@ fn entries_path(root: &str) -> PathBuf {
     memory_dir(root).join("entries.jsonl")
 }
 
-fn persona_path(root: &str) -> PathBuf {
+pub(crate) fn persona_path(root: &str) -> PathBuf {
     memory_dir(root).join("persona.md")
 }
 
@@ -475,6 +475,18 @@ pub async fn remember(
         return Err("text must not be empty".to_string());
     }
     let text = redact_secrets(text.trim());
+    // Already known (near-identical to a stored memory): reinforce that one
+    // instead of adding a second copy for recall to split its score across.
+    if let Some(auth) = auth.as_ref() {
+        if let Ok(Some(emb)) = crate::ai::embedding::embed_text(auth, &text).await {
+            if let Ok(hits) = super::memory_store::search_vector_scored(root, &emb, 1).await {
+                if let Some((existing, _)) = hits.into_iter().find(|(_, s)| *s >= 0.95) {
+                    let _ = super::memory_store::touch_entry(root, &existing.id).await;
+                    return Ok(existing);
+                }
+            }
+        }
+    }
     let entry = MemoryEntry {
         id: uuid::Uuid::new_v4().to_string(),
         key: key.unwrap_or_else(|| slug(&text)),
@@ -757,10 +769,6 @@ Assign each fact a short (1-3 word) scene_name describing what topic/task it rel
 Respond with ONLY a JSON array, no prose, no markdown fence: [{\"text\": \"...\", \"kind\": \"persona|episodic|instruction\", \"scene_name\": \"...\"}]. \
 If nothing is durable, respond with [].";
 
-const L3_SYSTEM_PROMPT: &str = "Synthesize a concise persona profile (under 500 words, markdown) from the following facts about the user. \
-Merge duplicates and resolve contradictions in favor of the most specific/recent-sounding fact. \
-Write only the profile itself — no preamble, no meta-commentary.";
-
 /// Batch L1 fact extraction: pull unprocessed turn-close notes, ask the
 /// current chat model to distill them into typed atomic facts + scene tags,
 /// store each as its own memory entry. Fire-and-forget — call via
@@ -793,33 +801,36 @@ pub async fn run_l1_extraction(app: tauri::AppHandle, root: String, model: crate
         return;
     };
 
-    let mut stored = 0usize;
+    let mut candidates = Vec::new();
     for fact in &facts {
         let Some(text) = fact.get("text").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()) else { continue };
         let kind = fact.get("kind").and_then(|v| v.as_str()).unwrap_or("episodic");
         let kind = if matches!(kind, "persona" | "episodic" | "instruction") { kind } else { "episodic" };
-        let scene_name = fact.get("scene_name").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
-
+        let scene = fact.get("scene_name").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(String::from);
         let text = redact_secrets(text);
-        let entry = MemoryEntry {
-            id: uuid::Uuid::new_v4().to_string(),
-            key: format!("{kind}_{}", slug(&text)),
-            text,
-            kind: kind.to_string(),
-            session_id: None,
-            created_at: now_ms(),
-            confidence: 1.0,
-            access_count: 0,
-            last_accessed_at: 0,
-            embedding_model: None,
-        };
-        if super::memory_store::insert_entry_with_scene(&root, &entry, scene_name).await.is_ok() {
-            stored += 1;
-            let auth = crate::ai::auth::wait_for_state(&app).await;
-            spawn_background_embed(&root, &entry, Some(auth));
-        }
+        candidates.push(super::memory_evolve::Candidate {
+            entry: MemoryEntry {
+                id: uuid::Uuid::new_v4().to_string(),
+                key: format!("{kind}_{}", slug(&text)),
+                text,
+                kind: kind.to_string(),
+                session_id: None,
+                created_at: now_ms(),
+                confidence: 1.0,
+                access_count: 0,
+                last_accessed_at: 0,
+                embedding_model: None,
+            },
+            scene,
+        });
     }
-    log::info!("[memory] L1 extraction: {stored}/{} facts stored from a batch of {}", facts.len(), batch.len());
+    // Reconciled against what is already known (ADD / UPDATE / DELETE /
+    // NOOP) instead of appended: see `memory_evolve`.
+    let (added, updated, deleted, skipped) = super::memory_evolve::write_facts(&app, &root, &model, candidates).await;
+    log::info!(
+        "[memory] L1 extraction from {} notes: {added} added, {updated} merged, {deleted} replaced, {skipped} already known",
+        batch.len()
+    );
 
     let mut state = read_state(&root).await;
     state.last_extraction_at = Some(now_ms());
@@ -839,19 +850,21 @@ pub async fn run_l1_extraction(app: tauri::AppHandle, root: String, model: crate
 /// (using the same model already resolved there) rather than triggered
 /// separately, since persona facts only ever appear as L1 extraction output.
 pub async fn run_l3_persona_synthesis(app: tauri::AppHandle, root: String, model: crate::agent::types::ModelRef) {
-    let persona_facts = match super::memory_store::recent_by_kind(&root, "persona", 50).await {
+    let state = read_state(&root).await;
+    let current = tokio::fs::read_to_string(persona_path(&root)).await.unwrap_or_default();
+    // Only what arrived since the last pass: the profile is edited by
+    // deltas (ACE), not regenerated from a window of recent facts, which is
+    // how repeated rewrites erode detail.
+    let since = if current.trim().is_empty() { 0 } else { state.last_persona_synthesis_at.unwrap_or(0) };
+    let persona_facts = match super::memory_store::entries_since(&root, "persona", since, 50).await {
         Ok(f) if !f.is_empty() => f,
         _ => return,
     };
-
-    let user_prompt = persona_facts.iter().map(|e| format!("- {}", e.text)).collect::<Vec<_>>().join("\n");
-    let profile = match crate::ai::completion::complete_text(&app, &model, L3_SYSTEM_PROMPT, &user_prompt).await {
-        Ok(p) if !p.trim().is_empty() => p,
-        Ok(_) => return,
-        Err(e) => {
-            log::warn!("[memory] L3 persona synthesis call failed, will retry next batch: {e}");
-            return;
-        }
+    let Some(profile) = super::memory_evolve::evolve_profile(&app, &model, &current, &persona_facts).await else {
+        let mut state = read_state(&root).await;
+        state.last_persona_synthesis_at = Some(now_ms());
+        let _ = write_state(&root, &state).await;
+        return;
     };
 
     if let Err(e) = tokio::fs::create_dir_all(memory_dir(&root)).await {
@@ -866,7 +879,7 @@ pub async fn run_l3_persona_synthesis(app: tauri::AppHandle, root: String, model
     let mut state = read_state(&root).await;
     state.last_persona_synthesis_at = Some(now_ms());
     let _ = write_state(&root, &state).await;
-    log::info!("[memory] L3 persona synthesis complete ({} source facts)", persona_facts.len());
+    log::info!("[memory] profile updated from {} new facts", persona_facts.len());
 }
 
 /// Background maintenance: infer `RelatesTo` and `InCluster` edges between

@@ -2764,7 +2764,12 @@ async fn execute_memory_tool(name: &str, args: &serde_json::Value, state: &Agent
             if hits.is_empty() {
                 "No matching memories found.".to_string()
             } else {
-                hits.iter().map(|h| format!("- {}", h.text)).collect::<Vec<_>>().join("\n")
+                // Labelled by source, so a user's own words outrank an
+                // inference when two memories disagree.
+                hits.iter()
+                    .map(|h| format!("- [{}] {}", crate::agent::memory_evolve::provenance_label(&h.kind), h.text))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             }
         }
     };

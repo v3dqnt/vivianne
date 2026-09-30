@@ -224,7 +224,15 @@ pub(crate) async fn assemble_capability_blocks(
     // Project memory is pulled on demand through the `recall` tool rather
     // than dumped into every turn — it was an 8KB (~2k token) block on every
     // message regardless of whether the conversation had anything to do with
-    // what was remembered.
+    // what was remembered. The exception is core memory: standing
+    // instructions, deliberately saved facts and the user profile, small and
+    // relevant to every turn (see `memory_evolve::core_block`).
+    if primary_agent {
+        let root = crate::agent::commands::memory_root_for(state).await;
+        if let Some(core) = crate::agent::memory_evolve::core_block(&root).await {
+            prompt = format!("{prompt}\n\n{core}");
+        }
+    }
     prompt
 }
 

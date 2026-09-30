@@ -441,6 +441,12 @@ pub async fn search_fts(root: &str, query_text: &str, limit: usize) -> Result<Ve
 /// reachable via BM25 lexical fallback (no apples-to-oranges cosine
 /// comparison across vector spaces).
 pub async fn search_vector(root: &str, query_embedding: &[f32], limit: usize) -> Result<Vec<MemoryEntry>, String> {
+    Ok(search_vector_scored(root, query_embedding, limit).await?.into_iter().map(|(e, _)| e).collect())
+}
+
+/// `search_vector` with each hit's cosine similarity, for the write-side
+/// novelty gate (`memory_evolve`), which routes on the score itself.
+pub async fn search_vector_scored(root: &str, query_embedding: &[f32], limit: usize) -> Result<Vec<(MemoryEntry, f32)>, String> {
     let root = root.to_string();
     let query_embedding = query_embedding.to_vec();
     let current_model = crate::ai::embedding::embedding_model().to_string();
@@ -469,7 +475,7 @@ pub async fn search_vector(root: &str, query_embedding: &[f32], limit: usize) ->
                 })
                 .collect();
             scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-            Ok(scored.into_iter().take(limit).map(|(_, e)| e).collect())
+            Ok(scored.into_iter().take(limit).map(|(s, e)| (e, s)).collect())
         })
     })
     .await
@@ -499,6 +505,53 @@ pub async fn touch_entry(root: &str, id: &str) -> Result<(), String> {
     })
     .await
     .map_err(|e| format!("touch task panicked: {e}"))?
+}
+
+/// Rewrite one memory in place (a merge or a correction). Its old vector no
+/// longer describes it, so the embedding is cleared for re-embedding, and
+/// confidence resets: the memory has just been confirmed.
+pub async fn update_entry_text(root: &str, id: &str, text: &str) -> Result<(), String> {
+    let root = root.to_string();
+    let id = id.to_string();
+    let text = text.to_string();
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    tokio::task::spawn_blocking(move || {
+        with_conn(&root, |conn| {
+            conn.execute(
+                "UPDATE memories SET text = ?1, embedding = NULL, embedding_model = NULL, confidence = 1.0, updated_at = ?2 WHERE id = ?3",
+                params![text, now_ms, id],
+            )
+            .map_err(|e| format!("failed to update memory: {e}"))?;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| format!("update task panicked: {e}"))?
+}
+
+/// Remove one memory by id, with its edges.
+pub async fn delete_entry(root: &str, id: &str) -> Result<(), String> {
+    let root = root.to_string();
+    let id = id.to_string();
+    tokio::task::spawn_blocking(move || {
+        with_conn(&root, |conn| {
+            conn.execute("DELETE FROM memories WHERE id = ?1", params![id]).map_err(|e| format!("failed to delete memory: {e}"))?;
+            let _ = conn.execute("DELETE FROM memory_edges WHERE source = ?1 OR target = ?1", params![id]);
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| format!("delete task panicked: {e}"))?
+}
+
+/// How many memories the project holds, for the density-adaptive gate.
+pub async fn entry_count(root: &str) -> Result<i64, String> {
+    let root = root.to_string();
+    tokio::task::spawn_blocking(move || {
+        with_conn(&root, |conn| conn.query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0)).map_err(|e| e.to_string()))
+    })
+    .await
+    .map_err(|e| format!("count task panicked: {e}"))?
 }
 
 pub async fn update_embedding(root: &str, id: &str, embedding: &[f32], model: &str) -> Result<(), String> {

@@ -30,6 +30,7 @@ pub mod memory;
 pub mod memory_rerank;
 pub mod memory_store;
 pub mod memory_graph;
+pub mod memory_evolve;
 pub mod rrf;
 pub mod paths;
 pub mod usage_store;
