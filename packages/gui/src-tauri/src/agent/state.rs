@@ -75,6 +75,9 @@ struct AgentStateInner {
     ///
     /// Defaults to `false` everywhere and is never persisted.
     auto_approve: bool,
+    /// Set on a bot's run (`agent::bots`): its rules decide which tools run,
+    /// ask, or are handed to the user. `None` everywhere else.
+    bot_policy: Option<crate::agent::bots::BotPolicy>,
     /// Where messages compacted out of the live context are appended, so the
     /// user can still scroll back through them. `None` (the default) means
     /// compaction simply drops them — right for subagents and Viv Instant,
@@ -142,6 +145,7 @@ impl AgentState {
                 access_mode: WorkspaceAccessMode::Full,
                 subagent_allowed_tools: None,
                 auto_approve: false,
+                bot_policy: None,
                 history_archive: None,
                 delegation_allowed: false,
                 goal: None,
@@ -254,6 +258,14 @@ impl AgentState {
 
     pub async fn set_history_archive(&self, path: Option<std::path::PathBuf>) {
         self.inner.write().await.history_archive = path;
+    }
+
+    pub async fn bot_policy(&self) -> Option<crate::agent::bots::BotPolicy> {
+        self.inner.read().await.bot_policy.clone()
+    }
+
+    pub async fn set_bot_policy(&self, value: Option<crate::agent::bots::BotPolicy>) {
+        self.inner.write().await.bot_policy = value;
     }
 
     pub async fn set_auto_approve(&self, value: bool) {

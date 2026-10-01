@@ -364,6 +364,7 @@ pub async fn execute_tool_calls(
     // Custom tools are Python the agent wrote: they run with the same reach
     // as `math` or `bash`, so they take the same approval.
     let custom_names = crate::coding_agent::custom_tools::custom_tool_names();
+    let bot_policy = state.bot_policy().await;
     // Global setting OR this session's own unattended flag. Viv Instant sets
     // the latter because it is spoken to rather than watched — there is no one
     // at the keyboard to answer an approval prompt — and it must not have to
@@ -672,7 +673,44 @@ pub async fn execute_tool_calls(
             }
         }
 
-        if !bypass_mode && needs_approval {
+        // A bot's own rules decide, above the global setting: what it may do
+        // alone, what it asks for, and what it hands to the user.
+        let mut force_ask = false;
+        if let Some(policy) = &bot_policy {
+            match crate::agent::bots::decide(policy, &tool_call.name) {
+                crate::agent::bots::Decision::Run => needs_approval = false,
+                crate::agent::bots::Decision::Ask(why) => {
+                    needs_approval = true;
+                    force_ask = true;
+                    approval_reason.get_or_insert(why);
+                }
+                crate::agent::bots::Decision::Refuse(why) => {
+                    let refused = AgentToolResult {
+                        content: vec![MessageContent::Text { text: format!("Error: {why}") }],
+                        details: serde_json::Value::Null,
+                        terminate: None,
+                    };
+                    emit.emit(AgentEvent::ToolExecutionEnd {
+                        tool_call_id: tool_call.id.clone(),
+                        tool_name: tool_call.name.clone(),
+                        result: refused.clone(),
+                        is_error: true,
+                    });
+                    slots[slot_idx] = Some(AgentMessage::ToolResult {
+                        tool_call_id: tool_call.id,
+                        tool_name: tool_call.name,
+                        content: refused.content,
+                        details: Some(refused.details),
+                        is_error: Some(true),
+                        timestamp: now_ms(),
+                        arguments: Some(tool_call.arguments),
+                    });
+                    continue;
+                }
+            }
+        }
+
+        if (force_ask || !bypass_mode) && needs_approval {
             let request_id = uuid::Uuid::new_v4().to_string();
             let (tx, rx) = oneshot::channel();
             if let Ok(mut pending) = PENDING_PERMISSIONS.lock() {

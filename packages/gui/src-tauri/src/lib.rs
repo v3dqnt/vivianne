@@ -372,6 +372,21 @@ pub fn run() {
       crate::instant::stt::cmd_parakeet_status,
       crate::activity::cmd_activity_set_size,
       crate::ai::chatgpt::cmd_chatgpt_status,
+      crate::agent::bots::cmd_bots_room,
+      crate::agent::bots::cmd_bots_post,
+      crate::agent::bots::cmd_bots_dm,
+      crate::agent::bots::cmd_bots_dm_send,
+      crate::agent::bots::cmd_bots_status,
+      crate::agent::bots::cmd_bots_settings,
+      crate::agent::bots::cmd_bots_save_settings,
+      crate::agent::bots::cmd_bots_stop,
+      crate::agent::bots::cmd_bots_reset,
+      crate::agent::bots::cmd_bots_memory,
+      crate::agent::bots::cmd_bots_save_memory,
+      crate::agent::bots::cmd_bots_routines,
+      crate::agent::bots::cmd_bots_save_routine,
+      crate::agent::bots::cmd_bots_delete_routine,
+      crate::agent::bots::cmd_bots_run_routine,
       crate::ai::chatgpt::cmd_chatgpt_sign_in,
       crate::ai::chatgpt::cmd_chatgpt_sign_out,
       crate::ai::chatgpt::cmd_chatgpt_manage_usage,
@@ -573,6 +588,7 @@ pub fn run() {
       // Automation store + background scheduler (emits `automation_fired`).
       app.manage(Arc::new(AutomationStore::new()));
       crate::automation::spawn_scheduler(app.handle().clone());
+      crate::agent::bots::spawn_scheduler(app.handle().clone());
 
       // PTY-backed terminal sessions (one per open tab).
       app.manage(Arc::new(crate::terminal::TerminalRegistry::new()));

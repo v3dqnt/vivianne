@@ -92,6 +92,22 @@ pub fn notify_long_task(app: &tauri::AppHandle, body: &str) {
     }
 }
 
+/// A titled notification (a teammate needs you, a routine posted), quiet
+/// while the user is looking at the window.
+pub fn notify_text(app: &tauri::AppHandle, title: &str, body: &str) {
+    use tauri::Manager;
+    use tauri_plugin_notification::NotificationExt;
+
+    let is_focused = app.get_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
+    if is_focused {
+        return;
+    }
+    let body: String = body.chars().take(160).collect();
+    if let Err(e) = app.notification().builder().title(title).body(body).show() {
+        log::warn!("[notifications] failed to show notification: {e}");
+    }
+}
+
 /// Settings → Notifications "Test" button — fires immediately regardless of
 /// the enabled toggle or window focus, so the user can confirm OS-level
 /// notification permission actually works before relying on it.

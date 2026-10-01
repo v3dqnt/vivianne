@@ -48,7 +48,7 @@ pub struct Automation {
 
 /// Compute the next fire time (epoch ms) strictly after `after`, or `None` if
 /// the cron string is invalid.
-fn next_run_after(cron: &str, after: DateTime<Utc>) -> Option<u64> {
+pub(crate) fn next_run_after(cron: &str, after: DateTime<Utc>) -> Option<u64> {
     // The `cron` crate wants a 6-field expression (leading seconds); accept the
     // familiar 5-field form by prepending a `0` seconds column.
     let normalized = match cron.split_whitespace().count() {
