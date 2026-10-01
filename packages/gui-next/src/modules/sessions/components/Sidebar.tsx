@@ -17,6 +17,7 @@ import { OnboardingDialog } from './OnboardingDialog'
 import { useTeamStore, isWorking, type TeamAgent, type AgentRun } from '../../team/store/teamStore'
 import { Avatar, colorOf } from '../../team/components/bits'
 import { openPanel } from '../../workspace/layout'
+import { TeamConversations } from '../../team/components/TeamConversations'
 
 export const SIDEBAR_WIDTH = 260
 
@@ -310,6 +311,7 @@ export function Sidebar() {
         <GeneralThreads onExport={exportCurrent} />
       ) : (
       <>
+      {!(mode === 'team' && root) && (
       <Box sx={{ px: 1.5, pb: 1.25, flexShrink: 0 }}>
         <Stack direction="row" sx={{ alignItems: 'center', px: 0.5, pb: 0.5 }}>
           <Typography variant="caption" color="text.secondary" sx={{ ...SECTION_LABEL_SX, flex: 1 }}>
@@ -329,9 +331,13 @@ export function Sidebar() {
           onClick={backToToday}
         />
       </Box>
+      )}
 
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pb: 1 }}>
-        {root && (
+        {/* An agent team talks in a group chat and in DMs with each teammate. */}
+        {root && mode === 'team' ? (
+          <TeamConversations root={root} team={activeTeam} onManage={() => openAgent(null)} />
+        ) : root && (
           <Box sx={{ px: 1.5 }}>
             <Stack direction="row" sx={{ alignItems: 'center', px: 0.5, pb: 0.5 }}>
               <Typography variant="caption" color="text.secondary" sx={{ ...SECTION_LABEL_SX, flex: 1 }}>

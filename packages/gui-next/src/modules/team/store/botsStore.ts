@@ -65,6 +65,11 @@ interface BotsState {
   dm: Record<string, BotMessage[]>
   status: Record<string, BotStatus>
   approvals: PendingApproval[]
+  /** The conversation open in the chat panel, per project: `room` or a bot id. */
+  channel: Record<string, string>
+  /** Messages that arrived in a conversation that wasn't open, by `root::channel`. */
+  unread: Record<string, number>
+  setChannel: (root: string, channel: string) => void
   init: () => void
   loadRoom: (root: string) => Promise<void>
   loadDm: (root: string, botId: string) => Promise<void>
@@ -86,6 +91,13 @@ export const useBotsStore = create<BotsState>((set, get) => ({
   dm: {},
   status: {},
   approvals: [],
+  channel: {},
+  unread: {},
+
+  setChannel: (root, channel) => {
+    set((s) => ({ channel: { ...s.channel, [root]: channel }, unread: { ...s.unread, [key(root, channel)]: 0 } }))
+    if (channel !== 'room' && !get().dm[key(root, channel)]) void get().loadDm(root, channel)
+  },
 
   init: () => {
     if (listening) return
@@ -93,6 +105,10 @@ export const useBotsStore = create<BotsState>((set, get) => ({
     void on<{ root: string; channel: string; message: BotMessage }>('bots:message', ({ root, channel, message }) => {
       if (channel === 'room') set((s) => ({ room: { ...s.room, [root]: append(s.room[root], message) } }))
       else set((s) => ({ dm: { ...s.dm, [key(root, channel)]: append(s.dm[key(root, channel)], message) } }))
+      // A teammate's message in a conversation that isn't open counts as unread.
+      if (message.from !== 'user' && (get().channel[root] ?? 'room') !== channel) {
+        set((s) => ({ unread: { ...s.unread, [key(root, channel)]: (s.unread[key(root, channel)] ?? 0) + 1 } }))
+      }
     })
     void on<BotStatus>('bots:status', (st) => set((s) => ({ status: { ...s.status, [key(st.root, st.botId)]: st } })))
     void on<PendingApproval>('bots:permission', (p) => set((s) => ({ approvals: [...s.approvals.filter((a) => a.requestId !== p.requestId), p] })))

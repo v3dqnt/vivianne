@@ -5,11 +5,9 @@ import { call } from '../../../ipc'
 import { useTeamStore, type TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey, type BotSettings, type Level, type Routine } from '../store/botsStore'
 import { Avatar, SectionLabel, colorOf } from './bits'
-import { BotChat } from './BotChat'
 import { ModelPicker } from './ModelPicker'
 
-type Tab = 'chat' | 'routines' | 'rules' | 'memory'
-const EMPTY: never[] = []
+type Tab = 'routines' | 'rules' | 'memory'
 
 const RULES: { key: keyof BotSettings['rules']; label: string; hint: string }[] = [
   { key: 'files', label: 'Change files', hint: 'write, edit, patch' },
@@ -128,12 +126,10 @@ function RoutineEditor({ initial, onSave, onCancel }: { initial: Partial<Routine
  */
 export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: TeamAgent; onBack: () => void; onEdit: () => void }) {
   const theme = useTheme()
-  const [tab, setTab] = useState<Tab>('chat')
-  const dm = useBotsStore((s) => s.dm[botKey(root, agent.id)] ?? EMPTY)
-  const approvals = useBotsStore((s) => s.approvals).filter((a) => a.root === root && a.botId === agent.id)
+  const [tab, setTab] = useState<Tab>('routines')
+  const setChannel = useBotsStore((s) => s.setChannel)
   const st = useBotsStore((s) => s.status[botKey(root, agent.id)])
-  const team = useTeamStore((s) => s.byRoot[root] ?? EMPTY).filter((a) => a.status === 'active')
-  const { loadDm, loadStatus, sendDm } = useBotsStore.getState()
+  const { loadDm, loadStatus } = useBotsStore.getState()
   const saveAgent = useTeamStore((s) => s.save)
   const [settings, setSettings] = useState<BotSettings | null>(null)
   const [routines, setRoutines] = useState<Routine[]>([])
@@ -209,6 +205,9 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
           <ModelPicker value={agent.model} onChange={(model) => void saveAgent(root, { ...agent, model }, agent.id)} />
         </Stack>
         <Stack direction="row" sx={{ gap: 0.75, flexWrap: 'wrap' }}>
+          <Button size="small" variant="contained" onClick={() => setChannel(root, agent.id)} sx={{ borderRadius: '8px' }}>
+            Message
+          </Button>
           {state === 'working' && (
             <Button size="small" variant="outlined" color="error" onClick={() => void call('cmd_bots_stop', args)} sx={{ borderRadius: '8px' }}>
               Stop
@@ -238,7 +237,7 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
           </Tooltip>
         </Stack>
         <Stack direction="row" sx={{ gap: 0.25, borderBottom: 1, borderColor: 'divider' }}>
-          {(['chat', 'routines', 'rules', 'memory'] as Tab[]).map((t) => (
+          {(['routines', 'rules', 'memory'] as Tab[]).map((t) => (
             <ButtonBase
               key={t}
               onClick={() => setTab(t)}
@@ -260,23 +259,7 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
         </Stack>
       </Stack>
 
-      {tab === 'chat' && (
-        <BotChat
-          messages={dm}
-          team={team}
-          approvals={approvals}
-          onSend={(t) => sendDm(root, agent.id, t)}
-          allowEveryone={false}
-          placeholder={`Message ${agent.name}`}
-          empty={
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center', py: 6 }}>
-              Talk to {agent.name} on its own. It keeps this conversation, and what it learns, from one day to the next.
-            </Typography>
-          }
-        />
-      )}
-
-      {tab !== 'chat' && (
+      {(
         <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: 1.5, pb: 2 }}>
           {tab === 'routines' && (
             <Stack sx={{ gap: 1.25, pt: 0.5 }}>

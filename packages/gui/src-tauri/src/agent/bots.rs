@@ -684,7 +684,7 @@ fn finish(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request:
             let reply = reply.trim().to_string();
             let silent = origin == Origin::Proactive && (reply.is_empty() || reply.eq_ignore_ascii_case("nothing") || reply.starts_with("NOTHING"));
             if !silent && !reply.is_empty() {
-                let needs = reply.starts_with("NEEDS YOU:");
+                let (text, needs) = needs_you(&reply);
                 let kind = if needs {
                     "needs_you"
                 } else {
@@ -694,7 +694,6 @@ fn finish(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request:
                         Origin::User => "message",
                     }
                 };
-                let text = reply.trim_start_matches("NEEDS YOU:").trim().to_string();
                 let channel = match target {
                     Target::Dm => id.to_string(),
                     Target::Room { .. } => "room".to_string(),
@@ -741,6 +740,28 @@ fn finish(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request:
     if let Some((o, r, t)) = next {
         dispatch(app, root, id, o, r, t);
     }
+}
+
+/// Whether a reply asks the user for something, and the reply without the
+/// marker. Models put "NEEDS YOU:" where the question is, often after an
+/// explanation, so it counts at the start of any line, bold or not.
+fn needs_you(reply: &str) -> (String, bool) {
+    let mut found = false;
+    let lines: Vec<String> = reply
+        .lines()
+        .map(|line| {
+            let t = line.trim_start();
+            for marker in ["**NEEDS YOU:**", "**NEEDS YOU**:", "NEEDS YOU:"] {
+                if let Some(rest) = t.strip_prefix(marker) {
+                    found = true;
+                    return rest.trim_start().to_string();
+                }
+            }
+            line.to_string()
+        })
+        .collect();
+    (lines.join("
+").trim().to_string(), found)
 }
 
 // ── Routing ──────────────────────────────────────────────────────────────
@@ -1053,6 +1074,19 @@ mod tests {
         assert_eq!(mentions_in("@AdaLovelace and @lin", &team).0.len(), 2);
         assert!(mentions_in("@everyone standup", &team).1);
         assert!(mentions_in("no mentions here", &team).0.is_empty());
+    }
+
+    #[test]
+    fn needs_you_is_found_on_any_line() {
+        let (text, needs) = needs_you("Nothing to hand over yet.
+
+NEEDS YOU: what are we building?");
+        assert!(needs);
+        assert_eq!(text, "Nothing to hand over yet.
+
+what are we building?");
+        assert!(needs_you("**NEEDS YOU:** pick a stack").1);
+        assert!(!needs_you("All done, nothing needed from you.").1);
     }
 
     #[test]
