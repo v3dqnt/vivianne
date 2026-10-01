@@ -6,6 +6,7 @@ import { API_FORMAT_OPTIONS, type CustomApiFormat, type CustomModel } from '../l
 import { useAuthStore } from '../store/authStore'
 import { useCustomProviderStore } from '../store/customProviderStore'
 import { ProviderRow } from './ProviderRow'
+import { ChatGptPlanPanel, chatGptStatus } from './ChatGptPlanPanel'
 
 // Deterministic color per provider id — same trick `ModelSelector.tsx` uses
 // for its picker marks, duplicated locally rather than shared since it's a
@@ -318,10 +319,12 @@ export function ProvidersSection() {
   const customProviders = useCustomProviderStore((s) => s.providers)
   const refreshCustom = useCustomProviderStore((s) => s.refresh)
   const [selected, setSelected] = useState<string | null>(null)
+  const [planConnected, setPlanConnected] = useState(false)
 
   useEffect(() => {
     void refreshAuth()
     void refreshCustom()
+    void chatGptStatus().then((s) => setPlanConnected(!!s?.signedIn && s.sharing))
   }, [refreshAuth, refreshCustom])
 
   const selectedCloud = CLOUD_PROVIDERS.find((p) => p.id === selected) ?? null
@@ -339,6 +342,7 @@ export function ProvidersSection() {
           >
             Providers
           </Typography>
+          <ListRow label="ChatGPT plan" markId="openai" connected={planConnected} selected={selected === '__chatgpt__'} onClick={() => setSelected('__chatgpt__')} />
           {CLOUD_PROVIDERS.map((p) => (
             <ListRow key={p.id} label={p.label} markId={p.id} connected={authStatus[p.id] ?? false} selected={selected === p.id} onClick={() => setSelected(p.id)} />
           ))}
@@ -390,7 +394,8 @@ export function ProvidersSection() {
           </Stack>
         )}
         {showCustomForm && <CustomProviderForm providerId={selectedCustom ? selectedCustom.id : null} onSaved={setSelected} onRemoved={() => setSelected(null)} />}
-        {!selectedCloud && !showCustomForm && (
+        {selected === '__chatgpt__' && <ChatGptPlanPanel onChange={(s) => setPlanConnected(!!s?.signedIn && s.sharing)} />}
+        {!selectedCloud && !showCustomForm && selected !== '__chatgpt__' && (
           <Stack sx={{ height: '100%', alignItems: 'center', justifyContent: 'center' }}>
             <Typography variant="body2" color="text.secondary">
               Select a provider to configure it.

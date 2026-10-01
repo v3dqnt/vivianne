@@ -15,3 +15,4 @@ pub mod keychain_store;
 pub mod local_registry;
 pub mod pricing;
 pub mod jev;
+pub mod chatgpt;

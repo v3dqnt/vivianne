@@ -287,6 +287,22 @@ pub async fn discover_all(auth: &AuthState) -> Vec<DiscoveredModel> {
         };
     }
 
+    // Signed in with ChatGPT: the plan's own model list, at no per-token cost
+    // (usage counts against the plan, not a bill).
+    match crate::ai::chatgpt::list_models(auth).await {
+        Ok(models) => out.extend(models.into_iter().map(|(id, name)| DiscoveredModel {
+            supports_vision: model_supports_vision("openai", &id),
+            id,
+            name: format!("{name} (ChatGPT plan)"),
+            provider: crate::ai::chatgpt::PROVIDER.to_string(),
+            api: "openai-responses".to_string(),
+            input_cost_per_million: Some(0.0),
+            output_cost_per_million: Some(0.0),
+            ..Default::default()
+        })),
+        Err(e) if e.starts_with("Not signed in") => {}
+        Err(e) => log::warn!("model discovery: {e}"),
+    }
     try_fetch!("anthropic", |key: String| async move { fetch_anthropic(&key).await });
     try_fetch!("google", |key: String| async move { fetch_google(&key).await });
     try_fetch!("openai", |key: String| async move {

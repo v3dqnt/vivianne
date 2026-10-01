@@ -158,7 +158,14 @@ function buildRequestSetup(req: ProviderStreamRequest, apiKey: string, maxOutput
         system: req.context.systemPrompt ?? undefined,
         tools: toSdkTools(req.context.tools, false),
         maxOutputTokens,
-        providerOptions: { openai: req.thinkingEnabled ? { reasoningEffort: 'medium', reasoningSummary: 'auto' } : {} },
+        providerOptions: {
+          openai: {
+            ...(req.thinkingEnabled ? { reasoningEffort: 'medium', reasoningSummary: 'auto' } : {}),
+            // On a ChatGPT plan nothing is stored server-side (`store: false`
+            // is required), so reasoning travels encrypted with each turn.
+            ...(req.provider === 'chatgpt' ? { store: false, include: ['reasoning.encrypted_content'] } : {}),
+          },
+        },
       }
     }
     case 'googleGenerative': {

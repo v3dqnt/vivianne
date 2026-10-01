@@ -82,6 +82,17 @@ pub fn classify(msg: &str) -> Failure {
     if crate::ai::utils::classify_provider_error(msg) == crate::ai::utils::CredentialErrorClass::QuotaOrBilling {
         return Failure::Final;
     }
+    // ChatGPT plan: the weekly cap the user set for this app is reached, the
+    // account can't share its plan, or the request asked for something plan
+    // usage doesn't support. None of these change by waiting minutes.
+    if msg.contains("subscription_sharing_usage_limit_exceeded")
+        || msg.contains("subscription_sharing_user_not_eligible")
+        || msg.contains("subscription_sharing_unsupported_capability")
+        || msg.contains("subscription_sharing_route_not_supported")
+        || msg.contains("subscription_sharing_invalid_user")
+    {
+        return Failure::Final;
+    }
     if rate_limit_pattern().is_match(msg) {
         return Failure::RateLimited { retry_after: parse_retry_after(msg) };
     }
@@ -163,6 +174,9 @@ mod tests {
         assert_eq!(classify("openai: (HTTP 429) You exceeded your current quota: insufficient_quota"), Failure::Final);
         assert_eq!(classify("openai: (HTTP 401) Incorrect API key provided"), Failure::Final);
         assert_eq!(classify("openai: (HTTP 400) Invalid schema for function"), Failure::Final);
+        // A ChatGPT plan's weekly cap is not a rate limit to wait out.
+        assert_eq!(classify("chatgpt: (HTTP 429) subscription_sharing_usage_limit_exceeded"), Failure::Final);
+        assert_eq!(classify("chatgpt: (HTTP 503) subscription_sharing_usage_unavailable"), Failure::Transient);
     }
 
     #[test]

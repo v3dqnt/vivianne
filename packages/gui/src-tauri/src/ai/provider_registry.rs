@@ -76,6 +76,8 @@ pub fn provider_spec(provider: &str) -> Option<ProviderSpec> {
     Some(match provider {
         "anthropic" => ProviderSpec { default_base_url: Some("https://api.anthropic.com"), api_kind: AnthropicMessages },
         "openai" => ProviderSpec { default_base_url: Some("https://api.openai.com/v1"), api_kind: OpenAiResponses },
+        // Signed in with ChatGPT: the same Responses API, paid from the plan.
+        "chatgpt" => ProviderSpec { default_base_url: Some("https://api.openai.com/v1"), api_kind: OpenAiResponses },
         "groq" => ProviderSpec { default_base_url: Some("https://api.groq.com/openai/v1"), api_kind: OpenAiChat },
         "xai" => ProviderSpec { default_base_url: Some("https://api.x.ai/v1"), api_kind: OpenAiChat },
         "deepseek" => ProviderSpec { default_base_url: Some("https://api.deepseek.com/v1"), api_kind: OpenAiChat },

@@ -238,8 +238,36 @@ export async function runSdkStream(opts: {
  * any other failure, and the loop can only guess how long to wait — when the
  * provider has already said exactly how long.
  */
+/** The machine-readable error code in a provider's error body, if any
+ * (`subscription_sharing_usage_limit_exceeded`, `insufficient_quota`…).
+ * The recovery classifier on the Rust side decides on these. */
+function errorCode(body: unknown): string | null {
+  const o = (typeof body === 'string' ? safeJson(body) : body) as Record<string, any> | null
+  if (!o || typeof o !== 'object') return null
+  const code = o.error?.code ?? o.code ?? o.error?.type ?? o.response?.error?.code
+  return typeof code === 'string' ? code : null
+}
+
+function safeJson(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
 export function describeProviderError(provider: string, e: unknown): string {
-  if (!APICallError.isInstance(e)) return e instanceof Error ? e.message : String(e)
+  if (!APICallError.isInstance(e)) {
+    if (e instanceof Error) return e.message
+    // Errors that arrive mid-stream (`response.failed`) are plain objects.
+    if (e && typeof e === 'object') {
+      const o = e as Record<string, any>
+      const message = o.message ?? o.error?.message ?? JSON.stringify(o).slice(0, 300)
+      const code = errorCode(o)
+      return `${provider}: ${message}${code && !String(message).includes(code) ? ` [${code}]` : ''}`
+    }
+    return String(e)
+  }
   const headers = e.responseHeaders ?? {}
   const header = (name: string) => Object.entries(headers).find(([k]) => k.toLowerCase() === name)?.[1]
   const ms = Number(header('retry-after-ms'))
@@ -253,5 +281,7 @@ export function describeProviderError(provider: string, e: unknown): string {
   }
   const status = e.statusCode ? `(HTTP ${e.statusCode}) ` : ''
   const retry = retryAfterSecs !== null && Number.isFinite(retryAfterSecs) ? ` [retry-after: ${Math.ceil(retryAfterSecs)}s]` : ''
-  return `${provider}: ${status}${e.message}${retry}`
+  const code = errorCode(e.responseBody ?? e.data)
+  const tag = code && !e.message.includes(code) ? ` [${code}]` : ''
+  return `${provider}: ${status}${e.message}${tag}${retry}`
 }

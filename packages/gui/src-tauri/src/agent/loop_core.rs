@@ -1298,6 +1298,17 @@ async fn resolve_api_key(app: &tauri::AppHandle, provider: &str) -> Option<Strin
     if provider == "local" {
         return Some("local-dummy-key".to_string());
     }
+    // The ChatGPT plan: the "key" is the signed-in access token, refreshed
+    // when it's about to expire.
+    if provider == crate::ai::chatgpt::PROVIDER {
+        return match crate::ai::chatgpt::access_token(app).await {
+            Ok(token) => Some(token),
+            Err(e) => {
+                log::warn!("[chatgpt] {e}");
+                None
+            }
+        };
+    }
 
     let auth_state = crate::ai::auth::wait_for_state(app).await;
     let mut api_key = auth_state
