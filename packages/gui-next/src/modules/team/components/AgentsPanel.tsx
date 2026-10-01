@@ -10,6 +10,7 @@ import { SUBAGENT_COLORS, SUBAGENT_COLOR_HEX } from '../../settings/lib/subagent
 import { useTeamStore, blankAgent, type TeamAgent } from '../store/teamStore'
 import { Avatar, Tag, SectionLabel, colorOf } from './bits'
 import { AgentPage } from './AgentPage'
+import { BotPage } from './BotPage'
 
 interface ToolInfo {
   name: string
@@ -51,7 +52,13 @@ export function AgentsPanel() {
   }
   const focusedAgent = focused && focused.root === root ? agents.find((a) => a.id === focused.agentId) : undefined
   if (!editing && focusedAgent && focusedAgent.status === 'active') {
-    return <AgentPage root={root} agent={focusedAgent} onBack={() => focus(root, null)} onEdit={() => setEditing(focusedAgent)} />
+    // An agent team's members are bots: their own chat, routines and rules.
+    // In a company the master hands out the tasks, so the page shows runs.
+    return teamMode ? (
+      <BotPage key={focusedAgent.id} root={root} agent={focusedAgent} onBack={() => focus(root, null)} onEdit={() => setEditing(focusedAgent)} />
+    ) : (
+      <AgentPage root={root} agent={focusedAgent} onBack={() => focus(root, null)} onEdit={() => setEditing(focusedAgent)} />
+    )
   }
   if (editing) {
     return (

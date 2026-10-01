@@ -10,6 +10,7 @@ import type {
 import { AddLinear, CloseLinear, LayerLinear, MaximizeLinear, MinimizeLinear, ArrowDownLinear } from '../../icons'
 import { hasTauri } from '../../ipc'
 import { ChatView } from '../ai/components/ChatView'
+import { useProjectsStore, modeOf } from '../sessions/store/projectsStore'
 import { usePlaybookStore } from '../settings/store/playbookStore'
 import { isPanel } from '../settings/lib/playbooks'
 import { ADDABLE, PANELS, type PanelKind } from './registry'
@@ -29,6 +30,7 @@ const BackgroundTasksPanel = lazy(() =>
   import('../dock/components/BackgroundTasksPanel').then((m) => ({ default: m.BackgroundTasksPanel })),
 )
 const PlanPanel = lazy(() => import('../plan/components/PlanPanel').then((m) => ({ default: m.PlanPanel })))
+const TeamRoom = lazy(() => import('../team/components/TeamRoom').then((m) => ({ default: m.TeamRoom })))
 const AgentsPanel = lazy(() => import('../team/components/AgentsPanel').then((m) => ({ default: m.AgentsPanel })))
 const CustomPanel = lazy(() => import('../dock/components/CustomPanel').then((m) => ({ default: m.CustomPanel })))
 const ReviewPanel = lazy(() => import('../git/components/ReviewPanel').then((m) => ({ default: m.ReviewPanel })))
@@ -53,6 +55,7 @@ function Fill({ children }: { children: React.ReactNode }) {
 }
 
 function Chat() {
+  const project = useProjectsStore((s) => s.projects.find((p) => p.id === s.activeProjectId))
   if (!hasTauri()) {
     return (
       <Fill>
@@ -62,6 +65,14 @@ function Chat() {
             desktop app for the real thing.
           </Alert>
         </Box>
+      </Fill>
+    )
+  }
+  // An agent team's conversation is its room: the user and every teammate.
+  if (project?.path && modeOf(project) === 'team') {
+    return (
+      <Fill>
+        <TeamRoom key={project.path} root={project.path} />
       </Fill>
     )
   }
