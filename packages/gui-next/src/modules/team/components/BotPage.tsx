@@ -4,8 +4,9 @@ import { ArrowLeftLinear, EditLinear, TrashLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { useTeamStore, type TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey, type BotSettings, type Level, type Routine } from '../store/botsStore'
-import { Avatar, SectionLabel, Tag, colorOf } from './bits'
+import { Avatar, SectionLabel, colorOf } from './bits'
 import { BotChat } from './BotChat'
+import { ModelPicker } from './ModelPicker'
 
 type Tab = 'chat' | 'routines' | 'rules' | 'memory'
 const EMPTY: never[] = []
@@ -133,6 +134,7 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
   const st = useBotsStore((s) => s.status[botKey(root, agent.id)])
   const team = useTeamStore((s) => s.byRoot[root] ?? EMPTY).filter((a) => a.status === 'active')
   const { loadDm, loadStatus, sendDm } = useBotsStore.getState()
+  const saveAgent = useTeamStore((s) => s.save)
   const [settings, setSettings] = useState<BotSettings | null>(null)
   const [routines, setRoutines] = useState<Routine[]>([])
   const [editing, setEditing] = useState<Partial<Routine> | null>(null)
@@ -191,7 +193,6 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
               <Typography variant="caption" color="text.secondary" noWrap>
                 {state === 'working' ? (st?.activity ?? 'Working') : state === 'paused' ? 'Paused' : 'Idle'}
               </Typography>
-              {agent.model && <Tag>{agent.model.name}</Tag>}
             </Stack>
           </Stack>
           <Tooltip title="Edit name, job, standing rules, model and tools">
@@ -199,6 +200,13 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
               <EditLinear size={15} color="currentColor" />
             </IconButton>
           </Tooltip>
+        </Stack>
+        <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+            Model
+          </Typography>
+          {/* Takes effect from its next turn; one in progress keeps its model. */}
+          <ModelPicker value={agent.model} onChange={(model) => void saveAgent(root, { ...agent, model }, agent.id)} />
         </Stack>
         <Stack direction="row" sx={{ gap: 0.75, flexWrap: 'wrap' }}>
           {state === 'working' && (

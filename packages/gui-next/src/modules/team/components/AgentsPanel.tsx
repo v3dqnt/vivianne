@@ -5,12 +5,12 @@ import { call } from '../../../ipc'
 import { useProjectsStore, modeOf } from '../../sessions/store/projectsStore'
 import { useMasterStore } from '../../sessions/store/masterStore'
 import { ListInput } from '../../sessions/onboarding/fields'
-import { useModelOptions } from '../../settings/components/SubagentsSection'
 import { SUBAGENT_COLORS, SUBAGENT_COLOR_HEX } from '../../settings/lib/subagentProfiles'
 import { useTeamStore, blankAgent, type TeamAgent } from '../store/teamStore'
 import { Avatar, Tag, SectionLabel, colorOf } from './bits'
 import { AgentPage } from './AgentPage'
 import { BotPage } from './BotPage'
+import { ModelPicker } from './ModelPicker'
 
 interface ToolInfo {
   name: string
@@ -382,7 +382,6 @@ function AgentForm({
   onClose: () => void
 }) {
   const save = useTeamStore((s) => s.save)
-  const modelOptions = useModelOptions()
   const [allTools, setAllTools] = useState<ToolInfo[]>([])
   const [toolQuery, setToolQuery] = useState('')
   const base = agent ?? blankAgent()
@@ -390,7 +389,7 @@ function AgentForm({
   const [role, setRole] = useState(base.role)
   const [color, setColor] = useState<string>(base.color ?? SUBAGENT_COLORS[team.length % SUBAGENT_COLORS.length])
   const [reportsTo, setReportsTo] = useState(base.reportsTo ?? 'master')
-  const [modelId, setModelId] = useState(base.model?.id ?? '__inherit__')
+  const [model, setModel] = useState(base.model ?? null)
   const [owns, setOwns] = useState<string[]>(base.owns)
   const [toolMode, setToolMode] = useState<'all' | 'custom'>(base.allowedTools ? 'custom' : 'all')
   const [tools, setTools] = useState<Set<string>>(new Set(base.allowedTools ?? []))
@@ -425,7 +424,7 @@ function AgentForm({
           color,
           status,
           reportsTo: teamMode || reportsTo === 'master' ? null : reportsTo,
-          model: modelId === '__inherit__' ? null : (modelOptions.find((m) => m.id === modelId) ?? base.model),
+          model,
           allowedTools: toolMode === 'all' ? null : Array.from(tools),
           owns,
           instructions,
@@ -495,21 +494,7 @@ function AgentForm({
           )}
           <Box sx={{ flex: '1 1 180px' }}>
             <Field label="Model">
-              <Select size="small" value={modelId} onChange={(e) => setModelId(e.target.value)} sx={selectSx}>
-                <MenuItem value="__inherit__" sx={{ fontSize: '0.8125rem' }}>
-                  Same as the chat
-                </MenuItem>
-                {base.model && !modelOptions.some((m) => m.id === base.model?.id) && (
-                  <MenuItem value={base.model.id} sx={{ fontSize: '0.8125rem' }}>
-                    {base.model.name}
-                  </MenuItem>
-                )}
-                {modelOptions.map((m) => (
-                  <MenuItem key={`${m.provider}-${m.id}`} value={m.id} sx={{ fontSize: '0.8125rem' }}>
-                    {m.name}
-                  </MenuItem>
-                ))}
-              </Select>
+              <ModelPicker value={model} onChange={setModel} fullWidth />
             </Field>
           </Box>
         </Stack>
