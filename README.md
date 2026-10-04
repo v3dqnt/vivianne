@@ -1,99 +1,101 @@
 <p align="center">
   <a href="https://vivianne.dev">
-    <img alt="pi logo" src="https://vivianne.dev/logo-auto.svg" width="128">
+    <img alt="Vivianne" src="https://vivianne.dev/logo-auto.svg" width="112">
   </a>
 </p>
+
+<h1 align="center">Vivianne</h1>
+
 <p align="center">
-  <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
-  <a href="https://www.npmjs.com/package/@v3dqnt/vivianne-agent-coding-agent"><img alt="npm" src="https://img.shields.io/npm/v/@v3dqnt/vivianne-agent-coding-agent?style=flat-square" /></a>
+  A desktop AI agent that works on your projects, your computer and your browser.<br>
+  Bring any model: an API key, your ChatGPT plan, or a model running on your own machine.
 </p>
 
-> New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
+<p align="center">
+  <a href="https://vivianne.dev">vivianne.dev</a> ·
+  <a href="https://github.com/v3dqnt/vivianne/releases">Download</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
-# Pi Agent Harness
+---
 
-This is the home of the Pi agent harness project including our self extensible coding agent.
+Vivianne is a native desktop app (Tauri 2, Rust and React). You talk to it in a chat, and it does the work: it reads and changes code, runs commands, browses, controls apps on your computer, and keeps going on long tasks until they're done. Windows is the primary platform; macOS and Linux build, but computer control is Windows-only for now.
 
-* **[@v3dqnt/vivianne-agent-coding-agent](packages/coding-agent)**: Interactive coding agent CLI
-* **[@v3dqnt/vivianne-agent-agent-core](packages/agent)**: Agent runtime with tool calling and state management
-* **[@v3dqnt/vivianne-agent-ai](packages/ai)**: Unified multi-provider LLM API (OpenAI, Anthropic, Google, …)
+## What it does
 
-To learn more about Pi:
+**Works like a colleague, not a chatbot**
+- **Long tasks that survive failure.** Rate limits are waited out, failing models fall back to the next one, network drops are retried, and a task resumes after the app restarts. Set a spend or time limit in the composer if you want one.
+- **Progress you can follow.** Each finished step becomes a checkpoint, tool calls fold into readable groups, and a task ends with its time, tokens and cost.
+- **Plan mode.** Vivianne researches and writes a plan you can comment on paragraph by paragraph; approving it hands the steps to the team.
+- **Memory.** Standing instructions and facts you asked it to keep are always in view; everything else is recalled when relevant. New facts are reconciled with what it already knows instead of piling up.
+- **Tools it writes itself.** When a task needs something no tool does, it writes one in Python, tests it, and keeps it for every model to use.
 
-* [Visit vivianne.dev](https://vivianne.dev), the project website with demos
-* [Read the documentation](https://vivianne.dev/docs/latest), but you can also ask the agent to explain itself
+**Teams of agents**
+- A project can be a set of threads, a **company** (a master agent with employees), or an **agent team**: teammates you define, each with its own job, model, tools, rules and memory.
+- The team shares a group chat with you, and you can DM each teammate. Mention one with `@`, or `@everyone`; they hand work to each other in the chat.
+- Teammates run **routines** on a schedule, can check in on the project while you're away, and ask you when they need a decision. Per-teammate rules decide what they may do alone and what they ask first.
 
-## All Packages
+**Your computer and your browser**
+- **Computer control (DIP).** Uses Windows UI Automation to read and operate apps directly (fast, reliable, and with real keystrokes), with pixel control as a fallback. A notch at the top of the screen shows what it's doing, with a Stop button.
+- **Your own browser.** The [Vivianne extension for Helium](packages/helium-extension) lets Vivianne use the browser you're signed in to, in tabs it groups as "Vivianne".
+- **Viv Instant.** Hold `Ctrl+Shift+Space` anywhere, say what you want, let go. Speech recognition runs on your machine (Parakeet or Whisper).
 
-| Package | Description |
-|---------|-------------|
-| **[@v3dqnt/vivianne-agent-ai](packages/ai)** | Unified multi-provider LLM API (OpenAI, Anthropic, Google, etc.) |
-| **[@v3dqnt/vivianne-agent-agent-core](packages/agent)** | Agent runtime with tool calling and state management |
-| **[@v3dqnt/vivianne-agent-coding-agent](packages/coding-agent)** | Interactive coding agent CLI |
-| **[@v3dqnt/vivianne-agent-tui](packages/tui)** | Terminal UI library with differential rendering |
+**Files, everywhere**
+- File names in the chat open in the Preview panel, which shows code, images, video, audio, 3D models, Markdown, HTML, CSV, PDFs and Office documents (editable).
 
-For Slack/chat automation and workflows see [v3dqnt-works/pi-chat](https://github.com/v3dqnt-works/pi-chat).
+**Any model**
+- Anthropic, OpenAI, Google, xAI, Mistral, Groq, OpenRouter, DeepSeek, Together, Fireworks, Cerebras, NVIDIA, Hugging Face, Azure, Bedrock, Cloudflare and any OpenAI-compatible endpoint.
+- **Your ChatGPT plan** (Plus or Pro) through Sign in with ChatGPT, instead of an API key.
+- **Local models** through llama.cpp, managed from Settings.
 
-## Permissions & Containerization
+## Install
 
-Pi does not include a built-in permission system for restricting filesystem, process, network, or credential access. By default, it runs with the permissions of the user and process that launched it.
+Download the installer from [Releases](https://github.com/v3dqnt/vivianne/releases), then add a provider in **Settings → Providers** (an API key, or **Continue with ChatGPT**).
 
-If you need stronger boundaries, containerize or sandbox Pi. See [packages/coding-agent/docs/containerization.md](packages/coding-agent/docs/containerization.md) for three patterns:
+Optional pieces live in **Settings → Components**: the browser engine for web tools, Docker for sandboxed code, and the Parakeet speech model for Viv Instant.
 
-- **Gondolin extension**: keep `pi` and provider auth on the host while routing built-in tools and `!` commands into a local Linux micro-VM.
-- **Plain Docker**: run the whole `pi` process in a local container for simple isolation.
-- **OpenShell**: run the whole `pi` process in a policy-controlled sandbox.
+### Helium extension
+
+1. Open Helium and go to `helium://extensions` (or `chrome://extensions` in any Chromium browser).
+2. Turn on **Developer mode**, choose **Load unpacked**, and pick the folder from **Settings → Browser** in Vivianne (`~/.viv/helium-extension`).
+3. The extension connects whenever Vivianne is running. Only this extension can connect to Vivianne's local bridge.
+
+## Develop
+
+Requirements: Node.js 20+, Rust 1.82+, and on Windows the MSVC build tools (Visual Studio C++ workload).
+
+```bash
+npm install                      # from the repository root
+cd packages/gui
+npm run tauri dev                # the app, with hot reload for the UI
+npm run tauri build              # an installer, in packages/gui/src-tauri/target/release/bundle
+```
+
+Checks:
+
+```bash
+cd packages/gui/src-tauri && cargo test --no-default-features --lib
+cd packages/gui-next && npx tsc -p tsconfig.app.json --noEmit
+```
+
+### Layout
+
+| Path | What's there |
+|------|--------------|
+| `packages/gui/src-tauri` | The backend (Rust): the agent loop, tools, providers, memory, teams, computer control, Viv Instant |
+| `packages/gui-next` | The app's interface (React, Radix-based UI kit) |
+| `packages/helium-extension` | The browser extension for Helium and other Chromium browsers |
+| `packages/gesture-control` | A standalone tray app that turns webcam hand gestures into mouse and keyboard input |
+| `docs` | Privacy policy, terms, design notes |
+
+## Privacy and safety
+
+Vivianne runs on your machine. Your conversations, memory and files stay local; requests go only to the model providers you configure. Actions with side effects (running commands, changing files outside the project, controlling apps, using your browser) ask for approval unless you turn that off. See [SECURITY.md](SECURITY.md) and the [privacy policy](docs/privacy-policy.md).
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.md](AGENTS.md) for project-specific rules (for both humans and agents).  Longer term plans for Pi can also be found in [RFCs](https://rfc.v3dqnt.com/keyword/pi/).
-
-## Development
-
-```bash
-npm install --ignore-scripts  # Install all dependencies without running lifecycle scripts
-npm run build        # Build all packages
-npm run check        # Lint, format, and type check
-./test.sh            # Run tests (skips LLM-dependent tests without API keys)
-./pi-test.sh         # Run pi from sources (can be run from any directory)
-```
-
-## Supply-chain hardening
-
-We treat npm dependency changes as reviewed code changes.
-
-- Direct external dependencies are pinned to exact versions. Internal workspace packages remain version-ranged.
-- `.npmrc` sets `save-exact=true` and `min-release-age=2` to avoid same-day dependency releases during npm resolution.
-- `package-lock.json` is the dependency ground truth. Pre-commit blocks accidental lockfile commits unless `PI_ALLOW_LOCKFILE_CHANGE=1` is set.
-- `npm run check` verifies pinned direct deps, native TypeScript import compatibility, and the generated coding-agent shrinkwrap.
-- The published CLI package includes `packages/coding-agent/npm-shrinkwrap.json`, generated from the root lockfile, to pin transitive deps for npm users.
-- Release smoke tests use `npm run release:local` to build, pack, and create isolated npm and Bun installs outside the repo before tagging a release.
-- Local release installs, documented npm installs, and `pi update --self` use `--ignore-scripts` where supported.
-- CI installs with `npm ci --ignore-scripts`, and a scheduled GitHub workflow runs `npm audit --omit=dev` plus `npm audit signatures --omit=dev`.
-- Shrinkwrap generation has an explicit allowlist for dependency lifecycle scripts; new lifecycle-script deps fail checks until reviewed.
-
-## Share your OSS coding agent sessions
-
-If you use Pi or other coding agents for open source work, please share your sessions.
-
-Public OSS session data helps improve coding agents with real-world tasks, tool use, failures, and fixes instead of toy benchmarks.
-
-For the full explanation, see [this post on X](https://x.com/badlogicgames/status/2037811643774652911).
-
-To publish sessions, use [`badlogic/pi-share-hf`](https://github.com/badlogic/pi-share-hf). Read its README.md for setup instructions. All you need is a Hugging Face account, the Hugging Face CLI, and `pi-share-hf`.
-
-You can also watch [this video](https://x.com/badlogicgames/status/2041151967695634619), where I show how I publish my `pi-mono` sessions.
-
-I regularly publish my own `pi-mono` work sessions here:
-
-- [badlogicgames/pi-mono on Hugging Face](https://huggingface.co/datasets/badlogicgames/pi-mono)
+See [CONTRIBUTING.md](CONTRIBUTING.md), and [AGENTS.md](AGENTS.md) for rules that apply to people and agents working in this repository.
 
 ## License
 
-MIT
-
-<p align="center">
-  <a href="https://vivianne.dev">vivianne.dev</a> domain graciously donated by
-  <br /><br />
-  <a href="https://exe.dev"><img src="packages/coding-agent/docs/images/exy.png" alt="Exy mascot" width="48" /><br />exe.dev</a>
-</p>
+[MIT](LICENSE). Vivianne began as a fork of [Pi](https://github.com/badlogic/pi-mono) by Mario Zechner and has since been rewritten as its own app; the original copyright notice is kept in the license as it requires.
