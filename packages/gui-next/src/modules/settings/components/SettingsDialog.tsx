@@ -19,6 +19,7 @@ import {
 import { ProvidersSection } from './ProvidersSection'
 import { LocalModelsSection } from './LocalModelsSection'
 import { ModsSection } from './ModsSection'
+import { BrowserSection } from './BrowserSection'
 import { SubagentsSection } from './SubagentsSection'
 import { McpSection } from './McpSection'
 import { MemorySection } from './MemorySection'
@@ -69,6 +70,7 @@ const GROUPS: { label: string; items: SectionDef[] }[] = [
       { id: 'subagents', label: 'Subagents', icon: UserOctagonLinear },
       { id: 'mcp', label: 'MCP servers', icon: Link2Linear },
       { id: 'websearch', label: 'Web search', icon: GlobalLinear },
+      { id: 'browser', label: 'Browser', icon: GlobalLinear },
       { id: 'memory', label: 'Memory', icon: ArchiveBookLinear },
       { id: 'skills', label: 'Skills', icon: MagicpenLinear },
       { id: 'automations', label: 'Automations', icon: ClockLinear },
@@ -227,6 +229,7 @@ export function SettingsDialog() {
               {section === 'websearch' && <WebSearchSection />}
               {section === 'themes' && <ThemesSection />}
               {section === 'components' && <ComponentsSection />}
+              {section === 'browser' && <BrowserSection />}
               {section === 'updates' && <UpdatesSection />}
             </Box>
           </Box>

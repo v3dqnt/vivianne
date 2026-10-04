@@ -18,6 +18,7 @@ export type SettingsSection =
   | 'updates'
   | 'instant'
   | 'websearch'
+  | 'browser'
 
 interface SettingsUiState {
   open: boolean
