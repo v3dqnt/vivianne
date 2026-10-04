@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Vivianne for Helium",
+  "version": "1.0.0",
+  "description": "Lets Vivianne use this browser for you: open pages, read them, click, type and take screenshots, in tabs it groups as Vivianne.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA976omFv5vmFNW22WO6Aj3gmhR+czc4Rn8KSdOM3IglEGRfcI505J9LR+tMnrNhKydIYxOcs2CNVaPdvmijK1TuGTdllZYZp3YYZkJ4huXWpujRJ+ZX+Z6M+HmEcWHPknZvOjeKp6hIIOw+v7lzU3JZ/Vm0W8BYJzXAK0o6MD2bR4LjbNrlXUhRcg5ovoVoy34gATKmrCSft4JssiMcCsDWy0ga4U/Ef0yvMxnLUW61Vsa1vjGM6br3OxmwEyyKmZVmbLfDxEqPNLfQ9ELPPDtJ8Hv3t6cxWQ0Ic0qfDzyOw+XhkYJRfY6Ipo1V4F2PDUyAHVKy9pUDyFnOTJA8jTvQIDAQAB",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "scripting",
+    "debugger",
+    "alarms",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Vivianne",
+    "default_popup": "popup.html"
+  }
+}

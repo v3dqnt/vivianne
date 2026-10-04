@@ -80,6 +80,7 @@ pub mod background;
 pub mod instant;
 pub mod overlays;
 pub mod activity;
+pub mod helium;
 pub mod automation;
 pub mod terminal;
 use crate::automation::AutomationStore;
@@ -372,6 +373,8 @@ pub fn run() {
       crate::instant::stt::cmd_parakeet_status,
       crate::activity::cmd_activity_set_size,
       crate::ai::chatgpt::cmd_chatgpt_status,
+      crate::helium::cmd_helium_status,
+      crate::helium::cmd_helium_open_extension_folder,
       crate::agent::bots::cmd_bots_room,
       crate::agent::bots::cmd_bots_post,
       crate::agent::bots::cmd_bots_dm,
@@ -589,6 +592,7 @@ pub fn run() {
       app.manage(Arc::new(AutomationStore::new()));
       crate::automation::spawn_scheduler(app.handle().clone());
       crate::agent::bots::spawn_scheduler(app.handle().clone());
+      crate::helium::start(app.handle().clone());
 
       // PTY-backed terminal sessions (one per open tab).
       app.manage(Arc::new(crate::terminal::TerminalRegistry::new()));

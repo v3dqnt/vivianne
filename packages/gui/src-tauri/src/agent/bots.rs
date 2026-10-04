@@ -109,7 +109,7 @@ pub fn category(tool: &str) -> Option<Category> {
         "write" | "edit" | "apply_patch" | "notebook_edit" | "edit_document" | "create_document" => Category::Files,
         "bash" | "powershell" | "terminal_open" | "terminal_send" | "terminal_signal" | "terminal_close" | "run_script"
         | "sandbox_execute" | "math" | "create_tool" | "delete_tool" => Category::Commands,
-        "dip" | "computer" => Category::Computer,
+        "dip" | "computer" | "helium" => Category::Computer,
         "web_search" | "web_fetch" | "web_preview" | "generate_image" => Category::Web,
         "github_act" | "github_api" | "connect_mcp_server" | "create_automation" => Category::Outside,
         t if t.starts_with("browser_") => Category::Web,

@@ -1012,6 +1012,7 @@ When you hit a login wall: call browser_session_status first, and if there is ge
             }
         }),
         crate::agent::math::schema(),
+        crate::helium::schema(),
         serde_json::json!({
             "name": "create_tool",
             "description": "Write a new tool in Python and save it for reuse. Use it when a task needs something the other tools don't do and it's likely to come up again (a format conversion, a query against an API, an analysis the user keeps asking for). The saved tool joins the tool list of every model the user runs, in every project, from your next step. The code is a Python module defining `def run(**args)` that returns a string or anything JSON-serialisable; the standard library and whatever is pip-installed are available, and it runs in the project folder. Give `test_args` to run it once before saving: if that run fails, nothing is saved and you get the traceback. Before creating one, check your tool list for an existing tool that already does it.",

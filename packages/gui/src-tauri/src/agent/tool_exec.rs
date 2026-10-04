@@ -39,6 +39,8 @@ const GATED_TOOLS: &[&str] = &[
     // Runs the Python it is given as a test before saving it. Calls to the
     // saved tools themselves are gated too (see `custom_names` below).
     "create_tool",
+    // Acts in the user's own browser, signed in as them.
+    "helium",
 ];
 
 /// The only tools plan mode allows: reading the project and the web, and
@@ -901,6 +903,8 @@ pub async fn execute_tool_calls(
             execute_sandbox_tool(&tool_call.arguments).await
         } else if tool_call.name == "run_script" {
             crate::agent::ptc::execute_ptc_tool(&tool_call.arguments, context.delegate_depth, state, emit, app, &tool_call.id).await
+        } else if tool_call.name == "helium" {
+            tool_result_to_agent_result(crate::helium::execute_tool(&tool_call.arguments).await, vision_capable)
         } else if tool_call.name == "dip" || tool_call.name == "computer" {
             // The tool is named `dip`; `computer` is accepted as a silent
             // alias. Both the schema and the capability map advertise `dip`
@@ -3054,7 +3058,7 @@ mod schema_registry_consistency_tests {
         "get_current_time", "list_tools", "load_tools", "set_panel", "get_goal", "create_goal", "update_goal",
         "terminal_open", "terminal_send", "terminal_read", "terminal_signal", "terminal_close",
         "terminal_list", "create_automation", "list_automations", "delete_automation",
-        "set_automation_enabled", "sandbox_execute", "run_script", "math", "dip", "computer",
+        "set_automation_enabled", "sandbox_execute", "run_script", "math", "dip", "computer", "helium",
     ];
 
     #[test]

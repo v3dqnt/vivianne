@@ -95,6 +95,15 @@ pub const GROUPS: &[CapabilityGroup] = &[
         triggers: &["google", "search the web", "search for", "look up", "look it up", "browse", "website", "web site", "web page", "webpage", "the internet", "online", "http://", "https://", ".com", ".org", ".io", "open a site", "go to "],
     },
     CapabilityGroup {
+        name: "The user's own browser",
+        when: "Anything in the browser the user actually uses (Helium): their tabs, sites they're signed in to, or when they ask you to do it in their browser.",
+        tools: &["helium"],
+        how: Some(
+            "helium works in the user's real browser through the Vivianne extension, with their sign-ins, so prefer it for              their accounts (mail, docs, dashboards) and for anything they want to see happen. open a url, snapshot to get              [ref]s, then click/type by ref; snapshot again after the page changes. Say done when finished so the browser's              debugging banner goes away. Never type passwords or payment details; if a site needs a sign-in, ask the user to              sign in themselves. If it says Helium isn't connected, tell the user to open Helium (Settings → Browser).",
+        ),
+        triggers: &["helium", "my browser", "my tabs", "in the browser", "signed in", "logged in", "my gmail", "my email", "my account"],
+    },
+    CapabilityGroup {
         name: "Control this computer",
         when: "Driving a desktop application, or anything that needs the real mouse, keyboard, or screen rather than a browser.",
         tools: &["dip"],
