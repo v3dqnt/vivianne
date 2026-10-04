@@ -32,6 +32,7 @@ pub mod memory_store;
 pub mod memory_graph;
 pub mod memory_evolve;
 pub mod bots;
+pub mod verification;
 pub mod rrf;
 pub mod paths;
 pub mod usage_store;

@@ -64,6 +64,29 @@ interface RequestSetup {
   tools: ToolSet | undefined
   maxOutputTokens: number | undefined
   providerOptions: SdkProviderOptions
+  /** The SDK's own reasoning level: it maps it per provider and per model
+   * (adaptive thinking with `effort` where the model has it, a token budget
+   * where it doesn't), so no per-model table lives here. */
+  reasoning?: Reasoning
+}
+
+type Reasoning = 'provider-default' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+
+/** The user's thinking level as the SDK's reasoning level; undefined when
+ * the request didn't say (older backend), which keeps the old behaviour. */
+function reasoningFor(req: ProviderStreamRequest): Reasoning | undefined {
+  switch (req.thinkingLevel) {
+    case 'off':
+      return 'none'
+    case 'minimal':
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'xhigh':
+      return req.thinkingLevel
+    default:
+      return undefined
+  }
 }
 
 /** Everything that varies per provider. Auth, message shape, caching, and
@@ -85,6 +108,19 @@ function buildRequestSetup(req: ProviderStreamRequest, apiKey: string, maxOutput
         normalizeToolCallId: normalizeAnthropicToolCallId,
       })
       const messages = toModelMessages(transformed)
+      // A rolling cache breakpoint on the newest message: Anthropic only
+      // reads a cache back from an explicit breakpoint, so without this the
+      // whole conversation was billed at full price on every step. With it,
+      // each step reads everything before it from cache (0.1×) and writes
+      // only what's new. Three breakpoints in all, of the four allowed:
+      // last tool, system, last message.
+      const last = messages[messages.length - 1]
+      if (last) {
+        last.providerOptions = {
+          ...(last.providerOptions ?? {}),
+          anthropic: { ...((last.providerOptions?.anthropic as Record<string, unknown>) ?? {}), cacheControl: { type: 'ephemeral' } },
+        }
+      }
       // Cached as a `system`-role message (not the `system:` string
       // shorthand, which can't carry `providerOptions`) — the tool list
       // barely changes within a session, so caching it (and everything
@@ -102,9 +138,13 @@ function buildRequestSetup(req: ProviderStreamRequest, apiKey: string, maxOutput
         messages,
         tools: toSdkTools(req.context.tools, true),
         maxOutputTokens: maxOutputTokens || 4096,
-        providerOptions: {
-          anthropic: { thinking: req.thinkingEnabled ? { type: 'enabled', budgetTokens: req.thinkingBudgetTokens || 1024 } : undefined },
-        },
+        ...(reasoningFor(req)
+          ? { reasoning: reasoningFor(req), providerOptions: {} }
+          : {
+              providerOptions: {
+                anthropic: { thinking: req.thinkingEnabled ? { type: 'enabled', budgetTokens: req.thinkingBudgetTokens || 1024 } : undefined },
+              },
+            }),
       }
     }
     case 'openAiChat':
@@ -158,9 +198,14 @@ function buildRequestSetup(req: ProviderStreamRequest, apiKey: string, maxOutput
         system: req.context.systemPrompt ?? undefined,
         tools: toSdkTools(req.context.tools, false),
         maxOutputTokens,
+        // The chosen level, not a fixed 'medium' whatever the user picked.
+        ...(reasoningFor(req) && req.thinkingEnabled ? { reasoning: reasoningFor(req) } : {}),
         providerOptions: {
           openai: {
-            ...(req.thinkingEnabled ? { reasoningEffort: 'medium', reasoningSummary: 'auto' } : {}),
+            ...(req.thinkingEnabled ? (reasoningFor(req) ? { reasoningSummary: 'auto' } : { reasoningEffort: 'medium', reasoningSummary: 'auto' }) : {}),
+            // Requests with the same key go to the same cache: a long
+            // conversation keeps hitting its prefix.
+            ...(req.cacheKey ? { promptCacheKey: req.cacheKey } : {}),
             // On a ChatGPT plan nothing is stored server-side (`store: false`
             // is required), so reasoning travels encrypted with each turn.
             ...(req.provider === 'chatgpt' ? { store: false, include: ['reasoning.encrypted_content'] } : {}),
@@ -232,6 +277,12 @@ export async function streamUniversal(req: ProviderStreamRequest): Promise<void>
         model: setup.model,
         system: setup.system,
         messages: setup.messages,
+        // The Anthropic branch sends its system prompt as a `system`-role
+        // message so it can carry a cache breakpoint. AI SDK 7 rejects those
+        // unless told otherwise ("System messages are not allowed in the
+        // prompt or messages fields"), which failed every Anthropic request
+        // before it was sent.
+        allowSystemInMessages: true,
         tools: setup.tools,
         maxOutputTokens: setup.maxOutputTokens,
         maxRetries: 0,
@@ -243,6 +294,7 @@ export async function streamUniversal(req: ProviderStreamRequest): Promise<void>
         // stayed "busy" well past when the first reply had actually finished).
         stopWhen: stepCountIs(1),
         providerOptions: setup.providerOptions,
+        ...(setup.reasoning ? { reasoning: setup.reasoning } : {}),
         // The only timeout on this path. Without it a provider that accepts
         // the connection and then goes quiet hangs the whole turn until
         // Rust's 120s backstop — see `IdleWatchdog`.

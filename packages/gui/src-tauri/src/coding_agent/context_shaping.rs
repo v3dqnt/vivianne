@@ -13,39 +13,126 @@
 
 use crate::agent::types::{AgentMessage, MessageContent};
 
-const TOOL_RESULT_SOFT_TRIM_BYTES: usize = 4_000;
-const TOOL_RESULT_KEEP_TAIL_MESSAGES: usize = 20;
-const TRIM_HEAD_CHARS: usize = 800;
-const TRIM_TAIL_CHARS: usize = 800;
+/// The newest tool results kept in full. Older ones are masked (below).
+pub const KEEP_RECENT_TOOL_RESULTS: usize = 10;
+/// Results smaller than this are kept: they're cheap, and often the whole
+/// point ("edited 3 lines", "tests passed").
+const MASK_MIN_BYTES: usize = 1_200;
+/// Masking happens in batches, once this much maskable output has built up
+/// outside the keep window, never a little every step. Each change to an
+/// old message invalidates every provider's prompt cache from that message
+/// on: one batch every so often costs one cache rewrite, where trimming one
+/// message per step cost one every step. (Anthropic's "clear_at_least" idea;
+/// arXiv 2607.12161 measured compression that ignored caching raising the
+/// bill.)
+const MASK_BATCH_BYTES: usize = 80_000;
+/// Never masked: the agent's own plan, memory and coordination, which stay
+/// small and are what it navigates by.
+const NEVER_MASK: &[&str] = &[
+    "todo_write", "submit_plan", "assign_plan_steps", "recall", "remember", "question", "create_goal", "update_goal",
+    "pair_activity", "list_custom_tools", "message_agent", "task_output",
+];
+const MASK_MARKER: &str = "[Earlier output elided";
 
-/// Soft-trim large `ToolResult` text blocks that are older than the last
-/// `TOOL_RESULT_KEEP_TAIL_MESSAGES` messages: keep head + tail, replace the
-/// middle with a `[...trimmed...]` marker. Never removes a `ToolResult`
-/// message outright (would orphan its paired `ToolCall`). Idempotent — an
-/// already-trimmed block is under the threshold, so re-running is a no-op.
-/// Returns whether anything changed.
+/// What a masked result was, so the agent knows what it no longer sees and
+/// how to get it back.
+fn mask_note(tool: &str, args: Option<&serde_json::Value>, bytes: usize) -> String {
+    let arg = |k: &str| args.and_then(|a| a.get(k)).and_then(|v| v.as_str()).map(|s| s.chars().take(120).collect::<String>());
+    let what = match tool {
+        "read" => arg("path").map(|p| format!("read {p}")),
+        "bash" | "powershell" => arg("command").map(|c| format!("{tool}: {c}")),
+        "grep" | "glob" | "code_search" => arg("pattern").or_else(|| arg("query")).map(|q| format!("{tool} {q}")),
+        "web_fetch" => arg("url").map(|u| format!("web_fetch {u}")),
+        "web_search" => arg("query").map(|q| format!("web_search {q}")),
+        _ => None,
+    }
+    .unwrap_or_else(|| tool.to_string());
+    format!("{MASK_MARKER} to save context: {what} ({} KB). Run it again if you need it.]", bytes / 1024 + 1)
+}
+
+fn result_bytes(content: &[MessageContent]) -> usize {
+    content.iter().map(|c| if let MessageContent::Text { text } = c { text.len() } else { 0 }).sum()
+}
+
+fn is_masked(content: &[MessageContent]) -> bool {
+    content.iter().any(|c| matches!(c, MessageContent::Text { text } if text.starts_with(MASK_MARKER)))
+}
+
+/// Observation masking, in batches: tool results older than the newest
+/// `KEEP_RECENT_TOOL_RESULTS` are replaced by a one-line note of what they
+/// were, once enough has accumulated (`MASK_BATCH_BYTES`), all at once.
+/// The tool calls stay, so the agent still sees what it did; only the old
+/// output goes ("The Complexity Trap", arXiv 2508.21433: masking matched
+/// LLM summaries' solve rate at about half the cost). Never removes a
+/// message, so call/result pairs stay intact. Returns whether anything
+/// changed.
 pub fn prune_aging_tool_results(messages: &mut [AgentMessage]) -> bool {
-    let len = messages.len();
-    let cutoff = len.saturating_sub(TOOL_RESULT_KEEP_TAIL_MESSAGES);
-    let mut changed = false;
-    for msg in &mut messages[..cutoff] {
-        if let AgentMessage::ToolResult { content, .. } = msg {
-            for block in content.iter_mut() {
-                if let MessageContent::Text { text } = block {
-                    if text.len() > TOOL_RESULT_SOFT_TRIM_BYTES {
-                        *text = trim_middle(text);
-                        changed = true;
-                    }
-                }
+    mask_old_results(messages, false)
+}
+
+/// Shape the history before a request: observation masking and image
+/// eviction, aligned. Each rewrites old messages and so costs one cache
+/// rewrite; whenever either one is due, both run in full, so they share
+/// that rewrite instead of each breaking the prefix at its own moment.
+/// Returns whether anything changed.
+pub fn shape_history(messages: &mut [AgentMessage], image_keep: usize) -> bool {
+    const IMAGE_SLACK: usize = 3;
+    let masked = mask_old_results(messages, false);
+    let evicted = evict_old_images_batched(messages, image_keep, IMAGE_SLACK) > 0;
+    match (masked, evicted) {
+        (true, false) => {
+            evict_old_images(messages, image_keep);
+        }
+        (false, true) => {
+            mask_old_results(messages, true);
+        }
+        _ => {}
+    }
+    masked || evicted
+}
+
+/// `force`: mask everything eligible even below the batch size, because the
+/// cache is being rewritten anyway.
+fn mask_old_results(messages: &mut [AgentMessage], force: bool) -> bool {
+    let positions: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| matches!(m, AgentMessage::ToolResult { .. }))
+        .map(|(i, _)| i)
+        .collect();
+    if positions.len() <= KEEP_RECENT_TOOL_RESULTS {
+        return false;
+    }
+    let old = &positions[..positions.len() - KEEP_RECENT_TOOL_RESULTS];
+    let eligible: Vec<usize> = old
+        .iter()
+        .copied()
+        .filter(|&i| match &messages[i] {
+            AgentMessage::ToolResult { tool_name, content, .. } => {
+                !NEVER_MASK.contains(&tool_name.as_str()) && !is_masked(content) && result_bytes(content) > MASK_MIN_BYTES
             }
+            _ => false,
+        })
+        .collect();
+    let pending: usize = eligible
+        .iter()
+        .map(|&i| if let AgentMessage::ToolResult { content, .. } = &messages[i] { result_bytes(content) } else { 0 })
+        .sum();
+    if eligible.is_empty() || (!force && pending < MASK_BATCH_BYTES) {
+        return false;
+    }
+    for i in eligible {
+        if let AgentMessage::ToolResult { tool_name, content, arguments, .. } = &mut messages[i] {
+            let bytes = result_bytes(content);
+            let note = mask_note(tool_name, arguments.as_ref(), bytes);
+            // Images in the result are left to `evict_old_images`.
+            content.retain(|c| !matches!(c, MessageContent::Text { .. }));
+            content.insert(0, MessageContent::Text { text: note });
         }
     }
-    changed
+    true
 }
 
-fn trim_middle(text: &str) -> String {
-    trim_middle_bytes(text, TRIM_HEAD_CHARS, TRIM_TAIL_CHARS)
-}
 
 /// Keep `head_bytes` from the start and `tail_bytes` from the end, dropping
 /// the middle. Parametrized (rather than only the fixed-budget `trim_middle`
@@ -146,6 +233,21 @@ fn char_boundary_suffix(text: &str, max_bytes: usize) -> &str {
 /// Same in-place-swap pattern as `prune_aging_tool_results` — preserves
 /// message/role structure, never removes a message. Returns how many images
 /// were evicted.
+/// Like `evict_old_images`, but only once `slack` more images than
+/// `keep_last_n` have built up, and then down to `keep_last_n` in one go:
+/// evicting one image per step rewrote an old message (and so the prompt
+/// cache from it on) on every step.
+pub fn evict_old_images_batched(messages: &mut [AgentMessage], keep_last_n: usize, slack: usize) -> usize {
+    let total: usize = messages
+        .iter_mut()
+        .map(|m| content_blocks_mut(m).into_iter().filter(|b| matches!(b, MessageContent::Image { .. })).count())
+        .sum();
+    if total <= keep_last_n + slack {
+        return 0;
+    }
+    evict_old_images(messages, keep_last_n)
+}
+
 pub fn evict_old_images(messages: &mut [AgentMessage], keep_last_n: usize) -> usize {
     // Walk newest-to-oldest (messages in reverse, and each message's content
     // blocks in reverse) so the images we KEEP are always the most recent
@@ -182,24 +284,7 @@ fn content_blocks_mut(msg: &mut AgentMessage) -> Vec<&mut MessageContent> {
 mod tests {
     use super::*;
 
-    fn tool_result(text: &str) -> AgentMessage {
-        AgentMessage::ToolResult {
-            tool_call_id: "call-1".into(),
-            tool_name: "read".into(),
-            content: vec![MessageContent::Text { text: text.to_string() }],
-            details: None,
-            is_error: None,
-            timestamp: 0,
-            arguments: None,
-        }
-    }
 
-    fn user(text: &str) -> AgentMessage {
-        AgentMessage::User {
-            content: vec![MessageContent::Text { text: text.to_string() }],
-            timestamp: 0,
-        }
-    }
 
     fn user_with_image() -> AgentMessage {
         AgentMessage::User {
@@ -211,70 +296,78 @@ mod tests {
         }
     }
 
-    #[test]
-    fn trims_large_old_tool_result() {
-        let big = "x".repeat(10_000);
-        let mut messages = vec![tool_result(&big)];
-        for _ in 0..TOOL_RESULT_KEEP_TAIL_MESSAGES {
-            messages.push(user("hi"));
+    fn result_named(tool: &str, text: &str, args: serde_json::Value) -> AgentMessage {
+        AgentMessage::ToolResult {
+            tool_call_id: "c".into(),
+            tool_name: tool.into(),
+            content: vec![MessageContent::Text { text: text.to_string() }],
+            details: None,
+            is_error: None,
+            timestamp: 0,
+            arguments: Some(args),
         }
-        let changed = prune_aging_tool_results(&mut messages);
-        assert!(changed);
-        if let AgentMessage::ToolResult { content, .. } = &messages[0] {
-            if let MessageContent::Text { text } = &content[0] {
-                assert!(text.len() < big.len());
-                assert!(text.contains("trimmed"));
-            } else {
-                panic!("expected text block");
-            }
-        } else {
-            panic!("expected tool result");
+    }
+
+    fn text_of(m: &AgentMessage) -> String {
+        match m {
+            AgentMessage::ToolResult { content, .. } => content
+                .iter()
+                .filter_map(|c| if let MessageContent::Text { text } = c { Some(text.clone()) } else { None })
+                .collect(),
+            _ => String::new(),
         }
     }
 
     #[test]
-    fn leaves_recent_tool_results_untouched() {
-        let big = "x".repeat(10_000);
-        let mut messages = vec![tool_result(&big)];
-        let changed = prune_aging_tool_results(&mut messages);
-        assert!(!changed, "the only message is within the keep-tail window, must not be trimmed");
+    fn masks_old_results_in_one_batch_and_keeps_the_newest() {
+        let big = "x".repeat(20_000);
+        let mut messages: Vec<AgentMessage> = (0..KEEP_RECENT_TOOL_RESULTS + 4)
+            .map(|i| result_named("read", &big, serde_json::json!({ "path": format!("src/f{i}.rs") })))
+            .collect();
+        assert!(prune_aging_tool_results(&mut messages));
+        for m in &messages[..4] {
+            let t = text_of(m);
+            assert!(t.starts_with(MASK_MARKER) && t.contains("read src/f") && t.contains("Run it again"), "{t}");
+        }
+        for m in &messages[4..] {
+            assert_eq!(text_of(m).len(), big.len(), "the newest results stay in full");
+        }
+        assert!(!prune_aging_tool_results(&mut messages), "masking is idempotent");
     }
 
     #[test]
-    fn leaves_small_old_tool_results_untouched() {
-        let small = "short output".to_string();
-        let mut messages = vec![tool_result(&small)];
-        for _ in 0..TOOL_RESULT_KEEP_TAIL_MESSAGES {
-            messages.push(user("hi"));
-        }
-        let changed = prune_aging_tool_results(&mut messages);
-        assert!(!changed);
+    fn waits_until_enough_has_built_up() {
+        let mid = "x".repeat(5_000);
+        let mut messages: Vec<AgentMessage> =
+            (0..KEEP_RECENT_TOOL_RESULTS + 2).map(|_| result_named("bash", &mid, serde_json::json!({ "command": "ls" }))).collect();
+        assert!(!prune_aging_tool_results(&mut messages), "10 KB pending is under the batch size");
+        assert_eq!(text_of(&messages[0]).len(), mid.len());
     }
 
     #[test]
-    fn is_idempotent() {
-        let big = "x".repeat(10_000);
-        let mut messages = vec![tool_result(&big)];
-        for _ in 0..TOOL_RESULT_KEEP_TAIL_MESSAGES {
-            messages.push(user("hi"));
+    fn never_masks_small_or_protected_results() {
+        let big = "x".repeat(90_000);
+        let mut messages = vec![
+            result_named("todo_write", &big, serde_json::json!({})),
+            result_named("edit", "ok", serde_json::json!({})),
+            result_named("read", &big, serde_json::json!({ "path": "a.rs" })),
+        ];
+        for _ in 0..KEEP_RECENT_TOOL_RESULTS {
+            messages.push(result_named("read", "small", serde_json::json!({})));
         }
-        prune_aging_tool_results(&mut messages);
-        let after_first = messages.clone();
-        let changed_again = prune_aging_tool_results(&mut messages);
-        assert!(!changed_again, "already-trimmed text should be under the threshold");
-        assert_eq!(messages, after_first);
+        assert!(prune_aging_tool_results(&mut messages));
+        assert_eq!(text_of(&messages[0]).len(), big.len(), "the plan is never masked");
+        assert_eq!(text_of(&messages[1]), "ok", "small results stay");
+        assert!(text_of(&messages[2]).starts_with(MASK_MARKER));
+        assert_eq!(messages.len(), 3 + KEEP_RECENT_TOOL_RESULTS, "no message is removed");
     }
 
     #[test]
-    fn never_removes_a_tool_result_message() {
-        let big = "x".repeat(10_000);
-        let mut messages = vec![tool_result(&big)];
-        for _ in 0..TOOL_RESULT_KEEP_TAIL_MESSAGES {
-            messages.push(user("hi"));
-        }
-        let before_len = messages.len();
-        prune_aging_tool_results(&mut messages);
-        assert_eq!(messages.len(), before_len);
+    fn images_are_evicted_in_batches() {
+        let mut messages: Vec<AgentMessage> = (0..4).map(|_| user_with_image()).collect();
+        assert_eq!(evict_old_images_batched(&mut messages, 2, 3), 0, "4 images is within 2 + slack 3");
+        messages.extend((0..2).map(|_| user_with_image()));
+        assert_eq!(evict_old_images_batched(&mut messages, 2, 3), 4, "6 > 5: back down to the newest 2");
     }
 
     #[test]
@@ -305,5 +398,40 @@ mod tests {
                 assert!(content.iter().any(|c| matches!(c, MessageContent::Image { .. })));
             }
         }
+    }
+
+    /// What a prompt cache sees: the serialized history. A step "keeps the
+    /// cache" when its request starts with the previous request's messages,
+    /// byte for byte. Simulates a long run with tool results of mixed sizes
+    /// and screenshots, shaping the history every step as the loop does.
+    #[test]
+    fn history_shaping_keeps_the_cached_prefix_on_most_steps() {
+        let mut messages: Vec<AgentMessage> = vec![AgentMessage::User { content: vec![MessageContent::Text { text: "start".into() }], timestamp: 0 }];
+        let mut previous: Vec<String> = Vec::new();
+        let (mut kept, mut steps) = (0usize, 0usize);
+        for step in 0..40 {
+            let size = [300, 2_000, 9_000, 25_000][step % 4];
+            messages.push(AgentMessage::Assistant {
+                content: vec![MessageContent::Text { text: format!("step {step}") }],
+                stop_reason: "toolUse".into(),
+                error_message: None,
+                timestamp: 0,
+                usage: None,
+            });
+            messages.push(result_named("bash", &"y".repeat(size), serde_json::json!({ "command": format!("cmd {step}") })));
+            if step % 3 == 0 {
+                messages.push(user_with_image());
+            }
+            shape_history(&mut messages, 2);
+            let now: Vec<String> = messages.iter().map(|m| serde_json::to_string(m).unwrap()).collect();
+            if !previous.is_empty() {
+                steps += 1;
+                if now.len() >= previous.len() && now[..previous.len()] == previous[..] {
+                    kept += 1;
+                }
+            }
+            previous = now;
+        }
+        assert!(kept * 10 >= steps * 9, "the prefix survived only {kept} of {steps} steps");
     }
 }

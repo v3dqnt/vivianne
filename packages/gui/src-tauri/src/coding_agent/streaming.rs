@@ -74,7 +74,11 @@ fn send_batch(tool: &str, lines: Vec<StreamLine>) {
 
 // ── shared streaming executor ───────────────────────────────────────────────
 
-const MAX_STREAM_BYTES: usize = 256_000;
+/// What a command's output may put in the conversation: 8 KB of head and
+/// 24 KB of tail (errors are usually at the end), the rest spilled to a
+/// file the agent can grep. It was 256 KB (about 64k tokens), and a single
+/// noisy build log then rode along in every request for many steps.
+const MAX_STREAM_BYTES: usize = 32_000;
 /// Trigger a live head/tail trim once a single stream's live accumulator
 /// grows this far past `MAX_STREAM_BYTES` — without it, `all_stdout`/
 /// `all_stderr` grew unbounded for as long as the process kept running (the
@@ -84,7 +88,10 @@ const MAX_STREAM_BYTES: usize = 256_000;
 /// trim uses, just applied periodically during the run instead of once at
 /// the end — same guarantees (head and tail preserved, trimmed middle
 /// recoverable from the spill file), just capped as it goes.
-const STREAM_LIVE_CAP_BYTES: usize = MAX_STREAM_BYTES * 4;
+/// Kept large and independent of `MAX_STREAM_BYTES`: each live trim spills
+/// what it drops, and fewer live trims means the final spill file holds
+/// more of the run.
+const STREAM_LIVE_CAP_BYTES: usize = 1_024_000;
 /// Flush the pending-line buffer at least this often, so output still reads
 /// as "live" even during a quiet lull between bursts.
 const BATCH_INTERVAL_MS: u64 = 40;

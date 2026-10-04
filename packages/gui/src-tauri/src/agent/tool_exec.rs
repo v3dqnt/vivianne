@@ -2296,7 +2296,9 @@ async fn execute_update_goal_tool(args: &serde_json::Value, state: &AgentState) 
 /// Ceiling on what one `terminal_read` puts into context. Matches
 /// `streaming::MAX_STREAM_BYTES` — the same output through a different pipe
 /// shouldn't get a different budget.
-const TERMINAL_READ_BUDGET_BYTES: usize = 256_000;
+/// Same budget as a command's output (`streaming::MAX_STREAM_BYTES`), with
+/// the rest spilled to a file.
+const TERMINAL_READ_BUDGET_BYTES: usize = 32_000;
 
 /// Model-facing surface over the same `TerminalRegistry` the GUI's terminal
 /// tabs already use (`packages/gui-next` xterm.js panel) — a session the

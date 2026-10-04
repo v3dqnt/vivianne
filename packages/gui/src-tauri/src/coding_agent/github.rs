@@ -452,7 +452,7 @@ async fn pr_diff(gh: &Gh, repo: &str, args: &Value) -> Result<String, String> {
             out.push('\n');
         }
     }
-    let max = arg_num(args, "max_chars").unwrap_or(40_000).clamp(2_000, 200_000) as usize;
+    let max = arg_num(args, "max_chars").unwrap_or(16_000).clamp(2_000, 200_000) as usize;
     Ok(clip(out.trim_end(), max))
 }
 

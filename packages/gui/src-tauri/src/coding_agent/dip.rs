@@ -514,6 +514,23 @@ pub(crate) async fn execute_dip_interact_tool(app: &tauri::AppHandle, args: &ser
 
 /// `read_text`: an element's full text — a document, a log, a field — or the
 /// window's when no id is given.
+/// The text of whatever has keyboard focus (a document or a field), for
+/// checking that typing landed. `None` when it can't be read.
+pub(crate) async fn focused_text() -> Option<String> {
+    on_worker(|ctx| -> Option<String> {
+        let el = ctx.automation.get_focused_element().ok()?;
+        if let Ok(p) = el.get_pattern::<UITextPattern>() {
+            if let Ok(t) = p.get_document_range().and_then(|r| r.get_text(200_000)) {
+                return Some(t);
+            }
+        }
+        el.get_pattern::<UIValuePattern>().ok().and_then(|p| p.get_value().ok())
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 pub(crate) async fn execute_dip_read_text_tool(args: &serde_json::Value) -> ToolResult {
     let id = args.get("id").and_then(|v| v.as_u64()).map(|v| v as usize);
     let result = on_worker(move |ctx| -> Result<String, String> {

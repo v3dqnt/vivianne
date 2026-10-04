@@ -458,6 +458,10 @@ pub async fn run_agent_loop_continue(
     const TODO_NUDGE_THRESHOLD: usize = 8;
 
     let mut truncated_resumes: usize = 0;
+    // What this run changed and whether it was looked at since, and the
+    // todo items it left open: checked once before the run ends.
+    let mut verification = crate::agent::verification::Verification::default();
+    let mut open_todos: Vec<String> = Vec::new();
 
     // ── Staying alive ──────────────────────────────────────────────────
     // Consecutive waits for the current failure streak (reset by any
@@ -608,13 +612,16 @@ pub async fn run_agent_loop_continue(
         // finally fires. Also catches oversized history on turn one of a
         // loaded/forked session. Never syncs back to `state`/disk — the
         // untrimmed original was already persisted when it was created.
-        crate::coding_agent::context_shaping::prune_aging_tool_results(&mut context.messages);
+        //
+        // Masked in batches, aligned with image eviction below
+        // (`shape_history`): every change to an old message costs a cache
+        // rewrite, so they happen together and rarely.
         // Same rationale, for images: inline base64 attachments/screenshots
         // are large (33% base64 overhead) and the model can't "re-derive" an
         // evicted one regardless, so keeping only the most recent few is a
         // clean token-budget win. The replacement text makes the eviction
         // visible to the model, so it won't hallucinate still seeing it.
-        crate::coding_agent::context_shaping::evict_old_images(&mut context.messages, state.image_keep_last_n().await as usize);
+        crate::coding_agent::context_shaping::shape_history(&mut context.messages, state.image_keep_last_n().await as usize);
 
         // Convert context messages to AI messages
         drop_orphaned_tool_results(&mut context.messages);
@@ -914,6 +921,19 @@ pub async fn run_agent_loop_continue(
             Vec::new()
         };
 
+        for result in &tool_results {
+            if let AgentMessage::ToolResult { tool_name, arguments, is_error, content, .. } = result {
+                let text: String = content
+                    .iter()
+                    .filter_map(|c| if let MessageContent::Text { text } = c { Some(text.as_str()) } else { None })
+                    .collect();
+                verification.observe(tool_name, arguments.as_ref(), *is_error == Some(true), &text);
+            }
+        }
+        if let Some(todos) = latest_todos(&tool_results) {
+            open_todos = todos.iter().filter(|(_, status, _)| status != "completed").map(|(t, _, _)| t.clone()).collect();
+        }
+
         // Add tool results to context
         for result in &tool_results {
             context.messages.push(result.clone());
@@ -1046,6 +1066,16 @@ pub async fn run_agent_loop_continue(
         next = drain_queue(&queues.follow_up_queue, &queues.follow_up_mode).await;
     }
     if next.is_empty() {
+        // Done means checked: a run that changed things nobody has looked at
+        // since, or left todo items open, is asked once to check them or
+        // say plainly that they're unchecked (`agent::verification`).
+        if !abort_flag.load(Ordering::SeqCst) && ended_on.is_none() && !state.plan_mode().await {
+            if let Some(text) = verification.reminder(&open_todos) {
+                context.messages.push(system_reminder(&text));
+                has_more_tool_calls = true;
+                continue 'outer;
+            }
+        }
         // A long task does not end just because the model stopped talking:
         // it ends when its goal is done, blocked, or out of budget.
         if let Some(l) = ledger.as_mut() {
@@ -1750,6 +1780,22 @@ async fn call_provider_stream_and_await(
     // once per retry × once per pool candidate × once per fallback).
     let context_clone = (*context).clone();
     let thinking_level_clone = thinking_level.clone();
+    let thinking_level_name = match thinking_level {
+        ThinkingLevel::Off => "off",
+        ThinkingLevel::Minimal => "minimal",
+        ThinkingLevel::Low => "low",
+        ThinkingLevel::Medium => "medium",
+        ThinkingLevel::High => "high",
+        ThinkingLevel::XHigh => "xhigh",
+    }
+    .to_string();
+    // One key per conversation (the source tag names it), short enough for
+    // OpenAI's limit.
+    let cache_key = {
+        use sha2::Digest;
+        let h = sha2::Sha256::digest(source_tag.as_bytes());
+        Some(format!("viv-{}", h[..12].iter().map(|b| format!("{b:02x}")).collect::<String>()))
+    };
     let base_url_clone = base_url.clone();
 
     tokio::spawn(async move {
@@ -1782,6 +1828,8 @@ async fn call_provider_stream_and_await(
                     thinking_budget_tokens,
                     extra_headers: None,
                     raw_body: None,
+                    thinking_level: thinking_level_name.clone(),
+                    cache_key: cache_key.clone(),
                 };
                 let _ = app_clone.emit("provider_stream_request", req);
             }
@@ -1837,6 +1885,8 @@ async fn call_provider_stream_and_await(
                     thinking_budget_tokens: 0,
                     extra_headers: None,
                     raw_body: None,
+                    thinking_level: thinking_level_name.clone(),
+                    cache_key: cache_key.clone(),
                 };
                 let _ = app_clone.emit("provider_stream_request", req);
             }
@@ -1857,6 +1907,8 @@ async fn call_provider_stream_and_await(
                     thinking_budget_tokens: 0,
                     extra_headers: None,
                     raw_body: None,
+                    thinking_level: thinking_level_name.clone(),
+                    cache_key: cache_key.clone(),
                 };
                 let _ = app_clone.emit("provider_stream_request", req);
             }
@@ -1878,6 +1930,8 @@ async fn call_provider_stream_and_await(
                     thinking_budget_tokens: 0,
                     extra_headers: None,
                     raw_body: None,
+                    thinking_level: thinking_level_name.clone(),
+                    cache_key: cache_key.clone(),
                 };
                 let _ = app_clone.emit("provider_stream_request", req);
             }
@@ -1898,6 +1952,8 @@ async fn call_provider_stream_and_await(
                     thinking_budget_tokens: 0,
                     extra_headers: None,
                     raw_body: None,
+                    thinking_level: thinking_level_name.clone(),
+                    cache_key: cache_key.clone(),
                 };
                 let _ = app_clone.emit("provider_stream_request", req);
             }
@@ -1987,6 +2043,8 @@ async fn call_provider_stream_and_await(
                     thinking_budget_tokens: 0,
                     extra_headers: Some(req_headers),
                     raw_body: Some(raw_body),
+                    thinking_level: thinking_level_name.clone(),
+                    cache_key: cache_key.clone(),
                 };
                 let _ = app_clone.emit("provider_stream_request", req);
             }
@@ -2029,6 +2087,8 @@ async fn call_provider_stream_and_await(
                     thinking_budget_tokens: 0,
                     extra_headers: None,
                     raw_body: None,
+                    thinking_level: thinking_level_name.clone(),
+                    cache_key: cache_key.clone(),
                 };
                 let _ = app_clone.emit("provider_stream_request", req);
             }

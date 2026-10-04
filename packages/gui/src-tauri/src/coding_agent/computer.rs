@@ -47,14 +47,54 @@ pub(crate) async fn execute_computer_tool(args: &serde_json::Value, app: &tauri:
         "zoom" => run_blocking(zoom_for(args.clone())).await,
         "wait" => wait(args).await,
         _ => {
-            let args = args.clone();
+            let owned = args.clone();
             let app = app.clone();
-            match tokio::task::spawn_blocking(move || windows_pointer_action(&args, &app)).await {
+            let result = match tokio::task::spawn_blocking(move || windows_pointer_action(&owned, &app)).await {
                 Ok(r) => r,
                 Err(e) => err(format!("input failed: {e}")),
+            };
+            if action == "type" && !result.is_error {
+                let typed = args.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+                return verify_typed(result, typed).await;
             }
+            result
         }
     }
+}
+
+/// Sent is not landed: an app can drop or mangle input. Read the focused
+/// field back and say whether the text is there, so "done" rests on what
+/// the field holds rather than on what was sent. Costs no model step.
+#[cfg(target_os = "windows")]
+async fn verify_typed(mut result: ToolResult, typed: &str) -> ToolResult {
+    let now = super::dip::focused_text().await;
+    result.content.push_str(&match now {
+        Some(field) => match typed_landed(typed, &field) {
+            true => format!(" Read back: the field contains it {VERIFIED_MARK}."),
+            false => format!(
+                " Read back: MISMATCH — the focused field doesn't contain what was typed (it ends: {:?}). Fix it before saying it's done.",
+                field.chars().rev().take(80).collect::<String>().chars().rev().collect::<String>()
+            ),
+        },
+        None => " Couldn't read the field back: check it landed with read_text before saying it's done.".to_string(),
+    });
+    result
+}
+
+/// Marks a result as checked, for the end-of-run check in the agent loop.
+pub(crate) const VERIFIED_MARK: &str = "[verified]";
+
+/// Whether `typed` shows up in `field`: compared without line-ending and
+/// whitespace differences, on its last 200 characters (a long text is
+/// pasted, and what matters is that the end arrived).
+pub(crate) fn typed_landed(typed: &str, field: &str) -> bool {
+    let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let t = norm(typed);
+    if t.is_empty() {
+        return true;
+    }
+    let tail: String = t.chars().rev().take(200).collect::<String>().chars().rev().collect();
+    norm(field).contains(&tail)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -418,13 +458,9 @@ fn windows_pointer_action(args: &serde_json::Value, app: &tauri::AppHandle) -> T
             let t = text.ok_or("'text' is required for type")?;
             keyboard_ready()?;
             let (n, pasted) = win::type_text(t)?;
-            // Sent is not landed: an app can drop or mangle input. Say so,
-            // so the model checks before telling the user it's done.
-            Ok(format!(
-                "{} {n} character(s).{} Before saying it's done, check it landed with read_text (no id reads the window's document).",
-                if pasted { "Pasted" } else { "Typed" },
-                front_note()
-            ))
+            // Whether it landed is checked by the caller (`verify_typed`),
+            // reading the focused field back.
+            Ok(format!("{} {n} character(s).{}", if pasted { "Pasted" } else { "Typed" }, front_note()))
         }
         "key" => {
             let combo = text.ok_or("'text' is required for key — e.g. \"enter\", \"ctrl+s\", \"alt+f4\"")?;

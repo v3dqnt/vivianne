@@ -160,12 +160,14 @@ pub(crate) async fn assemble_capability_blocks(
     // a goal set several turns ago (or before a compaction summarized away
     // the tool call that set it) needs to still be visible for get_goal/
     // update_goal to be worth calling at all.
-    if let Some(goal) = state.goal().await {
-        prompt = format!(
-            "{prompt}\n\n<vivianne_goal phase=\"{:?}\">\n{}\n</vivianne_goal>",
-            goal.phase, goal.objective
-        );
-    }
+    //
+    // Built here, appended last (see the end of this function): it changes
+    // when the goal does, and a block that changes invalidates every
+    // provider's prompt cache for everything after it.
+    let goal_block = state
+        .goal()
+        .await
+        .map(|goal| format!("\n\n<vivianne_goal phase=\"{:?}\">\n{}\n</vivianne_goal>", goal.phase, goal.objective));
 
     // Skills are strictly opt-in: only what the user explicitly `@mentions`
     // is loaded, and nothing touches disk when the message has no mention at
@@ -181,15 +183,18 @@ pub(crate) async fn assemble_capability_blocks(
     // reason a sent message took ~a minute to appear, why small-context
     // models (gpt-4 at 8k) failed outright, and why tool calling degraded:
     // the real tools sat behind a wall of skill descriptions.
+    //
+    // Also appended last: it changes with every message that mentions one.
+    let mut skills_block: Option<String> = None;
     if mention_scan_text.contains('@') {
         let all_skills = crate::agent::tool_exec::load_all_configured_skills().await;
         let mentioned = crate::coding_agent::skills::skills_mentioned_in(mention_scan_text, &all_skills);
         if !mentioned.is_empty() {
             let mentioned_owned: Vec<_> = mentioned.into_iter().cloned().collect();
             let block = crate::coding_agent::skills::format_skills_for_prompt(&mentioned_owned);
-            prompt = format!(
-                "{prompt}\n\n<vivianne_mentioned_skills>\nThe user @mentioned these skills directly — use their full instructions below for this turn.{block}</vivianne_mentioned_skills>"
-            );
+            skills_block = Some(format!(
+                "\n\n<vivianne_mentioned_skills>\nThe user @mentioned these skills directly — use their full instructions below for this turn.{block}</vivianne_mentioned_skills>"
+            ));
         }
     }
 
@@ -232,6 +237,16 @@ pub(crate) async fn assemble_capability_blocks(
         if let Some(core) = crate::agent::memory_evolve::core_block(&root).await {
             prompt = format!("{prompt}\n\n{core}");
         }
+    }
+
+    // The blocks that change within a conversation go last, so the stable
+    // prefix before them stays cached: directive, mode, capabilities,
+    // workspace, project instructions, charter and core memory first.
+    if let Some(goal) = goal_block {
+        prompt.push_str(&goal);
+    }
+    if let Some(skills) = skills_block {
+        prompt.push_str(&skills);
     }
     prompt
 }

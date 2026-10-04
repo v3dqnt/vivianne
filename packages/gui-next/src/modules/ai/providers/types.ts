@@ -105,6 +105,10 @@ export interface ProviderStreamRequest {
   extraHeaders: Record<string, string> | null
   /** Pre-serialized request body to send byte-for-byte as-is — required whenever `extraHeaders` includes a signature computed over the body. */
   rawBody: string | null
+  /** The chosen thinking level: off, minimal, low, medium, high, xhigh. */
+  thinkingLevel?: string
+  /** Stable per conversation, for providers that route by a cache key. */
+  cacheKey?: string | null
 }
 
 export function emptyUsage(): Usage {

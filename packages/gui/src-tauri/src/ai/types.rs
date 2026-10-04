@@ -250,6 +250,15 @@ pub struct ProviderStreamRequest {
     /// a signature computed over the body bytes (SigV4), since re-serializing
     /// in TS could produce different bytes and invalidate the signature.
     pub raw_body: Option<String>,
+    /// The thinking level as chosen (`off`, `minimal`, `low`, `medium`,
+    /// `high`, `xhigh`), for providers that take an effort setting rather
+    /// than a token budget.
+    #[serde(default)]
+    pub thinking_level: String,
+    /// Stable per conversation: OpenAI routes requests with the same key to
+    /// the same cache, so a long conversation keeps hitting its prefix.
+    #[serde(default)]
+    pub cache_key: Option<String>,
 }
 
 // ── Legacy AiMessage (kept for backward compat) ──────────────────────────────
