@@ -23,6 +23,13 @@ interface MultiplayerStoreState {
   connecting: boolean
   error: string | null
   initialized: boolean
+  /** Partner messages not yet seen in the Multiplayer panel. */
+  unread: number
+  /** When the partner's agent last did something (ms), for "working…". */
+  partnerActiveAt: number
+  /** Whether the Multiplayer panel's chat is on screen (no unread then). */
+  chatOpen: boolean
+  setChatOpen: (open: boolean) => void
   init: () => Promise<void>
   connect: (peerId: string) => Promise<void>
   disconnect: () => Promise<void>
@@ -53,6 +60,11 @@ export const useMultiplayerStore = create<MultiplayerStoreState>((set, get) => (
   connecting: false,
   error: null,
   initialized: false,
+  unread: 0,
+  partnerActiveAt: 0,
+  chatOpen: false,
+
+  setChatOpen: (open) => set(open ? { chatOpen: true, unread: 0 } : { chatOpen: false }),
 
   init: async () => {
     if (get().initialized) return
@@ -64,10 +76,13 @@ export const useMultiplayerStore = create<MultiplayerStoreState>((set, get) => (
     // wired up yet, and could miss an event that lands in that window.
     await on<ConnectionStatus>('multiplayer_status', (status) => set({ status }))
     await on<AgentMessage>('multiplayer_peer_message', (message) => {
-      set((s) => ({ peerMessages: pushBounded(s.peerMessages, message) }))
+      set((s) => ({ peerMessages: pushBounded(s.peerMessages, message), partnerActiveAt: Date.now() }))
     })
     await on<ChatEntry>('multiplayer_chat', (entry) => {
-      set((s) => ({ chatLog: pushBounded(s.chatLog, entry) }))
+      set((s) => ({
+        chatLog: pushBounded(s.chatLog, entry),
+        unread: entry.fromPeer && !(s.chatOpen && document.visibilityState === 'visible') ? s.unread + 1 : s.unread,
+      }))
     })
 
     const [myId, displayName, status, peerMessages, chatLog] = await Promise.all([

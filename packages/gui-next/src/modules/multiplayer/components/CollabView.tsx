@@ -22,7 +22,7 @@ export interface ActivityEntry {
   other: string[]
   commit: string | null
 }
-interface DayUsage {
+export interface DayUsage {
   input: number
   output: number
   cacheRead: number
@@ -31,11 +31,11 @@ interface DayUsage {
   requests: number
   hasUnknownCost: boolean
 }
-interface SyncNote {
+export interface SyncNote {
   at: number
   text: string
 }
-interface CollabData {
+export interface CollabData {
   mine: ActivityEntry[]
   partner: ActivityEntry[]
   myUsage: Record<string, DayUsage>
@@ -45,7 +45,7 @@ interface CollabData {
   pendingMerge: boolean
 }
 
-function today(): string {
+export function today(): string {
   const d = new Date()
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
@@ -58,7 +58,7 @@ interface Totals {
   unknown: boolean
 }
 
-function sum(days: Record<string, DayUsage>, only?: string): Totals {
+export function sum(days: Record<string, DayUsage>, only?: string): Totals {
   const t: Totals = { tokens: 0, cost: 0, requests: 0, unknown: false }
   for (const [day, u] of Object.entries(days)) {
     if (only && day !== only) continue
@@ -70,10 +70,10 @@ function sum(days: Record<string, DayUsage>, only?: string): Totals {
   return t
 }
 
-function tokens(n: number): string {
+export function tokens(n: number): string {
   return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 }
-function money(t: Totals): string {
+export function money(t: Totals): string {
   return `$${t.cost.toFixed(t.cost < 1 ? 3 : 2)}${t.unknown ? '+' : ''}`
 }
 function clock(ms: number): string {
@@ -115,7 +115,7 @@ export function CollabView({ projectId, partnerName }: { projectId: string; part
   )
 }
 
-function UsageBlock({ data, partnerName }: { data: CollabData; partnerName: string }) {
+export function UsageBlock({ data, partnerName }: { data: CollabData; partnerName: string }) {
   const theme = useTheme()
   const [range, setRange] = useState<'today' | 'all'>('today')
   const only = range === 'today' ? today() : undefined

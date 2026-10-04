@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Box, Stack, ButtonBase, Tooltip, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button, Menu, MenuItem, Typography, FormControlLabel, Switch, Divider } from '../../../ui'
-import { AddLinear, SettingsLinear, FolderLinear, Link2Linear, MessageSquareLinear } from '../../../icons'
+import { Box, Stack, ButtonBase, Tooltip, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button, Menu, MenuItem, Typography, Divider } from '../../../ui'
+import { AddLinear, SettingsLinear, FolderLinear, MessageSquareLinear } from '../../../icons'
 import { useSettingsUi } from '../../settings/store/uiStore'
 import { useProjectsStore, projectColor, projectInitial, PROJECT_COLORS, GENERAL_PROJECT_ID, type Project } from '../store/projectsStore'
-import { useMultiplayerStore } from '../../multiplayer/store/multiplayerStore'
-import { call } from '../../../ipc'
 import { isWindows } from '../../../lib/platform'
 import { NewProjectDialog } from './NewProjectDialog'
+import { PairProjectDialog } from '../../multiplayer/components/PairProjectDialog'
 
 export const PROJECT_RAIL_WIDTH = 56
 
@@ -16,36 +15,17 @@ export const PROJECT_RAIL_WIDTH = 56
 function ProjectDialog({ project, open, onClose }: { project: Project | null; open: boolean; onClose: () => void }) {
   const create = useProjectsStore((s) => s.create)
   const update = useProjectsStore((s) => s.update)
-  const createMultiplayer = useProjectsStore((s) => s.createMultiplayer)
-  const myId = useMultiplayerStore((s) => s.myId)
-  const initMultiplayer = useMultiplayerStore((s) => s.init)
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
   const [color, setColor] = useState<string>(Object.keys(PROJECT_COLORS)[0])
   const [busy, setBusy] = useState(false)
-  // Multiplayer projects are set up at creation only — editing an existing
-  // project's pairing/git-remote isn't wired yet, so the toggle is hidden
-  // once a project already exists (renaming/re-coloring still works via the
-  // fields above).
-  const [multiplayer, setMultiplayer] = useState(false)
-  const [peerId, setPeerId] = useState('')
-  // Pair with a second Vivianne on this computer instead of another device.
-  const [testPartner, setTestPartner] = useState(false)
-  const [partnerError, setPartnerError] = useState<string | null>(null)
-  const [gitRemote, setGitRemote] = useState('')
 
   useEffect(() => {
     if (!open) return
     setName(project?.name ?? '')
     setPath(project?.path ?? '')
     setColor(project?.color ?? Object.keys(PROJECT_COLORS)[0])
-    setMultiplayer(false)
-    setTestPartner(false)
-    setPartnerError(null)
-    setPeerId('')
-    setGitRemote('')
-    if (!project) void initMultiplayer()
-  }, [open, project, initMultiplayer])
+  }, [open, project])
 
   const pickFolder = async () => {
     // Same picker the workspace selector uses — the dialog plugin, not a
@@ -58,7 +38,6 @@ function ProjectDialog({ project, open, onClose }: { project: Project | null; op
     }
   }
 
-  const isMultiplayerReady = multiplayer && !!path.trim() && !!peerId.trim()
 
   const submit = async () => {
     if (!name.trim()) return
@@ -66,13 +45,6 @@ function ProjectDialog({ project, open, onClose }: { project: Project | null; op
     try {
       if (project) {
         await update(project.id, name, path || null, color)
-      } else if (multiplayer) {
-        if (!isMultiplayerReady) return
-        await createMultiplayer(name, path.trim(), peerId.trim(), testPartner ? 'Test partner' : null, gitRemote.trim() || null, color)
-        if (testPartner) {
-          // Gives the partner the mirror of this project and opens it.
-          await call('cmd_multiplayer_launch_test_partner', { name: name.trim(), folder: path.trim() })
-        }
       } else {
         await create(name, path || null, color)
       }
@@ -123,87 +95,6 @@ function ProjectDialog({ project, open, onClose }: { project: Project | null; op
             </Stack>
           </Stack>
 
-          {!project && (
-            <>
-              <FormControlLabel
-                control={<Switch size="small" checked={multiplayer} onChange={(e) => setMultiplayer(e.target.checked)} />}
-                label={
-                  <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75 }}>
-                    <Link2Linear size={14} color="currentColor" />
-                    <Typography variant="body2">Multiplayer project</Typography>
-                  </Stack>
-                }
-              />
-              {multiplayer && (
-                <Stack sx={{ gap: 1.5, p: 1.5, borderRadius: 1.5, bgcolor: 'action.hover' }}>
-                  <Typography variant="caption" color="text.secondary">
-                    A folder is required — it becomes a git repo both of you work against. You each paste the other’s
-                    pairing code (yours is below; they see theirs in this same dialog).
-                  </Typography>
-                  <FormControlLabel
-                    control={
-                      <Switch
-                        size="small"
-                        checked={testPartner}
-                        onChange={async (e) => {
-                          const on = e.target.checked
-                          setTestPartner(on)
-                          setPartnerError(null)
-                          if (!on) {
-                            setPeerId('')
-                            return
-                          }
-                          try {
-                            const id = await call<string>('cmd_multiplayer_test_partner_id')
-                            if (id) setPeerId(id)
-                          } catch (err) {
-                            setTestPartner(false)
-                            setPartnerError(err instanceof Error ? err.message : String(err))
-                          }
-                        }}
-                      />
-                    }
-                    label={
-                      <Stack>
-                        <Typography variant="body2">Test with a partner on this computer</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          No second device? A second Vivianne opens here with its own data, already paired to this project.
-                        </Typography>
-                      </Stack>
-                    }
-                    sx={{ alignItems: 'flex-start', '& .ui-Switch': { mt: 0.25 } }}
-                  />
-                  {partnerError && (
-                    <Typography variant="caption" color="error.main">
-                      {partnerError}
-                    </Typography>
-                  )}
-                  <TextField
-                    size="small"
-                    label={testPartner ? "Test partner's pairing code" : "Your pair's pairing code"}
-                    value={peerId}
-                    onChange={(e) => setPeerId(e.target.value)}
-                    disabled={testPartner}
-                    fullWidth
-                    slotProps={{ input: { sx: { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem' } } }}
-                  />
-                  <TextField
-                    size="small"
-                    label="Git remote (optional)"
-                    placeholder="https://github.com/you/project.git"
-                    value={gitRemote}
-                    onChange={(e) => setGitRemote(e.target.value)}
-                    fullWidth
-                  />
-                  {myId && (
-                    <Typography variant="caption" color="text.secondary">
-                      Your own pairing code (share it with them): <code>{myId}</code>
-                    </Typography>
-                  )}
-                </Stack>
-              )}
-            </>
-          )}
         </Stack>
       </DialogContent>
       <DialogActions>
@@ -214,7 +105,7 @@ function ProjectDialog({ project, open, onClose }: { project: Project | null; op
           variant="contained"
           disableElevation
           onClick={() => void submit()}
-          disabled={busy || !name.trim() || (!project && multiplayer && !isMultiplayerReady)}
+          disabled={busy || !name.trim()}
         >
           {project ? 'Save' : 'Create'}
         </Button>
@@ -233,6 +124,7 @@ export function ProjectRail() {
   const refresh = useProjectsStore((s) => s.refresh)
   const openSettings = useSettingsUi((s) => s.openSettings)
   const [dialog, setDialog] = useState<{ open: boolean; project: Project | null }>({ open: false, project: null })
+  const [pairing, setPairing] = useState(false)
   const [menu, setMenu] = useState<{ anchor: HTMLElement; project: Project } | null>(null)
   // New projects start with onboarding. The plain dialog remains for editing
   // a project and for multiplayer setup, which onboarding doesn't cover.
@@ -353,9 +245,10 @@ export function ProjectRail() {
         onClose={() => setOnboarding(false)}
         onMultiplayer={() => {
           setOnboarding(false)
-          setDialog({ open: true, project: null })
+          setPairing(true)
         }}
       />
+      <PairProjectDialog open={pairing} onClose={() => setPairing(false)} />
     </Stack>
   )
 }

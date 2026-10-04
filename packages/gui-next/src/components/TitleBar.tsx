@@ -7,6 +7,7 @@ import { useSidebarStore } from '../modules/sessions/store/sidebarStore'
 import { PRESET_LABELS, ZONE_LABELS, applyPreset, resetLayout, toggleZone, useWorkspace, type Preset, type Zone } from '../modules/workspace/layout'
 import { usePlaybookStore } from '../modules/settings/store/playbookStore'
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
+import { PairChip } from '../modules/multiplayer/components/PairChip'
 
 const TRAFFIC_LIGHT_SIZE = 12
 
@@ -45,6 +46,7 @@ function TitleBarActions() {
 
   return (
     <Stack direction="row" sx={{ alignItems: 'center', gap: 0.25, flexShrink: 0, pr: 0.5, zIndex: 1 }}>
+      <PairChip />
       <Tooltip title={`Open project folder${noFolderHint}`}>
         <span>
           <IconButton size="small" disabled={!hasFolder} onClick={(e) => setOpenAnchor(e.currentTarget)} sx={iconSx(false)}>

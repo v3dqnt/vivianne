@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Stack, Typography, TextField, Button, IconButton, CircularProgress, Divider, Chip, Tooltip } from '../../../ui'
+import { Stack, Typography, TextField, Button, CircularProgress, Divider, Chip } from '../../../ui'
 import { CopyLinear, Link2Linear, CloseCircleLinear } from '../../../icons'
 import { useMultiplayerStore } from '../store/multiplayerStore'
+import { inviteMessage, parseInvite } from '../lib/invite'
 
 function StatusChip() {
   const status = useMultiplayerStore((s) => s.status)
@@ -19,34 +20,41 @@ function StatusChip() {
 
 export function MyCode() {
   const myId = useMultiplayerStore((s) => s.myId)
+  const displayName = useMultiplayerStore((s) => s.displayName)
+  const setDisplayName = useMultiplayerStore((s) => s.setDisplayName)
+  const [name, setName] = useState(displayName ?? '')
   const [copied, setCopied] = useState(false)
+  useEffect(() => setName(displayName ?? ''), [displayName])
   if (!myId) return null
   return (
     <Stack sx={{ gap: 1 }}>
       <Typography variant="caption" sx={{ fontWeight: 600 }}>
-        Your pairing code
+        Your invite
       </Typography>
-      <Stack direction="row" sx={{ gap: 1 }}>
+      <Stack direction="row" sx={{ gap: 1, alignItems: 'center' }}>
         <TextField
           size="small"
           fullWidth
-          value={myId}
-          slotProps={{ input: { readOnly: true, sx: { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem' } } }}
+          label="Your name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={() => name.trim() !== (displayName ?? '') && void setDisplayName(name)}
         />
-        <Tooltip title={copied ? 'Copied' : 'Copy'}>
-          <IconButton
-            onClick={() => {
-              void navigator.clipboard.writeText(myId)
-              setCopied(true)
-              setTimeout(() => setCopied(false), 1500)
-            }}
-          >
-            <CopyLinear size={16} color="currentColor" />
-          </IconButton>
-        </Tooltip>
+        <Button
+          variant="outlined"
+          startIcon={<CopyLinear size={14} color="currentColor" />}
+          onClick={() => {
+            void navigator.clipboard.writeText(inviteMessage(myId, name))
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+          }}
+          sx={{ flexShrink: 0 }}
+        >
+          {copied ? 'Copied' : 'Copy invite'}
+        </Button>
       </Stack>
       <Typography variant="caption" color="text.secondary">
-        Share this with whoever you want to pair with — they paste it below on their end.
+        Send it to whoever you want to work with. Your pairing code: <code style={{ wordBreak: 'break-all' }}>{myId}</code>
       </Typography>
     </Stack>
   )
@@ -59,8 +67,9 @@ function ConnectForm() {
   const [peerId, setPeerId] = useState('')
 
   const submit = () => {
-    if (!peerId.trim()) return
-    void connect(peerId.trim())
+    const invite = parseInvite(peerId)
+    if (!invite) return
+    void connect(invite.id)
   }
 
   return (
@@ -72,7 +81,7 @@ function ConnectForm() {
         <TextField
           size="small"
           fullWidth
-          placeholder="Paste their pairing code"
+          placeholder="Paste their invite or pairing code"
           value={peerId}
           onChange={(e) => setPeerId(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && submit()}
