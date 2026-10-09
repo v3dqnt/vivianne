@@ -99,12 +99,11 @@ fn normalize_chord(s: &str) -> String {
     s.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_lowercase()
 }
 
+/// The executable's file name, lowercased. Split on both separators: `Path`
+/// only knows `\` on Windows, so on macOS a `C:\…\powershell.exe` would keep
+/// its whole path and slip past the shell check.
 fn file_stem_lower(command: &str) -> String {
-    std::path::Path::new(command)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or(command)
-        .to_ascii_lowercase()
+    command.rsplit(['/', '\\']).next().unwrap_or(command).to_ascii_lowercase()
 }
 
 /// Classify one tool call from its arguments alone. Pure, fast, always works.

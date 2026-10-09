@@ -75,9 +75,11 @@ pub struct ApplyReport {
     pub state: SuperchargeState,
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 const HIGH_PERFORMANCE: &str = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
 
 /// Never offered: Windows' shell and session processes.
+#[cfg_attr(not(windows), allow(dead_code))]
 const SYSTEM: &[&str] = &[
     "explorer.exe", "dwm.exe", "csrss.exe", "winlogon.exe", "sihost.exe", "ctfmon.exe", "conhost.exe",
     "applicationframehost.exe", "shellexperiencehost.exe", "startmenuexperiencehost.exe", "searchhost.exe",
