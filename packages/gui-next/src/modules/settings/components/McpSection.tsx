@@ -28,7 +28,9 @@ function ServerRow({ server, toolCount }: { server: McpServerConfig; toolCount: 
         <Typography variant="caption" color="text.secondary" noWrap>
           {server.transport.kind === 'http'
             ? server.transport.url
-            : `${server.transport.command} ${server.transport.args.join(' ')}`}
+            : server.transport.kind === 'stdio'
+              ? `${server.transport.command} ${server.transport.args.join(' ')}`
+              : 'Built in'}
         </Typography>
       </Stack>
       <Chip size="small" label={`${toolCount} tool${toolCount === 1 ? '' : 's'}`} sx={{ fontSize: '0.6875rem' }} />
@@ -287,8 +289,9 @@ function AddServerDialog({ open, onClose }: { open: boolean; onClose: () => void
   )
 }
 
-export function McpSection() {
-  const servers = useMcpStore((s) => s.servers)
+/** `hide`: servers managed in Connections, which aren't listed here. */
+export function McpSection({ hide = [] }: { hide?: string[] }) {
+  const servers = useMcpStore((s) => s.servers).filter((s) => !hide.includes(s.name))
   const tools = useMcpStore((s) => s.tools)
   const refresh = useMcpStore((s) => s.refresh)
   const [dialogOpen, setDialogOpen] = useState(false)

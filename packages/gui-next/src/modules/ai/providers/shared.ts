@@ -148,6 +148,15 @@ const PRECONNECT_ORIGINS: Record<string, string> = {
   mistral: 'https://api.mistral.ai',
 }
 
+/** Who is calling, for hosts that attribute requests to apps. OpenRouter
+ * reads these (its app rankings, and the gate on models it serves only to
+ * listed agent apps); every other host ignores unknown headers. Mirrors the
+ * Rust client (`ai/api/openai_completions.rs`). */
+export const APP_HEADERS: Record<string, string> = {
+  'HTTP-Referer': 'https://github.com/v3dqnt/vivianne',
+  'X-Title': 'Vivianne',
+}
+
 let lastPreconnected: string | null = null
 
 /** Fire-and-forget: warms the connection to a provider's origin ahead of the

@@ -1157,6 +1157,7 @@ pub async fn run_agent_loop_continue(
     if let Some(summary) = build_turn_memory_summary(new_messages) {
         let root = crate::agent::commands::memory_root_for(state).await;
         let auth = crate::ai::auth::wait_for_state(app).await;
+        crate::agent::memory::note_model(&root, &state.model().await).await;
         if crate::agent::memory::auto_capture(&root, &summary, Some(auth)).await.is_ok() {
             maybe_trigger_extraction(app, &root, state).await;
         }

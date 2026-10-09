@@ -1,4 +1,7 @@
-//! Helium (or any Chromium browser) driven through the Vivianne extension.
+//! The user's own Chromium browser (Chrome, Edge, Brave, Arc, Opera, Vivaldi,
+//! Helium…) driven through the Vivianne extension. Several can be connected
+//! at once; calls go to the one connected most recently unless the agent
+//! names another.
 //!
 //! The extension (`packages/helium-extension`, also written to
 //! `~/.viv/helium-extension` so an installed app can point to it) connects to
@@ -35,12 +38,19 @@ const EXTENSION_FILES: &[(&str, &str)] = &[
     ("popup.js", include_str!("../../../helium-extension/popup.js")),
 ];
 
+/// One browser with the extension, connected.
+struct Conn {
+    id: u64,
+    out: mpsc::UnboundedSender<String>,
+    browser: Option<String>,
+}
+
 #[derive(Default)]
 struct Bridge {
-    /// Messages to the connected extension.
-    out: Option<mpsc::UnboundedSender<String>>,
-    pending: HashMap<u64, oneshot::Sender<Result<serde_json::Value, String>>>,
-    browser: Option<String>,
+    /// Oldest first; the last is where calls go by default.
+    conns: Vec<Conn>,
+    /// Calls awaiting an answer, with the connection each was sent on.
+    pending: HashMap<u64, (u64, oneshot::Sender<Result<serde_json::Value, String>>)>,
 }
 
 static BRIDGE: std::sync::LazyLock<Mutex<Bridge>> = std::sync::LazyLock::new(|| Mutex::new(Bridge::default()));
@@ -54,7 +64,10 @@ fn bridge() -> std::sync::MutexGuard<'static, Bridge> {
 #[serde(rename_all = "camelCase")]
 pub struct HeliumStatus {
     pub connected: bool,
+    /// The browser calls go to by default.
     pub browser: Option<String>,
+    /// Every connected browser, oldest first.
+    pub browsers: Vec<String>,
     /// Where the extension's files are, for "Load unpacked".
     pub extension_path: Option<String>,
 }
@@ -81,8 +94,9 @@ fn write_extension() {
 pub fn status() -> HeliumStatus {
     let b = bridge();
     HeliumStatus {
-        connected: b.out.is_some(),
-        browser: b.browser.clone(),
+        connected: !b.conns.is_empty(),
+        browser: b.conns.last().map(|c| c.browser.clone().unwrap_or_else(|| "Browser".into())),
+        browsers: b.conns.iter().map(|c| c.browser.clone().unwrap_or_else(|| "Browser".into())).collect(),
         extension_path: extension_dir().map(|d| d.display().to_string()),
     }
 }
@@ -131,8 +145,10 @@ async fn serve(app: Option<tauri::AppHandle>, stream: tokio::net::TcpStream) {
     };
     let (mut sink, mut source) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    // The newest connection wins: a reloaded extension replaces its old self.
-    bridge().out = Some(tx.clone());
+    // The newest connection is the default: the browser just opened (or the
+    // extension just reloaded) is the one the user is in.
+    let conn_id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+    bridge().conns.push(Conn { id: conn_id, out: tx.clone(), browser: None });
     emit_status(app.as_ref());
 
     let writer = tokio::spawn(async move {
@@ -157,7 +173,10 @@ async fn serve(app: Option<tauri::AppHandle>, stream: tokio::net::TcpStream) {
         let tokio_tungstenite::tungstenite::Message::Text(text) = msg else { continue };
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
         if v.get("type").and_then(|t| t.as_str()) == Some("hello") {
-            bridge().browser = v.get("browser").and_then(|b| b.as_str()).map(String::from);
+            let name = v.get("browser").and_then(|b| b.as_str()).map(String::from);
+            if let Some(c) = bridge().conns.iter_mut().find(|c| c.id == conn_id) {
+                c.browser = name;
+            }
             emit_status(app.as_ref());
             continue;
         }
@@ -166,7 +185,7 @@ async fn serve(app: Option<tauri::AppHandle>, stream: tokio::net::TcpStream) {
             Some(e) => Err(e.to_string()),
             None => Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null)),
         };
-        if let Some(waiter) = bridge().pending.remove(&id) {
+        if let Some((_, waiter)) = bridge().pending.remove(&id) {
             let _ = waiter.send(reply);
         }
     }
@@ -174,11 +193,11 @@ async fn serve(app: Option<tauri::AppHandle>, stream: tokio::net::TcpStream) {
     pinger.abort();
     writer.abort();
     let mut b = bridge();
-    // Only forget the connection if it's still this one.
-    if b.out.as_ref().is_some_and(|o| o.same_channel(&tx)) {
-        b.out = None;
-        b.browser = None;
-        for (_, w) in b.pending.drain() {
+    b.conns.retain(|c| c.id != conn_id);
+    // Calls sent to this browser won't be answered now; the others' still will.
+    let lost: Vec<u64> = b.pending.iter().filter(|(_, (c, _))| *c == conn_id).map(|(id, _)| *id).collect();
+    for id in lost {
+        if let Some((_, w)) = b.pending.remove(&id) {
             let _ = w.send(Err("The browser disconnected.".into()));
         }
     }
@@ -186,14 +205,26 @@ async fn serve(app: Option<tauri::AppHandle>, stream: tokio::net::TcpStream) {
     emit_status(app.as_ref());
 }
 
-/// Ask the extension to do something.
-pub async fn call(method: &str, params: serde_json::Value, timeout: Duration) -> Result<serde_json::Value, String> {
+/// Ask the extension to do something, in `browser` (matched by name, e.g.
+/// "edge") or else the browser connected most recently.
+pub async fn call(method: &str, params: serde_json::Value, timeout: Duration, browser: Option<&str>) -> Result<serde_json::Value, String> {
     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
     let (tx, rx) = oneshot::channel();
     {
         let mut b = bridge();
-        let out = b.out.clone().ok_or_else(not_connected)?;
-        b.pending.insert(id, tx);
+        let conn = match browser.map(|n| n.trim().to_lowercase()).filter(|n| !n.is_empty()) {
+            Some(want) => b.conns.iter().rev().find(|c| c.browser.as_deref().is_some_and(|n| n.to_lowercase().contains(&want))).ok_or_else(|| {
+                let names: Vec<String> = b.conns.iter().map(|c| c.browser.clone().unwrap_or_else(|| "Browser".into())).collect();
+                if names.is_empty() {
+                    not_connected()
+                } else {
+                    format!("No connected browser matches '{want}'. Connected: {}.", names.join(", "))
+                }
+            })?,
+            None => b.conns.last().ok_or_else(not_connected)?,
+        };
+        let (out, conn_id) = (conn.out.clone(), conn.id);
+        b.pending.insert(id, (conn_id, tx));
         let msg = serde_json::json!({ "id": id, "method": method, "params": params }).to_string();
         if out.send(msg).is_err() {
             b.pending.remove(&id);
@@ -211,7 +242,7 @@ pub async fn call(method: &str, params: serde_json::Value, timeout: Duration) ->
 }
 
 fn not_connected() -> String {
-    "Helium isn't connected. Open Helium with the Vivianne extension installed (Settings → Browser shows how), then try again.".into()
+    "The user's browser isn't connected. Ask them to open a Chromium browser (Chrome, Edge, Brave, Arc, Helium…) with the Vivianne extension installed (Settings → Web & browser shows how), then try again.".into()
 }
 
 fn ok(text: String) -> ToolResult {
@@ -226,8 +257,10 @@ fn err(text: String) -> ToolResult {
 pub async fn execute_tool(args: &serde_json::Value) -> ToolResult {
     let action = args.get("action").and_then(|a| a.as_str()).unwrap_or("");
     let mut params = args.clone();
+    let browser = args.get("browser").and_then(|b| b.as_str()).map(String::from);
     if let Some(o) = params.as_object_mut() {
         o.remove("action");
+        o.remove("browser");
     }
     let timeout = Duration::from_secs(match action {
         "open" | "navigate" | "back" | "forward" | "reload" => 45,
@@ -240,7 +273,7 @@ pub async fn execute_tool(args: &serde_json::Value) -> ToolResult {
         "" => return err("'action' is required".into()),
         other => return err(format!("unknown action '{other}'")),
     };
-    let result = match call(method, params, timeout).await {
+    let result = match call(method, params, timeout, browser.as_deref()).await {
         Ok(r) => r,
         Err(e) => return err(e),
     };
@@ -261,7 +294,14 @@ pub async fn execute_tool(args: &serde_json::Value) -> ToolResult {
                     )
                 })
                 .collect();
-            ok(if lines.is_empty() { "No tabs open.".into() } else { lines.join("\n") })
+            let body = if lines.is_empty() { "No tabs open.".to_string() } else { lines.join("\n") };
+            // Which browser these are in, when there's a choice.
+            let s = status();
+            ok(if s.browsers.len() > 1 {
+                format!("In {} (also connected: {}; pass browser to use another):\n{body}", s.browser.unwrap_or_default(), s.browsers[..s.browsers.len() - 1].join(", "))
+            } else {
+                body
+            })
         }
         "snapshot" => ok(result.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string()),
         "read" => {
@@ -298,9 +338,9 @@ pub async fn execute_tool(args: &serde_json::Value) -> ToolResult {
 pub fn schema() -> serde_json::Value {
     serde_json::json!({
         "name": "helium",
-        "description": "Use the user's own browser (Helium, through the Vivianne extension): their tabs, with their sign-ins. Prefer it over other browser tools for anything the user is logged into or wants done in their browser. Tabs you open are grouped as \"Vivianne\".\n\
+        "description": "Use the user's own browser (any Chromium browser with the Vivianne extension: Chrome, Edge, Brave, Arc, Opera, Vivaldi, Helium…): their tabs, with their sign-ins. Prefer it over other browser tools for anything the user is logged into or wants done in their browser. Tabs you open are grouped as \"Vivianne\".\n\
 Actions: tabs (list) · open{url} (new tab, becomes current) · select_tab{tabId} · close_tab · navigate{url} · back · forward · reload · snapshot (the page's interactive elements as [ref] lines — do this before clicking or typing) · read (page text) · find{query} · click{ref, double?} · type{ref?, text, clear?, submit?} · select{ref, value} · key{key, repeat?} (enter, tab, escape, ctrl+a, arrowdown…) · scroll{direction, amount?} · screenshot · wait{ms} · done (finished with the browser).\n\
-Refs come from the latest snapshot and change when the page changes: snapshot again after anything that changes the page. Every action works on the current tab unless you pass tabId.",
+Refs come from the latest snapshot and change when the page changes: snapshot again after anything that changes the page. Every action works on the current tab unless you pass tabId. With several browsers connected, actions go to the one opened most recently unless you pass browser.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -319,7 +359,8 @@ Refs come from the latest snapshot and change when the page changes: snapshot ag
                 "amount": { "type": "number" },
                 "query": { "type": "string" },
                 "ms": { "type": "number" },
-                "background": { "type": "boolean", "description": "open: don't switch to the new tab." }
+                "background": { "type": "boolean", "description": "open: don't switch to the new tab." },
+                "browser": { "type": "string", "description": "Which connected browser, by name (e.g. \"edge\", \"brave\"), when more than one is." }
             },
             "required": ["action"]
         }
@@ -402,6 +443,36 @@ mod tests {
         let out = execute_tool(&serde_json::json!({ "action": "tabs" })).await;
         assert!(!out.is_error, "{}", out.content);
         assert!(out.content.contains("[7] Inbox (active) (current)"), "{}", out.content);
+
+        // A second browser connects: it becomes the default, the first can
+        // still be named, and closing the second falls back to the first.
+        let mut ext2 = format!("ws://{addr}/helium").into_client_request().unwrap();
+        ext2.headers_mut().insert("origin", format!("chrome-extension://{EXTENSION_ID}").parse().unwrap());
+        let (ws2, _) = tokio_tungstenite::connect_async(ext2).await.unwrap();
+        let (mut tx2, mut rx2) = ws2.split();
+        tx2.send(Message::Text(r#"{"type":"hello","browser":"Microsoft Edge 140"}"#.into())).await.unwrap();
+        let answer2 = tokio::spawn(async move {
+            while let Some(Ok(Message::Text(t))) = rx2.next().await {
+                let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+                if let Some(id) = v.get("id") {
+                    let reply = serde_json::json!({ "id": id, "result": { "tabs": [{ "tabId": 9, "title": "Docs", "url": "https://docs.example", "active": true }], "current": 9 } });
+                    tx2.send(Message::Text(reply.to_string().into())).await.unwrap();
+                }
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(status().browsers, vec!["Helium 0.18".to_string(), "Microsoft Edge 140".to_string()]);
+        let out = execute_tool(&serde_json::json!({ "action": "tabs" })).await;
+        assert!(out.content.contains("[9] Docs") && out.content.contains("In Microsoft Edge 140"), "{}", out.content);
+        let out = execute_tool(&serde_json::json!({ "action": "tabs", "browser": "helium" })).await;
+        assert!(out.content.contains("[7] Inbox"), "{}", out.content);
+        let out = execute_tool(&serde_json::json!({ "action": "tabs", "browser": "opera" })).await;
+        assert!(out.is_error && out.content.contains("Connected: Helium 0.18, Microsoft Edge 140"), "{}", out.content);
+        answer2.abort();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(status().browsers, vec!["Helium 0.18".to_string()]);
+        let out = execute_tool(&serde_json::json!({ "action": "tabs" })).await;
+        assert!(out.content.contains("[7] Inbox"), "{}", out.content);
     }
 
     #[test]

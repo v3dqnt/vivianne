@@ -1,14 +1,10 @@
 import { useEffect } from 'react'
-import { Box, ButtonBase, IconButton, Stack, Tooltip, Typography, alpha, keyframes, useTheme } from '../../../ui'
+import { Box, ButtonBase, IconButton, Orb, Stack, Tooltip, Typography, alpha, useTheme } from '../../../ui'
 import { AddLinear, AgentsLinear } from '../../../icons'
 import type { TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey, type BotMessage } from '../store/botsStore'
 import { Avatar, colorOf } from './bits'
 
-const pulse = keyframes`
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-`
 
 const SECTION_LABEL_SX = { fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.6875rem' } as const
 
@@ -161,20 +157,25 @@ export function TeamConversations({ root, team, onManage }: { root: string; team
               icon={
                 <Box sx={{ position: 'relative', flexShrink: 0 }}>
                   <Avatar name={a.name} color={colorOf(a)} size={26} />
-                  <Box
-                    sx={{
-                      position: 'absolute',
-                      right: -1,
-                      bottom: -1,
-                      width: 9,
-                      height: 9,
-                      borderRadius: '50%',
-                      border: 2,
-                      borderColor: 'background.paper',
-                      bgcolor: waiting ? 'warning.main' : state === 'working' ? 'success.main' : state === 'paused' ? 'text.disabled' : 'transparent',
-                      animation: state === 'working' ? `${pulse} 1.2s ease-in-out infinite` : undefined,
-                    }}
-                  />
+                  {state === 'working' && !waiting ? (
+                    <Box sx={{ position: 'absolute', right: -4, bottom: -4, display: 'flex', borderRadius: '50%', bgcolor: 'background.paper', p: '1px' }}>
+                      <Orb state="working" px={13} />
+                    </Box>
+                  ) : (
+                    <Box
+                      sx={{
+                        position: 'absolute',
+                        right: -1,
+                        bottom: -1,
+                        width: 9,
+                        height: 9,
+                        borderRadius: '50%',
+                        border: 2,
+                        borderColor: 'background.paper',
+                        bgcolor: waiting ? 'warning.main' : state === 'paused' ? 'text.disabled' : 'transparent',
+                      }}
+                    />
+                  )}
                 </Box>
               }
               title={a.name}

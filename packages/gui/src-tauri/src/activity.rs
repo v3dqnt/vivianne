@@ -116,6 +116,8 @@ pub fn begin_action(app: &tauri::AppHandle, args: &serde_json::Value) {
     let visible = win.is_visible().unwrap_or(false);
     if !visible {
         STARTED_AT.store(now_ms(), Ordering::SeqCst);
+        // Same slot at the top of the screen: the resting notch steps aside.
+        crate::notch::yield_slot(app);
     }
     let _ = win.set_ignore_cursor_events(true);
     paint(app, "working", describe(args));
@@ -162,6 +164,7 @@ pub fn end_run(app: &tauri::AppHandle, state: &'static str, message: String) {
                 let _ = win.hide();
                 crate::overlays::schedule_close(&app, LABEL);
             }
+            crate::notch::rest(&app);
         }
     });
 }

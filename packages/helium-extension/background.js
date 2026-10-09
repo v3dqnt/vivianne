@@ -1,4 +1,6 @@
-// Vivianne for Helium: the bridge between Vivianne and this browser.
+// Vivianne: the bridge between Vivianne and this browser. Works in any
+// Chromium browser (Chrome, Edge, Brave, Arc, Opera, Vivaldi, Helium…): it
+// uses only standard extension APIs, and its id is the same in all of them.
 //
 // Vivianne listens on ws://127.0.0.1:47321/helium and accepts only this
 // extension (it checks the connection's Origin, which pages can't fake).
@@ -20,6 +22,20 @@ function setBadge(connected) {
   chrome.storage.session.set({ connected })
 }
 
+// "Microsoft Edge 140", "Brave 140", "Google Chrome 140"…: the brand that
+// isn't the shared engine or the GREASE placeholder. Browsers that report
+// only "Chromium" (Arc, Vivaldi) are told apart by their user agent.
+function browserName() {
+  const ua = navigator.userAgent
+  const known = [['OPR/', 'Opera'], ['Vivaldi/', 'Vivaldi'], ['Arc/', 'Arc'], ['YaBrowser/', 'Yandex']].find(([tag]) => ua.includes(tag))
+  const brands = navigator.userAgentData?.brands ?? []
+  const own = brands.find((b) => !/chromium|not.?a.?brand/i.test(b.brand))
+  const version = (own ?? brands.find((b) => /chromium/i.test(b.brand)))?.version ?? ''
+  if (own) return `${own.brand} ${version}`.trim()
+  if (known) return `${known[1]} ${version}`.trim()
+  return `Chromium ${version}`.trim()
+}
+
 function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
   try {
@@ -30,8 +46,7 @@ function connect() {
   ws.onopen = () => {
     backoff = 1000
     setBadge(true)
-    const ua = navigator.userAgentData?.brands?.map((b) => `${b.brand} ${b.version}`).join(', ') ?? navigator.userAgent
-    ws.send(JSON.stringify({ type: 'hello', version: chrome.runtime.getManifest().version, browser: ua }))
+    ws.send(JSON.stringify({ type: 'hello', version: chrome.runtime.getManifest().version, browser: browserName() }))
   }
   ws.onclose = () => {
     setBadge(false)

@@ -1,0 +1,17 @@
+corpus: node_modules/@hugeicons (24311 files on disk, ignore rules off); 11 runs each
+
+case                                           p50 ms   p95 ms
+acu --version (start-up floor)                   15.3     16.1
+acu grep -F literal                             269.5    323.5
+rg   -F literal                                 331.9    459.7
+acu grep regex                                  294.5   3204.9
+rg   regex                                      353.0    491.9
+acu grep -i regex alt                           355.5   3890.3
+rg   -i regex alt                               469.0    651.8
+acu grep -l (files only)                        381.7   2960.2
+rg   -l                                         376.6    559.9
+acu glob **/*.ts                                 57.8    136.4
+fd   -e ts                                   (tool not installed)
+acu ls -R                                        58.5     69.4
+acu skim                                        417.3   2258.7
+acu find-def createAgentStore                   265.1    420.3

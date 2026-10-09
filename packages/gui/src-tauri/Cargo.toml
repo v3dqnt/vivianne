@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.7.3"
+version = "1.8.0"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -30,6 +30,31 @@ strip = true
 # keep debug assertions to match the Tauri runtime.
 [profile.dev.package.sherpa-rs-sys]
 debug-assertions = false
+
+# Local embedding inference runs ~30x slower unoptimized — seconds per
+# memory instead of milliseconds — so dev and test builds optimize it too.
+[profile.dev.package.tract-core]
+opt-level = 3
+[profile.dev.package.tract-data]
+opt-level = 3
+[profile.dev.package.tract-hir]
+opt-level = 3
+[profile.dev.package.tract-linalg]
+opt-level = 3
+[profile.dev.package.tract-nnef]
+opt-level = 3
+[profile.dev.package.tract-onnx]
+opt-level = 3
+[profile.dev.package.tract-onnx-opl]
+opt-level = 3
+[profile.dev.package.tract-transformers]
+opt-level = 3
+[profile.dev.package.tract-extra]
+opt-level = 3
+[profile.dev.package.tokenizers]
+opt-level = 3
+[profile.dev.package.sqlite-vec]
+opt-level = 3
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
@@ -92,22 +117,13 @@ which = "7.0"
 # decode traces) into the `log` crate, where our Info-level filter drops it.
 whisper-rs = { version = "0.16", features = ["log_backend"] }
 
-# Parakeet TDT speech-to-text, via sherpa-onnx.
-#
-# Not a second whisper: whisper.cpp cannot run a NeMo transducer at all. A TDT
-# model is an encoder + decoder + joiner with a duration head, decoded by a
-# greedy transducer loop — sherpa-onnx implements that loop, which is the
-# reason for taking the dependency rather than driving onnxruntime directly.
-#
-# `default-features = false` drops `tts` (sherpa's Piper/VITS stack, ~unused
-# here — Viv Instant speaks through the webview's SpeechSynthesis) while
-# keeping `download-binaries`, which fetches a prebuilt sherpa-onnx instead of
-# building it from source with CMake.
-sherpa-rs = { version = "0.6", default-features = false, features = ["download-binaries"] }
 # Bundled sqlite3 (no system dep) with FTS5 for real BM25 lexical memory search.
 # Note: FTS5 is compiled into the bundled sqlite3 amalgamation by default
 # (no separate rusqlite cargo feature needed for it).
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Vector KNN for memory recall (`vec0` virtual tables), compiled from C into
+# the bundled sqlite3 above and registered as an auto-extension.
+sqlite-vec = "0.1.9"
 # OS-native credential storage (Windows Credential Manager / macOS Keychain / libsecret)
 # for API keys, replacing plaintext credentials.json.
 # The per-platform feature flags are REQUIRED: with none enabled, keyring 3.x
@@ -122,7 +138,7 @@ portable-pty = "0.9.0"
 # runtime (no Python, no system deps beyond the Microsoft Visual C++
 # redistributable on Windows). The tokenizers crate is HuggingFace's Rust
 # WordPiece tokenizer bundled from source.
-tract-onnx = "0.21"
+tract-onnx = "0.23"
 tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 # Line diffs for the end-of-assignment change review. Diffed here rather than
 # in the webview so only changed hunks cross IPC, not two full copies of every
@@ -144,6 +160,38 @@ lopdf = "0.34"
 # file openable by Word/PowerPoint.
 quick-xml = "0.37"
 
+# Parakeet TDT speech-to-text, via sherpa-onnx.
+#
+# Not a second whisper: whisper.cpp cannot run a NeMo transducer at all. A TDT
+# model is an encoder + decoder + joiner with a duration head, decoded by a
+# greedy transducer loop — sherpa-onnx implements that loop, which is the
+# reason for taking the dependency rather than driving onnxruntime directly.
+#
+# `default-features = false` drops `tts` (sherpa's Piper/VITS stack, ~unused
+# here — Viv Instant speaks through the webview's SpeechSynthesis) while
+# keeping `download-binaries`, which fetches a prebuilt sherpa-onnx instead of
+# building it from source with CMake.
+#
+# Linked at build time everywhere but macOS, where sherpa-onnx's prebuilt
+# library needs a newer OS than Vivianne supports and is loaded at runtime
+# instead (`instant::sherpa`).
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+sherpa-rs = { version = "0.6", default-features = false, features = ["download-binaries"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Runtime loading of sherpa-onnx, and unpacking its release archive.
+libloading = "0.8"
+bzip2 = "0.6"
+tar = "0.4"
+# Native microphone capture where WKWebView has no getUserMedia (macOS < 12).
+cpal = "0.16"
+# The Accessibility API's CF types (`coding_agent::mac`), and NSWorkspace /
+# NSRunningApplication for apps. Same versions Tauri already pulls in.
+core-foundation = "0.10"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSGeometry", "NSURL"] }
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSScreen", "NSWindow", "NSResponder", "NSApplication"] }
+
 [target."cfg(windows)".dependencies]
 uiautomation = "0.25.0"
 # Direct Win32 for `dip`: SendInput (Unicode typing, full key map, wheel),
@@ -163,4 +211,7 @@ windows = { version = "0.62", features = [
   # Clipboard paste for typing long text (coding_agent::win::paste_text).
   "Win32_System_DataExchange",
   "Win32_System_Memory",
+  # Supercharge: the process list (and who launched whom) and memory use.
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_ProcessStatus",
 ] }

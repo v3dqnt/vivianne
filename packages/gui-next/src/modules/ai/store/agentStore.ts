@@ -128,6 +128,10 @@ interface AgentStoreState {
   setDraft: (text: string) => void
   /** What's sitting in the backend steering + follow-up queues. */
   queuedMessages: QueuedMessages
+  /** Stop was pressed and the run is winding down to its next checkpoint.
+   * The run is still busy until `agent_end`: treating it as idle early is
+   * what let a reopened conversation "resume" the task just stopped. */
+  stopping: boolean
   /** Every model failed and the run is waiting before trying again. */
   runWaiting: { untilMs: number; reason: string } | null
   /** The ledger of this conversation's current task (`agent::run_ledger`):
@@ -186,6 +190,10 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
   return create<AgentStoreState>((set, get) => {
   /** Resume the long task by sending its briefing as a message, so picking
    * the task back up is visible in the conversation like any other turn. */
+  // Picking a task back up by itself is for after a relaunch only: once this
+  // window has looked, a task in "running" is one this session runs (or just
+  // stopped), never one to start again on its own.
+  let launchResumeChecked = false
   const resumeLongTask = async () => {
     const prompt = await call<string | null>('cmd_long_task_resume_prompt', { threadId })
     if (prompt) await get().sendMessage(prompt)
@@ -207,6 +215,7 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
     draft: '',
     setDraft: (text: string) => set({ draft: text }),
     queuedMessages: { steering: [], followUp: [] },
+    stopping: false,
     runWaiting: null,
     longTask: null,
 
@@ -216,21 +225,25 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
       set({ longTask: ledger })
       // A task that was running (or waiting out a rate limit) when the app
       // closed carries on by itself.
-      if (ledger && (ledger.status === 'running' || ledger.status === 'waiting') && !get().isBusy) {
+      const firstLook = !launchResumeChecked
+      launchResumeChecked = true
+      if (firstLook && ledger && (ledger.status === 'running' || ledger.status === 'waiting') && !get().isBusy) {
         await resumeLongTask()
       }
     },
 
     controlLongTask: async (action, add) => {
       if (!isPrimary(threadId)) return
+      if (action === 'stop') return get().abort()
+      if (action === 'pause' && get().isBusy) set({ stopping: true })
       const ledger = await call<RunLedger | null>('cmd_long_task_control', {
         threadId,
         action,
         addUsd: add?.usd ?? null,
         addHours: add?.hours ?? null,
       })
-      set({ longTask: action === 'stop' ? null : (ledger ?? null) })
-      if (action === 'pause' || action === 'stop') set({ runWaiting: null })
+      set({ longTask: ledger ?? null })
+      if (action === 'pause') set({ runWaiting: null })
       if (action === 'resume' && ledger && !get().isBusy) await resumeLongTask()
     },
 
@@ -327,8 +340,15 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             })
             break
           }
+          case 'agent_start': {
+            // Runs the backend starts by itself (resuming a task, a routine)
+            // are busy too, so a message sent meanwhile is queued and shown
+            // rather than waiting unseen for this run to end.
+            set({ isBusy: true })
+            break
+          }
           case 'agent_end': {
-            set({ isBusy: false, streamingIndex: null, memoryRecalled: null })
+            set({ isBusy: false, stopping: false, streamingIndex: null, memoryRecalled: null })
             if (isPrimary(threadId)) {
               void useModelStore.getState().refreshStats()
               // QueuePanel only polls while `isBusy`, so without this the
@@ -583,7 +603,7 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
       // `isBusy` also clears from the `agent_end` event above — this is a
       // safety net so a dropped event can never leave the composer stuck
       // (the exact class of bug fixed in the old app's equivalent path).
-      set({ isBusy: false })
+      set({ isBusy: false, stopping: false })
     },
 
     refreshQueues: async () => {
@@ -639,12 +659,28 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
         console.warn('[agent] abort is not yet thread-scoped — ignoring on a secondary thread')
         return
       }
+      // One stop for every control (the composer, the status bar's End):
+      // the task is marked ended before the run is interrupted, so nothing
+      // that later sees it can mistake it for one to carry on.
+      if (get().isBusy) set({ stopping: true })
+      set({ runWaiting: null })
+      try {
+        if (get().longTask) {
+          await call('cmd_long_task_control', { threadId, action: 'stop', addUsd: null, addHours: null })
+          set({ longTask: null })
+        }
+      } catch (err) {
+        console.error('[agent] ending the task failed:', err)
+      }
       try {
         await call('cmd_agent_abort')
       } catch (err) {
         console.error('[agent] abort failed:', err)
+        set({ stopping: false })
       }
-      set({ isBusy: false })
+      // Busy until the run actually ends (`agent_end`, or the prompt call
+      // returning): it is still finishing its current step.
+      if (!get().isBusy) set({ stopping: false })
     },
 
     revertToIndex: async (index) => {

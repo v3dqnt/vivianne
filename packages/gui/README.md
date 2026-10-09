@@ -1,6 +1,6 @@
 # Vivianne
 
-A desktop AI coding agent, built with [Tauri 2](https://tauri.app) (Rust backend) and Next.js/React (frontend).
+A desktop AI coding agent, built with [Tauri 2](https://tauri.app) (Rust backend) and React + Vite (frontend, in `packages/gui-next`).
 
 ## Prerequisites
 
@@ -17,7 +17,7 @@ npm install
 npm run tauri dev
 ```
 
-This launches the Rust app with the Next.js dev server and hot reload.
+This launches the Rust app with the Vite dev server (`packages/gui-next`) and hot reload.
 
 ## Build a release bundle
 

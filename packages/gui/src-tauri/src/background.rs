@@ -86,7 +86,14 @@ fn install_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>
 
     TrayIconBuilder::with_id("viv_tray")
         .icon(app.default_window_icon().cloned().ok_or("no bundled window icon")?)
-        .tooltip("Vivianne — hold Ctrl+Shift+Space and speak for Viv Instant")
+        .tooltip(if cfg!(target_os = "macos") {
+            "Vivianne — hold \u{2318}\u{21e7}Space and speak for Viv Instant"
+        } else {
+            "Vivianne — hold Ctrl+Shift+Space and speak for Viv Instant"
+        })
+        // A menu-bar icon on macOS is drawn by the system in the bar's own
+        // colour (light or dark), which needs a template image.
+        .icon_as_template(cfg!(target_os = "macos"))
         .menu(&menu)
         // The menu must NOT open on a left click: left click is bound to
         // "show the app", which is what every other tray app on Windows does

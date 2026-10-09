@@ -6,6 +6,7 @@ import { summarizeTools } from '../lib/toolGroups'
 import { argSummary, declarationFor, iconFor, toolImages, TOOL_BLOCK_SX } from './ToolCallCard'
 import { ImageBlock } from './ImageBlock'
 import { FileLink, filePathArg } from './FileLink'
+import { CHAT_HEADER_SX, CHAT_META_SX, CHAT_SURFACE_SX, CHAT_TITLE_SX } from '../lib/chatStyle'
 
 type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
 
@@ -40,13 +41,7 @@ export function ToolGroup({ tools, children }: { tools: ToolResultMessage[]; chi
   return (
     <Stack spacing={0.75} sx={TOOL_BLOCK_SX}>
       <Box
-        sx={{
-          border: 1,
-          borderColor: 'divider',
-          borderRadius: '12px',
-          overflow: 'hidden',
-          bgcolor: 'background.paper',
-        }}
+        sx={CHAT_SURFACE_SX}
       >
         <Box
           role="button"
@@ -60,11 +55,7 @@ export function ToolGroup({ tools, children }: { tools: ToolResultMessage[]; chi
             }
           }}
           sx={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            px: 1.5,
-            py: 0.75,
+            ...CHAT_HEADER_SX,
             cursor: 'pointer',
             '&:hover': { bgcolor: 'action.hover' },
           }}
@@ -72,7 +63,7 @@ export function ToolGroup({ tools, children }: { tools: ToolResultMessage[]; chi
           <Box sx={{ display: 'flex', color: 'text.secondary', flexShrink: 0 }}>
             <Icon size={16} color="currentColor" />
           </Box>
-          <Typography variant="caption" sx={{ fontWeight: 600, flexShrink: 0 }}>
+          <Typography variant="caption" sx={CHAT_TITLE_SX}>
             {label}
           </Typography>
           {file ? (
@@ -89,11 +80,11 @@ export function ToolGroup({ tools, children }: { tools: ToolResultMessage[]; chi
           )}
           <Box sx={{ flex: 1 }} />
           {failed > 0 && (
-            <Typography variant="caption" color="error.main" sx={{ flexShrink: 0 }}>
+            <Typography variant="caption" color="error.main" sx={{ ...CHAT_META_SX, flexShrink: 0 }}>
               {failed} failed
             </Typography>
           )}
-          <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0 }}>
+          <Typography variant="caption" color="text.disabled" sx={{ ...CHAT_META_SX, flexShrink: 0 }}>
             {tools.length} steps
           </Typography>
           {running && <CircularProgress size={12} thickness={5} />}

@@ -1,0 +1,36 @@
+{
+  "name": "agent-coreutils",
+  "version": "0.1.0",
+  "description": "Fast, model-friendly file tools for AI agents: read, write, edit, grep, glob, ls and skim, as one small native binary (acu) and an MCP server.",
+  "license": "MIT",
+  "keywords": ["ai", "agent", "mcp", "grep", "coreutils", "cli", "codebase", "skim"],
+  "bin": {
+    "acu": "bin/acu.js"
+  },
+  "files": [
+    "bin",
+    "install.js",
+    "platform.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "acu": {
+    "releaseBase": "https://github.com/agent-coreutils/agent-coreutils/releases/download"
+  },
+  "optionalDependencies": {
+    "@agent-coreutils/win32-x64": "0.1.0",
+    "@agent-coreutils/win32-arm64": "0.1.0",
+    "@agent-coreutils/darwin-x64": "0.1.0",
+    "@agent-coreutils/darwin-arm64": "0.1.0",
+    "@agent-coreutils/linux-x64-gnu": "0.1.0",
+    "@agent-coreutils/linux-x64-musl": "0.1.0",
+    "@agent-coreutils/linux-arm64-gnu": "0.1.0",
+    "@agent-coreutils/linux-arm64-musl": "0.1.0"
+  }
+}

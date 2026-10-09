@@ -25,13 +25,14 @@ import { ImageBlock } from './ImageBlock'
 import { DiffView } from './DiffView'
 import { CodeBlock } from './CodeBlock'
 import { FileLink, filePathArg } from './FileLink'
+import { CHAT_HEADER_SX, CHAT_MAX_WIDTH, CHAT_RADIUS, CHAT_RADIUS_INNER, CHAT_SURFACE_SX, CHAT_TITLE_SX } from '../lib/chatStyle'
 
 type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
 
 /** One width for everything a tool leaves in the chat — groups, cards,
  * checkpoints, team runs — so they line up as a column instead of each
  * being as wide as its own text. */
-export const TOOL_BLOCK_SX = { width: '100%', maxWidth: 'min(80%, 640px)' } as const
+export const TOOL_BLOCK_SX = { width: '100%', maxWidth: CHAT_MAX_WIDTH } as const
 
 const MEMORY_TOOLS: Record<string, string> = {
   memory_get: 'Recalling memory…',
@@ -230,21 +231,16 @@ export function ToolCallCard({
     <Stack spacing={0.5} sx={compact ? { width: '100%' } : TOOL_BLOCK_SX}>
     <Box
       sx={{
-        border: 1,
+        ...CHAT_SURFACE_SX,
         borderColor: isError ? 'error.main' : 'divider',
-        borderRadius: compact ? '8px' : '12px',
-        overflow: 'hidden',
-        bgcolor: 'background.paper',
+        borderRadius: compact ? CHAT_RADIUS_INNER : CHAT_RADIUS,
       }}
     >
       <Box
         onClick={() => hasBody && setOpen((v) => !v)}
         sx={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 1,
-          px: 1.5,
-          py: 0.75,
+          ...CHAT_HEADER_SX,
+          ...(compact && { minHeight: 34, py: 0.5 }),
           cursor: hasBody ? 'pointer' : 'default',
           '&:hover': hasBody ? { bgcolor: 'action.hover' } : undefined,
         }}
@@ -252,7 +248,7 @@ export function ToolCallCard({
         <Box sx={{ display: 'flex', color: 'text.secondary', flexShrink: 0 }}>
           <Icon size={16} color="currentColor" />
         </Box>
-        <Typography variant="caption" sx={{ fontWeight: 600, flexShrink: 0 }} title={message.toolName}>
+        <Typography variant="caption" sx={CHAT_TITLE_SX} title={message.toolName}>
           {label}
         </Typography>
         {file ? (

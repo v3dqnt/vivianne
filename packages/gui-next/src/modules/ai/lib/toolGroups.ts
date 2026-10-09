@@ -51,6 +51,10 @@ export function groupTranscript(
   }
 
   messages.forEach((m, i) => {
+    // A stop isn't something said: the send button already shows it, so it
+    // stays in the model's context but not on screen. It doesn't break a
+    // run of steps into two groups either.
+    if (m.type === 'assistant' && m.stopReason === 'aborted') return
     const foldable =
       i !== streamingIndex && ((m.type === 'toolResult' && !STANDALONE_TOOLS.has(m.toolName)) || isSilentAssistant(m))
     if (foldable) run.push(i)

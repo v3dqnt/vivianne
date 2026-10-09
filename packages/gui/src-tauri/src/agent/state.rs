@@ -89,6 +89,9 @@ struct AgentStateInner {
     /// subagents of their own, which is the third tier of the hierarchy.
     /// Irrelevant at the top level, which can always delegate.
     delegation_allowed: bool,
+    /// The run record (`agent::runs`) of the employee this subagent is, so
+    /// the subagents it spawns are recorded under it.
+    run_record: Option<String>,
     goal: Option<Goal>,
     /// The ledger key of the long task this conversation is running, if any
     /// (see `agent::run_ledger`). Set means: no step ceiling, spend and time
@@ -148,6 +151,7 @@ impl AgentState {
                 bot_policy: None,
                 history_archive: None,
                 delegation_allowed: false,
+                run_record: None,
                 goal: None,
                 long_task: None,
                 plan_mode: false,
@@ -250,6 +254,14 @@ impl AgentState {
 
     pub async fn set_delegation_allowed(&self, value: bool) {
         self.inner.write().await.delegation_allowed = value;
+    }
+
+    pub async fn run_record(&self) -> Option<String> {
+        self.inner.read().await.run_record.clone()
+    }
+
+    pub async fn set_run_record(&self, id: Option<String>) {
+        self.inner.write().await.run_record = id;
     }
 
     pub async fn history_archive(&self) -> Option<std::path::PathBuf> {

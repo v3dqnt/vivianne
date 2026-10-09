@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Box, Button, ButtonBase, CircularProgress, InputBase, Stack, Tooltip, Typography, alpha, keyframes, useTheme } from '../../../ui'
+import { Box, Button, ButtonBase, CircularProgress, InputBase, Orb, Stack, Tooltip, Typography, alpha, useTheme } from '../../../ui'
 import { CodeLinear, CopyLinear, SendLinear, TickCircleLinear } from '../../../icons'
 import { call, on } from '../../../ipc'
 import { useMultiplayerStore, type ChatEntry } from '../store/multiplayerStore'
@@ -9,10 +9,6 @@ import { FileLink } from '../../ai/components/FileLink'
 import { inviteMessage } from '../lib/invite'
 import { UsageBlock, money, sum, today, type ActivityEntry, type CollabData } from './CollabView'
 
-const pulse = keyframes`
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-`
 
 type Presence = 'live' | 'connecting' | 'offline' | 'failed'
 
@@ -125,20 +121,25 @@ function Header({ project, presence, data }: { project: Project; presence: Prese
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1.25 }}>
         <Box sx={{ position: 'relative' }}>
           <Face name={partnerName} color={theme.palette.success.main} size={34} />
-          <Box
-            sx={{
-              position: 'absolute',
-              right: -1,
-              bottom: -1,
-              width: 11,
-              height: 11,
-              borderRadius: '50%',
-              bgcolor: dot,
-              border: 2,
-              borderColor: 'background.paper',
-              animation: working || presence === 'connecting' ? `${pulse} 1.2s ease-in-out infinite` : undefined,
-            }}
-          />
+          {working || presence === 'connecting' ? (
+            <Box sx={{ position: 'absolute', right: -4, bottom: -4, display: 'flex', borderRadius: '50%', bgcolor: 'background.paper', p: '1px' }}>
+              <Orb state={working ? 'working' : 'connecting'} px={16} />
+            </Box>
+          ) : (
+            <Box
+              sx={{
+                position: 'absolute',
+                right: -1,
+                bottom: -1,
+                width: 11,
+                height: 11,
+                borderRadius: '50%',
+                bgcolor: dot,
+                border: 2,
+                borderColor: 'background.paper',
+              }}
+            />
+          )}
         </Box>
         <Stack sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="body2" sx={{ fontWeight: 700 }} noWrap>

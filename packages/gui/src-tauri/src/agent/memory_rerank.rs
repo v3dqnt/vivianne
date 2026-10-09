@@ -292,6 +292,7 @@ mod tests {
             access_count: 0,
             last_accessed_at: 0,
             embedding_model: None,
+            user_wide: false,
         }
     }
 

@@ -1,4 +1,4 @@
-import { Dialog, Box, Stack, Typography, IconButton, ButtonBase, Tooltip, useTheme } from '../../../ui'
+import { Dialog, Box, Divider, Stack, Typography, IconButton, ButtonBase, Tooltip, useTheme } from '../../../ui'
 import {
   CloseCircleLinear,
   KeyLinear,
@@ -21,7 +21,7 @@ import { LocalModelsSection } from './LocalModelsSection'
 import { ModsSection } from './ModsSection'
 import { BrowserSection } from './BrowserSection'
 import { SubagentsSection } from './SubagentsSection'
-import { McpSection } from './McpSection'
+import { ConnectionsSection } from './ConnectionsSection'
 import { MemorySection } from './MemorySection'
 import { DiagnosticsSection } from './DiagnosticsSection'
 import { UsageSection } from './UsageSection'
@@ -68,9 +68,8 @@ const GROUPS: { label: string; items: SectionDef[] }[] = [
     items: [
       { id: 'mods', label: 'Mods', icon: FlashLinear },
       { id: 'subagents', label: 'Subagents', icon: UserOctagonLinear },
-      { id: 'mcp', label: 'MCP servers', icon: Link2Linear },
-      { id: 'websearch', label: 'Web search', icon: GlobalLinear },
-      { id: 'browser', label: 'Browser', icon: GlobalLinear },
+      { id: 'connections', label: 'Connections', icon: Link2Linear },
+      { id: 'websearch', label: 'Web & browser', icon: GlobalLinear },
       { id: 'memory', label: 'Memory', icon: ArchiveBookLinear },
       { id: 'skills', label: 'Skills', icon: MagicpenLinear },
       { id: 'automations', label: 'Automations', icon: ClockLinear },
@@ -220,16 +219,24 @@ export function SettingsDialog() {
               {section === 'local' && <LocalModelsSection />}
               {section === 'mods' && <ModsSection />}
               {section === 'subagents' && <SubagentsSection />}
-              {section === 'mcp' && <McpSection />}
+              {/* Manual MCP servers live under Connections → Advanced; 'mcp' still opens it. */}
+              {(section === 'connections' || section === 'mcp') && <ConnectionsSection />}
               {section === 'memory' && <MemorySection />}
               {section === 'diagnostics' && <DiagnosticsSection />}
               {section === 'skills' && <SkillsSection />}
               {section === 'automations' && <AutomationsSection />}
               {section === 'instant' && <InstantSection />}
-              {section === 'websearch' && <WebSearchSection />}
+              {/* One tab for the web: how the agent searches it, and the
+                  user's own browser it can work in. 'browser' still opens it. */}
+              {(section === 'websearch' || section === 'browser') && (
+                <Stack sx={{ gap: 4 }}>
+                  <WebSearchSection />
+                  <Divider />
+                  <BrowserSection />
+                </Stack>
+              )}
               {section === 'themes' && <ThemesSection />}
               {section === 'components' && <ComponentsSection />}
-              {section === 'browser' && <BrowserSection />}
               {section === 'updates' && <UpdatesSection />}
             </Box>
           </Box>

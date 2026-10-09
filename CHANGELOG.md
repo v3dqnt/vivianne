@@ -2,6 +2,40 @@
 
 All notable changes to Vivianne are documented here.
 
+## [1.8.0] — 2026-10-09
+
+### Added
+
+- **macOS, back to 10.15 Catalina** — Intel and Apple silicon in one universal build. Computer control runs on the Accessibility API with the same structured snapshots as on Windows, the notch sits under the menu bar, and a permissions card walks through Accessibility, Screen Recording, Microphone and Automation. Voice works on every version: Parakeet on macOS 13+, Whisper before that.
+- **Connections** — about 120 everyday apps (mail, calendars, docs, CRMs, design, finance, developer tools) connect in one click with a browser sign-in. Hand-written MCP setup is still there under Advanced.
+- **An always-on notch** — it shows every agent at work and what each one is doing. You can speak to it and hear the answer, and the main window can live in the background. It tells a general question from one about a project (with Laya, an open decision model) and hands project work to that project's chat.
+- **Science in chat** — chemical structures and reactions (RDKit), 3D molecules and proteins, biology diagrams (sequences, plasmids, trees, pathways, cells), physics graphs and interactive diagrams (forces, optics, circuits), and Greek letters and chemical equations anywhere. The agent checks each diagram before it answers.
+- **Teams and bots** — persistent teammates with a shared room, DMs, routines, rules and their own memory; each bot's model is chosen on its page.
+- **Use your ChatGPT plan** with Sign in with ChatGPT.
+- **Helium** — a browser extension that lets Vivianne work in your own browser.
+- **Multiplayer, redesigned** — invites, a partner panel and presence.
+- **Plan mode, rebuilt** — research, review, approve, then carry out — and long tasks that survive failures, restarts and hours of work.
+- **Search memory by meaning, offline** — EmbeddingGemma or MiniLM run on your computer, with no API key and nothing sent anywhere (Settings → Memory).
+
+### Changed
+
+- **Memory, rebuilt:**
+  - Facts that change are dated and closed rather than overwritten, so "what did we decide in March?" has an answer.
+  - What Vivianne learns about you is kept once and shared by every project.
+  - Each finished work session is summarised into one searchable episode.
+  - While the app is idle, near-duplicates are merged and facts unused for months are archived (kept on record, out of the way).
+  - Large memories search through a vector index.
+- **Token use** — prompt caching breakpoints and masking of stale tool output; "done" now means verified.
+- **Viv Instant is push-to-talk** — hold to speak, release to send.
+- **Updates** now come from a public release feed, so they reach every install.
+
+### Fixed
+
+- **Memory search ignoring almost every question** — keyword recall required every word of the question in one memory, so a question in plain words almost never matched. On the LongMemEval benchmark it found evidence for 1 question in 100.
+- **The offline embedding model never installed** — nothing downloaded it, so without an OpenAI key memory could only match keywords.
+- **Stale search entries after a memory was replaced** — replaced rows left their old text in the keyword index.
+- **The app exiting at startup** when Parakeet or Whisper loaded on some machines.
+
 ## [1.7.3] — 2026-08-29
 
 ### Fixed

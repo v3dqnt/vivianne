@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Box, Stack, Typography, Button, ButtonBase, IconButton, InputBase, Collapse, Tooltip, CircularProgress, alpha, useTheme } from '../../../ui'
+import { Box, Stack, Typography, Button, ButtonBase, IconButton, InputBase, Collapse, Tooltip, CircularProgress, Orb, alpha, useTheme } from '../../../ui'
 import { ArrowLeftLinear, EditLinear, TrashLinear, SendLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import type { AgentMessage } from '../../ai/lib/types'
@@ -41,18 +41,11 @@ function StatusPill({ status }: { status: AgentRun['status'] }) {
       direction="row"
       sx={{ alignItems: 'center', gap: 0.5, px: 0.75, borderRadius: '6px', bgcolor: alpha(c, 0.12), color: c, flexShrink: 0 }}
     >
-      <Box
-        sx={{
-          width: 6,
-          height: 6,
-          borderRadius: '50%',
-          bgcolor: c,
-          ...(status === 'running' && {
-            animation: 'viv-pulse 1.4s ease-in-out infinite',
-            '@keyframes viv-pulse': { '0%,100%': { opacity: 1 }, '50%': { opacity: 0.3 } },
-          }),
-        }}
-      />
+      {status === 'running' ? (
+        <Orb state="working" px={16} label={label} />
+      ) : (
+        <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: c }} />
+      )}
       <Typography component="span" sx={{ fontSize: '0.6875rem', fontWeight: 600, lineHeight: '18px' }}>
         {label}
       </Typography>

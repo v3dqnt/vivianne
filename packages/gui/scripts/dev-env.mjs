@@ -54,6 +54,11 @@ function runUnix() {
   const env = { ...process.env }
 
   if (process.platform === 'darwin') {
+    // Vivianne supports macOS 10.15 Catalina. Without this, C dependencies
+    // (whisper.cpp, sqlite) are built for the build machine's macOS and
+    // the app refuses to start on anything older. Apple Silicon's floor is
+    // 11.0 regardless, which the toolchain applies by itself.
+    env.MACOSX_DEPLOYMENT_TARGET ||= '10.15'
     // libclang.dylib ships inside the Xcode/CLT toolchain. `xcode-select -p`
     // resolves for both a full Xcode and the standalone Command Line Tools.
     if (!env.LIBCLANG_PATH) {

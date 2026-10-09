@@ -8,6 +8,16 @@ export interface MemoryState {
   extractionEnabled: boolean
   lastExtractionAt: number | null
   lastPersonaSynthesisAt: number | null
+  /** When the last tidy-up pass (re-embed, episodes, dedupe, forgetting) ran. */
+  lastSleepAt?: number | null
+}
+
+/** Mirrors `agent::memory_sleep::SleepReport`. */
+export interface SleepReport {
+  reembedded: number
+  episodes: number
+  merged: number
+  archived: number
 }
 
 /** Mirrors `agent::memory::MemoryStatus` — `#[serde(rename_all = "camelCase")]`. */
@@ -29,4 +39,6 @@ export interface MemoryEntry {
   sessionId: string | null
   createdAt: number
   confidence: number
+  /** From the user's own memory (shared by every project), not this project's. */
+  userWide?: boolean
 }

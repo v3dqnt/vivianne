@@ -80,7 +80,11 @@ pub mod background;
 pub mod instant;
 pub mod overlays;
 pub mod activity;
+pub mod notch;
+pub mod mac_permissions;
 pub mod helium;
+pub mod supercharge;
+pub mod connections;
 pub mod automation;
 pub mod terminal;
 use crate::automation::AutomationStore;
@@ -89,6 +93,14 @@ use crate::agent::dev_server_manager::DevServerManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  // macOS: an app opened from Finder or the Dock gets launchd's bare PATH
+  // (/usr/bin:/bin:…), not the one the user's shell builds — so Homebrew's
+  // git, node, cargo and the rest would be invisible to every tool Vivianne
+  // runs. Ask the user's login shell for its PATH, once, before anything
+  // else starts. A dev build started from a terminal already has it; this is
+  // a no-op then.
+  #[cfg(target_os = "macos")]
+  fix_macos_path();
   // A profile (VIV_PROFILE) is a separate Vivianne on the same machine; its
   // webview storage (layout, last thread, …) must be separate too, or two
   // instances would share and overwrite each other's UI state.
@@ -374,12 +386,49 @@ pub fn run() {
       crate::activity::cmd_activity_set_size,
       crate::ai::chatgpt::cmd_chatgpt_status,
       crate::helium::cmd_helium_status,
+      crate::supercharge::cmd_supercharge_status,
+      crate::connections::cmd_connections_list,
+      crate::connections::cmd_connections_connect,
+      crate::connections::cmd_connections_cancel,
+      crate::connections::cmd_connections_disconnect,
+      crate::connections::cmd_connections_icon,
+      crate::ai::laya::cmd_laya_status,
+      crate::ai::laya::cmd_laya_set_enabled,
+      crate::ai::laya::cmd_laya_install,
+      crate::notch::cmd_notch_status,
+      crate::notch::cmd_notch_set_always_on,
+      crate::notch::cmd_notch_open_main,
+      crate::notch::cmd_notch_talk,
+      crate::notch::cmd_notch_app_ready,
+      crate::agent::memory_sleep::cmd_memory_sleep_now,
+      crate::ai::local_onnx::cmd_local_embedder_status,
+      crate::ai::local_onnx::cmd_local_embedder_install,
+      crate::ai::local_onnx::cmd_local_embedder_remove,
+      crate::mac_permissions::cmd_mac_permissions,
+      crate::mac_permissions::cmd_mac_request_permission,
+      crate::instant::native_mic::cmd_instant_mic_start,
+      crate::instant::native_mic::cmd_instant_mic_stop,
+      crate::notch::cmd_notch_stop,
+      crate::instant::session::cmd_instant_delegate_done,
+      crate::agent::diagram_check::cmd_diagram_check_done,
+      crate::supercharge::cmd_supercharge_scan,
+      crate::supercharge::cmd_supercharge_apply,
+      crate::supercharge::cmd_supercharge_restore,
       crate::helium::cmd_helium_open_extension_folder,
       crate::agent::bots::cmd_bots_room,
       crate::agent::bots::cmd_bots_post,
       crate::agent::bots::cmd_bots_dm,
       crate::agent::bots::cmd_bots_dm_send,
       crate::agent::bots::cmd_bots_status,
+      crate::agent::bots::cmd_general_agents_root,
+      crate::agent::contact::cmd_contact_get,
+      crate::agent::contact::cmd_contact_providers,
+      crate::agent::contact::cmd_contact_create_email,
+      crate::agent::contact::cmd_contact_remove_email,
+      crate::agent::contact::cmd_contact_search_numbers,
+      crate::agent::contact::cmd_contact_buy_number,
+      crate::agent::contact::cmd_contact_release_number,
+      crate::agent::contact::cmd_contact_set_inbound,
       crate::agent::bots::cmd_bots_settings,
       crate::agent::bots::cmd_bots_save_settings,
       crate::agent::bots::cmd_bots_stop,
@@ -425,10 +474,29 @@ pub fn run() {
       // adds a crash file — it never suppresses the normal panic output.
       crate::agent::telemetry::install_panic_hook(app.package_info().version.to_string());
 
+      // Memory upkeep while nothing else is running: re-embedding, session
+      // summaries, dedupe, forgetting (`agent::memory_sleep`).
+      crate::agent::memory_sleep::start(app.handle().clone());
+
       // Tray icon + close-to-background. Installed early so the close handler
       // is attached before the user can possibly reach the close button, and
       // so Viv Instant's chord keeps working once the window is dismissed.
       crate::background::init(app.handle());
+      // The decision engine starts loading so it's ready by the first
+      // request. (The notch comes up once the main window has loaded:
+      // `cmd_notch_app_ready`.)
+      tauri::async_runtime::spawn(async {
+        if crate::ai::laya::installed() && crate::ai::laya::enabled().await {
+          crate::ai::laya::warm();
+        }
+      });
+      {
+        let handle = app.handle().clone();
+        tauri::async_runtime::spawn(async move {
+          tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+          crate::notch::app_ready(&handle);
+        });
+      }
       crate::agent::telemetry::track("app.start", serde_json::json!({
         "version": app.package_info().version.to_string(),
         "os": format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
@@ -592,6 +660,7 @@ pub fn run() {
       app.manage(Arc::new(AutomationStore::new()));
       crate::automation::spawn_scheduler(app.handle().clone());
       crate::agent::bots::spawn_scheduler(app.handle().clone());
+      crate::agent::contact::spawn_inbound_poller(app.handle().clone());
       crate::helium::start(app.handle().clone());
 
       // PTY-backed terminal sessions (one per open tab).
@@ -781,7 +850,14 @@ pub fn run() {
       // last up-to-5s of unflushed data was silently lost, and every open
       // terminal shell / running dev server / running local model was
       // orphaned instead of exiting with the app.
+      // macOS: clicking the Dock icon of an app whose window is hidden (closed
+      // to the background) brings the window back, as Mac apps do.
+      #[cfg(target_os = "macos")]
+      if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
+        crate::background::show_main(app_handle);
+      }
       if let tauri::RunEvent::Exit = event {
+        crate::ai::laya::stop();
         tauri::async_runtime::block_on(async {
           crate::agent::usage_store::flush_all().await;
           if let Some(terminals) = app_handle.try_state::<Arc<crate::terminal::TerminalRegistry>>() {
@@ -796,4 +872,26 @@ pub fn run() {
         });
       }
     });
+}
+
+/// See the comment where it is called in `run`.
+#[cfg(target_os = "macos")]
+fn fix_macos_path() {
+  let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+  let out = std::process::Command::new(&shell)
+    .args(["-l", "-i", "-c", "printf '__VIV_PATH__%s' \"$PATH\""])
+    .stdin(std::process::Stdio::null())
+    .output();
+  let Ok(out) = out else { return };
+  let text = String::from_utf8_lossy(&out.stdout);
+  // Profiles print banners; take only what follows the marker.
+  if let Some(path) = text.rsplit("__VIV_PATH__").next().map(str::trim).filter(|p| p.contains('/')) {
+    let mut merged: Vec<String> = path.split(':').map(String::from).collect();
+    for p in std::env::var("PATH").unwrap_or_default().split(':') {
+      if !p.is_empty() && !merged.iter().any(|m| m == p) {
+        merged.push(p.to_string());
+      }
+    }
+    std::env::set_var("PATH", merged.join(":"));
+  }
 }

@@ -1,0 +1,17 @@
+corpus: packages/gui-next/src (225 files on disk, ignore rules on); 21 runs each
+
+case                                           p50 ms   p95 ms
+acu --version (start-up floor)                   14.8     23.5
+acu grep -F literal                              23.8     29.0
+rg   -F literal                                  31.0     34.5
+acu grep regex                                   24.1     28.1
+rg   regex                                       30.8     35.2
+acu grep -i regex alt                            25.0     28.2
+rg   -i regex alt                                32.0     34.2
+acu grep -l (files only)                         23.7     26.5
+rg   -l                                          31.1     37.3
+acu glob **/*.ts                                 18.8     21.2
+fd   -e ts                                   (tool not installed)
+acu ls -R                                        20.1     24.4
+acu skim                                         26.7     28.6
+acu find-def createAgentStore                    22.9     25.1

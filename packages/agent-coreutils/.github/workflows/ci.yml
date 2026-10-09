@@ -1,0 +1,65 @@
+# Build and test on every push. Written for the plan's matrix; not yet run on GitHub.
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, name: windows-x64 }
+          - { os: macos-latest, name: macos-arm64 }
+          - { os: macos-13, name: macos-x64 }
+          - { os: ubuntu-latest, name: linux-x64 }
+          - { os: ubuntu-24.04-arm, name: linux-arm64 }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: packages/agent-coreutils
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build
+      - name: Unit and command tests
+        run: ./build/acu_tests
+      - name: Crash safety (2000 kills)
+        run: python3 tests/crash_safety.py build/acu 2000
+      - name: Differential test against ripgrep
+        if: runner.os != 'Windows'
+        run: |
+          command -v rg >/dev/null || sudo apt-get install -y ripgrep || brew install ripgrep
+          bash tests/diff-vs-rg.sh "$PWD/build/acu" src
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/agent-coreutils
+    strategy:
+      matrix:
+        san: [address, undefined, thread]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y ninja-build
+      - run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_CXX_FLAGS="-fsanitize=${{ matrix.san }} -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=${{ matrix.san }}"
+      - run: cmake --build build
+      - run: ./build/acu_tests
+
+  musl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test on Alpine (musl)
+        run: |
+          docker run --rm -v "$PWD":/w -w /w/packages/agent-coreutils alpine:3.20 sh -c \
+            "apk add --no-cache build-base cmake ninja python3 bash && cmake -S . -B build-musl -G Ninja && cmake --build build-musl && ./build-musl/acu_tests"

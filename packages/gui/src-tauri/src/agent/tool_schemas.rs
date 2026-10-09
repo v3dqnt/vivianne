@@ -69,7 +69,22 @@ STRUCTURED MODE — Windows. PREFER THIS for any normal app: it is faster and fa
 - read_text{id?}: the full text of a document, field or the whole window.
 Ids last until the next snapshot/find; after anything that changes the UI, snapshot again. Use pixel mode only for what snapshot can't see (games, canvas, custom-drawn UI).";
 
-#[allow(unused_mut)] // `mut` on `computer_actions` only needed on Windows, extended below
+/// The macOS half of the `dip` description — structured mode through the
+/// Accessibility API (`coding_agent::dip_mac`).
+#[cfg(target_os = "macos")]
+const STRUCTURED_MODE_DOC: &str = "
+
+STRUCTURED MODE — macOS (Accessibility). PREFER THIS for any normal app: it is faster and far more reliable than pixels. It needs Vivianne allowed under System Settings → Privacy & Security → Accessibility; if a call says it isn't, tell the user once and use pixel mode meanwhile.
+- list_windows: every open window, front app first, with ids.
+- launch_app{command, args?}: open an app by name (Safari, TextEdit, \"Visual Studio Code\"), a file, a folder or a URL. Waits for its window and makes it the target.
+- focus_window{id}: bring a window forward and make it the target. window_action{id, window_state}: minimize/maximize (zoom)/restore/close.
+- snapshot{id?}: the window's UI as an indented list, e.g. `[12] TextField \"To\" = \"ana@example.com\" *focused`. Without an id it reads the target window.
+- find{query}: only the elements matching a name, value or type.
+- interact{id, element_action, value?}: click, double_click, right_click, invoke, focus, set_value (REPLACES the field's text), toggle, select, expand, collapse, increment, decrement, scroll_into_view.
+- read_text{id?}: the full text of a document, field or the whole window.
+Keyboard shortcuts on a Mac use cmd, not ctrl: key{text: \"cmd+s\"}. Typing and keys always go to the target app, never into Vivianne. Ids last until the next snapshot/find; snapshot again after the UI changes. Use pixel mode only for what snapshot can't see.";
+
+#[allow(unused_mut)] // `mut` on `computer_actions` only needed on Windows and macOS, extended below
 pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
     // The `computer` tool's action list — cross-platform "pixel mode" plus,
     // on Windows only, "structured mode" (real UI Automation tree instead of
@@ -93,10 +108,13 @@ pub(super) fn static_tool_definitions() -> Vec<serde_json::Value> {
     // was not, so on macOS and Linux the model was told at length to prefer
     // structured mode, then rejected for calling an action the schema does
     // not list — an unforced error loop on every non-Windows host.
-    #[cfg(target_os = "windows")]
+    #[cfg(target_os = "macos")]
+    computer_actions.extend(["snapshot", "find", "read_text", "interact", "list_windows", "focus_window", "window_action", "launch_app"]);
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     let structured_mode = STRUCTURED_MODE_DOC;
-    #[cfg(not(target_os = "windows"))]
-    let structured_mode = "\n\nSTRUCTURED MODE (reading an app's real UI tree instead of guessing pixels) is Windows-only and unavailable on this machine, so pixel mode is the only option here. Take a screenshot, act on what you see in it, then screenshot again to confirm the action landed.";
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let structured_mode = "\n\nSTRUCTURED MODE (reading an app's real UI tree instead of guessing pixels) is available on Windows and macOS but not on this machine, so pixel mode is the only option here. Take a screenshot, act on what you see in it, then screenshot again to confirm the action landed.";
 
     let mut defs = vec![
         serde_json::json!({
@@ -270,20 +288,34 @@ XLSX edits existing cells only; use create_document to build a sheet with new on
         }),
         serde_json::json!({
             "name": "create_document",
-            "description": "Create a real PDF, Word (docx), Excel (xlsx), or PowerPoint (pptx) file on disk that opens in the corresponding app. Use this when the user asks for a document, report, spreadsheet, or deck as a FILE — not when they just want text in the chat.
-
-pdf/docx take `blocks`: an ordered array of {type: \"heading\"|\"paragraph\"|\"bullets\"|\"table\"} where heading has `text` and `level` (1-3), paragraph has `text`, bullets has `items` (array of strings), and table has `rows` (array of arrays; the first row is treated as a header).
-xlsx takes `sheets`: [{name, rows: [[cell, ...], ...]}] — numbers stay numeric so Excel can sum them, and the first row is bolded as a header.
-pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only.",
+            "description": "Create a real, designed file: PDF, Word (docx), Excel (xlsx), PowerPoint (pptx), or an image (png). Use it whenever the user wants a document, deck, spreadsheet, poster or graphic as a FILE. Before making one, read the design guide for it with `guide` (`design/principles`, then `design/formats/<pdf|slides|docx|xlsx|graphics>`). After, look at the preview image attached to the result and fix anything that looks wrong.\n\
+pdf/docx: `blocks` (heading, paragraph, bullets, numbered, table, image, quote, callout, code, metrics, chart, divider, page_break; inline **bold**, *italic*, `code`, [link](url)) with `title`, `subtitle`, `eyebrow`, `author`, `date`, `cover`. pdf can instead take `html` for any design the blocks can't express (a fragment gets the house stylesheet; a full document is used as is), or `slides` for a 16:9 PDF deck.\n\
+pptx: `slides` [{title, subtitle?, bullets?, left/right {heading, bullets}, stats [{label, value, note}], chart, table, image, quote, by, layout?}] — layouts title, section, bullets, two_column, image, quote, stats, table, chart, closing.\n\
+xlsx: `sheets` [{name, rows, columns [{width, format: currency|percent|number|integer|date}], total_row, charts [{type, title, categories: \"A\", values: [\"B\"], anchor}]}]; strings starting with = are formulas.\n\
+png: `html` and `size` {width, height} in pixels: posters, social images, covers, cards.\n\
+`theme`: modern (default), editorial, classic, minimal, warm, forest, midnight (dark) — or {preset, accent: \"#hex\"} for a brand colour.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "format": { "type": "string", "enum": ["pdf", "docx", "xlsx", "pptx"], "description": "Which file type to write" },
-                    "path": { "type": "string", "description": "Where to write it, relative to the workspace (e.g. \"reports/q1.xlsx\")" },
-                    "title": { "type": "string", "description": "Document title, rendered at the top — pdf/docx only" },
-                    "blocks": { "type": "array", "items": { "type": "object" }, "description": "Ordered content blocks — required for pdf and docx" },
-                    "sheets": { "type": "array", "items": { "type": "object" }, "description": "Worksheets — required for xlsx" },
-                    "slides": { "type": "array", "items": { "type": "object" }, "description": "Slides — required for pptx" }
+                    "format": { "type": "string", "enum": ["pdf", "docx", "xlsx", "pptx", "png"] },
+                    "path": { "type": "string", "description": "Where to write it, relative to the workspace. Name it for the reader: \"Q4 Board Report.pdf\"." },
+                    "theme": { "description": "A preset name, or {preset, accent, accent2, heading_font, body_font}." },
+                    "title": { "type": "string" },
+                    "subtitle": { "type": "string" },
+                    "eyebrow": { "type": "string", "description": "A short label above the title, e.g. \"Board report\"." },
+                    "author": { "type": "string" },
+                    "date": { "type": "string" },
+                    "cover": { "type": "boolean", "description": "pdf/docx: a cover page." },
+                    "footer": { "type": "string", "description": "Running head text (defaults to the title)." },
+                    "page_size": { "type": "string", "enum": ["A4", "letter", "legal", "A3", "A5"], "description": "pdf/docx page (default A4)." },
+                    "page": { "type": "object", "description": "pdf/docx custom page: {width_mm, height_mm}." },
+                    "orientation": { "type": "string", "enum": ["portrait", "landscape"] },
+                    "blocks": { "type": "array", "items": { "type": "object" } },
+                    "html": { "type": "string", "description": "pdf/png: your own HTML/CSS. Fonts 'Inter' and 'Source Serif 4' are embedded." },
+                    "size": { "type": "object", "description": "png: {width, height} in CSS pixels (rendered at 2x)." },
+                    "slides": { "type": "array", "items": { "type": "object" } },
+                    "sheets": { "type": "array", "items": { "type": "object" } },
+                    "preview": { "type": "boolean", "description": "Attach a picture of the first page/slide (default true)." }
                 },
                 "required": ["format", "path"]
             }
@@ -381,7 +413,8 @@ pptx takes `slides`: [{title, bullets: [...]}] — title-and-bullets layout only
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "What to search memory for" }
+                    "query": { "type": "string", "description": "What to search memory for" },
+                    "as_of": { "type": "string", "description": "Optional date (YYYY-MM-DD, or YYYY-MM): recall what was true then instead of now. Facts that were later corrected are kept on record, so this answers \"what did we decide in March\"." }
                 },
                 "required": ["query"]
             }
@@ -1013,6 +1046,11 @@ When you hit a login wall: call browser_session_status first, and if there is ge
         }),
         crate::agent::math::schema(),
         crate::helium::schema(),
+        // Shown only to a bot with its own address or number (`compute_restrictions`).
+        crate::agent::contact::schemas()[0].clone(),
+        crate::agent::contact::schemas()[1].clone(),
+        crate::agent::guides::schema(),
+        crate::agent::diagram_check::schema(),
         serde_json::json!({
             "name": "create_tool",
             "description": "Write a new tool in Python and save it for reuse. Use it when a task needs something the other tools don't do and it's likely to come up again (a format conversion, a query against an API, an analysis the user keeps asking for). The saved tool joins the tool list of every model the user runs, in every project, from your next step. The code is a Python module defining `def run(**args)` that returns a string or anything JSON-serialisable; the standard library and whatever is pip-installed are available, and it runs in the project folder. Give `test_args` to run it once before saving: if that run fails, nothing is saved and you get the traceback. Before creating one, check your tool list for an existing tool that already does it.",

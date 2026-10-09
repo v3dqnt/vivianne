@@ -9,7 +9,7 @@
 //!   <root>/.vivianne/memory/entries.jsonl  — append-only memory entries
 
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const MAX_CONTEXT_BYTES: usize = 8_000;
 const MAX_RECALL_HITS: usize = 8;
@@ -107,6 +107,7 @@ pub fn category_half_life_days(kind: &str) -> f64 {
         "entity" => 60.0,
         "instruction" => 180.0,
         "auto" => 45.0,
+        "episode" => 120.0,
         _ => 45.0, // "fact" and unknown kinds default to 45 days
     }
 }
@@ -123,10 +124,18 @@ pub fn effective_confidence(
     access_count: u32,
     half_life_days: f64,
 ) -> f32 {
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
+    effective_confidence_at(confidence, created_at_ms, last_accessed_at_ms, access_count, half_life_days, now_ms())
+}
+
+/// `effective_confidence` as of `now_ms`.
+pub fn effective_confidence_at(
+    confidence: f32,
+    created_at_ms: u64,
+    last_accessed_at_ms: u64,
+    access_count: u32,
+    half_life_days: f64,
+    now_ms: u64,
+) -> f32 {
     // Use last_accessed_at for age if available (resets decay on each access),
     // otherwise created_at. Using access-time-based age means refreshing a
     // memory keeps it from decaying further — the "use it or lose it" dynamic.
@@ -152,6 +161,15 @@ pub struct MemoryState {
     pub last_extraction_at: Option<u64>,
     #[serde(default)]
     pub last_persona_synthesis_at: Option<u64>,
+    /// The chat model last used in this project — what sleep-time work
+    /// (episode summaries) runs on, since it runs outside any turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_model: Option<crate::agent::types::ModelRef>,
+    /// The newest session note already summarised into an episode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_episode_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_sleep_at: Option<u64>,
 }
 
 impl Default for MemoryState {
@@ -166,6 +184,9 @@ impl Default for MemoryState {
             extraction_enabled: false,
             last_extraction_at: None,
             last_persona_synthesis_at: None,
+            last_model: None,
+            last_episode_at: None,
+            last_sleep_at: None,
         }
     }
 }
@@ -199,6 +220,10 @@ pub struct MemoryEntry {
     /// from the same model. `None` means un-embedded (no vector yet).
     #[serde(default)]
     pub embedding_model: Option<String>,
+    /// From the user's own store (who they are, how they work — shared by
+    /// every project) rather than this project's. Set by recall, not stored.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub user_wide: bool,
 }
 
 fn default_confidence() -> f32 { 1.0 }
@@ -219,7 +244,21 @@ pub(crate) fn now_ms() -> u64 {
 }
 
 fn memory_dir(root: &str) -> PathBuf {
-    crate::agent::paths::project_viv_path(Path::new(root), &["memory"])
+    super::memory_store::memory_dir(root)
+}
+
+use super::memory_store::USER_ROOT;
+
+/// Facts about the user themselves — traits, preferences, how they like to
+/// work — belong to every project, so they go to the user's own store.
+pub(crate) fn is_user_wide_kind(kind: &str) -> bool {
+    matches!(kind, "persona" | "preference")
+}
+
+/// Whether the user's own store has been started (recall skips it until
+/// something is written there, rather than creating it empty).
+fn user_store_exists() -> bool {
+    memory_dir(USER_ROOT).join("memory.db").exists()
 }
 
 fn state_path(root: &str) -> PathBuf {
@@ -238,6 +277,20 @@ async fn read_state(root: &str) -> MemoryState {
     let path = state_path(root);
     let Ok(content) = tokio::fs::read_to_string(&path).await else { return MemoryState::default() };
     serde_json::from_str(&content).unwrap_or_default()
+}
+
+pub(crate) async fn save_state(root: &str, state: &MemoryState) -> Result<(), String> {
+    write_state(root, state).await
+}
+
+/// Remember which model worked in `root` last, for sleep-time work.
+pub async fn note_model(root: &str, model: &crate::agent::types::ModelRef) {
+    let mut state = read_state(root).await;
+    let same = state.last_model.as_ref().is_some_and(|m| m.id == model.id && m.provider == model.provider);
+    if !same && state.enabled {
+        state.last_model = Some(model.clone());
+        let _ = write_state(root, &state).await;
+    }
 }
 
 async fn write_state(root: &str, state: &MemoryState) -> Result<(), String> {
@@ -427,7 +480,12 @@ pub async fn context(root: &str) -> Option<(String, usize)> {
         return None;
     }
 
-    let persona_block = match tokio::fs::read_to_string(persona_path(root)).await {
+    let user_persona = tokio::fs::read_to_string(persona_path(USER_ROOT)).await.ok().filter(|p| !p.trim().is_empty());
+    let persona = match user_persona {
+        Some(p) => Ok(p),
+        None => tokio::fs::read_to_string(persona_path(root)).await,
+    };
+    let persona_block = match persona {
         Ok(persona) if !persona.trim().is_empty() => {
             Some(format!("<user_persona>\n{}\n</user_persona>", persona.trim()))
         }
@@ -498,10 +556,12 @@ pub async fn remember(
         access_count: 0,
         last_accessed_at: 0,
         embedding_model: None,
+        user_wide: false,
     };
     append_entry(root, &entry).await?;
     let _ = super::memory_store::insert_entry(root, &entry).await;
     spawn_background_embed(root, &entry, auth);
+    super::memory_sleep::mark_dirty(root);
     let mut state = read_state(root).await;
     state.updated_at = now_ms();
     write_state(root, &state).await?;
@@ -573,28 +633,102 @@ pub async fn recall(
     auth: Option<&std::sync::Arc<crate::ai::auth::AuthState>>,
     reranker: Option<RerankerOptions<'_>>,
 ) -> Vec<MemoryEntry> {
+    recall_at(root, query, None, auth, reranker).await
+}
+
+/// The end of a day (`YYYY-MM-DD`) or month (`YYYY-MM`), UTC, in ms since
+/// the epoch — the moment `recall`'s `as_of` asks about.
+pub fn parse_as_of(s: &str) -> Option<u64> {
+    let parts: Vec<i64> = s.trim().split('-').map(|p| p.parse::<i64>().ok()).collect::<Option<_>>()?;
+    let (y, m, d) = match parts.as_slice() {
+        [y, m] => (*y, *m, None),
+        [y, m, d] => (*y, *m, Some(*d)),
+        _ => return None,
+    };
+    if !(1..=12).contains(&m) || y < 1970 {
+        return None;
+    }
+    // Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm).
+    let days = |y: i64, m: i64, d: i64| {
+        let y = if m <= 2 { y - 1 } else { y };
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        era * 146_097 + doe - 719_468
+    };
+    // The first day after the period, so everything within it counts.
+    let next = match d {
+        Some(d) if (1..=31).contains(&d) => days(y, m, d) + 1,
+        Some(_) => return None,
+        None => if m == 12 { days(y + 1, 1, 1) } else { days(y, m + 1, 1) },
+    };
+    Some((next * 86_400_000 - 1) as u64)
+}
+
+/// `recall` over what was true at `as_of` (ms since epoch) — "what did I
+/// think in March" — or what is true now, for `None`.
+pub async fn recall_at(
+    root: &str,
+    query: &str,
+    as_of: Option<u64>,
+    auth: Option<&std::sync::Arc<crate::ai::auth::AuthState>>,
+    reranker: Option<RerankerOptions<'_>>,
+) -> Vec<MemoryEntry> {
+    recall_in(root, true, query, as_of, auth, reranker).await
+}
+
+/// `recall_at`, with or without the user's own store — the benchmark
+/// measures a project store on its own.
+pub(crate) async fn recall_in(
+    root: &str,
+    include_user: bool,
+    query: &str,
+    as_of: Option<u64>,
+    auth: Option<&std::sync::Arc<crate::ai::auth::AuthState>>,
+    reranker: Option<RerankerOptions<'_>>,
+) -> Vec<MemoryEntry> {
+    let user_store = include_user && user_store_exists();
     let query = query.trim();
     if query.is_empty() {
         return Vec::new();
     }
 
-    let fts_fut = super::memory_store::search_fts(root, query, MAX_RECALL_HITS * 3);
-    let vector_fut = async {
-        let auth = auth?;
-        let embedding = crate::ai::embedding::embed_text(auth, query).await.ok().flatten()?;
-        super::memory_store::search_vector(root, &embedding, MAX_RECALL_HITS * 3).await.ok()
+    let embedding = crate::ai::embedding::embed_query(auth.map(|a| a.as_ref()), query).await.ok().flatten();
+    // This project's store and the user's own, searched together: each
+    // gives a keyword list and a vector list, and all four are fused.
+    let search = |store: &'static str, user_wide: bool| {
+        let store_root = if user_wide { store.to_string() } else { root.to_string() };
+        let embedding = embedding.clone();
+        async move {
+            if user_wide && !user_store {
+                return Vec::new();
+            }
+            let fts = super::memory_store::search_fts_at(&store_root, query, MAX_RECALL_HITS * 3, as_of).await.unwrap_or_default();
+            let vec = match embedding {
+                Some(e) => super::memory_store::search_vector_scored_at(&store_root, &e, MAX_RECALL_HITS * 3, as_of)
+                    .await
+                    .map(|hits| hits.into_iter().map(|(e, _)| e).collect())
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            };
+            let mark = |mut v: Vec<MemoryEntry>| {
+                v.iter_mut().for_each(|e| e.user_wide = user_wide);
+                v
+            };
+            vec![mark(fts), mark(vec)]
+        }
     };
-    let (fts_results, vector_results) = tokio::join!(fts_fut, vector_fut);
-    let fts_results = fts_results.unwrap_or_default();
-    let vector_results = vector_results.unwrap_or_default();
+    let (project_lists, user_lists) = tokio::join!(search("", false), search(USER_ROOT, true));
+    let lists: Vec<Vec<MemoryEntry>> = project_lists.into_iter().chain(user_lists).filter(|l| !l.is_empty()).collect();
 
-    if fts_results.is_empty() && vector_results.is_empty() {
+    if lists.is_empty() {
         return Vec::new();
     }
 
     // Step 1: RRF merge (identity ranking — no confidence factored in yet,
-    // just position across BM25 + vector lists)
-    let merged = super::rrf::rrf_merge(&[fts_results, vector_results], |e: &MemoryEntry| e.id.clone(), super::rrf::RRF_K);
+    // just position across the BM25 + vector lists of both stores)
+    let merged = super::rrf::rrf_merge(&lists, |e: &MemoryEntry| e.id.clone(), super::rrf::RRF_K);
 
     // Step 2: Decay the RRF score by each entry's effective confidence so
     // stale/rarely-accessed entries sink below the gate threshold
@@ -672,12 +806,17 @@ pub async fn recall(
     // follow typed edges to discover indirectly related memories. Cascade
     // results are ranked below direct matches with a fractional score.
     let mut gated = selected;
-    {
+    // Each store's edges link only its own facts, so each cascades from its
+    // own seeds.
+    for (store, user_wide) in [(root, false), (USER_ROOT, true)] {
+        if user_wide && !user_store {
+            continue;
+        }
         // Load all edges — this is cheap for personal-scale stores; revisit
         // with pagination if the edge table exceeds ~10K rows.
-        if let Ok(edges) = super::memory_store::all_edges(root).await {
-            if !edges.is_empty() && !gated.is_empty() {
-                let seed_ids: Vec<String> = gated.iter().map(|e| e.id.clone()).collect();
+        if let Ok(edges) = super::memory_store::all_edges(store).await {
+            if !edges.is_empty() && gated.iter().any(|e| e.user_wide == user_wide) {
+                let seed_ids: Vec<String> = gated.iter().filter(|e| e.user_wide == user_wide).map(|e| e.id.clone()).collect();
                 let cascade = super::memory_graph::bfs_cascade(
                     &seed_ids,
                     &edges,
@@ -695,7 +834,7 @@ pub async fn recall(
                         .collect();
                     if !new_ids.is_empty() {
                         if let Ok(cascade_entries) =
-                            super::memory_store::get_entries_by_ids(root, &new_ids).await
+                            super::memory_store::get_entries_by_ids(store, &new_ids).await
                         {
                             // Add cascade entries sorted by cumulative_weight descending,
                             // ranked below direct matches.
@@ -707,7 +846,9 @@ pub async fn recall(
                             cascade_to_add.sort();
                             for cid in &cascade_to_add {
                                 if let Some(entry) = cascade_entries.iter().find(|e| e.id == *cid) {
-                                    gated.push(entry.clone());
+                                    let mut entry = entry.clone();
+                                    entry.user_wide = user_wide;
+                                    gated.push(entry);
                                 }
                             }
                         }
@@ -719,7 +860,8 @@ pub async fn recall(
 
     // Step 6: Bump access_count + last_accessed_at for surfaced entries
     for entry in &gated {
-        let _ = super::memory_store::touch_entry(root, &entry.id).await;
+        let store = if entry.user_wide { USER_ROOT } else { root };
+        let _ = super::memory_store::touch_entry(store, &entry.id).await;
     }
 
     gated
@@ -755,10 +897,12 @@ pub async fn auto_capture(
         access_count: 0,
         last_accessed_at: 0,
         embedding_model: None,
+        user_wide: false,
     };
     append_entry(root, &entry).await?;
     let _ = super::memory_store::insert_entry(root, &entry).await;
     spawn_background_embed(root, &entry, auth);
+    super::memory_sleep::mark_dirty(root);
     Ok(Some(entry))
 }
 
@@ -820,13 +964,24 @@ pub async fn run_l1_extraction(app: tauri::AppHandle, root: String, model: crate
                 access_count: 0,
                 last_accessed_at: 0,
                 embedding_model: None,
+                user_wide: false,
             },
             scene,
         });
     }
     // Reconciled against what is already known (ADD / UPDATE / DELETE /
-    // NOOP) instead of appended: see `memory_evolve`.
-    let (added, updated, deleted, skipped) = super::memory_evolve::write_facts(&app, &root, &model, candidates).await;
+    // NOOP) instead of appended: see `memory_evolve`. Facts about the user
+    // themselves are reconciled against the user's own store.
+    let (user_facts, project_facts): (Vec<_>, Vec<_>) = candidates.into_iter().partition(|c| is_user_wide_kind(&c.entry.kind));
+    let (mut added, mut updated, mut deleted, mut skipped) = super::memory_evolve::write_facts(&app, &root, &model, project_facts).await;
+    if !user_facts.is_empty() {
+        super::memory_sleep::mark_dirty(USER_ROOT);
+        let (a, u, d, s) = super::memory_evolve::write_facts(&app, USER_ROOT, &model, user_facts).await;
+        added += a;
+        updated += u;
+        deleted += d;
+        skipped += s;
+    }
     log::info!(
         "[memory] L1 extraction from {} notes: {added} added, {updated} merged, {deleted} replaced, {skipped} already known",
         batch.len()
@@ -836,10 +991,11 @@ pub async fn run_l1_extraction(app: tauri::AppHandle, root: String, model: crate
     state.last_extraction_at = Some(now_ms());
     let _ = write_state(&root, &state).await;
 
-    let persona_after = state.last_persona_synthesis_at.unwrap_or(0);
-    if let Ok(n) = super::memory_store::count_since(&root, "persona", persona_after).await {
+    // The profile is the user's: built from their store, kept with it.
+    let persona_after = read_state(USER_ROOT).await.last_persona_synthesis_at.unwrap_or(0);
+    if let Ok(n) = super::memory_store::count_since(USER_ROOT, "persona", persona_after).await {
         if n as u64 >= PERSONA_BATCH_SIZE {
-            run_l3_persona_synthesis(app, root, model).await;
+            run_l3_persona_synthesis(app, USER_ROOT.to_string(), model).await;
         }
     }
 }

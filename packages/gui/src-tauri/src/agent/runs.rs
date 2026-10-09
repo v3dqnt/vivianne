@@ -54,7 +54,29 @@ pub struct RunMeta {
     pub tool_calls: u32,
     #[serde(default)]
     pub comments: Vec<RunComment>,
+    /// Subagents this specialist spawned during the run.
+    #[serde(default)]
+    pub children: Vec<ChildRun>,
 }
+
+/// A subagent an employee spawned for part of its own work.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildRun {
+    pub id: String,
+    /// The subagent type it was started as (e.g. "explore").
+    pub kind: String,
+    pub description: String,
+    /// `running`, `completed`, `failed` or `cancelled`.
+    pub status: String,
+    pub started_at: u64,
+    #[serde(default)]
+    pub ended_at: Option<u64>,
+}
+
+/// Run records are read, changed and written back, by a run and by the
+/// subagents it spawns at the same time; one at a time keeps every change.
+static META_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn runs_dir() -> Result<PathBuf, String> {
     let dir = crate::agent::commands::get_session_dir()?.join("agent-runs");
@@ -108,7 +130,10 @@ pub fn start(app: &tauri::AppHandle, id: &str, root: &str, agent_id: &str, agent
         turns: 0,
         tool_calls: 0,
         comments: Vec::new(),
+        children: Vec::new(),
     };
+    crate::notch::run_started(app, id, root, agent_name, description);
+    let _guard = META_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     match write_meta(&meta) {
         Ok(()) => announce(app, &meta),
         Err(e) => log::warn!("[runs] couldn't record run start: {e}"),
@@ -130,6 +155,8 @@ pub fn finish(app: &tauri::AppHandle, id: &str) {
         };
         (status, output, turns, tool_calls, messages)
     };
+    crate::notch::run_finished(app, id, status);
+    let _guard = META_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Ok(mut meta) = read_meta(id) else { return };
     meta.status = status.to_string();
     meta.output = output;
@@ -145,6 +172,45 @@ pub fn finish(app: &tauri::AppHandle, id: &str) {
         log::warn!("[runs] couldn't record run end: {e}");
     }
     announce(app, &meta);
+}
+
+/// Record a subagent the specialist of run `parent` just started.
+pub fn start_child(app: &tauri::AppHandle, parent: &str, id: &str, kind: &str, description: &str) {
+    crate::notch::child_started(app, parent, id, kind, description);
+    let _guard = META_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Ok(mut meta) = read_meta(parent) else { return };
+    meta.children.push(ChildRun {
+        id: id.to_string(),
+        kind: kind.to_string(),
+        description: description.to_string(),
+        status: "running".to_string(),
+        started_at: now_ms(),
+        ended_at: None,
+    });
+    if write_meta(&meta).is_ok() {
+        announce(app, &meta);
+    }
+}
+
+/// Record how a subagent of run `parent` ended, from its live handle.
+pub fn finish_child(app: &tauri::AppHandle, parent: &str, id: &str) {
+    crate::notch::child_finished(app, parent, id);
+    let status = SubagentRegistry::global()
+        .get(id)
+        .map(|arc| match arc.lock().unwrap_or_else(|e| e.into_inner()).status {
+            SubagentStatus::Failed { .. } | SubagentStatus::Initializing => "failed",
+            SubagentStatus::Cancelled { .. } => "cancelled",
+            _ => "completed",
+        })
+        .unwrap_or("completed");
+    let _guard = META_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Ok(mut meta) = read_meta(parent) else { return };
+    let Some(child) = meta.children.iter_mut().find(|c| c.id == id) else { return };
+    child.status = status.to_string();
+    child.ended_at = Some(now_ms());
+    if write_meta(&meta).is_ok() {
+        announce(app, &meta);
+    }
 }
 
 /// The live handle's status, when the run is still in this process.
@@ -169,6 +235,15 @@ pub async fn cmd_list_agent_runs(root: String, agent_id: String) -> Result<Vec<R
         .filter_map(|t| serde_json::from_str::<RunMeta>(&t).ok())
         .filter(|m| m.root == root && m.agent_id == agent_id)
         .collect();
+    for run in runs.iter_mut() {
+        // A subagent still marked running that this process doesn't have
+        // ended with the app.
+        for child in run.children.iter_mut().filter(|c| c.status == "running") {
+            if live_status(&child.id).is_none() {
+                child.status = "interrupted".to_string();
+            }
+        }
+    }
     for run in runs.iter_mut().filter(|r| r.status == "running") {
         match live_status(&run.id) {
             Some((true, turns, tool_calls)) => {

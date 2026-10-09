@@ -50,6 +50,8 @@ pub enum Embedder {
     Nvidia,
     /// The bundled offline all-MiniLM model, when it's been downloaded.
     Local,
+    /// The offline EmbeddingGemma model, when it's been downloaded.
+    LocalGemma,
 }
 
 impl Embedder {
@@ -58,13 +60,14 @@ impl Embedder {
             Embedder::OpenAi => "text-embedding-3-small",
             Embedder::Nvidia => "nvidia/nv-embedqa-e5-v5",
             Embedder::Local => "all-MiniLM-L6-v2",
+            Embedder::LocalGemma => "embeddinggemma-300m",
         }
     }
     fn url(self) -> &'static str {
         match self {
             Embedder::OpenAi => "https://api.openai.com/v1/embeddings",
             Embedder::Nvidia => "https://integrate.api.nvidia.com/v1/embeddings",
-            Embedder::Local => "",
+            Embedder::Local | Embedder::LocalGemma => "",
         }
     }
     pub fn label(self) -> &'static str {
@@ -72,6 +75,7 @@ impl Embedder {
             Embedder::OpenAi => "OpenAI embeddings",
             Embedder::Nvidia => "NVIDIA embeddings",
             Embedder::Local => "local MiniLM embeddings",
+            Embedder::LocalGemma => "local EmbeddingGemma embeddings",
         }
     }
 }
@@ -96,8 +100,10 @@ pub async fn pick_embedder() -> Option<(Embedder, String)> {
             }
         }
     }
-    if crate::ai::local_onnx::is_model_installed() {
-        return Some((Embedder::Local, String::new()));
+    match crate::ai::local_onnx::active() {
+        Some(crate::ai::local_onnx::LocalModel::Gemma) => return Some((Embedder::LocalGemma, String::new())),
+        Some(crate::ai::local_onnx::LocalModel::MiniLm) => return Some((Embedder::Local, String::new())),
+        None => {}
     }
     None
 }
@@ -254,8 +260,9 @@ fn http() -> &'static reqwest::Client {
 }
 
 async fn embed(embedder: Embedder, key: &str, inputs: &[String], query: bool) -> Result<Vec<Vec<f32>>, String> {
-    if embedder == Embedder::Local {
-        return match crate::ai::local_onnx::embed_local_batch(inputs).await? {
+    if matches!(embedder, Embedder::Local | Embedder::LocalGemma) {
+        let purpose = if query { crate::ai::local_onnx::Purpose::Query } else { crate::ai::local_onnx::Purpose::Document };
+        return match crate::ai::local_onnx::embed_local_batch(inputs, purpose).await? {
             Some(vectors) => Ok(vectors.into_iter().map(normalise).collect()),
             None => Err("the local embedding model isn't available".to_string()),
         };

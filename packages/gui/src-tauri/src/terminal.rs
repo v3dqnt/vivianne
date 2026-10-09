@@ -115,6 +115,10 @@ pub fn available_shells() -> Vec<ShellOption> {
             shells.push(ShellOption { id: format!("gitbash:{path}"), label: "Git Bash".to_string() });
         }
         shells.push(ShellOption { id: "cmd".to_string(), label: "Command Prompt".to_string() });
+    } else if cfg!(target_os = "macos") {
+        // zsh has been macOS's default shell since 10.15; first is the default.
+        shells.push(ShellOption { id: "zsh".to_string(), label: "Zsh".to_string() });
+        shells.push(ShellOption { id: "bash".to_string(), label: "Bash".to_string() });
     } else {
         shells.push(ShellOption { id: "bash".to_string(), label: "Bash".to_string() });
         shells.push(ShellOption { id: "zsh".to_string(), label: "Zsh".to_string() });
@@ -135,6 +139,11 @@ fn build_command(shell_id: &str, cwd: &str, strip_secrets: bool) -> CommandBuild
     } else {
         // bash/zsh/etc, resolved via PATH by name.
         let mut c = CommandBuilder::new(shell_id);
+        // A login shell on macOS, as Terminal starts: that's what reads
+        // ~/.zprofile, where Homebrew puts itself on PATH.
+        if cfg!(target_os = "macos") {
+            c.arg("-l");
+        }
         c.arg("-i");
         c
     };

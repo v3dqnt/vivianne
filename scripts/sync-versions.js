@@ -31,6 +31,9 @@ for (const dir of packageDirs) {
 	const pkgPath = join(packagesDir, dir, 'package.json');
 	try {
 		const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+		// Unversioned packages (scratch projects like a trailer render) aren't
+		// released, so they sit outside the lockstep.
+		if (!pkg.version) continue;
 		packages[dir] = { path: pkgPath, data: pkg };
 		versionMap[pkg.name] = pkg.version;
 	} catch (e) {

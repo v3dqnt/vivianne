@@ -37,7 +37,7 @@ Vivianne is a native desktop app (Tauri 2, Rust and React). You talk to it in a 
 
 **Your computer and your browser**
 - **Computer control (DIP).** Uses Windows UI Automation to read and operate apps directly (fast, reliable, and with real keystrokes), with pixel control as a fallback. A notch at the top of the screen shows what it's doing, with a Stop button.
-- **Your own browser.** The [Vivianne extension for Helium](packages/helium-extension) lets Vivianne use the browser you're signed in to, in tabs it groups as "Vivianne".
+- **Your own browser.** The [Vivianne browser extension](packages/helium-extension) lets Vivianne use the browser you're signed in to (Chrome, Edge, Brave, Arc, Opera, Vivaldi, Helium or any other Chromium browser), in tabs it groups as "Vivianne".
 - **Viv Instant.** Hold `Ctrl+Shift+Space` anywhere, say what you want, let go. Speech recognition runs on your machine (Parakeet or Whisper).
 
 **Files, everywhere**
@@ -54,10 +54,10 @@ Download the installer from [Releases](https://github.com/v3dqnt/vivianne/releas
 
 Optional pieces live in **Settings → Components**: the browser engine for web tools, Docker for sandboxed code, and the Parakeet speech model for Viv Instant.
 
-### Helium extension
+### Browser extension
 
-1. Open Helium and go to `helium://extensions` (or `chrome://extensions` in any Chromium browser).
-2. Turn on **Developer mode**, choose **Load unpacked**, and pick the folder from **Settings → Browser** in Vivianne (`~/.viv/helium-extension`).
+1. Open your browser's extensions page: `chrome://extensions`, `edge://extensions`, `brave://extensions` or `helium://extensions`.
+2. Turn on **Developer mode**, choose **Load unpacked**, and pick the folder from **Settings → Web & browser** in Vivianne (`~/.viv/helium-extension`).
 3. The extension connects whenever Vivianne is running. Only this extension can connect to Vivianne's local bridge.
 
 ## Develop
@@ -84,7 +84,7 @@ cd packages/gui-next && npx tsc -p tsconfig.app.json --noEmit
 |------|--------------|
 | `packages/gui/src-tauri` | The backend (Rust): the agent loop, tools, providers, memory, teams, computer control, Viv Instant |
 | `packages/gui-next` | The app's interface (React, Radix-based UI kit) |
-| `packages/helium-extension` | The browser extension for Helium and other Chromium browsers |
+| `packages/helium-extension` | The browser extension, for any Chromium browser |
 | `packages/gesture-control` | A standalone tray app that turns webcam hand gestures into mouse and keyboard input |
 | `docs` | Privacy policy, terms, design notes |
 

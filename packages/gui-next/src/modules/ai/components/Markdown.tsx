@@ -3,13 +3,18 @@ import { Box, Link } from '../../../ui'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
-import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
+import { MathSpan } from './sci/MathSpan'
 import remend from 'remend'
 import { CodeBlock } from './CodeBlock'
 import { MermaidBlock } from './MermaidBlock'
 import { ChartBlock } from './ChartBlock'
 import { Model3DBlock } from './Model3DBlock'
+import { ChemBlock } from './sci/ChemBlock'
+import { BioBlock } from './sci/BioBlock'
+import { PlotBlock } from './sci/PlotBlock'
+import { PhysicsBlock } from './sci/PhysicsBlock'
+import { Mol3DBlock } from './sci/Mol3DBlock'
 import { useThrottledValue } from '../../../lib/useThrottledValue'
 import { normalizeMath } from '../lib/mathText'
 
@@ -76,9 +81,6 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        // `throwOnError: false` renders a malformed formula as red source text
-        // instead of failing the whole message.
-        rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: 'ignore' }]]}
         components={{
           a: ({ href, children }) => {
             // The model has no real way to emit a native <video>/<audio> tag
@@ -106,6 +108,8 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
             // `<pre>` — react-markdown gives both the same `code` renderer,
             // so the className is the only reliable inline/block signal.
             if (!match) return <code className={className}>{children}</code>
+            // Formulas: remark-math emits them as `language-math` code nodes.
+            if (match[1] === 'math') return <MathSpan tex={String(children).replace(/\n$/, '')} display={/math-display/.test(className ?? '')} />
             const code = String(children).replace(/\n$/, '')
             // Rich fence languages render as real figures rather than as
             // source. Same mechanism mermaid already used — the model emits a
@@ -114,6 +118,11 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
             if (match[1] === 'mermaid') return <MermaidBlock code={code} />
             if (match[1] === 'chart') return <ChartBlock code={code} />
             if (match[1] === 'model3d') return <Model3DBlock code={code} />
+            if (match[1] === 'chem') return <ChemBlock code={code} />
+            if (match[1] === 'bio') return <BioBlock code={code} />
+            if (match[1] === 'plot') return <PlotBlock code={code} />
+            if (match[1] === 'physics') return <PhysicsBlock code={code} />
+            if (match[1] === 'mol3d') return <Mol3DBlock code={code} />
             return <CodeBlock code={code} lang={match[1]} />
           },
           // The `code` renderer above already produces CodeBlock's own

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { call } from '../../../ipc'
-import type { MemoryEntry, MemoryState, MemoryStatus } from '../lib/memory'
+import type { MemoryEntry, MemoryState, MemoryStatus, SleepReport } from '../lib/memory'
 
 interface MemoryStoreState {
   status: MemoryStatus | null
@@ -12,6 +12,8 @@ interface MemoryStoreState {
   toggleExtraction: () => Promise<void>
   purge: () => Promise<void>
   recall: (query: string) => Promise<void>
+  /** Run a tidy-up pass now instead of waiting for the app to go idle. */
+  sleepNow: () => Promise<SleepReport | null>
 }
 
 export const useMemoryStore = create<MemoryStoreState>((set, get) => ({
@@ -61,5 +63,11 @@ export const useMemoryStore = create<MemoryStoreState>((set, get) => ({
     }
     const results = await call<MemoryEntry[]>('cmd_memory_recall', { query })
     set({ recallResults: results ?? [] })
+  },
+
+  sleepNow: async () => {
+    const report = await call<SleepReport>('cmd_memory_sleep_now')
+    await get().refresh()
+    return report ?? null
   },
 }))

@@ -54,6 +54,18 @@ export interface AgentRun {
   turns: number
   toolCalls: number
   comments: RunComment[]
+  /** Subagents it spawned during the run (`agent::runs::ChildRun`). */
+  children?: ChildRun[]
+}
+
+/** Mirrors `agent::runs::ChildRun`. */
+export interface ChildRun {
+  id: string
+  kind: string
+  description: string
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+  startedAt: number
+  endedAt: number | null
 }
 
 const runKey = (root: string, agentId: string) => `${root}::${agentId}`

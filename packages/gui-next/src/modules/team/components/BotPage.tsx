@@ -6,15 +6,16 @@ import { useTeamStore, type TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey, type BotSettings, type Level, type Routine } from '../store/botsStore'
 import { Avatar, SectionLabel, colorOf } from './bits'
 import { ModelPicker } from './ModelPicker'
+import { ContactTab } from './ContactTab'
 
-type Tab = 'routines' | 'rules' | 'memory'
+type Tab = 'routines' | 'contact' | 'rules' | 'memory'
 
 const RULES: { key: keyof BotSettings['rules']; label: string; hint: string }[] = [
   { key: 'files', label: 'Change files', hint: 'write, edit, patch' },
   { key: 'commands', label: 'Run commands', hint: 'terminal, scripts, its own tools' },
   { key: 'computer', label: 'Use your computer', hint: 'clicking and typing in apps' },
   { key: 'web', label: 'Use the web', hint: 'search, read pages' },
-  { key: 'outside', label: 'Act outside this machine', hint: 'GitHub, connected apps, automations' },
+  { key: 'outside', label: 'Act outside this machine', hint: 'email, texts and calls, GitHub, connected apps' },
 ]
 
 const LEVELS: { value: Level; label: string }[] = [
@@ -237,7 +238,7 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
           </Tooltip>
         </Stack>
         <Stack direction="row" sx={{ gap: 0.25, borderBottom: 1, borderColor: 'divider' }}>
-          {(['routines', 'rules', 'memory'] as Tab[]).map((t) => (
+          {(['routines', 'contact', 'rules', 'memory'] as Tab[]).map((t) => (
             <ButtonBase
               key={t}
               onClick={() => setTab(t)}
@@ -319,6 +320,8 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
               )}
             </Stack>
           )}
+
+          {tab === 'contact' && <ContactTab root={root} agent={agent} />}
 
           {tab === 'rules' && settings && (
             <Stack sx={{ gap: 1.5, pt: 0.5 }}>

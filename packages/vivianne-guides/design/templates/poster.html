@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Poster</title>
+<!-- A3 event poster (PDF), or render as PNG at 1240 × 1754.
+     One message, scale contrast, a strict grid. Replace the content. -->
+<style>
+  @page { size: 297mm 420mm; margin: 0; }
+  :root { --bg: #1F3A5F; --ink: #F7F5F2; --muted: rgba(247,245,242,.68); --accent: #E8B85C; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { width: 297mm; height: 420mm; background: var(--bg); color: var(--ink); font-family: 'Inter', sans-serif; }
+  .poster { height: 100%; padding: 22mm; display: grid; grid-template-rows: auto 1fr auto; }
+  .top { display: flex; justify-content: space-between; font: 600 10pt/1 'Inter', sans-serif; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+  .main { align-self: end; padding-bottom: 26mm; }
+  .kicker { font: 600 12pt/1 'Inter', sans-serif; letter-spacing: .16em; text-transform: uppercase; color: var(--accent); margin-bottom: 10mm; }
+  h1 { font: 400 112pt/0.92 'Source Serif 4', serif; letter-spacing: -0.035em; margin: 0; font-optical-sizing: auto; }
+  h1 em { font-style: italic; color: var(--accent); }
+  .sub { font: 400 20pt/1.35 'Inter', sans-serif; color: var(--muted); max-width: 190mm; margin-top: 12mm; }
+  .details { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10mm; padding-top: 8mm; border-top: 1pt solid rgba(247,245,242,.35); }
+  .details .l { font: 600 9pt/1.2 'Inter', sans-serif; letter-spacing: .15em; text-transform: uppercase; color: var(--muted); margin-bottom: 3mm; }
+  .details .v { font: 500 17pt/1.3 'Inter', sans-serif; }
+</style>
+</head>
+<body>
+  <div class="poster">
+    <div class="top"><span>Northwind Design Talks</span><span>No. 07</span></div>
+    <div class="main">
+      <div class="kicker">An evening talk</div>
+      <h1>Designing for <em>the second</em> visit</h1>
+      <div class="sub">Why onboarding is a promise, and what it takes to keep it. With Alex Morgan.</div>
+    </div>
+    <div class="details">
+      <div><div class="l">When</div><div class="v">Thursday 13 November<br>18:30</div></div>
+      <div><div class="l">Where</div><div class="v">The Assembly Rooms<br>Leeds</div></div>
+      <div><div class="l">Tickets</div><div class="v">Free · northwind.co/talks</div></div>
+    </div>
+  </div>
+</body>
+</html>

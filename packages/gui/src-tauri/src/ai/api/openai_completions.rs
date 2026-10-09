@@ -425,7 +425,7 @@ pub async fn stream_chat_completions(
     // unknown headers — so there's no need to gate this on `provider`.
     header_map.insert(
         reqwest::header::HeaderName::from_static("http-referer"),
-        reqwest::header::HeaderValue::from_static("https://vivianne.app"),
+        reqwest::header::HeaderValue::from_static("https://github.com/v3dqnt/vivianne"),
     );
     header_map.insert(
         reqwest::header::HeaderName::from_static("x-title"),

@@ -45,7 +45,13 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    target: 'esnext',
+    // The oldest web engines Vivianne runs in: macOS 10.15's WKWebView tops
+    // out at Safari 15.6's WebKit, and Windows' WebView2 is evergreen
+    // Chromium. Anything newer than these is lowered at build time
+    // (top-level await, class static blocks, `??=`; nesting and colour
+    // functions in CSS).
+    target: ['safari15', 'chrome105'],
+    cssTarget: ['safari15', 'chrome105'],
     rollupOptions: {
       // Two entry points, because each Tauri window is its own renderer that
       // executes its entry's whole static import graph before anything decides

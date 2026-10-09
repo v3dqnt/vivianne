@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { call } from '../../../ipc'
+import { call, on } from '../../../ipc'
 
 /** whisper.cpp's expected input rate. Resampling is left to the browser by
  * asking the AudioContext for this rate directly. */
@@ -91,10 +91,83 @@ interface MicCallbacks {
  * finished?" decision slots in where `SILENCE_TAIL_MS` is applied, and would
  * shave most of that tail off the perceived latency.
  */
+/**
+ * Where 16 kHz mono frames come from. Normally the page's own microphone
+ * (`getUserMedia` into an AudioWorklet). macOS's WKWebView only has
+ * `getUserMedia` from macOS 12, so on 10.15 and 11 the frames come from
+ * Rust instead (`instant::native_mic`), as `instant:mic` events — the same
+ * frames, so everything downstream is identical.
+ */
+interface FrameSource {
+  onFrame: (handler: (frame: Float32Array) => void) => void
+  close: () => void
+}
+
+async function openWebSource(): Promise<FrameSource> {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      // The browser's own cleanup is better than anything done after the
+      // fact, and whisper is noticeably more accurate with it on.
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  })
+  const ctx = new AudioContext({ sampleRate: SAMPLE_RATE })
+  const blob = new Blob([WORKLET_SOURCE], { type: 'application/javascript' })
+  const url = URL.createObjectURL(blob)
+  try {
+    await ctx.audioWorklet.addModule(url)
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+  const node = new AudioWorkletNode(ctx, 'instant-capture')
+  ctx.createMediaStreamSource(stream).connect(node)
+  // Not connected to the destination: this is a tap, and routing it to the
+  // speakers would echo the user back at themselves.
+  return {
+    onFrame: (handler) => {
+      node.port.onmessage = (ev: MessageEvent<Float32Array>) => handler(ev.data)
+    },
+    close: () => {
+      node.port.close()
+      node.disconnect()
+      stream.getTracks().forEach((t) => t.stop())
+      void ctx.close()
+    },
+  }
+}
+
+async function openNativeSource(): Promise<FrameSource> {
+  let handler: ((frame: Float32Array) => void) | null = null
+  const unlisten = await on<number[]>('instant:mic', (frame) => handler?.(Float32Array.from(frame)))
+  try {
+    await call('cmd_instant_mic_start')
+  } catch (e) {
+    unlisten()
+    throw e
+  }
+  return {
+    onFrame: (h) => {
+      handler = h
+    },
+    close: () => {
+      handler = null
+      unlisten()
+      void call('cmd_instant_mic_stop').catch(() => {})
+    },
+  }
+}
+
+function openSource(): Promise<FrameSource> {
+  // Typed as always present, but undefined in WKWebView before macOS 12.
+  const web = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getUserMedia === 'function'
+  return web ? openWebSource() : openNativeSource()
+}
+
 export function useInstantMic({ onUtterance, onSpeechStart, onInterim, onError, onLevel, model }: MicCallbacks) {
-  const ctxRef = useRef<AudioContext | null>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const nodeRef = useRef<AudioWorkletNode | null>(null)
+  const sourceRef = useRef<FrameSource | null>(null)
   // Callbacks in refs so starting the mic does not depend on their identity —
   // otherwise every parent re-render would tear down and restart capture.
   const cbs = useRef({ onUtterance, onSpeechStart, onInterim, onError, onLevel, model })
@@ -106,13 +179,8 @@ export function useInstantMic({ onUtterance, onSpeechStart, onInterim, onError, 
 
   const stop = useCallback(() => {
     finishRef.current = null
-    nodeRef.current?.port.close()
-    nodeRef.current?.disconnect()
-    nodeRef.current = null
-    streamRef.current?.getTracks().forEach((t) => t.stop())
-    streamRef.current = null
-    void ctxRef.current?.close()
-    ctxRef.current = null
+    sourceRef.current?.close()
+    sourceRef.current = null
   }, [])
 
   /**
@@ -123,35 +191,10 @@ export function useInstantMic({ onUtterance, onSpeechStart, onInterim, onError, 
   const start = useCallback(async (opts?: { hold?: boolean }) => {
     const hold = !!opts?.hold
     releasedEarly.current = false
-    if (ctxRef.current) stop()
+    if (sourceRef.current) stop()
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          // The browser's own cleanup is better than anything done after the
-          // fact, and whisper is noticeably more accurate with it on.
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      })
-      streamRef.current = stream
-
-      const ctx = new AudioContext({ sampleRate: SAMPLE_RATE })
-      ctxRef.current = ctx
-      const blob = new Blob([WORKLET_SOURCE], { type: 'application/javascript' })
-      const url = URL.createObjectURL(blob)
-      try {
-        await ctx.audioWorklet.addModule(url)
-      } finally {
-        URL.revokeObjectURL(url)
-      }
-
-      const node = new AudioWorkletNode(ctx, 'instant-capture')
-      nodeRef.current = node
-      ctx.createMediaStreamSource(stream).connect(node)
-      // Not connected to the destination: this is a tap, and routing it to the
-      // speakers would echo the user back at themselves.
+      const source = await openSource()
+      sourceRef.current = source
 
       let buffer: Float32Array[] = []
       let speaking = false
@@ -225,8 +268,7 @@ export function useInstantMic({ onUtterance, onSpeechStart, onInterim, onError, 
       if (hold) {
         let heardVoice = false
         let startedAt = performance.now()
-        node.port.onmessage = (ev: MessageEvent<Float32Array>) => {
-          const frame = ev.data
+        source.onFrame((frame) => {
           const now = performance.now()
           const level = rms(frame)
           cbs.current.onLevel?.(level)
@@ -240,7 +282,7 @@ export function useInstantMic({ onUtterance, onSpeechStart, onInterim, onError, 
             lastInterimAt = now
             void interim()
           }
-        }
+        })
         finishRef.current = async () => {
           finishRef.current = null
           const frames = buffer
@@ -271,8 +313,7 @@ export function useInstantMic({ onUtterance, onSpeechStart, onInterim, onError, 
         return
       }
 
-      node.port.onmessage = (ev: MessageEvent<Float32Array>) => {
-        const frame = ev.data
+      source.onFrame((frame) => {
         const now = performance.now()
         const level = rms(frame)
         cbs.current.onLevel?.(level)
@@ -304,7 +345,7 @@ export function useInstantMic({ onUtterance, onSpeechStart, onInterim, onError, 
             void interim()
           }
         }
-      }
+      })
     } catch (e) {
       stop()
       const msg = e instanceof Error ? e.message : String(e)

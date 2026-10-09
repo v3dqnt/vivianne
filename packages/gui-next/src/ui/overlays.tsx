@@ -417,10 +417,14 @@ export function Dialog({ open, onClose, fullWidth = false, fullScreen = false, m
                     onOpenAutoFocus={(e) => {
                       // Like the old dialogs: focus the dialog itself, not
                       // its first button — unless a field asked for
-                      // `autoFocus`, which has already happened.
+                      // `autoFocus`. React focuses that field on mount, but a
+                      // dialog opened from inside another one can lose it to
+                      // the outer focus trap, so it's focused again here.
                       e.preventDefault()
                       const el = content.current
-                      if (el && !el.contains(document.activeElement)) el.focus()
+                      const wanted = el?.querySelector<HTMLElement>('[data-autofocus]')
+                      if (wanted) wanted.focus()
+                      else if (el && !el.contains(document.activeElement)) el.focus()
                     }}
                     onCloseAutoFocus={returnFocus}
                     onEscapeKeyDown={() => {

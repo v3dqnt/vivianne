@@ -1,0 +1,113 @@
+# macOS checks for every push and pull request.
+#
+# Vivianne is developed on Windows, so this is where the macOS half is
+# actually compiled and tested: the Accessibility-based DIP, the runtime-loaded
+# Parakeet runtime, native microphone capture, menu-bar and Dock behaviour.
+#
+# Two runners, because they are two different Macs: macos-13 is Intel
+# (x86_64) and macos-14 is Apple silicon (arm64). Tests run natively on each.
+# The Apple-silicon job also builds the universal app bundle and checks it
+# was built for the oldest macOS Vivianne supports: 10.15 for the Intel slice,
+# 11.0 for the Apple-silicon slice (Apple silicon's own floor). A dependency
+# that raises that floor would stop Vivianne launching on older Macs, and
+# nothing else would notice.
+#
+# Unsigned: signing and notarisation need the Developer ID secrets and happen
+# in release.yml.
+
+name: macOS
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore: ['**.md', 'docs/**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-13
+            arch: x86_64
+            bundle: false
+          - runner: macos-14
+            arch: arm64
+            bundle: true
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '10.15'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.bundle && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      # Same overrides as release.yml: .cargo/config.toml pins Windows paths.
+      - name: Prepare build environment
+        run: |
+          brew install ninja
+          echo "LIBCLANG_PATH=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-isysroot $(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+          echo "CMAKE=$(which cmake)" >> "$GITHUB_ENV"
+          echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: packages/gui/src-tauri -> target
+          key: macos-${{ matrix.arch }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck and build the frontend
+        working-directory: packages/gui-next
+        run: |
+          npx tsc -p tsconfig.app.json --noEmit
+          npx vite build
+
+      - name: Rust tests
+        working-directory: packages/gui/src-tauri
+        run: cargo test --no-default-features --lib
+
+      - name: Build the universal app (unsigned)
+        if: matrix.bundle
+        working-directory: packages/gui
+        run: npx tauri build --target universal-apple-darwin --bundles app,dmg --no-sign
+
+      # Each slice must say it runs on the oldest supported macOS.
+      - name: Check the minimum macOS of every binary
+        if: matrix.bundle
+        working-directory: packages/gui/src-tauri/target/universal-apple-darwin/release/bundle/macos
+        run: |
+          fail=0
+          while IFS= read -r -d '' f; do
+            file "$f" | grep -q 'Mach-O' || continue
+            for arch in x86_64 arm64; do
+              lipo "$f" -verify_arch "$arch" 2>/dev/null || continue
+              minos=$(vtool -arch "$arch" -show-build "$f" 2>/dev/null | awk '/minos/ {print $2; exit}')
+              [ -z "$minos" ] && minos=$(otool -arch "$arch" -l "$f" | awk '/LC_VERSION_MIN_MACOSX/ {getline; getline; print $2; exit}')
+              want=$([ "$arch" = x86_64 ] && echo 10.15 || echo 11.0)
+              echo "$arch ${f#./}: minos $minos (need <= $want)"
+              if [ "$(printf '%s\n%s\n' "$minos" "$want" | sort -V | tail -1)" != "$want" ]; then
+                echo "::error file=$f::$arch slice requires macOS $minos, newer than $want"
+                fail=1
+              fi
+            done
+          done < <(find . -type f -print0)
+          exit $fail
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.bundle
+        with:
+          name: Vivianne-macOS-universal
+          path: packages/gui/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error

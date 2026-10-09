@@ -1,0 +1,26 @@
+# Nightly benchmark against ripgrep on a pinned corpus. Not yet run.
+# TODO before relying on it: pin the corpus to a commit, and add the check that fails a pull request which is more
+# than 10% slower than main (compare bench-result.txt with the artifact from the last main run).
+name: bench
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/agent-coreutils
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y ninja-build ripgrep fd-find
+      - run: cmake -S . -B build -G Ninja && cmake --build build
+      - name: Fetch the corpus
+        run: git clone --depth 1 https://github.com/microsoft/vscode.git /tmp/corpus
+      - run: python3 bench/bench.py build/acu /tmp/corpus 15 | tee bench-result.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench
+          path: packages/agent-coreutils/bench-result.txt

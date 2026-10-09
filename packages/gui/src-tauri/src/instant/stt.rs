@@ -229,6 +229,8 @@ async fn whisper_transcribe(
 fn engine_of(settings: &serde_json::Value) -> &'static str {
     match settings.get("instantSttEngine").and_then(|v| v.as_str()) {
         Some("whisper") => "whisper",
+        // Parakeet can't run everywhere (an older Mac can't load its runtime).
+        _ if !crate::instant::sherpa::available() => "whisper",
         _ => "parakeet",
     }
 }
@@ -238,7 +240,10 @@ fn engine_of(settings: &serde_json::Value) -> &'static str {
 pub async fn cmd_instant_stt_preload(app: tauri::AppHandle, model: Option<String>) -> Result<(), String> {
     let settings = crate::agent::tool_exec::read_settings_json().await;
     if engine_of(&settings) == "parakeet" {
-        return crate::instant::parakeet::preload(&app).await;
+        match crate::instant::parakeet::preload(&app).await {
+            Err(e) if e == crate::instant::parakeet::UNAVAILABLE => {}
+            other => return other,
+        }
     }
     whisper_preload(app, model).await
 }
@@ -257,7 +262,10 @@ pub async fn cmd_instant_stt_transcribe(
     }
     let settings = crate::agent::tool_exec::read_settings_json().await;
     if engine_of(&settings) == "parakeet" {
-        return crate::instant::parakeet::transcribe(&app, pcm).await;
+        match crate::instant::parakeet::transcribe(&app, pcm.clone()).await {
+            Err(e) if e == crate::instant::parakeet::UNAVAILABLE => {}
+            other => return other,
+        }
     }
     whisper_transcribe(app, pcm, model, language, partial).await
 }

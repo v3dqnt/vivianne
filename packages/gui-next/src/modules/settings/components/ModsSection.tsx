@@ -7,6 +7,8 @@ import { useSettingsUi } from '../store/uiStore'
 import { useAgentStore } from '../../ai/store/agentStore'
 import { CodeBlock } from '../../ai/components/CodeBlock'
 import { isPanel, type PlaybookDef } from '../lib/playbooks'
+import { SuperchargeSubsection } from './SuperchargeSubsection'
+import { GuidesSubsection } from './GuidesSubsection'
 
 // ── Playbook parameter editor: a small list-builder over the JSON-schema
 // `{ type: 'object', properties: {...}, required: [...] }` shape every
@@ -638,6 +640,10 @@ const PLAYBOOKS_ENABLED = false
 export function ModsSection() {
   return (
     <Stack sx={{ gap: 2.5 }}>
+      <SuperchargeSubsection />
+      <Divider />
+      <GuidesSubsection />
+      <Divider />
       <ToolsSubsection />
       <Divider />
       <CustomToolsSubsection />

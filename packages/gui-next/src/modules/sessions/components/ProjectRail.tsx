@@ -143,6 +143,11 @@ export function ProjectRail() {
         alignItems: 'center',
         gap: 1,
         py: 1.5,
+        // The sidebar card sits 8px to the right of the rail on the same
+        // chrome background, so the strip you see is 64px wide. The same 8px
+        // on the left centres the icons in it rather than in the rail alone.
+        pl: '8px',
+        boxSizing: 'border-box',
         bgcolor: 'background.chrome',
       }}
     >

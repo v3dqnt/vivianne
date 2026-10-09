@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Letter</title>
+<!-- A formal letter. Replace the content; keep the structure. -->
+<style>
+  @page { size: A4; margin: 26mm 28mm 24mm; }
+  :root { --ink: #1C1917; --muted: #6F6A64; --line: #E7E3DD; --accent: #A6402B; }
+  body { margin: 0; font: 400 11pt/1.62 'Source Serif 4', Georgia, serif; color: var(--ink); font-optical-sizing: auto; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 14pt; border-bottom: 0.6pt solid var(--line); margin-bottom: 30pt; }
+  .from { font: 400 8.6pt/1.6 'Inter', sans-serif; color: var(--muted); text-align: right; }
+  .name { font: 600 13pt/1.2 'Source Serif 4', serif; letter-spacing: -0.01em; }
+  .to { margin-bottom: 22pt; }
+  .date { color: var(--muted); margin-bottom: 22pt; }
+  p { margin: 0 0 10pt; text-wrap: pretty; }
+  .sign { margin-top: 26pt; }
+  .sign .who { font-weight: 600; margin-top: 30pt; }
+  .sign .title { color: var(--muted); font-size: 10pt; }
+</style>
+</head>
+<body>
+  <div class="head">
+    <div class="name">Morgan Studio</div>
+    <div class="from">12 Elm Row, London E2 7QA<br>hello@morgan.studio · +44 20 7946 0000</div>
+  </div>
+
+  <div class="to">Ms Jordan Lee<br>Head of Product, Northwind Ltd<br>4 Harbour Street<br>Leeds LS1 4AB</div>
+  <div class="date">7 October 2026</div>
+
+  <p>Dear Ms Lee,</p>
+  <p>Thank you for your time last week. As promised, this letter sets out how we would approach the redesign of Northwind's onboarding, and what you can expect from us.</p>
+  <p>We propose a six-week engagement in three stages: research with twelve of your recent sign-ups, a redesigned flow tested with real users, and a handover your team can build from directly. We will share progress every Friday.</p>
+  <p>I've enclosed the detailed scope and costs. I would be glad to talk them through whenever suits you.</p>
+
+  <div class="sign">
+    Yours sincerely,
+    <div class="who">Alex Morgan</div>
+    <div class="title">Founder, Morgan Studio</div>
+  </div>
+</body>
+</html>

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Stack, Typography, TextField, MenuItem, Divider, Alert, Chip } from '../../../ui'
 import { call } from '../../../ipc'
+import { NotchSubsection } from './NotchSubsection'
+import { MacPermissions } from './MacPermissions'
 
 /**
  * Speech models offered, smallest first.
@@ -76,9 +78,13 @@ export function InstantSection() {
           Hold the chord from anywhere, say what you want done, and let go: it operates your computer.
           It runs without asking for approval on each step — the overlay shows a live log of
           everything it does, and anything that could destroy your work is held for three seconds
-          first.
+          first. Ask it a question and it answers out loud; mention a project and it asks that
+          project's agent.
         </Typography>
       </Stack>
+      <NotchSubsection />
+      <Divider />
+      <MacPermissions />
 
       <Divider />
 

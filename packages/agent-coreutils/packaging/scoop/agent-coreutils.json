@@ -1,0 +1,21 @@
+{
+  "version": "0.1.0",
+  "description": "Fast, model-friendly file tools for AI agents (acu).",
+  "homepage": "https://github.com/agent-coreutils/agent-coreutils",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/agent-coreutils/agent-coreutils/releases/download/v0.1.0/release-acu-win32-x64.exe#/acu.exe",
+      "hash": "FILL-IN-AT-RELEASE"
+    }
+  },
+  "bin": "acu.exe",
+  "checkver": "github",
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/agent-coreutils/agent-coreutils/releases/download/v$version/release-acu-win32-x64.exe#/acu.exe"
+      }
+    }
+  }
+}

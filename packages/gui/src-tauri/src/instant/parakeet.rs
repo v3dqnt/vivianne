@@ -79,8 +79,7 @@ lazy_static::lazy_static! {
     /// destroys a stream internally), hence the inner mutex — which also
     /// serializes decodes, wanted anyway since each saturates the threads it is
     /// given.
-    static ref MODEL: Mutex<Option<Arc<std::sync::Mutex<sherpa_rs::transducer::TransducerRecognizer>>>> =
-        Mutex::new(None);
+    static ref MODEL: Mutex<Option<Arc<std::sync::Mutex<crate::instant::sherpa::Recognizer>>>> = Mutex::new(None);
 }
 
 fn models_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -198,9 +197,9 @@ async fn ensure_files(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 /// The recognizer's configuration, for the model files in `dir`.
-fn recognizer_config(dir: &Path) -> sherpa_rs::transducer::TransducerConfig {
+fn recognizer_config(dir: &Path) -> crate::instant::sherpa::Config {
     let p = |n: &str| dir.join(n).to_string_lossy().to_string();
-    sherpa_rs::transducer::TransducerConfig {
+    crate::instant::sherpa::Config {
         encoder: p("encoder.int8.onnx"),
         decoder: p("decoder.int8.onnx"),
         joiner: p("joiner.int8.onnx"),
@@ -219,11 +218,10 @@ fn recognizer_config(dir: &Path) -> sherpa_rs::transducer::TransducerConfig {
         num_threads: 4,
         sample_rate: 16_000,
         feature_dim: 80,
-        ..Default::default()
     }
 }
 
-type Recognizer = Arc<std::sync::Mutex<sherpa_rs::transducer::TransducerRecognizer>>;
+type Recognizer = Arc<std::sync::Mutex<crate::instant::sherpa::Recognizer>>;
 
 async fn get_or_load(app: &tauri::AppHandle) -> Result<Recognizer, String> {
     {
@@ -232,22 +230,41 @@ async fn get_or_load(app: &tauri::AppHandle) -> Result<Recognizer, String> {
             return Ok(m.clone());
         }
     }
+    if !crate::instant::sherpa::available() {
+        return Err(UNAVAILABLE.into());
+    }
+    // macOS: sherpa-onnx is loaded at runtime (see `instant::sherpa`).
+    #[cfg(target_os = "macos")]
+    let runtime = Some(crate::instant::sherpa::ensure_runtime(app).await?);
+    #[cfg(not(target_os = "macos"))]
+    let runtime: Option<PathBuf> = None;
     let dir = ensure_files(app).await?;
     let config = recognizer_config(&dir);
 
     // Mapping ~628 MB of weights and building the ORT sessions is blocking.
-    let recognizer = tokio::task::spawn_blocking(move || {
-        sherpa_rs::transducer::TransducerRecognizer::new(config)
-    })
-    .await
-    .map_err(|e| format!("join: {e}"))?
-    .map_err(|e| format!("load Parakeet: {e}"))?;
+    let recognizer = tokio::task::spawn_blocking(move || crate::instant::sherpa::Recognizer::new(config, runtime.as_deref()))
+        .await
+        .map_err(|e| format!("join: {e}"))?
+        .map_err(|e| {
+            // On a Mac too old for sherpa-onnx's runtime, it never will load:
+            // stop trying, and let speech-to-text use whisper instead.
+            if cfg!(target_os = "macos") {
+                log::warn!("[instant/parakeet] {e}; using whisper on this Mac");
+                crate::instant::sherpa::mark_unavailable();
+                return UNAVAILABLE.to_string();
+            }
+            format!("load Parakeet: {e}")
+        })?;
 
     let recognizer: Recognizer = Arc::new(std::sync::Mutex::new(recognizer));
     let mut guard = MODEL.lock().await;
     *guard = Some(recognizer.clone());
     Ok(recognizer)
 }
+
+/// Returned when Parakeet can't run on this machine; `stt` falls back to
+/// whisper on it.
+pub const UNAVAILABLE: &str = "Parakeet isn't available on this Mac";
 
 /// Build the recognizer without transcribing, so the first utterance does not
 /// pay the download and load.
@@ -297,7 +314,7 @@ mod tests {
             eprintln!("model not downloaded; skipping");
             return;
         }
-        let mut r = sherpa_rs::transducer::TransducerRecognizer::new(recognizer_config(&dir)).expect("load");
+        let mut r = crate::instant::sherpa::Recognizer::new(recognizer_config(&dir), None).expect("load");
         let text = r.transcribe(16_000, &vec![0.0f32; 16_000]);
         assert!(text.trim().len() < 20, "silence should transcribe to (almost) nothing: {text:?}");
     }

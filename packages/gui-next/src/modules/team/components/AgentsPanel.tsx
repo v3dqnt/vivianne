@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Box, Stack, Typography, Button, ButtonBase, IconButton, InputBase, Select, MenuItem, Checkbox, Tooltip, CircularProgress, alpha } from '../../../ui'
 import { AddLinear, ArrowLeftLinear, EditLinear, TrashLinear, AgentsLinear, UserPlusLinear } from '../../../icons'
 import { call } from '../../../ipc'
-import { useProjectsStore, modeOf } from '../../sessions/store/projectsStore'
+import { useProjectsStore, modeOf, GENERAL_PROJECT_ID } from '../../sessions/store/projectsStore'
+import { useGeneralAgents } from '../store/generalAgentsStore'
 import { useMasterStore } from '../../sessions/store/masterStore'
 import { ListInput } from '../../sessions/onboarding/fields'
 import { SUBAGENT_COLORS, SUBAGENT_COLOR_HEX } from '../../settings/lib/subagentProfiles'
@@ -25,9 +26,17 @@ export function AgentsPanel() {
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const projects = useProjectsStore((s) => s.projects)
   const project = projects.find((p) => p.id === activeProjectId)
-  const root = project?.path ?? null
-  // A team project has no master: the agents are peers the user built.
-  const teamMode = modeOf(project) === 'team'
+  // General's agents have a folder of their own; a project's live in it.
+  const isGeneral = activeProjectId === GENERAL_PROJECT_ID
+  const generalRoot = useGeneralAgents((s) => s.root)
+  const ensureGeneral = useGeneralAgents((s) => s.ensure)
+  useEffect(() => {
+    if (isGeneral) void ensureGeneral()
+  }, [isGeneral, ensureGeneral])
+  const root = isGeneral ? generalRoot : (project?.path ?? null)
+  // A team project has no master: the agents are peers the user built. So
+  // are General's: each one works on its own.
+  const teamMode = isGeneral || modeOf(project) === 'team'
   const agents = useTeamStore((s) => (root ? (s.byRoot[root] ?? EMPTY) : EMPTY))
   const loaded = useTeamStore((s) => (root ? root in s.byRoot : false))
   const load = useTeamStore((s) => s.load)

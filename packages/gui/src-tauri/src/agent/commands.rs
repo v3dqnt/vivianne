@@ -166,8 +166,10 @@ pub async fn cmd_agent_prompt(
     // just add an await per event for no different an answer.
     let mp_workspace_folders = agent.state.workspace_folders().await;
     let mp_workspace_folders_for_loop = mp_workspace_folders.clone();
+    crate::notch::turn_started(&app, &emit_thread_id, &mp_workspace_folders, &text);
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.rx.recv().await {
+            crate::notch::event(&app_clone, &emit_thread_id, &event);
             if let crate::agent::events::AgentEvent::AgentEnd { messages, .. } = &event {
                 let (state, message) = crate::activity::outcome(messages);
                 crate::activity::end_run(&app_clone, state, message);

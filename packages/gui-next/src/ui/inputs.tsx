@@ -78,9 +78,21 @@ function useAutosize(ref: React.RefObject<HTMLTextAreaElement | null>, minRows: 
   useEffect(() => {
     const input = ref.current
     if (!input) return
-    const ro = new ResizeObserver(() => sync())
+    // Only a width change can rewrap the text, and `sync` sets this same
+    // element's height: reacting to that inside the callback re-triggers the
+    // observer in the same frame ("ResizeObserver loop completed with
+    // undelivered notifications"). So: width only, on the next frame.
+    let width = input.getBoundingClientRect().width
+    let frame = 0
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width === width) return
+      width = entry.contentRect.width
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => sync())
+    })
     ro.observe(input)
     return () => {
+      cancelAnimationFrame(frame)
       ro.disconnect()
       shadow.current?.remove()
       shadow.current = null
@@ -234,6 +246,8 @@ export const InputBase = forwardRef<Any, InputBaseProps>(function InputBase(prop
     disabled,
     readOnly,
     autoFocus,
+    // Lets a Dialog find the field that asked for focus (see overlays.tsx).
+    'data-autofocus': autoFocus || undefined,
     className: 'ui-InputBase-input',
     onChange,
     onKeyDown,

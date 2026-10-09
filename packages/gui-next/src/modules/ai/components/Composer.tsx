@@ -100,6 +100,34 @@ function basename(p: string): string {
   return p.split(/[\\/]/).filter(Boolean).pop() || p
 }
 
+/** The composer's narrow layout: controls collapse to their icons. */
+const NARROW = {
+    '& .cq-label, & .cq-wide': { display: 'none' },
+    '& .cq-compact': { display: 'inline-flex' },
+    '& .cq-context': { minWidth: 0 },
+    // A lone icon inside a MUI Button still carries the margin meant to
+    // separate it from the (now hidden) text.
+    '& .cq-collapsible': { minWidth: 32, px: 0.75 },
+    '& .cq-collapsible .ui-Button-startIcon, & .cq-collapsible .ui-Button-endIcon': { m: 0 },
+  }
+
+/**
+ * Container queries need Safari 16; macOS 10.15's WebKit stops at 15.6 and
+ * ignores them, leaving a narrow composer in its wide layout. There, measure
+ * the element instead and mark it `data-narrow`, which the same styles key on.
+ */
+function useNarrowFallback(ref: React.RefObject<HTMLElement | null>, maxWidth: number) {
+  useEffect(() => {
+    const el = ref.current
+    if (!el || typeof CSS === 'undefined' || CSS.supports('container-type: inline-size')) return
+    const ro = new ResizeObserver(([entry]) => {
+      el.dataset.narrow = String(entry.contentRect.width <= maxWidth)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [ref, maxWidth])
+}
+
 export function Composer() {
   const theme = useTheme()
   const [text, setText] = useState('')
@@ -107,6 +135,7 @@ export function Composer() {
   const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([])
   const [dragging, setDragging] = useState(false)
   const isBusy = useAgentStore((s) => s.isBusy)
+  const stopping = useAgentStore((s) => s.stopping)
   const planMode = usePlanStore((s) => s.planMode)
   const sendMessage = useAgentStore((s) => s.sendMessage)
   const steer = useAgentStore((s) => s.steer)
@@ -125,6 +154,13 @@ export function Composer() {
     setDraft('')
     inputRef.current?.focus()
   }, [draft, setDraft])
+
+  // Opening the project lead from the sidebar puts the cursor here.
+  useEffect(() => {
+    const focus = () => inputRef.current?.focus()
+    window.addEventListener('viv:focus-composer', focus)
+    return () => window.removeEventListener('viv:focus-composer', focus)
+  }, [])
 
   // ── @ mentions (skills + workspace files) ──
   const [skills, setSkills] = useState<MentionableSkill[]>([])
@@ -309,12 +345,16 @@ export function Composer() {
     }
   }
 
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  useNarrowFallback(rootRef, 560)
+
   return (
     // The gap on all sides (not just top) plus each panel's own radius/shadow
     // is what reads as "floating" rather than a bar glued to the window edge.
     // maxWidth/mx match MessageList's transcript cap so the composer's edges
     // line up with the message column above it instead of stretching wider.
     <Box
+      ref={rootRef}
       onPaste={onPaste}
       onDrop={onDrop}
       onDragOver={(e) => {
@@ -348,15 +388,9 @@ export function Composer() {
         // Narrow: controls collapse to their icons. Nothing is removed — the
         // full value is in each control's tooltip and accessible label, and a
         // click opens the same menu as before.
-        '@container composer (max-width: 560px)': {
-          '& .cq-label, & .cq-wide': { display: 'none' },
-          '& .cq-compact': { display: 'inline-flex' },
-          '& .cq-context': { minWidth: 0 },
-          // A lone icon inside a MUI Button still carries the margin meant to
-          // separate it from the (now hidden) text.
-          '& .cq-collapsible': { minWidth: 32, px: 0.75 },
-          '& .cq-collapsible .ui-Button-startIcon, & .cq-collapsible .ui-Button-endIcon': { m: 0 },
-        },
+        '@container composer (max-width: 560px)': NARROW,
+        // Older WebKit (macOS 10.15's) has no container queries; see `useNarrowFallback`.
+        '&[data-narrow="true"]': NARROW,
       }}
     >
       {dragging && (
@@ -503,8 +537,8 @@ export function Composer() {
                   else if (text.trim()) doSteer()
                   else void abort()
                 }}
-                disabled={!isBusy && !text.trim() && pending.length === 0 && pendingFiles.length === 0}
-                title={!isBusy ? 'Send' : text.trim() ? 'Steer — interrupt the current task and redirect it with this message' : 'Stop — end the current task'}
+                disabled={(!isBusy && !text.trim() && pending.length === 0 && pendingFiles.length === 0) || (stopping && !text.trim())}
+                title={!isBusy ? 'Send' : text.trim() ? 'Steer — interrupt the current task and redirect it with this message' : stopping ? 'Stopping…' : 'Stop — end the current task'}
                 sx={{
                   bgcolor: !isBusy ? 'action.selected' : text.trim() ? 'primary.main' : 'error.main',
                   color: !isBusy ? 'text.primary' : text.trim() ? 'primary.contrastText' : 'error.contrastText',

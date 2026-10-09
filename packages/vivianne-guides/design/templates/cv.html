@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Alex Morgan — CV</title>
+<!-- One-page CV. Replace the content; keep the structure.
+     Fonts 'Inter' and 'Source Serif 4' are embedded by Vivianne. -->
+<style>
+  @page { size: A4; margin: 18mm 20mm; }
+  :root { --ink: #18181B; --muted: #6B6B74; --faint: #A1A1AA; --line: #E4E4E7; --accent: #3451D1; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 400 9.6pt/1.55 'Inter', system-ui, sans-serif; color: var(--ink); font-feature-settings: "kern", "liga", "ss01"; }
+  header { display: grid; grid-template-columns: 1fr auto; align-items: end; padding-bottom: 12pt; border-bottom: 0.9pt solid var(--ink); }
+  h1 { font: 650 26pt/1.05 'Inter', sans-serif; letter-spacing: -0.03em; margin: 0; }
+  .role { font-size: 11.5pt; color: var(--muted); margin-top: 5pt; }
+  .contact { text-align: right; font-size: 8.4pt; color: var(--muted); line-height: 1.7; }
+  .contact a { color: inherit; text-decoration: none; }
+  .grid { display: grid; grid-template-columns: 34mm 1fr; column-gap: 9mm; margin-top: 16pt; }
+  .label { font: 650 6.8pt/1.2 'Inter', sans-serif; letter-spacing: .13em; text-transform: uppercase; color: var(--muted); padding-top: 2pt; }
+  section { display: contents; }
+  .body { margin-bottom: 16pt; }
+  .summary { font-size: 10pt; line-height: 1.6; max-width: 120mm; }
+  .job { margin-bottom: 11pt; break-inside: avoid; }
+  .job-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8pt; }
+  .job-title { font-weight: 620; }
+  .job-title span { font-weight: 400; color: var(--muted); }
+  .dates { font-size: 8.2pt; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  ul { margin: 4pt 0 0; padding-left: 12pt; list-style-type: "–  "; }
+  li { margin: 2pt 0; } li::marker { color: var(--faint); }
+  .skills { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4pt 14pt; }
+  .skills b { font-weight: 600; }
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Alex Morgan</h1>
+      <div class="role">Senior Product Designer · design systems and growth</div>
+    </div>
+    <div class="contact">London, UK<br>alex@morgan.design · +44 7700 900123<br><a href="https://morgan.design">morgan.design</a></div>
+  </header>
+
+  <div class="grid">
+    <section>
+      <div class="label">Profile</div>
+      <div class="body summary">Product designer with nine years in B2B SaaS. I build design systems that let small teams ship consistently, and run research that changes roadmaps. Led the redesign that lifted activation 23% at Northwind.</div>
+    </section>
+
+    <section>
+      <div class="label">Experience</div>
+      <div class="body">
+        <div class="job">
+          <div class="job-head"><div class="job-title">Lead Product Designer <span>· Northwind</span></div><div class="dates">2022 – now</div></div>
+          <ul>
+            <li>Redesigned onboarding end to end; activation up 23%, time to value from 9 days to 2.</li>
+            <li>Built and staffed the design system used by 40 engineers across 6 teams.</li>
+          </ul>
+        </div>
+        <div class="job">
+          <div class="job-head"><div class="job-title">Senior Product Designer <span>· Fabrikam</span></div><div class="dates">2018 – 2022</div></div>
+          <ul>
+            <li>Owned billing and admin; cut support tickets about invoices by 41%.</li>
+            <li>Introduced continuous discovery: 6 interviews a month, shared with the whole team.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="label">Education</div>
+      <div class="body"><div class="job-head"><div class="job-title">BA Graphic Design <span>· Kingston University</span></div><div class="dates">2012 – 2015</div></div></div>
+    </section>
+
+    <section>
+      <div class="label">Skills</div>
+      <div class="body skills">
+        <div><b>Design</b> · systems, interaction, prototyping</div>
+        <div><b>Research</b> · interviews, usability, analytics</div>
+        <div><b>Tools</b> · Figma, Framer, SQL</div>
+        <div><b>Languages</b> · English, Spanish</div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

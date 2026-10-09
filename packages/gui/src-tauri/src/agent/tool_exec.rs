@@ -53,7 +53,7 @@ const GATED_TOOLS: &[&str] = &[
 pub(crate) const PLAN_MODE_TOOLS: &[&str] = &[
     "read", "ls", "grep", "glob", "code_search", "repo_overview", "diagnostics", "inspect_document",
     "web_search", "web_fetch", "recall", "read_skill", "list_tools", "load_tools", "list_subagent_profiles",
-    "question", "get_current_time", "get_goal", "github", "math", "todo_write",
+    "question", "get_current_time", "get_goal", "github", "math", "todo_write", "guide", "check_diagram",
     "task", "task_output", "submit_plan",
 ];
 
@@ -209,6 +209,16 @@ pub(crate) async fn compute_restrictions(state: &AgentState) -> Restrictions {
     // ALLOWlist, not a denylist — everything NOT named gets disabled. `None`
     // (the default for the main agent, and for a subagent whose profile
     // didn't specify one) means no restriction from this source at all.
+    // A bot's own email and phone: only a bot that has them sees them.
+    let contact = match state.bot_policy().await {
+        Some(p) => crate::agent::contact::load(&p.root, &p.bot_id),
+        None => crate::agent::contact::Contact::default(),
+    };
+    for (tool, has) in [("email", contact.email.is_some()), ("phone", contact.phone.is_some())] {
+        if !has && !disabled_tools.iter().any(|d| d == tool) {
+            disabled_tools.push(tool.to_string());
+        }
+    }
     if let Some(allowed) = state.subagent_allowed_tools().await {
         for def in crate::agent::tool_schemas::static_tool_definitions() {
             if let Some(name) = def.get("name").and_then(|v| v.as_str()) {
@@ -679,7 +689,7 @@ pub async fn execute_tool_calls(
         // alone, what it asks for, and what it hands to the user.
         let mut force_ask = false;
         if let Some(policy) = &bot_policy {
-            match crate::agent::bots::decide(policy, &tool_call.name) {
+            match crate::agent::bots::decide_call(policy, &tool_call.name, &tool_call.arguments) {
                 crate::agent::bots::Decision::Run => needs_approval = false,
                 crate::agent::bots::Decision::Ask(why) => {
                     needs_approval = true;
@@ -905,6 +915,23 @@ pub async fn execute_tool_calls(
             crate::agent::ptc::execute_ptc_tool(&tool_call.arguments, context.delegate_depth, state, emit, app, &tool_call.id).await
         } else if tool_call.name == "helium" {
             tool_result_to_agent_result(crate::helium::execute_tool(&tool_call.arguments).await, vision_capable)
+        } else if tool_call.name == "check_diagram" {
+            crate::agent::diagram_check::execute(&tool_call.arguments, app).await
+        } else if tool_call.name == "guide" {
+            let path = tool_call.arguments.get("path").and_then(|p| p.as_str()).unwrap_or("");
+            let text = crate::agent::guides::read(path).await.unwrap_or_else(|e| e);
+            AgentToolResult { content: vec![MessageContent::Text { text }], details: serde_json::Value::Null, terminate: None }
+        } else if tool_call.name == "email" || tool_call.name == "phone" {
+            // A bot's own address and number (`agent::contact`).
+            let text = match state.bot_policy().await {
+                Some(p) if tool_call.name == "email" => crate::agent::contact::email_tool(&p.root, &p.bot_id, &tool_call.arguments).await,
+                Some(p) => crate::agent::contact::phone_tool(&p.root, &p.bot_id, &tool_call.arguments).await,
+                None => Err("Only an agent with its own email or phone can use this.".to_string()),
+            };
+            match text {
+                Ok(t) => AgentToolResult { content: vec![MessageContent::Text { text: t }], details: serde_json::Value::Null, terminate: None },
+                Err(e) => AgentToolResult { content: vec![MessageContent::Text { text: format!("Error: {e}") }], details: serde_json::Value::Null, terminate: None },
+            }
         } else if tool_call.name == "dip" || tool_call.name == "computer" {
             // The tool is named `dip`; `computer` is accepted as a silent
             // alias. Both the schema and the capability map advertise `dip`
@@ -1745,6 +1772,12 @@ pub(crate) async fn execute_task_tool(
         abort: None,
     };
     let arc = SubagentRegistry::global().register(handle);
+    // An employee's own subagents are recorded under the employee's run, so
+    // the team tree shows who it handed work to.
+    let parent_run = if employee { parent_state.run_record().await } else { None };
+    if let Some(parent) = &parent_run {
+        crate::agent::runs::start_child(app, parent, &id, &subagent_type, &description);
+    }
     // A project specialist's work is kept, and can be commented on.
     let run_record = team_agent.as_ref().zip(project_root.as_deref()).map(|(agent, root)| {
         crate::agent::runs::start(app, &id, root, &agent.id, &agent.name, &description, &prompt);
@@ -1775,6 +1808,7 @@ pub(crate) async fn execute_task_tool(
     sub_state.set_subagent_allowed_tools(profile.as_ref().and_then(|p| p.allowed_tools.clone())).await;
     // An employee spawned by the top level may run subagents of its own.
     sub_state.set_delegation_allowed(depth == 0 && team_agent.is_some()).await;
+    sub_state.set_run_record(run_record.clone()).await;
     sub_state.set_thinking_level(parent_state.thinking_level().await).await;
     // A subagent of a planning agent plans too: research, not action.
     sub_state.set_plan_mode(parent_state.plan_mode().await).await;
@@ -1807,6 +1841,7 @@ pub(crate) async fn execute_task_tool(
     if run_in_background {
         let app = app.clone();
         let arc_bg = arc.clone();
+        let id_bg = id.clone();
         let source_tag = source_tag.clone();
         // A plain `tokio::spawn` here would require the *entire* awaited
         // future chain (drive_subagent -> run_agent_loop_with_prompts ->
@@ -1839,6 +1874,9 @@ pub(crate) async fn execute_task_tool(
             if let Some(run_id) = &run_record {
                 crate::agent::runs::finish(&app, run_id);
             }
+            if let Some(parent) = &parent_run {
+                crate::agent::runs::finish_child(&app, parent, &id_bg);
+            }
             notify.notify_waiters();
         });
         return AgentToolResult {
@@ -1861,6 +1899,9 @@ pub(crate) async fn execute_task_tool(
         drop(g);
         if let Some(run_id) = &run_record {
             crate::agent::runs::finish(app, run_id);
+        }
+        if let Some(parent) = &parent_run {
+            crate::agent::runs::finish_child(app, parent, &id);
         }
         notify.notify_waiters();
     }
@@ -2043,7 +2084,7 @@ async fn execute_connect_mcp_server_tool(args: &serde_json::Value) -> AgentToolR
     };
 
     let timeout_ms = args.get("timeout_ms").and_then(|v| v.as_u64()).map(|v| v as u32);
-    let config = crate::mcp::McpServerConfig { name: name.to_string(), transport, timeout_ms };
+    let config = crate::mcp::McpServerConfig { name: name.to_string(), transport, timeout_ms, auth: None };
     match crate::mcp::add_server(config).await {
         Ok(tools) => {
             // MCP tools changed — invalidate the tool definitions cache so
@@ -2812,14 +2853,18 @@ async fn execute_memory_tool(name: &str, args: &serde_json::Value, state: &Agent
                 }
             });
 
-            let hits = crate::agent::memory::recall(&root, query, Some(&auth), reranker).await;
+            let as_of = args.get("as_of").and_then(|v| v.as_str()).and_then(crate::agent::memory::parse_as_of);
+            let hits = crate::agent::memory::recall_at(&root, query, as_of, Some(&auth), reranker).await;
             if hits.is_empty() {
                 "No matching memories found.".to_string()
             } else {
                 // Labelled by source, so a user's own words outrank an
                 // inference when two memories disagree.
                 hits.iter()
-                    .map(|h| format!("- [{}] {}", crate::agent::memory_evolve::provenance_label(&h.kind), h.text))
+                    .map(|h| {
+                        let scope = if h.user_wide { ", about you" } else { "" };
+                        format!("- [{}{scope}] {}", crate::agent::memory_evolve::provenance_label(&h.kind), h.text)
+                    })
                     .collect::<Vec<_>>()
                     .join("\n")
             }
@@ -3060,7 +3105,7 @@ mod schema_registry_consistency_tests {
         "get_current_time", "list_tools", "load_tools", "set_panel", "get_goal", "create_goal", "update_goal",
         "terminal_open", "terminal_send", "terminal_read", "terminal_signal", "terminal_close",
         "terminal_list", "create_automation", "list_automations", "delete_automation",
-        "set_automation_enabled", "sandbox_execute", "run_script", "math", "dip", "computer", "helium",
+        "set_automation_enabled", "sandbox_execute", "run_script", "math", "dip", "computer", "helium", "email", "phone", "guide", "check_diagram",
     ];
 
     #[test]

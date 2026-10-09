@@ -245,6 +245,11 @@ pub struct UpdateInfo {
 pub async fn cmd_check_for_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
     use tauri_plugin_updater::UpdaterExt;
 
+    // A dev build isn't an installed release and can't be updated in place;
+    // asking the release feed only produces errors.
+    if cfg!(debug_assertions) {
+        return Ok(None);
+    }
     let updater = app.updater().map_err(|e| format!("Updater unavailable: {e}"))?;
     match updater.check().await {
         Ok(Some(update)) => Ok(Some(UpdateInfo {

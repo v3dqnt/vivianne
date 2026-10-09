@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Invoice INV-2026-014</title>
+<!-- Invoice. Replace the content; keep the structure. -->
+<style>
+  @page { size: A4; margin: 22mm 22mm 20mm; }
+  :root { --ink: #18181B; --muted: #6B6B74; --line: #E4E4E7; --accent: #3451D1; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 400 9.6pt/1.55 'Inter', system-ui, sans-serif; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .brand { font: 650 14pt/1.2 'Inter', sans-serif; letter-spacing: -0.02em; }
+  .brand small { display: block; font: 400 8.6pt/1.6 'Inter', sans-serif; color: var(--muted); letter-spacing: 0; margin-top: 4pt; }
+  h1 { font: 300 30pt/1 'Inter', sans-serif; letter-spacing: -0.03em; margin: 0; text-align: right; }
+  .label { font: 650 6.8pt/1.2 'Inter', sans-serif; letter-spacing: .13em; text-transform: uppercase; color: var(--muted); margin-bottom: 4pt; }
+  .meta { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12pt; margin: 34pt 0 28pt; padding-top: 10pt; border-top: 0.9pt solid var(--ink); }
+  table { width: 100%; border-collapse: collapse; }
+  th { font: 650 6.8pt/1.2 'Inter', sans-serif; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); text-align: left; padding: 0 0 6pt; border-bottom: 0.9pt solid var(--ink); }
+  td { padding: 8pt 0; border-bottom: 0.5pt solid var(--line); vertical-align: top; }
+  .r { text-align: right; } td.r, th.r { padding-left: 12pt; }
+  td small { display: block; color: var(--muted); }
+  .totals { margin: 14pt 0 0 auto; width: 70mm; }
+  .totals div { display: flex; justify-content: space-between; padding: 4pt 0; }
+  .totals .due { border-top: 0.9pt solid var(--ink); margin-top: 6pt; padding-top: 8pt; font-weight: 650; font-size: 12pt; }
+  .foot { position: fixed; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 16pt; font-size: 8.2pt; color: var(--muted); padding-top: 10pt; border-top: 0.5pt solid var(--line); }
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="brand">Morgan Studio<small>12 Elm Row, London E2 7QA<br>hello@morgan.studio · VAT GB123456789</small></div>
+    <h1>Invoice</h1>
+  </div>
+
+  <div class="meta">
+    <div><div class="label">Billed to</div>Northwind Ltd<br>Attn: Finance<br>4 Harbour St, Leeds</div>
+    <div><div class="label">Invoice</div>INV-2026-014</div>
+    <div><div class="label">Issued</div>7 October 2026</div>
+    <div><div class="label">Due</div>6 November 2026</div>
+  </div>
+
+  <table>
+    <thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead>
+    <tbody>
+      <tr><td>Onboarding redesign<small>Research, flows and high-fidelity designs</small></td><td class="r">1</td><td class="r">£8,400.00</td><td class="r">£8,400.00</td></tr>
+      <tr><td>Design system support<small>October retainer</small></td><td class="r">12 h</td><td class="r">£95.00</td><td class="r">£1,140.00</td></tr>
+    </tbody>
+  </table>
+
+  <div class="totals">
+    <div><span>Subtotal</span><span>£9,540.00</span></div>
+    <div><span>VAT 20%</span><span>£1,908.00</span></div>
+    <div class="due"><span>Total due</span><span>£11,448.00</span></div>
+  </div>
+
+  <div class="foot">
+    <div><div class="label">Payment</div>Morgan Studio Ltd · Sort code 20-00-00 · Account 12345678<br>Reference INV-2026-014</div>
+    <div><div class="label">Terms</div>Payment within 30 days. Thank you for your business.</div>
+  </div>
+</body>
+</html>

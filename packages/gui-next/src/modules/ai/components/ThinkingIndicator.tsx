@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Box, Typography } from '../../../ui'
+import { Box, Orb, Typography } from '../../../ui'
 
 const WORDS = ['Thinking', 'Cooking', 'Reasoning', 'Introspecting', 'Loading', 'Pondering', 'Working', 'Computing']
 
@@ -23,19 +23,7 @@ export function ThinkingIndicator() {
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.25 }}>
-      <Box
-        sx={{
-          width: 6,
-          height: 6,
-          borderRadius: '50%',
-          bgcolor: 'primary.main',
-          animation: 'viv-pulse 1.1s ease-in-out infinite',
-          '@keyframes viv-pulse': {
-            '0%, 100%': { opacity: 0.35, transform: 'scale(0.85)' },
-            '50%': { opacity: 1, transform: 'scale(1)' },
-          },
-        }}
-      />
+      <Orb state="working" label="Working" />
       <Typography
         key={word}
         variant="body2"

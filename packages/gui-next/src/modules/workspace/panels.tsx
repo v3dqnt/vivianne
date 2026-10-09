@@ -10,7 +10,9 @@ import type {
 import { AddLinear, CloseLinear, LayerLinear, MaximizeLinear, MinimizeLinear, ArrowDownLinear } from '../../icons'
 import { hasTauri } from '../../ipc'
 import { ChatView } from '../ai/components/ChatView'
-import { useProjectsStore, modeOf } from '../sessions/store/projectsStore'
+import { useProjectsStore, modeOf, GENERAL_PROJECT_ID } from '../sessions/store/projectsStore'
+import { useGeneralAgents } from '../team/store/generalAgentsStore'
+import { useBotsStore } from '../team/store/botsStore'
 import { usePlaybookStore } from '../settings/store/playbookStore'
 import { isPanel } from '../settings/lib/playbooks'
 import { ADDABLE, PANELS, type PanelKind } from './registry'
@@ -56,6 +58,9 @@ function Fill({ children }: { children: React.ReactNode }) {
 
 function Chat() {
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === s.activeProjectId))
+  const isGeneral = useProjectsStore((s) => s.activeProjectId === GENERAL_PROJECT_ID)
+  const generalRoot = useGeneralAgents((s) => s.root)
+  const generalChannel = useBotsStore((s) => (generalRoot ? s.channel[generalRoot] : undefined))
   if (!hasTauri()) {
     return (
       <Fill>
@@ -65,6 +70,14 @@ function Chat() {
             desktop app for the real thing.
           </Alert>
         </Box>
+      </Fill>
+    )
+  }
+  // One of General's own agents, picked in the sidebar: its direct messages.
+  if (isGeneral && generalRoot && generalChannel && generalChannel !== 'room') {
+    return (
+      <Fill>
+        <TeamRoom key={generalRoot} root={generalRoot} />
       </Fill>
     )
   }

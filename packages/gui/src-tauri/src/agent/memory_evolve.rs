@@ -209,11 +209,25 @@ pub async fn write_facts(
                     // that drops its words is refused, and the fact is
                     // kept beside it instead.
                     Some(m) if !user_stated(&t.kind) || normalized(m).contains(&normalized(&t.text)) => {
+                        // The merged fact is a new version: the old one is
+                        // closed (not overwritten) and superseded by it, so
+                        // what was believed before stays answerable.
                         let m = redact_secrets(m);
-                        if super::memory_store::update_entry_text(root, &t.id, &m).await.is_ok() {
-                            if let Ok(Some(e)) = crate::ai::embedding::embed_text(&auth, &m).await {
-                                let _ = super::memory_store::update_embedding(root, &t.id, &e, crate::ai::embedding::embedding_model()).await;
-                            }
+                        let now = super::memory::now_ms();
+                        let version = MemoryEntry {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            key: t.key.clone(),
+                            text: m.clone(),
+                            kind: t.kind.clone(),
+                            session_id: c.entry.session_id.clone(),
+                            created_at: now,
+                            ..t.clone()
+                        };
+                        let new = Candidate { entry: version, scene: c.scene.clone() };
+                        let emb = crate::ai::embedding::embed_text(&auth, &m).await.ok().flatten();
+                        if insert(root, &new, emb.as_deref()).await {
+                            let _ = super::memory_store::invalidate_entry(root, &t.id, now).await;
+                            link(root, &new.entry.id, &t.id, EdgeKind::Supersedes).await;
                             updated += 1;
                         }
                     }
@@ -232,7 +246,9 @@ pub async fn write_facts(
                         // Provenance guard: keep what the user said, and
                         // mark the disagreement for whoever recalls it.
                         link(root, &c.entry.id, &t.id, EdgeKind::Contradicts).await;
-                    } else if super::memory_store::delete_entry(root, &t.id).await.is_ok() {
+                    } else if super::memory_store::invalidate_entry(root, &t.id, super::memory::now_ms()).await.is_ok() {
+                        // Closed, not erased: it was true until now.
+                        link(root, &c.entry.id, &t.id, EdgeKind::Supersedes).await;
                         deleted += 1;
                     }
                 }
@@ -391,6 +407,7 @@ pub fn provenance_label(kind: &str) -> &'static str {
         "persona" => "inferred about the user",
         "episodic" => "happened before",
         "auto" => "session note",
+        "episode" => "session summary",
         _ => "note",
     }
 }

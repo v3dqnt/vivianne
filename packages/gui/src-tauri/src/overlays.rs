@@ -58,7 +58,21 @@ fn exclude_from_capture(win: &WebviewWindow) {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+/// macOS: `NSWindow.sharingType = .none` keeps a window out of screenshots and
+/// screen recordings. AppKit must be touched on the main thread, and `ensure`
+/// runs from async tasks, so it is handed over there.
+#[cfg(target_os = "macos")]
+fn exclude_from_capture(win: &WebviewWindow) {
+    let Ok(ptr) = win.ns_window() else { return };
+    let ptr = ptr as usize;
+    let _ = win.run_on_main_thread(move || {
+        use objc2_app_kit::{NSWindow, NSWindowSharingType};
+        let w: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
+        unsafe { w.setSharingType(NSWindowSharingType::None) };
+    });
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn exclude_from_capture(_win: &WebviewWindow) {}
 
 /// The overlay's window if it's open. Never creates one — for paths like
@@ -132,6 +146,24 @@ pub fn emit<S: Serialize + Clone>(app: &AppHandle, label: &str, event: &str, pay
         }
     }
     let _ = app.emit_to(label, event, payload);
+}
+
+/// Whether the overlay's page has loaded and is listening.
+pub fn is_ready(label: &str) -> bool {
+    state().ready.contains(label)
+}
+
+/// Throw away an overlay window whose page never loaded, so the next
+/// [`ensure`] builds a fresh one. WebView2 can fail to create a webview (its
+/// error arrives after the window has been built, so `ensure` can't see it)
+/// and leave the window there, blank, for good.
+pub fn discard(app: &AppHandle, label: &str) {
+    if let Some(win) = app.get_webview_window(label) {
+        let _ = win.destroy();
+    }
+    let mut s = state();
+    s.ready.remove(label);
+    s.pending.remove(label);
 }
 
 /// Called by an overlay's page once its event listeners are attached.

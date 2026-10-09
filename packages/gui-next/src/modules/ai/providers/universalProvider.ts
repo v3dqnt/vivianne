@@ -35,7 +35,7 @@ import type { AssistantMessage, ProviderStreamRequest, StreamTokenEvent } from '
 import { emptyUsage, now } from './types'
 import { transformMessages, normalizeAnthropicToolCallId } from './transformMessages'
 import { toModelMessages, toSdkTools, runSdkStream, describeProviderError } from './sdkShared'
-import { IdleWatchdog, parseOpenRouterAffordableTokens } from './shared'
+import { APP_HEADERS, IdleWatchdog, parseOpenRouterAffordableTokens } from './shared'
 
 function emitToken(payload: StreamTokenEvent) {
   void emit('ai-stream-token', payload)
@@ -166,7 +166,7 @@ function buildRequestSetup(req: ProviderStreamRequest, apiKey: string, maxOutput
       // package does). `openai-compatible` is the SDK's own recommended
       // package for exactly this class of host (LM Studio is one of its
       // documented examples).
-      const openai = createOpenAICompatible({ name: req.provider, apiKey, baseURL: req.baseUrl.replace(/\/+$/, '') })
+      const openai = createOpenAICompatible({ name: req.provider, apiKey, baseURL: req.baseUrl.replace(/\/+$/, ''), headers: APP_HEADERS })
       const transformed = transformMessages(req.context.messages, {
         supportsImages: true,
         targetProvider: '',
@@ -184,7 +184,7 @@ function buildRequestSetup(req: ProviderStreamRequest, apiKey: string, maxOutput
       }
     }
     case 'openAiResponses': {
-      const openai = createOpenAI({ apiKey, baseURL: req.baseUrl.replace(/\/+$/, '') })
+      const openai = createOpenAI({ apiKey, baseURL: req.baseUrl.replace(/\/+$/, ''), headers: APP_HEADERS })
       const transformed = transformMessages(req.context.messages, {
         supportsImages: true,
         targetProvider: '',

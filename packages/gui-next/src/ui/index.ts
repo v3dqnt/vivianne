@@ -9,6 +9,7 @@ export { alpha, darken, lighten, emphasize, fade, getContrastRatio } from './col
 export { createTheme, type Theme, type Mode, type PaletteColor, type ColorName, type Tokens } from './theme'
 export type { SxProps, SxObject } from './sx'
 export { ThemeProvider, useTheme, GlobalStyles, CssBaseline } from './ThemeProvider'
+export { Orb, type OrbState } from './Orb'
 export { Box, Stack, Typography, Paper, Divider, Link, type BoxProps, type StackProps, type TypographyProps } from './layout'
 export { ButtonBase, Button, IconButton, ButtonGroup, Chip, ToggleButton, ToggleButtonGroup, type ButtonProps } from './buttons'
 export { InputBase, TextField, Select, FormControl, InputLabel, Switch, Checkbox, FormControlLabel, Slider } from './inputs'

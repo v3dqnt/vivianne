@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Box, Button, ButtonBase, Stack, TextField, Typography } from '../../../ui'
+import { Box, Button, ButtonBase, Orb, Stack, TextField, Typography } from '../../../ui'
 import { useAgentStore } from '../store/agentStore'
 import type { RunStatus } from '../lib/types'
 
@@ -57,6 +57,8 @@ export function RunStatusBar() {
   const waiting = useAgentStore((s) => s.runWaiting)
   const control = useAgentStore((s) => s.controlLongTask)
   const abort = useAgentStore((s) => s.abort)
+  const isBusy = useAgentStore((s) => s.isBusy)
+  const stopping = useAgentStore((s) => s.stopping)
   const [addUsd, setAddUsd] = useState('10')
   const [addHours, setAddHours] = useState('24')
   const [error, setError] = useState<string | null>(null)
@@ -65,6 +67,10 @@ export function RunStatusBar() {
 
 
   if (!status || status === 'done' || status === 'stopped') return null
+  // "Working" is the run's to say: a ledger still reading running after the
+  // run ended (or while it winds down from a stop) is stale, not a second
+  // task to offer controls for.
+  if ((status === 'running' || status === 'waiting') && (!isBusy || stopping)) return null
   // Every task has a ledger, and a quick exchange doesn't need a status bar:
   // a running task earns one once it is clearly a piece of work — it has a
   // plan, has taken a while, or is spending against a limit.
@@ -146,17 +152,11 @@ export function RunStatusBar() {
       }}
     >
       <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, minWidth: 0, minHeight: 24 }}>
-        <Box
-          sx={{
-            width: 6,
-            height: 6,
-            borderRadius: '50%',
-            bgcolor: color,
-            flexShrink: 0,
-            animation: status === 'running' ? 'vivPulse 1.6s ease-in-out infinite' : undefined,
-            '@keyframes vivPulse': { '0%, 100%': { opacity: 1 }, '50%': { opacity: 0.35 } },
-          }}
-        />
+        {status === 'running' || status === 'waiting' ? (
+          <Orb state={status === 'running' ? 'working' : 'listening'} label={label} />
+        ) : (
+          <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color, flexShrink: 0, mx: '7px' }} />
+        )}
         <Typography variant="caption" sx={{ fontWeight: 600, color, flexShrink: 0, fontSize: '0.6875rem' }}>
           {label}
           {status === 'waiting' && waitUntil ? ` · ${formatDuration(waitUntil - now)}` : ''}
@@ -172,7 +172,7 @@ export function RunStatusBar() {
         {ledger && (status === 'running' || status === 'waiting') && textButton('Pause', () => void run(() => control('pause')))}
         {!ledger && status === 'waiting' && textButton('Stop', () => void abort())}
         {ledger && (status === 'paused' || status === 'blocked') && !capHit && textButton('Resume', () => void run(() => control('resume')), true)}
-        {ledger && textButton('End', () => void run(() => control('stop')))}
+        {ledger && textButton('End', () => void abort())}
       </Stack>
       {ledger && capHit && (status === 'paused' || status === 'blocked') && (
         <Stack direction="row" spacing={1} sx={{ alignItems: 'center', py: 0.75 }}>

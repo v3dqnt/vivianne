@@ -18,6 +18,10 @@ import { useTeamStore, isWorking, type TeamAgent, type AgentRun } from '../../te
 import { Avatar, colorOf } from '../../team/components/bits'
 import { openPanel } from '../../workspace/layout'
 import { TeamConversations } from '../../team/components/TeamConversations'
+import { CompanyTree } from '../../team/components/CompanyTree'
+import { GeneralAgents } from '../../team/components/GeneralAgents'
+import { useGeneralAgents } from '../../team/store/generalAgentsStore'
+import { useBotsStore } from '../../team/store/botsStore'
 
 export const SIDEBAR_WIDTH = 260
 
@@ -186,6 +190,9 @@ export function Sidebar() {
   }
 
   const onToday = !viewing
+  // A company project with its lead: the lead, its employees and their
+  // subagents, as one tree.
+  const companyTree = mode === 'company'
 
   return (
     <Stack component="nav" sx={SIDEBAR_CARD_SX}>
@@ -223,53 +230,6 @@ export function Sidebar() {
 
       {activeProject?.path && mode === 'company' && master !== undefined && (
         <Box sx={{ px: 1.5, pb: 1.25, flexShrink: 0 }}>
-          {master ? (
-            <ButtonBase
-              onClick={() => {
-                // The master may have edited the charter since it was loaded.
-                if (root) void loadMaster(root)
-                setCharterOpen(true)
-              }}
-              sx={{
-                display: 'flex',
-                width: '100%',
-                alignItems: 'center',
-                gap: 1,
-                px: 1,
-                py: 0.75,
-                borderRadius: '8px',
-                justifyContent: 'flex-start',
-                textAlign: 'left',
-                '&:hover': { bgcolor: 'action.hover' },
-                '&:focus-visible': { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: 1 },
-              }}
-            >
-              <Box
-                sx={{
-                  width: 22,
-                  height: 22,
-                  borderRadius: '50%',
-                  flexShrink: 0,
-                  display: 'grid',
-                  placeItems: 'center',
-                  bgcolor: alpha(projectColor(activeProject), 0.2),
-                  color: projectColor(activeProject),
-                  fontSize: '0.6875rem',
-                  fontWeight: 700,
-                }}
-              >
-                {master.name.trim()[0]?.toUpperCase() ?? 'M'}
-              </Box>
-              <Stack sx={{ minWidth: 0, flex: 1 }}>
-                <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem' }} noWrap>
-                  {master.name}
-                </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>
-                  Master agent · view charter
-                </Typography>
-              </Stack>
-            </ButtonBase>
-          ) : null}
           {master ? null : (
             // Every project made before onboarding existed lands here. Offered,
             // not forced: a project can go on without a master, as a plain chat.
@@ -308,7 +268,45 @@ export function Sidebar() {
       )}
 
       {threaded ? (
-        <GeneralThreads onExport={exportCurrent} />
+        <>
+          {isGeneral && <GeneralAgents labelSx={SECTION_LABEL_SX} />}
+          <GeneralThreads onExport={exportCurrent} />
+        </>
+      ) : (
+      <>
+      {companyTree && master && root && activeProject ? (
+        <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 1.5, pb: 1 }}>
+          <Stack direction="row" sx={{ alignItems: 'center', px: 0.5, pb: 0.5 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ ...SECTION_LABEL_SX, flex: 1 }}>
+              Company{activeTeam.length ? ` · ${activeTeam.length}` : ''}
+            </Typography>
+            <Tooltip title={viewing ? 'Copy this thread as markdown' : 'Copy the whole conversation as markdown'}>
+              <IconButton size="small" aria-label="Copy as markdown" onClick={exportCurrent}>
+                <ExportLinear size={13} color="currentColor" />
+              </IconButton>
+            </Tooltip>
+          </Stack>
+          <CompanyTree
+            leadName={master.name}
+            leadColor={projectColor(activeProject)}
+            leadActive={onToday}
+            team={activeTeam}
+            runs={(id) => runs[`${root}::${id}`]}
+            pendingHires={pendingHires}
+            onLead={() => {
+              backToToday()
+              // Straight to typing: say the goal, the lead routes it.
+              window.dispatchEvent(new Event('viv:focus-composer'))
+            }}
+            onCharter={() => {
+              // The master may have edited the charter since it was loaded.
+              void loadMaster(root)
+              setCharterOpen(true)
+            }}
+            onAgent={openAgent}
+            onManage={() => openAgent(null)}
+          />
+        </Box>
       ) : (
       <>
       {!(mode === 'team' && root) && (
@@ -386,6 +384,8 @@ export function Sidebar() {
         )}
 
       </Box>
+      </>
+      )}
 
       {/* Pinned to the bottom, folded: the archive is history, so it takes
           one line until asked for, and scrolls within its own space when
@@ -467,6 +467,12 @@ function GeneralThreads({ onExport }: { onExport: () => void }) {
     setRenaming(null)
     if (name) void renameThread(id, name)
   }
+  // Picking a thread leaves a General agent's chat, if one is open.
+  const generalRoot = useGeneralAgents((s) => s.root)
+  const agentOpen = useBotsStore((s) => (generalRoot ? (s.channel[generalRoot] ?? 'room') !== 'room' : false))
+  const leaveAgent = () => {
+    if (generalRoot && agentOpen) useBotsStore.getState().setChannel(generalRoot, 'room')
+  }
 
   return (
     <>
@@ -482,7 +488,10 @@ function GeneralThreads({ onExport }: { onExport: () => void }) {
       </Stack>
       <Box sx={{ px: 1.5, pb: 1, flexShrink: 0 }}>
         <ButtonBase
-          onClick={() => void newThread()}
+          onClick={() => {
+            leaveAgent()
+            void newThread()
+          }}
           disabled={busy}
           sx={{
             display: 'flex',
@@ -514,7 +523,7 @@ function GeneralThreads({ onExport }: { onExport: () => void }) {
             items={threads}
             dateOf={(t) => t.created_at}
             render={(t: SessionInfo) => {
-              const active = !viewing && t.id === activeId
+              const active = !viewing && !agentOpen && t.id === activeId
               if (renaming === t.id) {
                 return (
                   <Box key={t.id} sx={{ px: 0.5 }}>
@@ -541,7 +550,10 @@ function GeneralThreads({ onExport }: { onExport: () => void }) {
                 >
                   <Tooltip title="Double-click to rename" enterDelay={1200} placement="right">
                     <ButtonBase
-                      onClick={() => void openThread(t.id)}
+                      onClick={() => {
+                        leaveAgent()
+                        void openThread(t.id)
+                      }}
                       onDoubleClick={() => {
                         setRenaming(t.id)
                         setDraft(t.name)

@@ -31,7 +31,13 @@ pub mod memory_rerank;
 pub mod memory_store;
 pub mod memory_graph;
 pub mod memory_evolve;
+pub mod memory_sleep;
+#[cfg(test)]
+mod memory_bench;
 pub mod bots;
+pub mod contact;
+pub mod guides;
+pub mod diagram_check;
 pub mod verification;
 pub mod rrf;
 pub mod paths;

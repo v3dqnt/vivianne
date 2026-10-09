@@ -8,6 +8,7 @@ export type SettingsSection =
   | 'mods'
   | 'subagents'
   | 'mcp'
+  | 'connections'
   | 'memory'
   | 'usage'
   | 'diagnostics'

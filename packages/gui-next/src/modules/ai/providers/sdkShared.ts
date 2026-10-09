@@ -279,6 +279,15 @@ export function describeProviderError(provider: string, e: unknown): string {
     const secs = Number(raw)
     retryAfterSecs = Number.isFinite(secs) ? secs : Math.max(0, (Date.parse(raw) - Date.now()) / 1000)
   }
+  // OpenRouter serves some free models only to the agent apps it lists.
+  // Vivianne identifies itself (`APP_HEADERS`) but isn't on that list, so
+  // say what to do instead of passing on a message about other apps.
+  if (e.statusCode === 403 && /only available on agentic harnesses/i.test(`${e.message} ${e.responseBody ?? ''}`)) {
+    const model = /([\w.-]+\/[\w.-]+):free/.exec(`${e.message} ${e.responseBody ?? ''}`)?.[1]
+    return `${provider}: OpenRouter serves this free model only to coding agents on its approved list, and Vivianne isn't on it yet. ${
+      model ? `Pick ${model} (the same model, paid) or` : 'Pick its paid version or'
+    } another free model.`
+  }
   const status = e.statusCode ? `(HTTP ${e.statusCode}) ` : ''
   const retry = retryAfterSecs !== null && Number.isFinite(retryAfterSecs) ? ` [retry-after: ${Math.ceil(retryAfterSecs)}s]` : ''
   const code = errorCode(e.responseBody ?? e.data)

@@ -10,6 +10,7 @@ import { ReasoningBlock } from './ReasoningBlock'
 import { ImageBlock } from './ImageBlock'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { HandoffDivider, isHandoffText, SummaryDivider, isSummaryText, PairActivityDivider, isPairActivityText, ResumeDivider, isResumeText, PlanNoteDivider, isPlanNoteText } from './HandoffDivider'
+import { CHAT_FONT, CHAT_MAX_WIDTH, CHAT_RADIUS } from '../lib/chatStyle'
 
 // Memoized — `MessageList` re-renders on every streamed token (the store
 // replaces its `messages` array each time), but non-streaming message
@@ -66,6 +67,9 @@ function MessageBubbleImpl({
   if (isUser && isPairActivityText(text)) return <PairActivityDivider text={text} />
   if (isUser && isResumeText(text)) return <ResumeDivider text={text} />
   if (isUser && isPlanNoteText(text)) return <PlanNoteDivider text={text} />
+  // Stops are left out of the transcript (`groupTranscript`); this covers any
+  // other path that renders a message directly.
+  if (message.type === 'assistant' && message.stopReason === 'aborted') return null
   const thinking = contentToThinking(message.content)
   const images = contentImages(message.content)
   // A failed turn ends with `errorMessage` set and (usually) empty content —
@@ -102,14 +106,14 @@ function MessageBubbleImpl({
     >
       {!isUser && thinking && <ReasoningBlock text={thinking} streaming={isEmptyStreamingAssistant} />}
       {images.length > 0 && (
-        <Stack direction="row" spacing={1} sx={{ maxWidth: '80%', flexWrap: 'wrap' }}>
+        <Stack direction="row" spacing={1} sx={{ maxWidth: CHAT_MAX_WIDTH, flexWrap: 'wrap' }}>
           {images.map((block, i) => (
             <ImageBlock key={i} block={block} />
           ))}
         </Stack>
       )}
       {errorMessage && (
-        <Alert severity="error" sx={{ maxWidth: '80%', fontSize: '0.8125rem' }}>
+        <Alert severity="error" sx={{ maxWidth: CHAT_MAX_WIDTH, fontSize: CHAT_FONT.title, borderRadius: CHAT_RADIUS }}>
           {errorMessage}
         </Alert>
       )}
@@ -122,19 +126,24 @@ function MessageBubbleImpl({
         <Paper
           elevation={0}
           sx={{
-            maxWidth: '80%',
+            maxWidth: CHAT_MAX_WIDTH,
             minWidth: 0,
-            px: 2,
+            px: 1.75,
             py: 1,
+            // The same box as the cards around it; your own messages are
+            // filled instead, so who said what reads at a glance.
+            border: 1,
+            borderColor: isUser ? 'transparent' : 'divider',
             bgcolor: isUser ? 'primary.main' : 'background.paper',
             color: isUser ? 'primary.contrastText' : 'text.primary',
-            borderRadius: 2,
+            borderRadius: CHAT_RADIUS,
+            fontSize: CHAT_FONT.text,
           }}
         >
           {isEmptyStreamingAssistant ? (
             <ThinkingIndicator />
           ) : isUser ? (
-            <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+            <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontSize: CHAT_FONT.text, lineHeight: 1.6 }}>
               {text}
             </Typography>
           ) : (

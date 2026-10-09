@@ -1,0 +1,79 @@
+# Builds the eight platform binaries and publishes the npm packages. Not yet run; needs the NPM_TOKEN secret.
+name: release
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { os: windows-latest, key: win32-x64, exe: acu.exe }
+          - { os: windows-11-arm, key: win32-arm64, exe: acu.exe }
+          - { os: macos-13, key: darwin-x64, exe: acu }
+          - { os: macos-latest, key: darwin-arm64, exe: acu }
+          - { os: ubuntu-latest, key: linux-x64-gnu, exe: acu }
+          - { os: ubuntu-24.04-arm, key: linux-arm64-gnu, exe: acu }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: packages/agent-coreutils
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build && ./build/acu_tests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: acu-${{ matrix.key }}
+          path: packages/agent-coreutils/build/${{ matrix.exe }}
+
+  musl:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, key: linux-x64-musl }
+          - { os: ubuntu-24.04-arm, key: linux-arm64-musl }
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          docker run --rm -v "$PWD":/w -w /w/packages/agent-coreutils alpine:3.20 sh -c \
+            "apk add --no-cache build-base cmake ninja && cmake -S . -B build -G Ninja && cmake --build build && ./build/acu --version"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: acu-${{ matrix.key }}
+          path: packages/agent-coreutils/build/acu
+
+  publish:
+    needs: [build, musl]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Publish the platform packages, then the main package
+        working-directory: packages/agent-coreutils
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for dir in ../../artifacts/acu-*; do
+            key=${dir##*/acu-}
+            bin=$(ls "$dir"/acu* | head -1)
+            node npm/scripts/pack-platform.cjs "$key" "$bin" npm/dist
+            (cd "npm/dist/$key" && npm publish --access public)
+            case "$key" in win32-*) ext=.exe ;; *) ext= ;; esac
+            cp "$bin" "release-acu-$key$ext"
+          done
+          (cd npm/agent-coreutils && npm publish --access public)
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: packages/agent-coreutils/release-acu-*

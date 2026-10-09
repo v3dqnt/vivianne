@@ -29,6 +29,8 @@ pub enum McpTransportConfig {
         #[serde(default)]
         headers: HashMap<String, String>,
     },
+    /// A connector built into the app (`connections::native`).
+    Native { connector: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +45,11 @@ pub struct McpServerConfig {
     /// default of 30s.
     #[serde(default)]
     pub timeout_ms: Option<u32>,
+    /// A connected app (`connections`) whose sign-in each request carries:
+    /// the header comes from the keychain at request time, refreshed when
+    /// it's about to expire, and is never written to the config file.
+    #[serde(default)]
+    pub auth: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

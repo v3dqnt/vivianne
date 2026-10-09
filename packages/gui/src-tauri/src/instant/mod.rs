@@ -35,6 +35,9 @@
 pub mod parakeet;
 pub mod pointer;
 pub mod risk;
+pub mod route;
 pub mod session;
+pub mod sherpa;
+pub mod native_mic;
 pub mod stt;
 pub mod window;

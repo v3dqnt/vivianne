@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Box, ButtonBase } from '../../../ui'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { call, on } from '../../../ipc'
 import { useTransparentWindowBody } from '../../../lib/transparentWindow'
 import { useInstantStore, type InstantStep } from '../store/instantStore'
 import { useInstantMic } from '../lib/useInstantMic'
 import { speak, stopSpeaking } from '../lib/instantTts'
 import { Notch, NOTCH_MUTED, type NotchTone } from './Notch'
+import { RestingNotch } from './RestingNotch'
+
+/** Mirrors `instant::route::Route`. */
+interface Route {
+  kind: 'computer' | 'general' | 'project' | 'status'
+  project: { id: string; name: string } | null
+  work: boolean
+}
 
 /**
  * What counts as "stop" during a destructive step's countdown.
@@ -22,7 +29,12 @@ const CANCEL_PHRASE = /\b(stop|cancel|no|wait|dont|don't|abort)\b/i
 const COLLAPSED_W = 200
 
 /** What the status line says for each phase. */
-function statusFor(phase: string, hasSteps: boolean): string {
+function statusFor(phase: string, hasSteps: boolean, route: Route | null): string {
+  if (phase === 'working' && route) {
+    if (route.kind === 'general') return 'Answering'
+    if (route.kind === 'status') return 'Checking'
+    if (route.kind === 'project' && route.project) return route.work ? `To ${route.project.name}` : route.project.name
+  }
   switch (phase) {
     case 'listening':
       return 'Listening'
@@ -71,6 +83,8 @@ export function InstantOverlay() {
   const risk = useInstantStore((s) => s.risk)
   const download = useInstantStore((s) => s.download)
   const store = useInstantStore
+  // What the request turned out to be (`instant::route`), for the title.
+  const [route, setRoute] = useState<Route | null>(null)
 
   // One controller per run, so a new activation cuts off the previous reply
   // mid-sentence rather than letting it talk over the new one.
@@ -169,6 +183,7 @@ export function InstantOverlay() {
       stopSpeaking()
       talkingRef.current = false
       store.getState().activate()
+      setRoute(null)
       void (async () => {
         const cfg = await call<{ instantSttModel?: string }>('cmd_get_settings').catch(() => null)
         const chosen = cfg?.instantSttModel
@@ -192,8 +207,12 @@ export function InstantOverlay() {
       talkingRef.current = false
       stop()
       store.getState().dismiss()
-      void getCurrentWindow().hide()
+      setRoute(null)
+      // Not hidden here: the backend either hides the window or, when the
+      // notch is always on, puts it back to resting.
     }))
+
+    track(on<Route>('instant:route', setRoute))
 
     track(on<InstantStep>('instant:step', (step) => {
       store.getState().upsertStep(step)
@@ -273,7 +292,7 @@ export function InstantOverlay() {
       timer = window.setTimeout(() => {
         const now = store.getState().phase
         if ((now === 'done' || now === 'error') && !talkingRef.current) void call('cmd_instant_dismiss').catch(() => {})
-      }, phase === 'error' ? 6000 : 4000)
+      }, phase === 'error' ? 6000 : 5000)
     }
     check()
     return () => window.clearTimeout(timer)
@@ -332,10 +351,13 @@ export function InstantOverlay() {
     </Box>
   ) : null
 
+  // Between commands: the always-on status notch.
+  if (phase === 'idle') return <RestingNotch />
+
   return (
     <Notch
       tone={tone}
-      title={statusFor(phase, steps.length > 0)}
+      title={statusFor(phase, steps.length > 0, route)}
       detail={detail}
       level={level}
       onStop={working ? () => void call('cmd_instant_abort', {}) : null}

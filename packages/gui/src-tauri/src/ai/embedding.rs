@@ -21,14 +21,11 @@ use crate::ai::env_api_keys::find_env_keys;
 /// - `"text-embedding-3-small"` when falling back to OpenAI remote API
 /// This function is fast (checks a flag, no I/O) and safe to call repeatedly.
 pub fn embedding_model() -> &'static str {
-    if super::local_onnx::is_model_installed() {
-        super::local_onnx::LOCAL_MODEL_NAME
-    } else {
-        "text-embedding-3-small"
-    }
+    super::local_onnx::active_model_name().unwrap_or(REMOTE_MODEL)
 }
 
 const EMBEDDING_PROVIDER: &str = "openai";
+const REMOTE_MODEL: &str = "text-embedding-3-small";
 const EMBEDDING_URL: &str = "https://api.openai.com/v1/embeddings";
 
 /// LRU cache for text embeddings. Keyed by a u64 hash of the input text;
@@ -112,6 +109,20 @@ async fn resolve_openai_key(auth: &AuthState) -> Option<String> {
 ///
 /// Checks the LRU cache before computing; only uncached texts are embedded.
 pub async fn embed_texts(auth: &AuthState, texts: &[String]) -> Result<Option<Vec<Vec<f32>>>, String> {
+    embed_texts_with(Some(auth), texts).await
+}
+
+/// `embed_texts` where the remote fallback is optional: with no `auth`,
+/// only the local model is tried.
+pub async fn embed_texts_with(auth: Option<&AuthState>, texts: &[String]) -> Result<Option<Vec<Vec<f32>>>, String> {
+    embed_for(auth, texts, super::local_onnx::Purpose::Document).await
+}
+
+/// Embed texts for `purpose`, cached per purpose (EmbeddingGemma embeds a
+/// query and the same words as a document differently).
+async fn embed_for(auth: Option<&AuthState>, texts: &[String], purpose: super::local_onnx::Purpose) -> Result<Option<Vec<Vec<f32>>>, String> {
+    let model = embedding_model();
+    let key = |t: &str| hash_text(&format!("{model}\u{0}{}\u{0}{t}", purpose == super::local_onnx::Purpose::Query));
     if texts.is_empty() {
         return Ok(Some(Vec::new()));
     }
@@ -123,7 +134,7 @@ pub async fn embed_texts(auth: &AuthState, texts: &[String]) -> Result<Option<Ve
         let mut uncached_indices: Vec<usize> = Vec::new();
         let mut uncached_texts: Vec<String> = Vec::new();
         for (i, text) in texts.iter().enumerate() {
-            match cache.get(hash_text(text)) {
+            match cache.get(key(text)) {
                 Some(embedding) => result.push(embedding),
                 None => {
                     result.push(Vec::new());
@@ -139,31 +150,27 @@ pub async fn embed_texts(auth: &AuthState, texts: &[String]) -> Result<Option<Ve
         return Ok(Some(result));
     }
 
-    // Phase 2: Try local ONNX first (best path: ~3ms, no API key)
+    // Phase 2: the local model when one is installed. No remote fallback
+    // when it fails: callers tag vectors with `embedding_model()`, which
+    // names the local model, and a remote vector under that tag would
+    // poison the store.
     if super::local_onnx::is_model_installed() {
-        match super::local_onnx::embed_local_batch(&uncached_texts).await {
-            Ok(Some(embeddings)) => {
-                // Store results and fill output — lock re-acquired
+        return match super::local_onnx::embed_local_batch(&uncached_texts, purpose).await? {
+            Some(embeddings) => {
                 let mut cache = get_cache().lock().await;
                 for (i, embedding) in embeddings.into_iter().enumerate() {
                     let orig_idx = uncached_indices[i];
                     result[orig_idx] = embedding.clone();
-                    cache.insert(hash_text(&uncached_texts[i]), embedding);
+                    cache.insert(key(&uncached_texts[i]), embedding);
                 }
-                return Ok(Some(result));
+                Ok(Some(result))
             }
-            Ok(None) => {
-                // Local model reported not available (files deleted between
-                // the is_model_installed check and the call?). Fall through.
-            }
-            Err(e) => {
-                log::warn!("[embedding] local ONNX failed, falling back to remote: {e}");
-                // Fall through to remote
-            }
-        }
+            None => Ok(None),
+        };
     }
 
     // Phase 3: Remote OpenAI API call — no lock held
+    let Some(auth) = auth else { return Ok(None) };
     let Some(api_key) = resolve_openai_key(auth).await else { return Ok(None) };
     let embeddings = fetch_embeddings(&api_key, &uncached_texts).await?;
 
@@ -173,7 +180,7 @@ pub async fn embed_texts(auth: &AuthState, texts: &[String]) -> Result<Option<Ve
         for (i, embedding) in embeddings.into_iter().enumerate() {
             let orig_idx = uncached_indices[i];
             result[orig_idx] = embedding.clone();
-            cache.insert(hash_text(&uncached_texts[i]), embedding);
+            cache.insert(key(&uncached_texts[i]), embedding);
         }
     }
 
@@ -187,7 +194,7 @@ async fn fetch_embeddings(api_key: &str, texts: &[String]) -> Result<Vec<Vec<f32
     let resp = client
         .post(EMBEDDING_URL)
         .bearer_auth(api_key)
-        .json(&serde_json::json!({ "model": embedding_model(), "input": texts }))
+        .json(&serde_json::json!({ "model": REMOTE_MODEL, "input": texts }))
         .send()
         .await
         .map_err(|e| format!("embedding request failed: {e}"))?;
@@ -214,18 +221,18 @@ async fn fetch_embeddings(api_key: &str, texts: &[String]) -> Result<Vec<Vec<f32
     Ok(out)
 }
 
+/// Embed a search query. Asymmetric models (EmbeddingGemma) embed queries
+/// and the documents they should find differently; for the rest this is
+/// `embed_text`.
+pub async fn embed_query(auth: Option<&AuthState>, text: &str) -> Result<Option<Vec<f32>>, String> {
+    let batch = embed_for(auth, std::slice::from_ref(&text.to_string()), super::local_onnx::Purpose::Query).await?;
+    Ok(batch.and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) }))
+}
+
 /// Embed a single text. Tries local ONNX first (fast, ~3ms, no API key).
 /// Falls back to the OpenAI remote API. Checks the LRU cache first — on
 /// cache hit, no computation or network call is needed.
 pub async fn embed_text(auth: &AuthState, text: &str) -> Result<Option<Vec<f32>>, String> {
-    // Check cache first — lock held briefly, no .await inside
-    let key = hash_text(text);
-    {
-        let cache = get_cache().lock().await;
-        if let Some(embedding) = cache.get(key) {
-            return Ok(Some(embedding));
-        }
-    }
     let batch = embed_texts(auth, std::slice::from_ref(&text.to_string())).await?;
     Ok(batch.and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) }))
 }

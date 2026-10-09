@@ -14,6 +14,10 @@ pub mod computer;
 pub mod dip;
 #[cfg(target_os = "windows")]
 pub mod win;
+#[cfg(target_os = "macos")]
+pub mod mac;
+#[cfg(target_os = "macos")]
+pub mod dip_mac;
 
 /// Stop any typing or key presses in progress (the activity notch's Stop).
 pub fn win_cancel() {
@@ -30,6 +34,7 @@ pub mod tools_ext;
 pub mod apply_patch;
 pub mod repo_tools;
 pub mod compaction;
+pub mod doc_design;
 pub mod documents;
 pub mod document_edit;
 pub mod playbooks;

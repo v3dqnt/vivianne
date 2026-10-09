@@ -39,6 +39,25 @@ const ALLOWED_TOOLS: &[&str] = &[
     "dip", "read", "ls", "glob", "grep", "sleep", "todo_write", "web_search", "web_fetch",
 ];
 
+/// Answering a general question: the web, and nothing that touches the machine.
+const ANSWER_TOOLS: &[&str] = &["web_search", "web_fetch"];
+
+/// Answering a question about a project: its files, read-only, and the web.
+const PROJECT_TOOLS: &[&str] = &["read", "ls", "glob", "grep", "web_search", "web_fetch"];
+
+/// The framing for a spoken answer. Everything in it follows from the answer
+/// being heard rather than read.
+const SPOKEN_FRAMING: &str = "\
+You are Vivianne, answering out loud through the notch at the top of the user's screen. \
+What you write is spoken by a voice and shown in one small line, so:
+
+- Answer in one to three short sentences. Lead with the answer itself.
+- Plain speech only: no markdown, no lists, no headings, no links, no code.
+- Look things up when the answer depends on anything current (news, prices, \
+weather, versions, opening hours) rather than guessing.
+- Never ask the user a question back; nobody can answer it. If the request is \
+ambiguous, answer the most likely reading.";
+
 /// One executed step, as shown in the overlay's live log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,6 +103,46 @@ impl Default for InstantSession {
             abort_flag: std::sync::Mutex::new(None),
             cancel_step: AtomicBool::new(false),
             instruction: std::sync::Mutex::new(String::new()),
+        }
+    }
+}
+
+/// Whether Viv Instant is running something.
+pub fn is_running(app: &tauri::AppHandle) -> bool {
+    app.try_state::<Arc<InstantSession>>().is_some_and(|s| s.is_running())
+}
+
+/// Hand-offs to the main window waiting for its answer, by request id.
+static DELEGATIONS: std::sync::Mutex<Vec<(String, tokio::sync::oneshot::Sender<String>)>> = std::sync::Mutex::new(Vec::new());
+
+/// The main window's answer to a hand-off: what to say about it.
+#[tauri::command]
+pub async fn cmd_instant_delegate_done(id: String, message: String) -> Result<(), String> {
+    let mut pending = DELEGATIONS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(at) = pending.iter().position(|(k, _)| *k == id) {
+        let (_, tx) = pending.remove(at);
+        let _ = tx.send(message);
+    }
+    Ok(())
+}
+
+/// Give a project's work to its own agent, in the app, where its approvals and
+/// transcript already live. The main window does it (it owns the chat) and
+/// says how it went; it can refuse, when the chat is busy with something else.
+async fn delegate(app: &tauri::AppHandle, project: &crate::instant::route::ProjectRef, text: &str) -> Result<String, String> {
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    DELEGATIONS.lock().unwrap_or_else(|e| e.into_inner()).push((id.clone(), tx));
+    let _ = app.emit_to(
+        "main",
+        "notch:delegate",
+        serde_json::json!({ "id": id, "projectId": project.id, "projectName": project.name, "text": text }),
+    );
+    match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
+        Ok(Ok(message)) => Ok(message),
+        _ => {
+            DELEGATIONS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(k, _)| *k != id);
+            Err(format!("Couldn't reach the {} chat. Open Vivianne and ask there.", project.name))
         }
     }
 }
@@ -235,6 +294,29 @@ pub async fn cmd_instant_run(
         return Err("Vivianne's main window is closed — Viv Instant needs it to reach the model.".to_string());
     }
 
+    // What is this? An action on the computer, a question, one of the
+    // user's projects, or "what are my agents doing".
+    use crate::instant::route::Kind;
+    let route = crate::instant::route::route(&instruction).await;
+    log::info!("[instant] routed as {:?} (by {}) project={:?} work={}", route.kind, route.by, route.project.as_ref().map(|p| &p.name), route.work);
+    let _ = app.emit_to(crate::instant::window::LABEL, "instant:route", &route);
+    match (&route.kind, &route.project) {
+        (Kind::Status, _) => {
+            finish(&app, Ok(crate::notch::spoken_summary()));
+            return Ok(());
+        }
+        (Kind::Project, Some(project)) if route.work => {
+            let (app, project, text) = (app.clone(), project.clone(), instruction.clone());
+            sess.running.store(true, Ordering::SeqCst);
+            tauri::async_runtime::spawn(async move {
+                let outcome = delegate(&app, &project, &text).await;
+                finish(&app, outcome);
+            });
+            return Ok(());
+        }
+        _ => {}
+    }
+
     let state = registry.resolve(Some(INSTANT_THREAD_ID)).await;
     let primary = registry.resolve(None).await;
 
@@ -250,17 +332,28 @@ pub async fn cmd_instant_run(
     // not two.
     state.agent_state.set_model(primary.agent_state.model().await).await;
     state.agent_state.set_thinking_level(primary.agent_state.thinking_level().await).await;
-    state
-        .agent_state
-        .set_workspace(primary.agent_state.workspace_folders().await, primary.agent_state.access_mode().await)
-        .await;
+    // A project question is answered from inside that project.
+    let folders = match &route.project {
+        Some(p) if route.kind == Kind::Project => p.path.clone().map(|path| vec![path]).unwrap_or_default(),
+        _ => primary.agent_state.workspace_folders().await,
+    };
+    state.agent_state.set_workspace(folders, primary.agent_state.access_mode().await).await;
     // `Agent` is the only persona whose `restricted_tools()` is empty; any
     // other would strip `dip` and leave Viv Instant unable to do the one thing
     // it exists for.
     state.agent_state.set_persona_mode(PersonaMode::Agent).await;
     state
         .agent_state
-        .set_subagent_allowed_tools(Some(ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect()))
+        .set_subagent_allowed_tools(Some(
+            match route.kind {
+                Kind::Computer => ALLOWED_TOOLS,
+                Kind::Project => PROJECT_TOOLS,
+                _ => ANSWER_TOOLS,
+            }
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        ))
         .await;
     state.agent_state.set_auto_approve(true).await;
 
@@ -275,7 +368,20 @@ pub async fn cmd_instant_run(
         false,
     )
     .await;
-    let system_prompt = format!("{ROLE_FRAMING}\n\n{capability_blocks}");
+    let framing = match (&route.kind, &route.project) {
+        (Kind::Computer, _) => ROLE_FRAMING.to_string(),
+        (Kind::Project, Some(p)) => format!(
+            "{SPOKEN_FRAMING}\n\nThe question is about the user's project \"{name}\"{at}. What the \
+             project is and where it is going is written down in its `.viv/` folder: charter.md \
+             (what it is), map.md (how it is built), roadmap.md (what is next) and journal.md \
+             (what happened). Read the ones that bear on the question first, then the code if \
+             you need it. Answer from what you find, not from general knowledge.",
+            name = p.name,
+            at = p.path.as_deref().map(|x| format!(" at {x}")).unwrap_or_default()
+        ),
+        _ => SPOKEN_FRAMING.to_string(),
+    };
+    let system_prompt = format!("{framing}\n\n{capability_blocks}");
 
     *sess.abort_flag.lock().unwrap_or_else(|e| e.into_inner()) = Some(state.abort_flag.clone());
     sess.running.store(true, Ordering::SeqCst);

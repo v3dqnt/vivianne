@@ -23,6 +23,11 @@ const TOP_MARGIN: f64 = 0.0;
 pub const COLLAPSED_W: f64 = 200.0;
 pub const COLLAPSED_H: f64 = 34.0;
 
+/// The resting notch with nothing to report: a short dark tab at the top
+/// edge, small enough not to sit over anything you'd click.
+pub const RESTING_W: f64 = 120.0;
+pub const RESTING_H: f64 = 8.0;
+
 fn overlay(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
     crate::overlays::get(app, LABEL)
 }
@@ -52,6 +57,12 @@ pub fn position(win: &tauri::WebviewWindow) -> Result<(), String> {
         .to_logical::<f64>(scale);
 
     let x = origin.x + (screen.width - size.width) / 2.0;
+    // On a Mac the top of the screen is the menu bar (and, on newer
+    // MacBooks, the camera notch inside it): hang the notch just below it, so
+    // on a notched display it reads as the notch growing downwards.
+    #[cfg(target_os = "macos")]
+    let y = monitor.work_area().position.to_logical::<f64>(scale).y + TOP_MARGIN;
+    #[cfg(not(target_os = "macos"))]
     let y = origin.y + TOP_MARGIN;
     win.set_position(LogicalPosition::new(x, y))
         .map_err(|e| format!("couldn't position the overlay: {e}"))
@@ -60,6 +71,13 @@ pub fn position(win: &tauri::WebviewWindow) -> Result<(), String> {
 /// Whether the chord is down. Holding a key makes Windows repeat the press,
 /// and every repeat arrives as another press: only the first one counts.
 static HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Summoned (listening, working or answering) rather than resting.
+static ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn is_active() -> bool {
+    ACTIVE.load(std::sync::atomic::Ordering::SeqCst)
+}
 
 /// The chord went down: listen. Whatever was running is stopped first, since
 /// holding the chord again means a new instruction.
@@ -103,7 +121,8 @@ pub fn toggle(app: &tauri::AppHandle) {
 }
 
 fn toggle_now(app: &tauri::AppHandle) {
-    if overlay(app).is_some_and(|w| w.is_visible().unwrap_or(false)) {
+    // Visible and listening or working is "on"; resting doesn't count.
+    if overlay(app).is_some_and(|w| w.is_visible().unwrap_or(false)) && ACTIVE.load(std::sync::atomic::Ordering::SeqCst) {
         dismiss(app);
         return;
     }
@@ -143,11 +162,31 @@ fn show_and_activate(app: &tauri::AppHandle, hold: bool) {
     // Deliberately NO `set_focus()`. See this module's note in `mod.rs`: the
     // overlay must never hold the keyboard, or the text Viv Instant types goes
     // to the overlay instead of the app being driven.
+    ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
     // Through the overlay queue: on a first summon the page is still loading.
     crate::overlays::emit(app, LABEL, "instant:activate", serde_json::json!({ "hold": hold }));
 }
 
-/// Cancel any run and hide the overlay.
+/// The resting notch: up, small, showing the agents' status, not listening.
+pub fn show_resting(app: &tauri::AppHandle) {
+    let win = match crate::overlays::ensure(app, LABEL) {
+        Ok(w) => w,
+        Err(e) => {
+            log::warn!("[notch] {e}");
+            return;
+        }
+    };
+    if !win.is_visible().unwrap_or(false) {
+        let _ = win.set_size(tauri::LogicalSize::new(RESTING_W, RESTING_H));
+        let _ = position(&win);
+    }
+    let _ = win.set_always_on_top(true);
+    let _ = win.show();
+    crate::overlays::emit(app, LABEL, "notch:rest", ());
+}
+
+/// Cancel any run and hide the overlay — or, when the notch is always on,
+/// put it back to resting.
 pub fn dismiss(app: &tauri::AppHandle) {
     crate::instant::session::abort(app);
     // Give the speech model's weights back. Viv Instant is summoned for
@@ -162,11 +201,17 @@ pub fn dismiss(app: &tauri::AppHandle) {
         let _ = handle;
     });
     disarm_escape(app);
+    ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
     let _ = app.emit_to(LABEL, "instant:dismiss", ());
-    if let Some(win) = overlay(app) {
-        let _ = win.hide();
-        crate::overlays::schedule_close(app, LABEL);
-    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if crate::notch::always_on().await {
+            crate::notch::rest(&app);
+        } else if let Some(win) = overlay(&app) {
+            let _ = win.hide();
+            crate::overlays::schedule_close(&app, LABEL);
+        }
+    });
 }
 
 /// Escape while a run is in flight: stop, but stay open so the step log is
@@ -210,8 +255,8 @@ pub async fn cmd_instant_set_size(app: tauri::AppHandle, width: f64, height: f64
     let Some(win) = overlay(&app) else { return Ok(()) };
     // Clamped so a layout bug in the overlay cannot produce a zero-size window
     // (invisible, unrecoverable) or one that covers the whole screen.
-    let width = width.clamp(COLLAPSED_W, 900.0);
-    let height = height.clamp(COLLAPSED_H, 620.0);
+    let width = width.clamp(RESTING_W.min(COLLAPSED_W), 900.0);
+    let height = height.clamp(RESTING_H.min(COLLAPSED_H), 620.0);
     win.set_size(tauri::LogicalSize::new(width, height)).map_err(|e| e.to_string())?;
     position(&win)
 }

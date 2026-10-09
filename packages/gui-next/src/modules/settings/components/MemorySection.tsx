@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Stack, Typography, Divider, Switch, Button, TextField, CircularProgress } from '../../../ui'
 import { ArchiveBookLinear, SearchNormalLinear, TrashLinear } from '../../../icons'
 import { useMemoryStore } from '../store/memoryStore'
+import { LocalEmbedderRow } from './LocalEmbedderRow'
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -46,7 +47,33 @@ export function MemorySection() {
   const toggleExtraction = useMemoryStore((s) => s.toggleExtraction)
   const purge = useMemoryStore((s) => s.purge)
   const recall = useMemoryStore((s) => s.recall)
+  const sleepNow = useMemoryStore((s) => s.sleepNow)
   const [query, setQuery] = useState('')
+  const [tidying, setTidying] = useState(false)
+  const [tidyResult, setTidyResult] = useState<string | null>(null)
+
+  const tidy = async () => {
+    setTidying(true)
+    setTidyResult(null)
+    try {
+      const r = await sleepNow()
+      if (!r) {
+        setTidyResult('Nothing to do.')
+      } else {
+        const parts = [
+          r.episodes && `${r.episodes} session ${r.episodes === 1 ? 'summary' : 'summaries'} written`,
+          r.merged && `${r.merged} duplicate${r.merged === 1 ? '' : 's'} merged`,
+          r.archived && `${r.archived} unused ${r.archived === 1 ? 'fact' : 'facts'} archived`,
+          r.reembedded && `${r.reembedded} re-indexed`,
+        ].filter(Boolean)
+        setTidyResult(parts.length ? `${parts.join(' · ')}.` : 'Already tidy.')
+      }
+    } catch (e) {
+      setTidyResult(`Couldn't tidy up: ${String(e)}`)
+    } finally {
+      setTidying(false)
+    }
+  }
   const [confirmingPurge, setConfirmingPurge] = useState(false)
   const [purging, setPurging] = useState(false)
 
@@ -118,6 +145,10 @@ export function MemorySection() {
 
       <Divider sx={{ my: 1 }} />
 
+      <LocalEmbedderRow />
+
+      <Divider sx={{ my: 1 }} />
+
       <Typography variant="body2" sx={{ fontWeight: 500, mb: 0.5 }}>
         Search memory
       </Typography>
@@ -137,12 +168,36 @@ export function MemorySection() {
             <Stack key={entry.id} sx={{ px: 1.5, py: 1, borderRadius: 2, bgcolor: 'action.hover' }}>
               <Typography variant="caption" color="text.secondary">
                 {entry.kind}
+                {entry.userWide ? ' · about you, all projects' : ''}
               </Typography>
               <Typography variant="body2">{entry.text}</Typography>
             </Stack>
           ))}
         </Stack>
       )}
+
+      <Divider sx={{ my: 1 }} />
+
+      <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5, py: 0.5 }}>
+        <Stack sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>
+            Tidy up
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            {tidyResult ??
+              'Runs by itself when the app has been idle for 10 minutes: summarises finished sessions, merges duplicates, and archives facts unused for months (archived facts stay on record).'}
+          </Typography>
+        </Stack>
+        <Button
+          size="small"
+          onClick={() => void tidy()}
+          disabled={tidying || !status.state.enabled}
+          startIcon={tidying ? <CircularProgress size={14} /> : undefined}
+          sx={{ textTransform: 'none', flexShrink: 0 }}
+        >
+          {tidying ? 'Tidying…' : 'Tidy up now'}
+        </Button>
+      </Stack>
 
       <Divider sx={{ my: 1 }} />
 

@@ -97,7 +97,56 @@ pub(crate) fn typed_landed(typed: &str, field: &str) -> bool {
     norm(field).contains(&tail)
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub(crate) async fn execute_computer_tool(args: &serde_json::Value, app: &tauri::AppHandle) -> ToolResult {
+    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or_default();
+    match action {
+        "snapshot" => super::dip_mac::execute_dip_snapshot_tool(app, args).await,
+        "find" => super::dip_mac::execute_dip_find_tool(args).await,
+        "read_text" => super::dip_mac::execute_dip_read_text_tool(args).await,
+        "interact" => super::dip_mac::execute_dip_interact_tool(app, args).await,
+        "list_windows" => super::dip_mac::execute_dip_list_windows_tool().await,
+        "focus_window" => super::dip_mac::execute_dip_focus_window_tool(args).await,
+        "window_action" => super::dip_mac::execute_dip_window_action_tool(args).await,
+        "launch_app" => super::dip_mac::execute_dip_launch_app_tool(args).await,
+        "point_at" | "highlight" | "clear_pointer" => execute_narration_action(action, args, app),
+        "screenshot" => run_blocking(capture_screenshot_for(args.clone())).await,
+        "zoom" => run_blocking(zoom_for(args.clone())).await,
+        "wait" => wait(args).await,
+        _ => {
+            // Keys and text go to the app being driven, never into Vivianne
+            // (which is in front whenever the user just spoke to it).
+            if matches!(action, "type" | "key" | "hold_key" | "key_down" | "key_up") && super::mac::trusted() {
+                if let Err(e) = tokio::task::spawn_blocking(super::mac::ensure_target_front).await.unwrap_or_else(|e| Err(e.to_string())) {
+                    return err(e);
+                }
+            }
+            let owned = args.clone();
+            let result = match tokio::task::spawn_blocking(move || enigo_pointer_action(&owned)).await {
+                Ok(r) => r,
+                Err(e) => err(format!("input failed: {e}")),
+            };
+            if action == "type" && !result.is_error {
+                let typed = args.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+                return verify_typed_mac(result, typed).await;
+            }
+            result
+        }
+    }
+}
+
+/// Read the focused field back after typing (see the Windows `verify_typed`).
+#[cfg(target_os = "macos")]
+async fn verify_typed_mac(mut result: ToolResult, typed: &str) -> ToolResult {
+    match super::dip_mac::focused_text().await {
+        Some(field) if typed_landed(typed, &field) => result.content.push_str(&format!(" Read back: the field contains it {VERIFIED_MARK}.")),
+        Some(_) => result.content.push_str(" Read back: MISMATCH — the focused field doesn't contain what was typed. Fix it before saying it's done."),
+        None => result.content.push_str(" Couldn't read the field back: check it landed with read_text before saying it's done."),
+    }
+    result
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 pub(crate) async fn execute_computer_tool(args: &serde_json::Value, app: &tauri::AppHandle) -> ToolResult {
     let action = args.get("action").and_then(|v| v.as_str()).unwrap_or_default();
     match action {

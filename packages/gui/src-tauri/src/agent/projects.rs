@@ -93,6 +93,11 @@ fn save(data: &ProjectsData) -> Result<(), String> {
     std::fs::write(&path, json).map_err(|e| format!("Failed to write projects.json: {e}"))
 }
 
+/// Every project, for the backend.
+pub fn load_all() -> Result<Vec<Project>, String> {
+    Ok(load()?.projects)
+}
+
 #[tauri::command]
 pub async fn cmd_list_projects() -> Result<Vec<Project>, String> {
     Ok(load()?.projects)

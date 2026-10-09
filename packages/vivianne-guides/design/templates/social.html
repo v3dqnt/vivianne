@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Social card</title>
+<!-- Instagram/LinkedIn post, 1080 × 1350 px: create_document format "png",
+     size {width: 1080, height: 1350}. Text big enough to read on a phone. -->
+<style>
+  :root { --bg: #F6F4F1; --ink: #1C1917; --muted: #6F6A64; --accent: #A6402B; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { width: 1080px; height: 1350px; background: var(--bg); color: var(--ink); font-family: 'Inter', sans-serif; }
+  .card { height: 100%; padding: 84px; display: flex; flex-direction: column; }
+  .top { display: flex; justify-content: space-between; font: 600 22px/1 'Inter', sans-serif; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+  .big { margin-top: auto; font: 300 240px/0.9 'Inter', sans-serif; letter-spacing: -0.05em; color: var(--accent); font-variant-numeric: lining-nums; }
+  h1 { font: 500 64px/1.08 'Source Serif 4', serif; letter-spacing: -0.02em; margin: 36px 0 0; max-width: 860px; }
+  .sub { font: 400 30px/1.4 'Inter', sans-serif; color: var(--muted); margin-top: 28px; max-width: 820px; }
+  .foot { margin-top: 64px; padding-top: 28px; border-top: 2px solid var(--ink); display: flex; justify-content: space-between; font: 500 24px/1 'Inter', sans-serif; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="top"><span>Northwind</span><span>Q4 2026</span></div>
+    <div class="big">23%</div>
+    <h1>more customers reach their first result</h1>
+    <div class="sub">After we rebuilt onboarding around the one thing people came to do.</div>
+    <div class="foot"><span>northwind.co/blog</span><span>→</span></div>
+  </div>
+</body>
+</html>

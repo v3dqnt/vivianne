@@ -1,25 +1,25 @@
 # Builds, signs, and publishes a release the in-app updater can consume.
 #
-# The app already ships a configured updater pointing at
-# `releases/latest/download/latest.json` on this repo. That file only exists
-# if something publishes it — this workflow is that something.
+# The app's updater reads
+# `github.com/v3dqnt/vivianne-releases/releases/latest/download/latest.json`.
+# The code repo is private, and a private repo's release files 404 for every
+# installed app (they have no GitHub login), so releases are published to the
+# public `vivianne-releases` repo, which holds only installers and that
+# manifest. This workflow builds, signs and publishes them there.
 #
 # Trigger: push a version tag.
 #   npm version patch -ws --no-git-tag-version   # or edit versions by hand
 #   git commit -am "Release v1.7.3" && git tag v1.7.3 && git push --follow-tags
 #
-# Required repository secret (Settings → Secrets and variables → Actions):
-#   TAURI_SIGNING_PRIVATE_KEY   — the minisign PRIVATE key whose public half
-#                                 is in tauri.conf.json's `plugins.updater.pubkey`.
-#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — only if you set a passphrase.
-#
-# Generate a pair with:  npx @tauri-apps/cli signer generate -w ~/.tauri/viv.key
-# Then put the PRIVATE key's contents in the secret, and the printed PUBLIC
-# key into tauri.conf.json. An update signed by a key that doesn't match the
-# configured pubkey is rejected by every client — that check is the whole
-# point of the signature, so a mismatch fails closed and silently.
-#
-# GITHUB_TOKEN is provided automatically by Actions; no token needs creating.
+# Required secrets on THIS repo (Settings → Secrets and variables → Actions):
+#   TAURI_SIGNING_PRIVATE_KEY — the minisign private key whose public half is
+#       tauri.conf.json's `plugins.updater.pubkey` (the key file lives at
+#       ~/.tauri/vivianne-updater.key on the maintainer's machine; no password).
+#       An update signed by any other key is rejected by every client — that
+#       check is the point of the signature, so a mismatch fails closed.
+#   RELEASES_TOKEN — a fine-grained personal access token with Contents:
+#       read and write on v3dqnt/vivianne-releases. The automatic
+#       GITHUB_TOKEN can only write to the repo the workflow runs in.
 
 name: Release
 
@@ -45,9 +45,8 @@ jobs:
     # other half, and the updater has one download per platform to offer.
     # Both architectures need their Rust std, hence the explicit targets.
     #
-    # The DIP automation layer (UI Automation tree reading) stays Windows-only;
-    # the macOS build ships pixel-mode computer control instead, which is what
-    # the tool schema advertises on that host.
+    # DIP's structured mode is UI Automation on Windows and the Accessibility
+    # API on macOS (`coding_agent::dip_mac`); the schema advertises both.
     strategy:
       fail-fast: false
       matrix:
@@ -87,6 +86,8 @@ jobs:
           echo "BINDGEN_EXTRA_CLANG_ARGS=-isysroot $(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
           echo "CMAKE=$(which cmake)" >> "$GITHUB_ENV"
           echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
+          # Vivianne supports macOS 10.15+; C dependencies follow this.
+          echo "MACOSX_DEPLOYMENT_TARGET=10.15" >> "$GITHUB_ENV"
 
       # Keyed on the lockfile so a dependency change busts it, and scoped to
       # the tauri crate's own target dir.
@@ -107,11 +108,17 @@ jobs:
 
       - uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASES_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: packages/gui
+          # Published to the public releases repo (see the top of this file).
+          owner: v3dqnt
+          repo: vivianne-releases
+          # The tag is created there, on its own main branch: this repo's
+          # commit doesn't exist in that one.
+          releaseCommitish: main
           tagName: ${{ github.ref_name }}
           releaseName: 'Vivianne ${{ github.ref_name }}'
           # Pulled from CHANGELOG.md rather than retyped — the app's own

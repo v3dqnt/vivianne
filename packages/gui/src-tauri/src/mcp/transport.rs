@@ -25,7 +25,11 @@ enum Inner {
         /// response header) that must be echoed on every subsequent request —
         /// part of the "Streamable HTTP" transport in the 2025-03-26 spec.
         session_id: Mutex<Option<String>>,
+        /// A connected app's id: its sign-in rides on every request.
+        auth: Option<String>,
     },
+    /// Built into the app (`connections::native`); no protocol underneath.
+    Native { connector: String },
 }
 
 pub struct McpConnection {
@@ -62,7 +66,10 @@ impl McpConnection {
                     .timeout(timeout)
                     .build()
                     .map_err(|e| e.to_string())?;
-                Inner::Http { url: url.clone(), headers: headers.clone(), client, session_id: Mutex::new(None) }
+                Inner::Http { url: url.clone(), headers: headers.clone(), client, session_id: Mutex::new(None), auth: config.auth.clone() }
+            }
+            McpTransportConfig::Native { connector } => {
+                return Ok(Self { inner: Inner::Native { connector: connector.clone() }, next_id: AtomicI64::new(1), timeout });
             }
         };
         let conn = Self { inner, next_id: AtomicI64::new(1), timeout };
@@ -103,7 +110,8 @@ impl McpConnection {
                     }
                 }
             }
-            Inner::Http { url, headers, client, session_id } => {
+            Inner::Native { .. } => Err(format!("{method}: not available for a built-in connector")),
+            Inner::Http { url, headers, client, session_id, auth } => {
                 // The 2025-03-26 "Streamable HTTP" transport requires the
                 // client to accept both shapes a server may reply with: a
                 // plain JSON body, or a single `text/event-stream` SSE event
@@ -120,8 +128,25 @@ impl McpConnection {
                 if let Some(sid) = session_id.lock().await.clone() {
                     req = req.header("Mcp-Session-Id", sid);
                 }
-                let resp = req.send().await.map_err(|e| format!("{method}: request failed: {e}"))?;
+                if let Some(id) = auth {
+                    if let Some((k, v)) = crate::connections::auth_header(id, false).await? {
+                        req = req.header(k, v);
+                    }
+                }
+                let retry = req.try_clone();
+                let mut resp = req.send().await.map_err(|e| format!("{method}: request failed: {e}"))?;
+                // An expired or revoked sign-in: refresh once and try again.
+                if resp.status().as_u16() == 401 {
+                    if let (Some(id), Some(again)) = (auth, retry) {
+                        if let Ok(Some((k, v))) = crate::connections::auth_header(id, true).await {
+                            resp = again.header(k, v).send().await.map_err(|e| format!("{method}: request failed: {e}"))?;
+                        }
+                    }
+                }
                 let status = resp.status();
+                if status.as_u16() == 401 && auth.is_some() {
+                    return Err(format!("{method}: the app's sign-in has expired or was revoked; reconnect it in Settings → Connections"));
+                }
                 if let Some(sid) = resp.headers().get("mcp-session-id").and_then(|v| v.to_str().ok()) {
                     *session_id.lock().await = Some(sid.to_string());
                 }
@@ -149,7 +174,8 @@ impl McpConnection {
                 line.push('\n');
                 stdin.lock().await.write_all(line.as_bytes()).await.map_err(|e| e.to_string())
             }
-            Inner::Http { url, headers, client, session_id } => {
+            Inner::Native { .. } => Ok(()),
+            Inner::Http { url, headers, client, session_id, auth } => {
                 let mut req = client
                     .post(url)
                     .json(&message)
@@ -159,6 +185,11 @@ impl McpConnection {
                 }
                 if let Some(sid) = session_id.lock().await.clone() {
                     req = req.header("Mcp-Session-Id", sid);
+                }
+                if let Some(id) = auth {
+                    if let Some((k, v)) = crate::connections::auth_header(id, false).await? {
+                        req = req.header(k, v);
+                    }
                 }
                 let resp = req.send().await.map_err(|e| e.to_string())?;
                 // A notification gets a bare 202 Accepted with no body per
@@ -174,12 +205,19 @@ impl McpConnection {
     }
 
     pub async fn list_tools(&self) -> Result<Vec<McpToolDef>, String> {
+        if let Inner::Native { connector } = &self.inner {
+            return Ok(crate::connections::native::tools(connector));
+        }
         let result = self.request("tools/list", json!({})).await?;
         let tools = result.get("tools").cloned().unwrap_or(json!([]));
         serde_json::from_value(tools).map_err(|e| format!("bad tools/list response: {e}"))
     }
 
     pub async fn call_tool(&self, tool_name: &str, arguments: Value) -> Result<String, String> {
+        if let Inner::Native { connector } = &self.inner {
+            let fields = crate::connections::native_fields(connector).await;
+            return crate::connections::native::call(connector, &fields, tool_name, &arguments).await;
+        }
         let result = self.request("tools/call", json!({ "name": tool_name, "arguments": arguments })).await?;
         // MCP tool results are `{ content: [{type: "text", text: "..."}], isError?: bool }`.
         let is_error = result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false);

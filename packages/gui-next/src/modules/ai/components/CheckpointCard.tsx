@@ -3,6 +3,7 @@ import { Box, ButtonBase, Collapse, Stack, Typography } from '../../../ui'
 import { TickCircleLinear } from '../../../icons'
 import type { Checkpoint } from '../lib/checkpoints'
 import { TOOL_BLOCK_SX } from './ToolCallCard'
+import { CHAT_META_SX, CHAT_SURFACE_SX, CHAT_TITLE_SX } from '../lib/chatStyle'
 
 /** "40 s", "15 min", "2 h 5 min" — how long a piece of work took, without
  * a countdown's precision. */
@@ -46,10 +47,8 @@ export function CheckpointCard({ checkpoint: c }: { checkpoint: Checkpoint }) {
           gap: 1,
           px: 1.5,
           py: 1,
-          borderRadius: '12px',
-          border: 1,
-          borderColor: 'divider',
-          bgcolor: 'background.paper',
+          minHeight: 38,
+          ...CHAT_SURFACE_SX,
           textAlign: 'left',
           cursor: c.files.length ? 'pointer' : 'default',
           '&:hover': c.files.length ? { bgcolor: 'action.hover' } : undefined,
@@ -60,11 +59,11 @@ export function CheckpointCard({ checkpoint: c }: { checkpoint: Checkpoint }) {
         </Box>
         <Box sx={{ minWidth: 0, flex: 1 }}>
           <Stack direction="row" sx={{ alignItems: 'baseline', gap: 1, flexWrap: 'wrap' }}>
-            <Typography variant="caption" sx={{ fontWeight: 600 }}>
+            <Typography variant="caption" sx={CHAT_TITLE_SX}>
               {positionLabel(c)} done{allDone ? ' — plan complete' : ''}
             </Typography>
             {meta.length > 0 && (
-              <Typography variant="caption" color="text.disabled">
+              <Typography variant="caption" color="text.disabled" sx={CHAT_META_SX}>
                 {meta.join(' · ')}
               </Typography>
             )}

@@ -6,6 +6,7 @@ import { call, on } from '../../../ipc'
 interface HeliumStatus {
   connected: boolean
   browser: string | null
+  browsers?: string[]
   extensionPath: string | null
 }
 
@@ -35,12 +36,13 @@ export function BrowserSection() {
   return (
     <Stack sx={{ gap: 2.5, maxWidth: 560 }}>
       <Stack sx={{ gap: 0.5 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+        <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
           Your browser
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.55 }}>
-          With the Vivianne extension, Vivianne can use the browser you're signed in to — Helium, or any Chromium browser — in
-          tabs it groups as “Vivianne”. It asks before acting, like any other action with side effects.
+          With the Vivianne extension, Vivianne can use the browser you're signed in to — Chrome, Edge, Brave, Arc, Opera,
+          Vivaldi, Helium or any other Chromium browser — in tabs it groups as “Vivianne”. Install it in more than one and
+          Vivianne uses the one you opened last. It asks before acting, like any other action with side effects.
         </Typography>
       </Stack>
 
@@ -50,7 +52,9 @@ export function BrowserSection() {
           {status?.connected ? 'Connected' : 'Not connected'}
         </Typography>
         <Typography variant="body2" color="text.secondary" noWrap sx={{ minWidth: 0 }}>
-          {status?.connected ? `· ${status.browser ?? 'browser'}` : '· open your browser with the extension installed'}
+          {status?.connected
+            ? `· ${(status.browsers?.length ? status.browsers : [status.browser ?? 'browser']).join(', ')}`
+            : '· open your browser with the extension installed'}
         </Typography>
       </Stack>
 
@@ -60,7 +64,8 @@ export function BrowserSection() {
         </Typography>
         <Typography component="ol" variant="body2" color="text.secondary" sx={{ m: 0, pl: 2.5, lineHeight: 1.7 }}>
           <li>
-            In Helium, open <code>helium://extensions</code> (or <code>chrome://extensions</code> in another Chromium browser).
+            Open your browser's extensions page: <code>chrome://extensions</code>, <code>edge://extensions</code>,{' '}
+            <code>brave://extensions</code>, <code>opera://extensions</code> or <code>helium://extensions</code>.
           </li>
           <li>Turn on Developer mode, then choose Load unpacked.</li>
           <li>Pick this folder. Vivianne keeps it up to date, so you only do this once.</li>

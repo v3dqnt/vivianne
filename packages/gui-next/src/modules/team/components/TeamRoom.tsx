@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Box, Button, ButtonBase, Stack, Tooltip, Typography, keyframes } from '../../../ui'
+import { Box, Button, ButtonBase, Orb, Stack, Tooltip, Typography } from '../../../ui'
 import { call } from '../../../ipc'
 import { ModelPicker } from './ModelPicker'
 import { useTeamStore, type TeamAgent } from '../store/teamStore'
@@ -11,12 +11,8 @@ import { BotChat } from './BotChat'
 const EMPTY_AGENTS: TeamAgent[] = []
 const EMPTY_MSGS: never[] = []
 
-const pulse = keyframes`
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-`
 
-/** A bot's face with its state: a dot (working pulses, paused is grey), and
+/** A bot's face with its state: a dot (an orb while working, grey when paused), and
  * what it's doing on hover. Clicking opens its page. */
 export function BotChip({ root, agent, onOpen }: { root: string; agent: TeamAgent; onOpen: () => void }) {
   const st: BotStatus | undefined = useBotsStore((s) => s.status[botKey(root, agent.id)])
@@ -27,20 +23,25 @@ export function BotChip({ root, agent, onOpen }: { root: string; agent: TeamAgen
     <Tooltip title={tip}>
       <ButtonBase onClick={onOpen} sx={{ position: 'relative', borderRadius: '50%' }}>
         <Avatar name={agent.name} color={colorOf(agent)} size={30} />
-        <Box
-          sx={{
-            position: 'absolute',
-            right: -1,
-            bottom: -1,
-            width: 10,
-            height: 10,
-            borderRadius: '50%',
-            bgcolor: dot,
-            border: 2,
-            borderColor: 'background.paper',
-            animation: state === 'working' ? `${pulse} 1.2s ease-in-out infinite` : undefined,
-          }}
-        />
+        {state === 'working' ? (
+          <Box sx={{ position: 'absolute', right: -4, bottom: -4, display: 'flex', borderRadius: '50%', bgcolor: 'background.paper', p: '1px' }}>
+            <Orb state="working" px={14} />
+          </Box>
+        ) : (
+          <Box
+            sx={{
+              position: 'absolute',
+              right: -1,
+              bottom: -1,
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              bgcolor: dot,
+              border: 2,
+              borderColor: 'background.paper',
+            }}
+          />
+        )}
       </ButtonBase>
     </Tooltip>
   )

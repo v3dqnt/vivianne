@@ -58,16 +58,19 @@ export function QueuePanel() {
             px: 1.25,
             py: 0.625,
             borderRadius: 2,
-            bgcolor: 'rgba(255,255,255,0.03)',
+            bgcolor: 'action.hover',
             border: 1,
-            borderColor: 'rgba(255,255,255,0.06)',
+            borderColor: 'divider',
           }}
         >
-          <Typography variant="caption" noWrap sx={{ flex: 1, minWidth: 0, color: 'text.secondary' }}>
+          <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.6875rem', fontWeight: 600, flexShrink: 0 }}>
+            Queued
+          </Typography>
+          <Typography variant="caption" noWrap title={row.text} sx={{ flex: 1, minWidth: 0, color: 'text.primary' }}>
             {row.text}
           </Typography>
           <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.6875rem', flexShrink: 0 }}>
-            {row.key === 'steering' ? 'next up' : 'after this turn'}
+            {row.key === 'steering' ? 'sends at the next step' : 'after this task'}
           </Typography>
           <IconButton size="small" onClick={() => void removeQueued(row.key, row.index)} sx={{ p: 0.25, flexShrink: 0 }}>
             <CloseCircleLinear size={13} color="currentColor" />
@@ -77,7 +80,7 @@ export function QueuePanel() {
       {isBusy && (
         <Stack
           direction="row"
-          sx={{ alignItems: 'center', gap: 1, px: 1.25, py: 0.375, borderRadius: 2, border: 1, borderColor: 'rgba(255,255,255,0.06)' }}
+          sx={{ alignItems: 'center', gap: 1, px: 1.25, py: 0.375, borderRadius: 2, border: 1, borderColor: 'divider' }}
         >
           <InputBase
             fullWidth
