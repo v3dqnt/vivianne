@@ -1,10 +1,13 @@
-# macOS checks for every push and pull request.
+# macOS checks, on pull requests to main and on demand (Actions → macOS →
+# Run workflow). Not on every push: this repo is private, where macOS
+# minutes bill at 10x, and two Mac jobs per push used up the month's
+# allowance in a day.
 #
 # Vivianne is developed on Windows, so this is where the macOS half is
 # actually compiled and tested: the Accessibility-based DIP, the runtime-loaded
 # Parakeet runtime, native microphone capture, menu-bar and Dock behaviour.
 #
-# Two runners, because they are two different Macs: macos-13 is Intel
+# Two runners, because they are two different Macs: macos-15-intel is Intel
 # (x86_64) and macos-14 is Apple silicon (arm64). Tests run natively on each.
 # The Apple-silicon job also builds the universal app bundle and checks it
 # was built for the oldest macOS Vivianne supports: 10.15 for the Intel slice,
@@ -12,16 +15,15 @@
 # that raises that floor would stop Vivianne launching on older Macs, and
 # nothing else would notice.
 #
-# Unsigned: signing and notarisation need the Developer ID secrets and happen
-# in release.yml.
+# Unsigned. Releases are built in the public v3dqnt/vivianne-releases repo
+# (its release.yml), where Actions minutes are free.
 
 name: macOS
 
 on:
-  push:
-    branches: ['**']
-    paths-ignore: ['**.md', 'docs/**']
   pull_request:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
   workflow_dispatch:
 
 jobs:
