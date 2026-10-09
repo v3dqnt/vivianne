@@ -68,7 +68,7 @@ fn exclude_from_capture(win: &WebviewWindow) {
     let _ = win.run_on_main_thread(move || {
         use objc2_app_kit::{NSWindow, NSWindowSharingType};
         let w: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
-        unsafe { w.setSharingType(NSWindowSharingType::None) };
+        w.setSharingType(NSWindowSharingType::None);
     });
 }
 

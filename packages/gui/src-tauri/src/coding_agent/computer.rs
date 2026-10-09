@@ -560,19 +560,21 @@ fn enigo_pointer_action(args: &serde_json::Value) -> ToolResult {
     };
     let at = coordinate(args, "coordinate");
     let text = args.get("text").and_then(|v| v.as_str());
-    let mut go = |p: Option<(i32, i32)>| -> Result<(), String> {
+    // A plain function, not a closure: a closure would hold `enigo` mutably
+    // while the actions below need it too.
+    fn go(enigo: &mut Enigo, p: Option<(i32, i32)>) -> Result<(), String> {
         if let Some((x, y)) = p {
             enigo.move_mouse(x, y, Coordinate::Abs).map_err(|e| e.to_string())?;
         }
         Ok(())
-    };
+    }
     let r: Result<String, String> = (|| match action {
         "mouse_move" => {
-            go(at)?;
+            go(&mut enigo, at)?;
             Ok("Moved the mouse.".into())
         }
         "left_click" | "right_click" | "middle_click" | "double_click" | "triple_click" => {
-            go(at)?;
+            go(&mut enigo, at)?;
             let (b, n) = match action {
                 "right_click" => (Button::Right, 1),
                 "middle_click" => (Button::Middle, 1),
@@ -593,7 +595,7 @@ fn enigo_pointer_action(args: &serde_json::Value) -> ToolResult {
             Ok("Dragged.".into())
         }
         "scroll" => {
-            go(at)?;
+            go(&mut enigo, at)?;
             let amount = args.get("amount").and_then(|v| v.as_i64()).unwrap_or(3) as i32;
             let (len, axis) = match args.get("direction").and_then(|v| v.as_str()).unwrap_or("down") {
                 "up" => (-amount, Axis::Vertical),

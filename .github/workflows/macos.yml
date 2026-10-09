@@ -30,7 +30,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-13
+          # GitHub's last Intel image (macos-13 was retired and its jobs
+          # queue forever).
+          - runner: macos-15-intel
             arch: x86_64
             bundle: false
           - runner: macos-14
