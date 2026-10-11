@@ -2,6 +2,13 @@
 
 All notable changes to Vivianne are documented here.
 
+## [1.8.1] — 2026-10-11
+
+### Fixed
+
+- **Windows: "sherpa-onnx-c-api.dll was not found" on launch.** The speech engine's DLLs (sherpa-onnx and its ONNX Runtime) weren't in the installer; they are now, next to the app. Windows' own older `onnxruntime.dll` is no longer picked up instead.
+- **macOS: no download for 1.8.0.** The build finished but nothing was uploaded: the build launcher reported success the moment it started. It now waits for the build.
+
 ## [1.8.0] — 2026-10-09
 
 ### Added

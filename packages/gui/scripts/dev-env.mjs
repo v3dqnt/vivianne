@@ -39,7 +39,10 @@ if (process.platform === 'win32') {
   const child = spawn(quoted, { stdio: 'inherit', shell: true })
   child.on('exit', (code) => process.exit(code ?? 1))
 } else {
-  process.exit(runUnix())
+  // Not `process.exit(runUnix())`: that exited the moment tauri was spawned,
+  // leaving the build running orphaned — so CI (tauri-action) went looking
+  // for the .dmg before it existed. The child's exit handler ends the process.
+  runUnix()
 }
 
 /** Reads a command's trimmed stdout, or null if it isn't runnable. */
@@ -101,5 +104,4 @@ function runUnix() {
   // separated regardless of spaces in the project path.
   const child = spawn('tauri', args, { stdio: 'inherit', env })
   child.on('exit', (code) => process.exit(code ?? 1))
-  return 0
 }
