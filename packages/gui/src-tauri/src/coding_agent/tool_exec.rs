@@ -93,14 +93,8 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         Box::new(super::custom_tools::DeleteToolTool),
         Box::new(super::custom_tools::ListCustomToolsTool),
     ];
-    // ── User-defined: playbooks (~/.viv/playbooks/*.json) ──────────────────
-    // A playbook is a tool if it has `command`, a panel if it has `panel`
-    // (see `PlaybookDef`'s doc comment) — only the tool-shaped ones register
-    // here; panel-shaped ones are read by `cmd_list_playbooks` for the
-    // frontend's Panels menu, never dispatched as a tool.
-    for def in super::playbooks::load_playbooks().into_iter().filter(|d| d.is_tool()) {
-        tools.push(Box::new(super::playbooks::PlaybookTool::new(def, cwd.clone())));
-    }
+    // ── User-made: tools from running mods (`crate::mods`) ─────────────────
+    tools.extend(crate::mods::tools::tools(&cwd));
     // ── Agent-written: custom tools (~/.viv/tools/<name>/) ─────────────────
     tools.extend(super::custom_tools::registry(&cwd));
     tools

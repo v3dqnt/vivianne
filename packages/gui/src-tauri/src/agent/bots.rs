@@ -31,6 +31,7 @@
 //! here, with the app's tools, while the app is running (it keeps running in
 //! the tray when its window is closed).
 
+use crate::agent::commands::ImageInput;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -372,6 +373,117 @@ pub struct ChatMessage {
     pub kind: String,
     #[serde(default)]
     pub mentions: Vec<String>,
+    /// What the agent did to get to this reply, step by step (tool calls),
+    /// for the "N steps" record under it in chat.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<BotStep>,
+    /// What the user attached to this message, by name (the content went to
+    /// the agent; the chat shows chips).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AttachmentRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentRef {
+    pub name: String,
+    /// `image` | `file`
+    pub kind: String,
+}
+
+/// A text file attached to a DM (read on the user's side, like the main chat).
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileInput {
+    pub name: String,
+    pub content: String,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// One thing an agent did during a turn: a tool call, in a few words.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotStep {
+    pub id: String,
+    pub tool: String,
+    /// What it was, for a person: "Read src/main.rs", "Searched the web for …".
+    pub label: String,
+    /// `running` | `done` | `error`
+    pub state: String,
+    /// The start of the result (or the error), when there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// Steps kept with a reply, at most: a long run keeps its last ones.
+const MAX_STEPS: usize = 60;
+
+/// "Read src/main.rs" from a tool call: its name in words and the argument
+/// that says what it was about.
+fn step_label(tool: &str, args: &serde_json::Value) -> String {
+    if tool == "dip" || tool == "computer" {
+        return crate::activity::describe(args);
+    }
+    let arg = ["path", "file_path", "query", "url", "command", "pattern", "title", "name", "prompt", "description", "to", "text"]
+        .iter()
+        .find_map(|k| args.get(*k).and_then(|v| v.as_str()))
+        .map(|v| v.lines().next().unwrap_or("").trim().to_string())
+        .filter(|v| !v.is_empty());
+    let verb = match tool {
+        "read" => "Read",
+        "write" => "Wrote",
+        "edit" | "multi_edit" => "Edited",
+        "ls" => "Listed",
+        "glob" => "Found files",
+        "grep" => "Searched files for",
+        "bash" | "powershell" | "sandbox_execute" => "Ran",
+        "web_search" => "Searched the web for",
+        "web_fetch" | "web_preview" => "Opened",
+        "create_document" => "Made a document",
+        "edit_document" => "Edited a document",
+        "generate_image" => "Made an image",
+        "task" => "Asked a subagent to",
+        "email" => "Email",
+        "phone" => "Phone",
+        "recall" => "Recalled",
+        "remember" => "Remembered",
+        other => return match arg {
+            Some(a) => format!("{} {}", other.replace('_', " "), clip(&a, 80)),
+            None => other.replace('_', " "),
+        },
+    };
+    match arg {
+        Some(a) => format!("{verb} {}", clip(&a, 80)),
+        None => verb.to_string(),
+    }
+}
+
+fn clip(s: &str, n: usize) -> String {
+    let mut out: String = s.chars().take(n).collect();
+    if s.chars().count() > n {
+        out.push('…');
+    }
+    out
+}
+
+fn result_text(r: &crate::agent::types::AgentToolResult) -> String {
+    r.content
+        .iter()
+        .filter_map(|c| match c {
+            crate::agent::types::MessageContent::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn emit_steps(app: &tauri::AppHandle, root: &str, id: &str) {
+    let key = (root.to_string(), id.to_string());
+    let (steps, channel) = {
+        let l = live();
+        (l.steps.get(&key).cloned().unwrap_or_default(), l.channel.get(&key).cloned().unwrap_or_else(|| id.to_string()))
+    };
+    let _ = app.emit("bots:steps", serde_json::json!({ "root": root, "botId": id, "channel": channel, "steps": steps }));
 }
 
 fn kind_message() -> String {
@@ -412,8 +524,12 @@ struct Live {
     /// (root, bot) pairs with a run in flight, and the run's abort flag.
     running: HashMap<(String, String), Arc<AtomicBool>>,
     activity: HashMap<(String, String), String>,
+    /// The steps of the run in flight, shown live in its conversation.
+    steps: HashMap<(String, String), Vec<BotStep>>,
+    /// Where the run in flight will reply: `room` or the bot's own DM.
+    channel: HashMap<(String, String), String>,
     /// Requests that arrived while the bot was busy, run after it finishes.
-    queued: HashMap<(String, String), Vec<(Origin, String, Target)>>,
+    queued: HashMap<(String, String), Vec<(Origin, String, Target, Vec<ImageInput>)>>,
 }
 
 static LIVE: std::sync::LazyLock<Mutex<Live>> = std::sync::LazyLock::new(|| Mutex::new(Live::default()));
@@ -558,16 +674,25 @@ fn trim_thread(mut msgs: Vec<AgentMessage>) -> Vec<AgentMessage> {
 
 /// Run one turn of a bot. Queues it if the bot is busy.
 fn dispatch(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request: String, target: Target) {
+    dispatch_with(app, root, id, origin, request, target, Vec::new())
+}
+
+/// `dispatch`, with images for the agent to look at (a DM's attachments).
+fn dispatch_with(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request: String, target: Target, images: Vec<ImageInput>) {
     let key = (root.to_string(), id.to_string());
     {
         let mut l = live();
         if l.running.contains_key(&key) {
-            l.queued.entry(key).or_default().push((origin, request, target));
+            l.queued.entry(key).or_default().push((origin, request, target, images));
             return;
         }
         l.running.insert(key.clone(), Arc::new(AtomicBool::new(false)));
+        l.steps.remove(&key);
+        l.channel.insert(key.clone(), if target == Target::Dm { id.to_string() } else { "room".to_string() });
     }
     emit_status(app, root, id);
+    // Tells the chat where this run will show, before its first step.
+    emit_steps(app, root, id);
     let app = app.clone();
     let (root, id) = key;
     // The loop's future isn't `Send` (provider streaming, event plumbing), so
@@ -580,12 +705,12 @@ fn dispatch(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, reques
                 return;
             }
         };
-        let outcome = rt.block_on(run_turn(&app, &root, &id, origin, &request));
+        let outcome = rt.block_on(run_turn(&app, &root, &id, origin, &request, images));
         finish(&app, &root, &id, origin, &request, target, outcome);
     });
 }
 
-async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request: &str) -> Result<String, String> {
+async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request: &str, images: Vec<ImageInput>) -> Result<String, String> {
     let root_path = PathBuf::from(root);
     let bot = find_bot(&root_path, id).ok_or_else(|| format!("@{id} isn't an active agent on this project"))?;
     let settings = load_settings(&root_path, id);
@@ -663,14 +788,36 @@ async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, 
     let drain = tokio::spawn(async move {
         while let Some(event) = rx.rx.recv().await {
             match event {
-                AgentEvent::ToolExecutionStart { tool_name, args, .. } => {
-                    let what = if tool_name == "dip" || tool_name == "computer" {
-                        crate::activity::describe(&args)
-                    } else {
-                        tool_name.replace('_', " ")
-                    };
-                    live().activity.insert((root_ev.clone(), id_ev.clone()), what);
+                AgentEvent::ToolExecutionStart { tool_call_id, tool_name, args } => {
+                    let label = step_label(&tool_name, &args);
+                    {
+                        let mut l = live();
+                        let key = (root_ev.clone(), id_ev.clone());
+                        l.activity.insert(key.clone(), label.clone());
+                        let steps = l.steps.entry(key).or_default();
+                        steps.push(BotStep { id: tool_call_id, tool: tool_name, label, state: "running".into(), detail: None });
+                        if steps.len() > MAX_STEPS {
+                            steps.remove(0);
+                        }
+                    }
                     emit_status(&app_ev, &root_ev, &id_ev);
+                    emit_steps(&app_ev, &root_ev, &id_ev);
+                }
+                AgentEvent::ToolExecutionEnd { tool_call_id, result, is_error, .. } => {
+                    {
+                        let mut l = live();
+                        if let Some(step) = l
+                            .steps
+                            .get_mut(&(root_ev.clone(), id_ev.clone()))
+                            .and_then(|s| s.iter_mut().rev().find(|s| s.id == tool_call_id))
+                        {
+                            step.state = if is_error { "error" } else { "done" }.into();
+                            let text = result_text(&result);
+                            let first = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+                            step.detail = (!first.is_empty()).then(|| clip(first, 160));
+                        }
+                    }
+                    emit_steps(&app_ev, &root_ev, &id_ev);
                 }
                 AgentEvent::PermissionAsked { request_id, tool_name, args, reason, .. } => {
                     let _ = app_ev.emit(
@@ -692,8 +839,19 @@ async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, 
         Origin::Routine => format!("(Routine) {request}"),
         Origin::Proactive | Origin::Inbound => request.to_string(),
     };
+    // Images go in as content blocks, with a line saying they're there: some
+    // models otherwise answer that they can't see images.
+    let framed = if images.is_empty() {
+        framed
+    } else {
+        format!("{framed}\n\n({} image{} attached to this message — look at it before answering.)", images.len(), if images.len() == 1 { "" } else { "s" })
+    };
+    let mut content = vec![MessageContent::Text { text: framed }];
+    for img in images {
+        content.push(MessageContent::Image { url: None, base64: Some(img.base64), media_type: Some(img.media_type) });
+    }
     let new_messages = Box::pin(crate::agent::loop_core::run_agent_loop_with_prompts(
-        vec![AgentMessage::User { content: vec![MessageContent::Text { text: framed }], timestamp: now_ms() }],
+        vec![AgentMessage::User { content, timestamp: now_ms() }],
         app,
         &mut context,
         &state,
@@ -741,7 +899,30 @@ fn mentions_in(text: &str, team: &[TeamAgent]) -> (Vec<String>, bool) {
 }
 
 fn post(app: &tauri::AppHandle, root: &str, channel: &str, from: &str, text: &str, kind: &str, mentions: Vec<String>) -> ChatMessage {
-    let msg = ChatMessage { id: uuid::Uuid::new_v4().to_string(), from: from.into(), text: text.into(), ts: now_ms(), kind: kind.into(), mentions };
+    post_with_steps(app, root, channel, from, text, kind, mentions, Vec::new())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn post_with_steps(
+    app: &tauri::AppHandle,
+    root: &str,
+    channel: &str,
+    from: &str,
+    text: &str,
+    kind: &str,
+    mentions: Vec<String>,
+    steps: Vec<BotStep>,
+) -> ChatMessage {
+    let msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        from: from.into(),
+        text: text.into(),
+        ts: now_ms(),
+        kind: kind.into(),
+        mentions,
+        steps,
+        attachments: Vec::new(),
+    };
     let path = if channel == "room" { room_path(Path::new(root)) } else { dm_path(Path::new(root), channel) };
     let _ = append_line(&path, &msg);
     emit_message(app, root, channel, &msg);
@@ -752,6 +933,8 @@ fn finish(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request:
     let root_path = PathBuf::from(root);
     let team = active_bots(&root_path);
     let name = team.iter().find(|a| a.id == id).map(|a| a.name.clone()).unwrap_or_else(|| id.to_string());
+    // The run's steps go with what it posts, so they stay readable after.
+    let steps = live().steps.remove(&(root.to_string(), id.to_string())).unwrap_or_default();
 
     match outcome {
         Ok(reply) => {
@@ -773,7 +956,7 @@ fn finish(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request:
                     Target::Room { .. } => "room".to_string(),
                 };
                 let (mentions, everyone) = mentions_in(&text, &team);
-                post(app, root, &channel, id, &text, kind, mentions.clone());
+                post_with_steps(app, root, &channel, id, &text, kind, mentions.clone(), steps);
                 if needs || origin != Origin::User {
                     let title = if needs { format!("{name} needs you") } else { format!("{name} posted") };
                     crate::agent::notifications::notify_text(app, &title, &text.chars().take(140).collect::<String>());
@@ -792,7 +975,7 @@ fn finish(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request:
         }
         Err(e) => {
             let channel = if target == Target::Dm { id.to_string() } else { "room".to_string() };
-            post(app, root, &channel, "system", &format!("{name} couldn't finish: {e}"), "note", Vec::new());
+            post_with_steps(app, root, &channel, "system", &format!("{name} couldn't finish: {e}"), "note", Vec::new(), steps);
         }
     }
     if origin == Origin::Proactive {
@@ -808,11 +991,13 @@ fn finish(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request:
         let mut l = live();
         l.running.remove(&key);
         l.activity.remove(&key);
+        l.steps.remove(&key);
+        l.channel.remove(&key);
         l.queued.get_mut(&key).and_then(|q| (!q.is_empty()).then(|| q.remove(0)))
     };
     emit_status(app, root, id);
-    if let Some((o, r, t)) = next {
-        dispatch(app, root, id, o, r, t);
+    if let Some((o, r, t, imgs)) = next {
+        dispatch_with(app, root, id, o, r, t, imgs);
     }
 }
 
@@ -971,14 +1156,50 @@ pub async fn cmd_bots_dm(root: String, bot_id: String, limit: Option<usize>) -> 
 }
 
 #[tauri::command]
-pub async fn cmd_bots_dm_send(app: tauri::AppHandle, root: String, bot_id: String, text: String) -> Result<ChatMessage, String> {
+pub async fn cmd_bots_dm_send(
+    app: tauri::AppHandle,
+    root: String,
+    bot_id: String,
+    text: String,
+    files: Option<Vec<FileInput>>,
+    images: Option<Vec<ImageInput>>,
+) -> Result<ChatMessage, String> {
     let text = text.trim().to_string();
-    if text.is_empty() {
+    let files = files.unwrap_or_default();
+    let images = images.unwrap_or_default();
+    if text.is_empty() && files.is_empty() && images.is_empty() {
         return Err("Nothing to send.".into());
     }
     find_bot(Path::new(&root), &bot_id).ok_or("That agent isn't active.")?;
-    let msg = post(&app, &root, &bot_id, "user", &text, "message", Vec::new());
-    dispatch(&app, &root, &bot_id, Origin::User, text, Target::Dm);
+    // The chat shows what was written and chips for what was attached; the
+    // agent gets the files' contents inline, as the main chat does.
+    let mut attachments: Vec<AttachmentRef> = files.iter().map(|f| AttachmentRef { name: f.name.clone(), kind: "file".into() }).collect();
+    attachments.extend((1..=images.len()).map(|i| AttachmentRef { name: format!("Image {i}"), kind: "image".into() }));
+    let shown = if text.is_empty() { "(attachments)".to_string() } else { text.clone() };
+    let msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        from: "user".into(),
+        text: shown,
+        ts: now_ms(),
+        kind: "message".into(),
+        mentions: Vec::new(),
+        steps: Vec::new(),
+        attachments,
+    };
+    let _ = append_line(&dm_path(Path::new(&root), &bot_id), &msg);
+    emit_message(&app, &root, &bot_id, &msg);
+    let request = if files.is_empty() {
+        text
+    } else {
+        let blocks = files
+            .iter()
+            .map(|f| format!("<file path=\"{}\"{}>\n{}\n</file>", f.name, if f.truncated { " truncated=\"true\"" } else { "" }, f.content))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        format!("{text}\n\nAttached files:\n{blocks}")
+    };
+    dispatch_with(&app, &root, &bot_id, Origin::User, request, Target::Dm, images);
+
     Ok(msg)
 }
 

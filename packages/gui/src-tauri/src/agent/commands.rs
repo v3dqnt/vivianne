@@ -918,7 +918,7 @@ pub async fn cmd_agent_session_stats(
 
     // Tool schemas ride along in every single request, so they occupy context
     // permanently — measured from the real definition list (which already
-    // reflects the user's disabled-tools setting, playbooks and MCP servers),
+    // reflects the user's disabled-tools setting, mod tools and MCP servers),
     // not a fixed guess.
     let tool_defs = crate::agent::tool_exec::get_agent_tool_definitions().await;
     breakdown.tool_schemas = (tool_defs
@@ -1165,14 +1165,6 @@ pub async fn cmd_save_skill_file(name: String, content: String) -> Result<String
     Ok(file_path.to_string_lossy().to_string())
 }
 
-/// List every playbook currently in `~/.viv/playbooks` — same data the
-/// model's tool list is built from (`coding_agent::playbooks::load_playbooks`),
-/// so what Settings shows is exactly what's live.
-#[tauri::command]
-pub async fn cmd_list_playbooks() -> Result<Vec<crate::coding_agent::playbooks::PlaybookDef>, String> {
-    Ok(crate::coding_agent::playbooks::load_playbooks())
-}
-
 /// Every hardcoded built-in profile plus every custom one saved in
 /// `~/.viv/subagents` — the same data `execute_task_tool` resolves
 /// `subagent_type` against, so Settings never drifts from what a `task`
@@ -1221,121 +1213,6 @@ pub async fn cmd_save_subagent_profile(
 pub async fn cmd_delete_subagent_profile(id: String) -> Result<(), String> {
     let dir = crate::agent::paths::viv_subagents_dir()?;
     crate::coding_agent::subagent_profiles::delete_profile(&dir.to_string_lossy(), &id)
-}
-
-/// Add a playbook from an already-written JSON file (e.g. picked via a
-/// native file dialog): validate it parses as a `PlaybookDef` describing
-/// EITHER a tool or a panel, copy it into `~/.viv/playbooks/<name>.json`,
-/// and invalidate the tool-defs cache so a tool-type playbook is live on the
-/// model's very next turn (a panel-type one needs no cache invalidation —
-/// `cmd_list_playbooks` always reads fresh).
-#[tauri::command]
-pub async fn cmd_add_playbook_file(path: String) -> Result<String, String> {
-    let content = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read {path}: {e}"))?;
-    let def: crate::coding_agent::playbooks::PlaybookDef =
-        serde_json::from_str(&content).map_err(|e| format!("Not a valid playbook: {e}"))?;
-    if def.name.trim().is_empty() || (!def.is_tool() && !def.is_panel()) {
-        return Err("Playbook needs a non-empty 'name' and either a 'command' or a 'panel'.".to_string());
-    }
-    if def.is_tool() && crate::agent::tool_schemas::reserved_tool_names().contains(def.name.trim()) {
-        return Err(format!(
-            "'{}' is already a built-in tool name — a playbook with that name could never actually run. Pick a different name.",
-            def.name.trim()
-        ));
-    }
-
-    let stem: String = def
-        .name
-        .trim()
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
-        .collect();
-    let dest = crate::coding_agent::playbooks::playbooks_dir()?.join(format!("{stem}.json"));
-    std::fs::write(&dest, &content).map_err(|e| format!("Failed to write playbook: {e}"))?;
-    crate::agent::tool_exec::invalidate_tool_defs_cache();
-    Ok(def.name)
-}
-
-/// Create or update a playbook from in-app form fields — either a tool
-/// (`command` set) or a panel (`panel_url` set; exactly one of the two
-/// should be given, enforced by the caller's form, not re-validated here
-/// beyond requiring at least one). The in-app counterpart to
-/// `cmd_add_playbook_file`'s "import an existing file" path, so authoring
-/// one doesn't require hand-writing JSON externally.
-/// `original_name` is the playbook's name before this save (so a rename —
-/// which changes the destination filename, see `cmd_add_playbook_file`'s
-/// same slugify — removes the stale old file); omit/empty for a new one.
-#[tauri::command]
-pub async fn cmd_save_playbook(
-    original_name: Option<String>,
-    name: String,
-    description: String,
-    parameters: serde_json::Value,
-    command: Option<String>,
-    panel_url: Option<String>,
-) -> Result<String, String> {
-    let name = name.trim().to_string();
-    let command = command.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
-    let panel_url = panel_url.map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
-    if name.is_empty() || (command.is_none() && panel_url.is_none()) {
-        return Err("Playbook needs a non-empty name and either a command or a panel URL.".to_string());
-    }
-    if command.is_some() && crate::agent::tool_schemas::reserved_tool_names().contains(&name) {
-        return Err(format!("'{name}' is already a built-in tool name — a playbook with that name could never actually run. Pick a different name."));
-    }
-    if let Some(url) = &panel_url {
-        if !crate::coding_agent::playbooks::is_allowed_panel_url(url) {
-            return Err("Panel URL must start with http://localhost: or http://127.0.0.1: — the app's CSP won't frame anything else.".to_string());
-        }
-    }
-    let panel = panel_url.map(|url| crate::coding_agent::playbooks::PanelSpec { url });
-    let def = crate::coding_agent::playbooks::PlaybookDef { name: name.clone(), description, parameters, timeout_secs: None, command, panel };
-    let dir = crate::coding_agent::playbooks::playbooks_dir()?;
-
-    let slugify = |s: &str| -> String {
-        s.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect()
-    };
-    let new_stem = slugify(&name);
-    let dest = dir.join(format!("{new_stem}.json"));
-
-    // Renamed: remove the old file so the save doesn't leave a duplicate
-    // playbook under the old name sitting alongside the new one.
-    if let Some(original) = original_name.as_deref().filter(|o| !o.is_empty()) {
-        let old_stem = slugify(original);
-        if old_stem != new_stem {
-            let old_path = dir.join(format!("{old_stem}.json"));
-            let _ = std::fs::remove_file(&old_path);
-        }
-    }
-
-    let content = serde_json::to_string_pretty(&def).map_err(|e| format!("Failed to serialize playbook: {e}"))?;
-    std::fs::write(&dest, content).map_err(|e| format!("Failed to write playbook: {e}"))?;
-    crate::agent::tool_exec::invalidate_tool_defs_cache();
-    Ok(name)
-}
-
-/// Remove a playbook by name (matches its `name` field, not the filename) —
-/// works for both tool- and panel-type playbooks.
-#[tauri::command]
-pub async fn cmd_remove_playbook(name: String) -> Result<bool, String> {
-    let dir = crate::coding_agent::playbooks::playbooks_dir()?;
-    let Ok(entries) = std::fs::read_dir(&dir) else { return Ok(false) };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(def) = serde_json::from_str::<crate::coding_agent::playbooks::PlaybookDef>(&content) {
-                if def.name == name {
-                    std::fs::remove_file(&path).map_err(|e| format!("Failed to remove playbook: {e}"))?;
-                    crate::agent::tool_exec::invalidate_tool_defs_cache();
-                    return Ok(true);
-                }
-            }
-        }
-    }
-    Ok(false)
 }
 
 /// Full daily-aggregated real token/cost usage history, for the Settings →

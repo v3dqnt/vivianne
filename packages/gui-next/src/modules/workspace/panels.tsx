@@ -13,8 +13,7 @@ import { ChatView } from '../ai/components/ChatView'
 import { useProjectsStore, modeOf, GENERAL_PROJECT_ID } from '../sessions/store/projectsStore'
 import { useGeneralAgents } from '../team/store/generalAgentsStore'
 import { useBotsStore } from '../team/store/botsStore'
-import { usePlaybookStore } from '../settings/store/playbookStore'
-import { isPanel } from '../settings/lib/playbooks'
+import { useModsStore, modPanels } from '../mods/store/modsStore'
 import { ADDABLE, PANELS, type PanelKind } from './registry'
 import { openPanel, setZoneVisible, zoneOf, ZONE_LABELS } from './layout'
 import { usePanelStore } from '../dock/store/panelStore'
@@ -34,7 +33,7 @@ const BackgroundTasksPanel = lazy(() =>
 const PlanPanel = lazy(() => import('../plan/components/PlanPanel').then((m) => ({ default: m.PlanPanel })))
 const TeamRoom = lazy(() => import('../team/components/TeamRoom').then((m) => ({ default: m.TeamRoom })))
 const AgentsPanel = lazy(() => import('../team/components/AgentsPanel').then((m) => ({ default: m.AgentsPanel })))
-const CustomPanel = lazy(() => import('../dock/components/CustomPanel').then((m) => ({ default: m.CustomPanel })))
+const ModPanel = lazy(() => import('../mods/components/ModPanel').then((m) => ({ default: m.ModPanel })))
 const ReviewPanel = lazy(() => import('../git/components/ReviewPanel').then((m) => ({ default: m.ReviewPanel })))
 const MultiplayerWorkspacePanel = lazy(() =>
   import('../multiplayer/components/MultiplayerWorkspacePanel').then((m) => ({ default: m.MultiplayerWorkspacePanel })),
@@ -174,7 +173,7 @@ export const COMPONENTS: Record<PanelKind, FunctionComponent<IDockviewPanelProps
   ),
   custom: (props) => (
     <Fill>
-      <CustomPanel id={props.params.panelName ?? null} />
+      <ModPanel name={props.params.panelName ?? null} />
     </Fill>
   ),
 }
@@ -258,8 +257,8 @@ const headerBtnSx = {
 export function GroupActions(props: IDockviewHeaderActionsProps) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const [maximized, setMaximized] = useState(props.api.isMaximized())
-  const playbooks = usePlaybookStore((s) => s.playbooks)
-  const customPanels = playbooks.filter(isPanel)
+  const mods = useModsStore((s) => s.mods)
+  const customPanels = modPanels(mods)
 
   useEffect(() => {
     const d = props.containerApi.onDidMaximizedGroupChange(() => setMaximized(props.api.isMaximized()))
@@ -323,7 +322,7 @@ export function GroupActions(props: IDockviewHeaderActionsProps) {
         {customPanels.map((p) => (
           <MenuItem key={p.name} onClick={() => add('custom', p.name)} sx={{ gap: 1, fontSize: '0.8125rem' }}>
             <LayerLinear size={14} color="currentColor" />
-            {p.name}
+            {p.title}
           </MenuItem>
         ))}
       </Menu>
@@ -339,8 +338,8 @@ export function GroupActions(props: IDockviewHeaderActionsProps) {
  */
 export function ZoneEmptyState(props: IWatermarkPanelProps) {
   const theme = useTheme()
-  const playbooks = usePlaybookStore((s) => s.playbooks)
-  const customPanels = playbooks.filter(isPanel)
+  const mods = useModsStore((s) => s.mods)
+  const customPanels = modPanels(mods)
   const group = props.group as DockviewGroupPanel | undefined
   const zone = zoneOf(group)
   if (!group || !zone) return null
@@ -407,7 +406,7 @@ export function ZoneEmptyState(props: IWatermarkPanelProps) {
             ),
           )}
           {customPanels.map((p) =>
-            option(`custom:${p.name}`, p.name, LayerLinear, () => openPanel('custom', { panelName: p.name, group })),
+            option(`custom:${p.name}`, p.title, LayerLinear, () => openPanel('custom', { panelName: p.name, group })),
           )}
         </Box>
       </Stack>

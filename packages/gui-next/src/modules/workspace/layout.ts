@@ -23,10 +23,11 @@
 import { create } from 'zustand'
 import type { DockviewApi, DockviewGroupPanel, IDockviewPanel } from 'dockview-react'
 import { loadPersisted, savePersisted } from '../../lib/persist'
+import { useModsStore, findModPanel } from '../mods/store/modsStore'
 import { PANELS, type PanelKind } from './registry'
 
 export type Zone = 'right' | 'bottom'
-export type Preset = 'default' | 'full' | 'focus'
+export type Preset = 'default' | 'full' | 'focus' | 'coding' | 'research'
 
 export const ZONE_LABELS: Record<Zone, string> = { right: 'Right panel', bottom: 'Bottom panel' }
 
@@ -34,6 +35,73 @@ export const PRESET_LABELS: Record<Preset, string> = {
   default: 'Chat with right panel',
   full: 'Chat with right and bottom panels',
   focus: 'Chat only',
+  coding: 'Coding: chat, files and a terminal',
+  research: 'Research: chat and a browser',
+}
+
+/** A layout the user saved by name (Settings → Layout & shortcuts). */
+export interface SavedLayout {
+  id: string
+  name: string
+  layout: unknown
+}
+
+const SAVED_KEY = 'viv.layouts.saved'
+/** What opens at launch: `last` (where you left off), a preset, or
+ * `saved:<id>`. */
+const STARTUP_KEY = 'viv.layouts.startup'
+
+export const useSavedLayouts = create<{ saved: SavedLayout[]; startup: string }>(() => ({
+  saved: loadPersisted<SavedLayout[]>(SAVED_KEY, []),
+  startup: loadPersisted<string>(STARTUP_KEY, 'last'),
+}))
+
+function storeSaved(saved: SavedLayout[]) {
+  savePersisted(SAVED_KEY, saved)
+  useSavedLayouts.setState({ saved })
+}
+
+/** Save the arrangement on screen under a name (replacing one of that name). */
+export function saveCurrentLayout(name: string): SavedLayout | null {
+  if (!api || !name.trim()) return null
+  const entry: SavedLayout = { id: crypto.randomUUID(), name: name.trim(), layout: api.toJSON() }
+  const rest = useSavedLayouts.getState().saved.filter((l) => l.name !== entry.name)
+  storeSaved([...rest, entry])
+  return entry
+}
+
+export function deleteSavedLayout(id: string) {
+  storeSaved(useSavedLayouts.getState().saved.filter((l) => l.id !== id))
+  if (useSavedLayouts.getState().startup === `saved:${id}`) setStartupLayout('last')
+}
+
+export function renameSavedLayout(id: string, name: string) {
+  if (!name.trim()) return
+  storeSaved(useSavedLayouts.getState().saved.map((l) => (l.id === id ? { ...l, name: name.trim() } : l)))
+}
+
+export function setStartupLayout(startup: string) {
+  savePersisted(STARTUP_KEY, startup)
+  useSavedLayouts.setState({ startup })
+}
+
+/** Restore a saved layout (a panel it names that no longer exists is
+ * dropped by dockview; the chat always comes back). */
+export function applySavedLayout(id: string): boolean {
+  const entry = useSavedLayouts.getState().saved.find((l) => l.id === id)
+  if (!api || !entry) return false
+  try {
+    api.fromJSON(withZoneMinimums(structuredClone(entry.layout)) as Parameters<DockviewApi['fromJSON']>[0])
+  } catch (e) {
+    console.warn('[workspace] saved layout could not be applied:', e)
+    return false
+  }
+  ensureZones()
+  if (!find('chat')) api.addPanel(panelOptions('chat', undefined, 'chat'))
+  keepEmptyZonesOpen()
+  syncState()
+  scheduleSave()
+  return true
 }
 
 const ZONE_IDS: Record<Zone, string> = { right: 'zone-right', bottom: 'zone-bottom' }
@@ -56,7 +124,7 @@ interface PanelParams {
 }
 
 interface WorkspaceState {
-  /** One entry per open panel: `kind`, or `custom:<name>` for custom panels. */
+  /** One entry per open panel: `kind`, or `custom:<mod key>/<panel id>` for mod panels. */
   open: string[]
   zones: Record<Zone, boolean>
   ready: boolean
@@ -178,7 +246,7 @@ function panelOptions(
     component: kind,
     title:
       kind === 'custom'
-        ? (panelName ?? 'Panel')
+        ? (findModPanel(useModsStore.getState().mods, panelName)?.title ?? panelName ?? 'Panel')
         : kind === 'document'
           ? (panelName?.split(/[\\/]/).filter(Boolean).pop() ?? 'Document')
           : def.title,
@@ -265,15 +333,22 @@ export function applyPreset(preset: Preset) {
   const right = zoneGroup('right')
   const bottom = zoneGroup('bottom')
 
-  if (preset !== 'focus' && right) {
+  if (preset === 'research' && right) {
+    api.addPanel({ ...panelOptions('preview', undefined, 'preview'), position: { referenceGroup: right } })
+    api.addPanel({ ...panelOptions('files', undefined, 'files'), position: { referenceGroup: right }, inactive: true })
+  } else if (preset === 'coding' && right) {
+    api.addPanel({ ...panelOptions('files', undefined, 'files'), position: { referenceGroup: right } })
+    api.addPanel({ ...panelOptions('review', undefined, 'review'), position: { referenceGroup: right }, inactive: true })
+  } else if (preset !== 'focus' && right) {
     api.addPanel({ ...panelOptions('files', undefined, 'files'), position: { referenceGroup: right } })
     api.addPanel({ ...panelOptions('preview', undefined, 'preview'), position: { referenceGroup: right }, inactive: true })
   }
-  if (preset === 'full' && bottom) {
+  const withTerminal = preset === 'full' || preset === 'coding'
+  if (withTerminal && bottom) {
     api.addPanel({ ...panelOptions('terminal', undefined, newId('terminal')), position: { referenceGroup: bottom } })
   }
   api.setEdgeGroupVisible('right', preset !== 'focus')
-  api.setEdgeGroupVisible('bottom', preset === 'full')
+  api.setEdgeGroupVisible('bottom', withTerminal)
   keepEmptyZonesOpen()
   api.getPanel('chat')?.api.setActive()
   syncState()
@@ -313,7 +388,14 @@ export function attach(dockview: DockviewApi) {
     scheduleSave()
   })
 
-  const saved = withZoneMinimums(loadPersisted<unknown>(STORAGE_KEY, null))
+  // A chosen startup layout wins over where you left off.
+  const startup = useSavedLayouts.getState().startup
+  const startupSaved = startup.startsWith('saved:')
+    ? useSavedLayouts.getState().saved.find((l) => l.id === startup.slice('saved:'.length))?.layout
+    : undefined
+  const saved = withZoneMinimums(
+    startupSaved ? structuredClone(startupSaved) : startup === 'last' ? loadPersisted<unknown>(STORAGE_KEY, null) : null,
+  )
   let restored = false
   if (saved) {
     try {
@@ -326,7 +408,7 @@ export function attach(dockview: DockviewApi) {
       dockview.clear()
     }
   }
-  if (!restored) applyPreset('default')
+  if (!restored) applyPreset(startup in PRESET_LABELS ? (startup as Preset) : 'default')
   ensureZones()
   // The Editor panel was removed from the app; a layout saved while it was
   // open still restores (its component is kept for exactly this), minus it.

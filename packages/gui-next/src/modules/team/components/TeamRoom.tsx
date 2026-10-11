@@ -1,10 +1,11 @@
 import { useEffect } from 'react'
-import { Box, Button, ButtonBase, Orb, Stack, Tooltip, Typography } from '../../../ui'
+import { Button, ButtonBase, Stack, Tooltip, Typography } from '../../../ui'
 import { call } from '../../../ipc'
 import { ModelPicker } from './ModelPicker'
 import { useTeamStore, type TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey, type BotStatus } from '../store/botsStore'
 import { usePanelStore } from '../../dock/store/panelStore'
+import { useBotFace } from './AgentFace'
 import { Avatar, colorOf } from './bits'
 import { BotChat } from './BotChat'
 
@@ -12,36 +13,18 @@ const EMPTY_AGENTS: TeamAgent[] = []
 const EMPTY_MSGS: never[] = []
 
 
-/** A bot's face with its state: a dot (an orb while working, grey when paused), and
- * what it's doing on hover. Clicking opens its page. */
+/** A bot's face, showing its state (thinking, searching, working, waiting
+ * on you, asleep when paused), and what it's doing on hover. Clicking opens
+ * its page. */
 export function BotChip({ root, agent, onOpen }: { root: string; agent: TeamAgent; onOpen: () => void }) {
   const st: BotStatus | undefined = useBotsStore((s) => s.status[botKey(root, agent.id)])
+  const face = useBotFace(root, agent.id)
   const state = st?.state ?? 'idle'
-  const dot = state === 'working' ? 'success.main' : state === 'paused' ? 'text.disabled' : 'text.secondary'
   const tip = state === 'working' ? `${agent.name} · ${st?.activity ?? 'working'}` : state === 'paused' ? `${agent.name} · paused` : `${agent.name} · ${agent.role || 'idle'}`
   return (
     <Tooltip title={tip}>
       <ButtonBase onClick={onOpen} sx={{ position: 'relative', borderRadius: '50%' }}>
-        <Avatar name={agent.name} color={colorOf(agent)} size={30} />
-        {state === 'working' ? (
-          <Box sx={{ position: 'absolute', right: -4, bottom: -4, display: 'flex', borderRadius: '50%', bgcolor: 'background.paper', p: '1px' }}>
-            <Orb state="working" px={14} />
-          </Box>
-        ) : (
-          <Box
-            sx={{
-              position: 'absolute',
-              right: -1,
-              bottom: -1,
-              width: 10,
-              height: 10,
-              borderRadius: '50%',
-              bgcolor: dot,
-              border: 2,
-              borderColor: 'background.paper',
-            }}
-          />
-        )}
+        <Avatar name={agent.name} color={colorOf(agent)} size={34} state={face} />
       </ButtonBase>
     </Tooltip>
   )
@@ -92,7 +75,6 @@ function DirectMessage({ root, bot, team }: { root: string; bot: TeamAgent; team
             {state === 'working' ? (st?.activity ?? 'Working…') : state === 'paused' ? 'Paused' : bot.role}
           </Typography>
         </Stack>
-        <ModelPicker value={bot.model} onChange={(model) => void save(root, { ...bot, model }, bot.id)} />
         {state === 'working' && (
           <Button size="small" variant="outlined" color="error" onClick={() => void call('cmd_bots_stop', { root, botId: bot.id })} sx={{ borderRadius: '8px', flexShrink: 0 }}>
             Stop
@@ -113,15 +95,19 @@ function DirectMessage({ root, bot, team }: { root: string; bot: TeamAgent; team
         </Tooltip>
       </Stack>
       <BotChat
+        root={root}
+        channel={bot.id}
         messages={messages}
         team={team}
         approvals={approvals}
-        onSend={(t) => sendDm(root, bot.id, t)}
+        onSend={(t, att) => sendDm(root, bot.id, t, att)}
+        attachments
+        toolbar={<ModelPicker compact value={bot.model} onChange={(model) => void save(root, { ...bot, model }, bot.id)} />}
         allowEveryone={false}
         placeholder={`Message ${bot.name}`}
         empty={
           <Stack sx={{ alignItems: 'center', textAlign: 'center', gap: 1, py: 8, color: 'text.secondary' }}>
-            <Avatar name={bot.name} color={colorOf(bot)} size={40} />
+            <Avatar name={bot.name} color={colorOf(bot)} size={72} animate />
             <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary' }}>
               {bot.name}
             </Typography>
@@ -173,6 +159,8 @@ function Room({ root, team }: { root: string; team: TeamAgent[] }) {
         </Typography>
       </Stack>
       <BotChat
+        root={root}
+        channel="room"
         messages={messages}
         team={team}
         approvals={approvals}

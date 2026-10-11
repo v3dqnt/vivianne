@@ -104,8 +104,8 @@ fn check_name(name: &str) -> Result<(), String> {
     if crate::agent::tool_schemas::reserved_tool_names().contains(name) || BUILTIN_NAMES.contains(&name) {
         return Err(format!("'{name}' is already a built-in tool. Pick a name that says what yours does differently."));
     }
-    if crate::coding_agent::playbooks::load_playbooks().iter().any(|p| p.name == name) {
-        return Err(format!("'{name}' is already a playbook's name."));
+    if crate::mods::tools::names().contains(name) {
+        return Err(format!("'{name}' is already a mod's tool."));
     }
     Ok(())
 }

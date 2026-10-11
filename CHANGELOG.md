@@ -2,6 +2,52 @@
 
 All notable changes to Vivianne are documented here.
 
+## [1.8.2] — 2026-10-11
+
+### Added
+
+- **Mods: build your own parts of Vivianne.** A mod is a folder with a `mod.json` and web files that adds:
+  - dock panels;
+  - sidebar sections;
+  - chat components (a ```` ```fence ```` Vivianne writes, drawn by your page);
+  - tools Vivianne can call;
+  - themes.
+
+  Mods run sandboxed: no access to the app, your data or the internet beyond what you allow. Every call goes through one API checked against the permissions you approved. Nothing runs until you turn it on, a mod that later asks for more is switched off until you agree again, and a project's mods stay off until you trust that project. New mod (Settings → Mods) starts from working presets:
+  - panels: Notes, Web page, Agent dashboard;
+  - chat components: Checklist, Sortable table, Flashcards;
+  - sidebar sections: Quick links, Focus timer, Today;
+  - tools: Shell command.
+
+  Or ask Vivianne to build one; she reads the mod rules first.
+- **Appearance:**
+  - follow the system's light/dark;
+  - any accent colour;
+  - five fonts (Geist, Inter, System, Serif, Mono);
+  - whole-app size from 90% to 125%;
+  - corner radius;
+  - chat density and width;
+  - a wallpaper with adjustable glass and dimming.
+- **Theme builder:** make or edit a theme with every colour for light and dark. The whole app previews it as you edit, and contrast is checked for readability. Themes import and export as `.vivtheme.json`.
+- **Layout & shortcuts:**
+  - every keyboard shortcut is listed and rebindable, with clash warnings, including Viv Instant's wake keys;
+  - two new layouts (Coding, Research);
+  - save your own arrangements and choose which one opens at launch;
+  - sidebar on the left or right, and the project rail can be hidden;
+  - the notch's position, size and contents are adjustable.
+- **Agent DMs: attach files and pick the model.** Drop, paste or attach files and images in a DM; the model picker sits next to the message box.
+- **Robot faces for agents.** Every agent has its own robot head, and its face shows what it's doing: thinking, searching, working, waiting on you, happy when done. Vivianne's head in the notch also listens while you talk and speaks when she answers. Idle heads are still frames, so a long list costs nothing.
+- **See what an agent is doing in chat.** While an agent works, its steps appear live in the conversation; a finished reply keeps them folded under "N steps".
+
+### Changed
+
+- **Playbooks are now mods.** Existing playbooks are converted on first launch: tool playbooks keep their names and keep working, and panel playbooks become mod panels. The old folder is kept as `~/.viv/playbooks.migrated`.
+- **The context breakdown and the "@" menu, redesigned** to match the rest of the app: a usage ring, a segmented bar and session totals; grouped, keyboard-friendly mentions.
+
+### Fixed
+
+- **Windows release builds** no longer fail on a clean machine looking for the speech engine's DLLs before they're downloaded. (1.8.1 was never published for Windows; this is that fix.)
+
 ## [1.8.1] — 2026-10-11
 
 ### Fixed

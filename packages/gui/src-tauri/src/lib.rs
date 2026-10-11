@@ -43,31 +43,23 @@ mod file_preview;
 #[link_section = ".drectve"]
 static COMMON_CONTROLS_V6_MANIFEST: [u8; 167] = *br#" /MANIFESTDEPENDENCY:"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'""#;
 
-/// Set when Viv Instant's global wake chord can't be registered at startup —
-/// most often because another running application already claims it. Recorded
-/// rather than only logged: the chord is the ONLY way into Viv Instant, so a
-/// clash makes the whole feature unreachable and looks broken rather than
-/// blocked. Settings reads this back via `cmd_instant_shortcut_error`.
-static INSTANT_SHORTCUT_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
-/// The human-readable wake chord, matching what `setup` actually registers.
-///
-/// macOS reserves Ctrl+Shift+<key> chords far more aggressively than Windows
-/// does, and Control is not the modifier a Mac user reaches for; the platform
-/// convention for an app-level chord is Command. The label lives in Rust
-/// rather than being re-derived in the UI so the string the user is told to
-/// press and the chord actually registered can never drift apart.
-pub const INSTANT_SHORTCUT_LABEL: &str =
-  if cfg!(target_os = "macos") { "\u{2318}\u{21e7}Space" } else { "Ctrl+Shift+Space" };
-
 #[tauri::command]
 fn cmd_instant_shortcut_error() -> Option<String> {
-  INSTANT_SHORTCUT_ERROR.lock().ok().and_then(|s| s.clone())
+  // Set when the chord can't be registered (most often another app claims
+  // it): the chord is the only way into Viv Instant.
+  crate::instant::chord::error()
 }
 
+/// The wake chord as the user sees it (rebindable: `instant::chord`).
 #[tauri::command]
-fn cmd_instant_shortcut_label() -> &'static str {
-  INSTANT_SHORTCUT_LABEL
+fn cmd_instant_shortcut_label() -> String {
+  crate::instant::chord::label(&crate::instant::chord::current())
+}
+
+/// The wake chord as text, for the rebinding field.
+#[tauri::command]
+fn cmd_instant_chord() -> String {
+  crate::instant::chord::current()
 }
 mod updates;
 pub mod camoufox;
@@ -84,6 +76,8 @@ pub mod notch;
 pub mod mac_permissions;
 pub mod helium;
 pub mod supercharge;
+pub mod mods;
+pub mod appearance;
 pub mod connections;
 pub mod automation;
 pub mod terminal;
@@ -113,6 +107,10 @@ pub fn run() {
     }
   }
   tauri::Builder::default()
+    // Mod pages and the mod SDK (`mods::protocol`).
+    .register_asynchronous_uri_scheme_protocol(crate::mods::protocol::SCHEME, |_ctx, request, responder| {
+      std::thread::spawn(move || responder.respond(crate::mods::protocol::handle(&request)));
+    })
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_store::Builder::default().build())
     .plugin(tauri_plugin_dialog::init())
@@ -272,6 +270,8 @@ pub fn run() {
       crate::file_preview::cmd_read_file_preview,
       cmd_instant_shortcut_error,
       cmd_instant_shortcut_label,
+      cmd_instant_chord,
+      crate::instant::chord::cmd_instant_set_chord,
       crate::background::cmd_hide_to_background,
       crate::background::cmd_quit_app,
       crate::updates::cmd_app_version,
@@ -290,13 +290,9 @@ pub fn run() {
       crate::agent::commands::cmd_clone_session,
       crate::agent::commands::cmd_list_skills,
       crate::agent::commands::cmd_save_skill_file,
-      crate::agent::commands::cmd_list_playbooks,
       crate::coding_agent::custom_tools::cmd_list_custom_tools,
       crate::coding_agent::custom_tools::cmd_delete_custom_tool,
       crate::coding_agent::custom_tools::cmd_custom_tool_source,
-      crate::agent::commands::cmd_add_playbook_file,
-      crate::agent::commands::cmd_save_playbook,
-      crate::agent::commands::cmd_remove_playbook,
       crate::agent::commands::cmd_list_subagent_profiles,
       crate::agent::commands::cmd_save_subagent_profile,
       crate::agent::commands::cmd_delete_subagent_profile,
@@ -400,7 +396,27 @@ pub fn run() {
       crate::notch::cmd_notch_open_main,
       crate::notch::cmd_notch_talk,
       crate::notch::cmd_notch_app_ready,
+      crate::notch::cmd_notch_prefs,
+      crate::notch::cmd_notch_set_prefs,
       crate::agent::memory_sleep::cmd_memory_sleep_now,
+      crate::mods::cmd_mods_list,
+      crate::mods::cmd_mods_set_enabled,
+      crate::mods::cmd_mods_trust_project,
+      crate::mods::cmd_mods_create,
+      crate::mods::cmd_mods_remove,
+      crate::mods::cmd_mods_storage_get,
+      crate::mods::cmd_mods_storage_set,
+      crate::mods::cmd_mods_fingerprint,
+      crate::mods::cmd_mods_read_theme,
+      crate::mods::cmd_mods_open_url,
+      crate::mods::cmd_mods_dirs,
+      crate::appearance::cmd_themes_list,
+      crate::appearance::cmd_themes_save,
+      crate::appearance::cmd_themes_delete,
+      crate::appearance::cmd_themes_read_file,
+      crate::appearance::cmd_themes_write_file,
+      crate::appearance::cmd_appearance_wallpaper,
+      crate::appearance::cmd_appearance_set_wallpaper,
       crate::ai::local_onnx::cmd_local_embedder_status,
       crate::ai::local_onnx::cmd_local_embedder_install,
       crate::ai::local_onnx::cmd_local_embedder_remove,
@@ -773,20 +789,9 @@ pub fn run() {
         }
       });
 
-      // Register Viv Instant's global wake chord. The handler above routes it
-      // to `instant::window::toggle`.
-      {
-        use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
-        // Command on macOS, Control elsewhere — see `INSTANT_SHORTCUT_LABEL`.
-        let primary = if cfg!(target_os = "macos") { Modifiers::SUPER } else { Modifiers::CONTROL };
-        let shortcut = Shortcut::new(Some(primary | Modifiers::SHIFT), Code::Space);
-        if let Err(e) = app.global_shortcut().register(shortcut) {
-          log::warn!("[instant] failed to register global shortcut {INSTANT_SHORTCUT_LABEL}: {e}");
-          if let Ok(mut slot) = INSTANT_SHORTCUT_ERROR.lock() {
-            *slot = Some(e.to_string());
-          }
-        }
-      }
+      // Register Viv Instant's global wake chord (the user's, or the
+      // default). The handler above routes it to `instant::window`.
+      crate::instant::chord::register_at_startup(app.handle());
 
       if cfg!(debug_assertions) {
         app.handle().plugin(

@@ -6,6 +6,7 @@ import { useSubagentStore } from './subagentStore'
 import { useShellTaskStore, isShellTool } from '../../dock/store/shellTaskStore'
 import { useWebPreviewStore } from './webPreviewStore'
 import { usePanelStore, type RightPanelKind } from '../../dock/store/panelStore'
+import { useModsStore } from '../../mods/store/modsStore'
 import { notifyFileChanged, resolveAgentPath } from '../../ide/lib/fileChangeBus'
 import { useWorkspaceStore } from './workspaceStore'
 
@@ -534,12 +535,14 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             if (!isPrimary(threadId)) break
             const p = event.payload
             const RIGHT_PANEL_KINDS: RightPanelKind[] = ['review', 'files', 'preview', 'tasks', 'plan']
-            if (p.panel.startsWith('custom:')) {
-              // Always "open" — set_panel's backend-side validation already
-              // confirmed this id exists, and there's no sensible "close the
-              // panel showing THIS custom id specifically" distinct from
-              // closeRight (the slot is shared across all custom panels).
-              if (p.action === 'open') usePanelStore.getState().openCustomPanel(p.panel.slice('custom:'.length))
+            if (p.panel.startsWith('mod:')) {
+              // A mod's panel, `mod:<key>/<panel id>` — set_panel's backend
+              // side already confirmed it's running. With no panel id, the
+              // mod's first panel.
+              const [key, id] = p.panel.slice('mod:'.length).split('/')
+              const mod = useModsStore.getState().mods.find((m) => m.key === key)
+              const panelId = id || mod?.manifest?.contributes.panels[0]?.id
+              if (p.action === 'open' && panelId) usePanelStore.getState().openCustomPanel(`${key}/${panelId}`)
               else usePanelStore.getState().closeRight()
             } else if (p.panel === 'terminal') {
               if (p.action === 'open') usePanelStore.getState().openBottom()

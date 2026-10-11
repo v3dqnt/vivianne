@@ -125,19 +125,101 @@ export const PALETTES: PaletteDef[] = [
   },
 ]
 
-const FONT_FAMILY = '"Geist", system-ui, -apple-system, "Segoe UI", sans-serif'
-const MONO_FAMILY = '"Geist Mono", ui-monospace, "Cascadia Code", monospace'
+export const FONT_FAMILY = '"Geist", system-ui, -apple-system, "Segoe UI", sans-serif'
+export const MONO_FAMILY = '"Geist Mono", ui-monospace, "Cascadia Code", monospace'
 
-export function buildTheme(mode: Mode, paletteId: string): Theme {
-  const preset = PALETTES.find((p) => p.id === paletteId) ?? PALETTES[0]
-  return createTheme({
-    mode,
-    tokens: { ...NEUTRAL[mode], ...preset[mode] },
-    fontFamily: FONT_FAMILY,
-    monoFamily: MONO_FAMILY,
-    radius: 10,
-  })
+export type FontChoice = 'geist' | 'inter' | 'system' | 'serif' | 'mono'
+
+/** The UI font stacks offered in Settings → Appearance. */
+export const FONTS: Record<FontChoice, { label: string; family: string }> = {
+  geist: { label: 'Geist', family: FONT_FAMILY },
+  inter: { label: 'Inter', family: '"Inter", system-ui, -apple-system, "Segoe UI", sans-serif' },
+  system: { label: 'System', family: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif' },
+  serif: { label: 'Serif', family: '"Source Serif 4", Georgia, "Times New Roman", serif' },
+  mono: { label: 'Mono', family: MONO_FAMILY },
 }
+
+/** What the user chose beyond the palette (see `themeStore`). */
+export interface ThemeOptions {
+  /** Themes the user made (`~/.viv/themes`), looked up after the built-ins. */
+  custom?: PaletteDef[]
+  /** Any colour, over the palette's primary. */
+  accent?: string | null
+  font?: FontChoice
+  radius?: number
+  /** A wallpaper is showing: the frame goes clear and panes let `glass`
+   * (0 solid … 1 most see-through) of it through. */
+  wallpaper?: boolean
+  glass?: number
+}
+
+/** `hex` (#rgb / #rrggbb) or `rgb(a)` at `alpha` opacity. */
+export function withAlpha(color: string, alpha: number): string {
+  const c = color.trim()
+  let m = /^#([0-9a-f]{3})$/i.exec(c)
+  const hex = m ? m[1].split('').map((x) => x + x).join('') : /^#([0-9a-f]{6})$/i.exec(c)?.[1]
+  if (hex) {
+    const n = parseInt(hex, 16)
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`
+  }
+  m = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i.exec(c)
+  return m ? `rgba(${m[1]}, ${m[2]}, ${m[3]}, ${alpha})` : c
+}
+
+/** Black or white, whichever reads better on `hex`. */
+export function onColor(hex: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return '#ffffff'
+  const n = parseInt(m[1], 16)
+  const lin = (c: number) => {
+    const v = c / 255
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+  }
+  const l = 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255)
+  return l > 0.4 ? '#111111' : '#ffffff'
+}
+
+/** Every palette: built-ins, then the user's own. */
+export function allPalettes(custom: PaletteDef[] = []): PaletteDef[] {
+  return [...PALETTES, ...custom.filter((c) => !PALETTES.some((p) => p.id === c.id))]
+}
+
+/** The full token set for a palette in a mode — what the app is painted
+ * with, and what mod pages receive as `--viv-*` variables. */
+export function themeTokens(mode: Mode, paletteId: string, opts: ThemeOptions = {}): TokenSet {
+  const preset = allPalettes(opts.custom).find((p) => p.id === paletteId) ?? PALETTES[0]
+  const tokens = { ...NEUTRAL[mode], ...preset[mode] }
+  if (opts.accent) Object.assign(tokens, accent(opts.accent, onColor(opts.accent)))
+  return tokens
+}
+
+export function buildTheme(mode: Mode, paletteId: string, opts: ThemeOptions = {}): Theme {
+  const theme = createTheme({
+    mode,
+    tokens: themeTokens(mode, paletteId, opts),
+    fontFamily: FONTS[opts.font ?? 'geist'].family,
+    monoFamily: MONO_FAMILY,
+    radius: opts.radius ?? 10,
+  })
+  if (opts.wallpaper) {
+    // Solid at glass 0; at 1 a pane is 45% opaque (more and text over a busy
+    // image stops being readable).
+    const alpha = 1 - Math.min(1, Math.max(0, opts.glass ?? 0.3)) * 0.55
+    const bg = theme.palette.background
+    theme.palette.background = {
+      ...bg,
+      default: 'transparent',
+      chrome: 'transparent',
+      pane: withAlpha(bg.pane, alpha),
+      card: withAlpha(bg.card, Math.min(1, alpha + 0.1)),
+    }
+  }
+  return theme
+}
+
+/** The token names, for the theme builder. */
+export const TOKEN_NAMES = Object.keys(NEUTRAL.dark) as (keyof TokenSet)[]
+export type { TokenSet }
 
 /** App-wide resets on top of the kit's baseline, passed to `CssBaseline`. */
 export function baselineExtras(_mode: Mode) {
@@ -188,6 +270,8 @@ export const SURFACE_RADIUS = 14
 export function glassSurface(mode: Mode) {
   return {
     bgcolor: 'background.pane',
+    // Only blurs when a wallpaper is set (Settings → Appearance).
+    backdropFilter: 'var(--viv-glass-filter, none)',
     border: '1px solid',
     borderColor: 'divider',
     boxShadow: mode === 'dark' ? 'inset 0 1px 0 rgba(255,255,255,0.035)' : 'none',

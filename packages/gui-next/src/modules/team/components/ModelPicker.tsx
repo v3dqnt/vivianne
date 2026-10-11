@@ -27,11 +27,14 @@ export function ModelPicker({
   onChange,
   size = 'small',
   fullWidth,
+  compact,
 }: {
   value: SubagentModelOverride | null
   onChange: (model: SubagentModelOverride | null) => void
   size?: 'small' | 'medium'
   fullWidth?: boolean
+  /** A borderless pill for a composer bar, not a form field. */
+  compact?: boolean
 }) {
   const options = useModelOptions()
   const groups = useMemo(() => {
@@ -53,7 +56,19 @@ export function ModelPicker({
         const k = String(e.target.value)
         onChange(k === INHERIT ? null : (options.find((m) => keyOf(m) === k) ?? value))
       }}
-      sx={{ fontSize: '0.8125rem', borderRadius: '8px', minWidth: 180 }}
+      sx={
+        compact
+          ? {
+              fontSize: '0.75rem',
+              borderRadius: '999px',
+              minWidth: 0,
+              height: 28,
+              color: 'text.secondary',
+              '& fieldset, & .ui-Select-outline': { border: 'none' },
+              '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+            }
+          : { fontSize: '0.8125rem', borderRadius: '8px', minWidth: 180 }
+      }
     >
       <MenuItem value={INHERIT} sx={{ fontSize: '0.8125rem' }}>
         Same as the chat

@@ -32,7 +32,8 @@ fn overlay(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
     crate::overlays::get(app, LABEL)
 }
 
-/// Place the notch top-centre of the monitor the cursor is on.
+/// Place the notch at the top of the monitor the cursor is on: centred, or
+/// at the left or right end, as the user chose.
 ///
 /// `current_monitor` rather than `primary_monitor`: on a multi-monitor desk the
 /// overlay should appear on the screen the user is actually working on, and the
@@ -56,7 +57,13 @@ pub fn position(win: &tauri::WebviewWindow) -> Result<(), String> {
         .map_err(|e| format!("couldn't read window size: {e}"))?
         .to_logical::<f64>(scale);
 
-    let x = origin.x + (screen.width - size.width) / 2.0;
+    // Along the top edge where the user put it (Settings → Layout & shortcuts).
+    const EDGE: f64 = 24.0;
+    let x = match crate::notch::prefs().position.as_str() {
+        "left" => origin.x + EDGE,
+        "right" => origin.x + screen.width - size.width - EDGE,
+        _ => origin.x + (screen.width - size.width) / 2.0,
+    };
     // On a Mac the top of the screen is the menu bar (and, on newer
     // MacBooks, the camera notch inside it): hang the notch just below it, so
     // on a notched display it reads as the notch growing downwards.

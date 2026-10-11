@@ -1,10 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Box, ButtonBase, InputBase, Stack, Typography, alpha, useTheme } from '../../../ui'
-import { SendLinear } from '../../../icons'
+import { SendLinear, CloseLinear, DocumentTextLinear } from '../../../icons'
 import { Markdown } from '../../ai/components/Markdown'
+import { AttachFileButton } from '../../ai/components/AttachFileButton'
+import { buildAttachments, filesFromDataTransfer } from '../../ai/lib/attachments'
+import type { ImageAttachment, FileAttachment } from '../../ai/lib/types'
 import type { TeamAgent } from '../store/teamStore'
-import { useBotsStore, type BotMessage, type PendingApproval } from '../store/botsStore'
+import { useBotsStore, type BotMessage, type DmAttachments, type PendingApproval } from '../store/botsStore'
 import { Avatar, colorOf } from './bits'
+import { LiveRunCard, StepsToggle } from './BotSteps'
+import { MentionShell, MentionRow } from '../../ai/components/MentionMenu'
 
 const KIND_LABEL: Partial<Record<BotMessage['kind'], string>> = {
   needs_you: 'Needs you',
@@ -35,9 +40,18 @@ function Message({ m, team, prev }: { m: BotMessage; team: TeamAgent[]; prev: Bo
   if (m.from === 'user') {
     return (
       <Stack sx={{ alignItems: 'flex-end', mt: grouped ? 0.25 : 1.25 }}>
-        <Box sx={{ maxWidth: '80%', px: 1.5, py: 1, borderRadius: '14px', bgcolor: alpha(theme.palette.text.primary, 0.07), fontSize: '0.875rem' }}>
-          <Markdown text={m.text} />
-        </Box>
+        {m.attachments && m.attachments.length > 0 && (
+          <Stack direction="row" sx={{ gap: 0.5, flexWrap: 'wrap', justifyContent: 'flex-end', mb: 0.5, maxWidth: '80%' }}>
+            {m.attachments.map((a, i) => (
+              <Chip key={`${a.name}${i}`} label={a.name} kind={a.kind} />
+            ))}
+          </Stack>
+        )}
+        {m.text !== '(attachments)' && (
+          <Box sx={{ maxWidth: '80%', px: 1.5, py: 1, borderRadius: '14px', bgcolor: alpha(theme.palette.text.primary, 0.07), fontSize: '0.875rem' }}>
+            <Markdown text={m.text} />
+          </Box>
+        )}
       </Stack>
     )
   }
@@ -80,7 +94,35 @@ function Message({ m, team, prev }: { m: BotMessage; team: TeamAgent[]; prev: Bo
         >
           <Markdown text={m.text} />
         </Box>
+        {m.steps && m.steps.length > 0 && <StepsToggle steps={m.steps} />}
       </Stack>
+    </Stack>
+  )
+}
+
+/** An attachment, as a small chip: name and kind, with remove when pending. */
+function Chip({ label, kind, image, onRemove }: { label: string; kind: 'image' | 'file'; image?: string; onRemove?: () => void }) {
+  return (
+    <Stack
+      direction="row"
+      aria-label={`${kind === 'image' ? 'Image' : 'File'}: ${label}`}
+      sx={{ alignItems: 'center', gap: 0.75, pl: image ? 0.375 : 1, pr: onRemove ? 0.375 : 1, py: 0.375, borderRadius: '10px', border: 1, borderColor: 'divider', bgcolor: 'background.paper', maxWidth: 240 }}
+    >
+      {image ? (
+        <Box component="img" src={image} alt="" sx={{ width: 26, height: 26, borderRadius: '7px', objectFit: 'cover', flexShrink: 0 }} />
+      ) : (
+        <Box sx={{ display: 'inline-flex', color: 'text.secondary', flexShrink: 0 }}>
+          <DocumentTextLinear size={13} color="currentColor" />
+        </Box>
+      )}
+      <Typography variant="caption" noWrap sx={{ fontSize: '0.75rem', minWidth: 0 }}>
+        {label}
+      </Typography>
+      {onRemove && (
+        <ButtonBase aria-label={`Remove ${label}`} onClick={onRemove} sx={{ borderRadius: '6px', p: 0.25, color: 'text.secondary', '&:hover': { color: 'text.primary' } }}>
+          <CloseLinear size={12} color="currentColor" />
+        </ButtonBase>
+      )}
     </Stack>
   )
 }
@@ -126,6 +168,8 @@ function ApprovalCard({ a, team }: { a: PendingApproval; team: TeamAgent[] }) {
  * the room). Approvals a bot is waiting on appear inline.
  */
 export function BotChat({
+  root,
+  channel,
   messages,
   team,
   approvals,
@@ -133,26 +177,56 @@ export function BotChat({
   placeholder,
   allowEveryone,
   empty,
+  attachments = false,
+  toolbar,
 }: {
+  /** The project, and which conversation this is (`room` or a bot id): runs
+   * replying here show live, step by step. */
+  root: string
+  channel: string
   messages: BotMessage[]
   team: TeamAgent[]
   approvals: PendingApproval[]
-  onSend: (text: string) => Promise<void>
+  onSend: (text: string, attachments?: DmAttachments) => Promise<void>
   placeholder: string
   allowEveryone: boolean
   empty?: React.ReactNode
+  /** Accept files and images (attach button, paste, drop). */
+  attachments?: boolean
+  /** Controls at the composer's left edge (a DM's model picker). */
+  toolbar?: React.ReactNode
 }) {
+  const theme = useTheme()
   const [text, setText] = useState('')
+  const [images, setImages] = useState<ImageAttachment[]>([])
+  const [files, setFiles] = useState<FileAttachment[]>([])
+  const [dragging, setDragging] = useState(false)
+  const ingest = async (list: File[]) => {
+    if (!attachments || list.length === 0) return
+    const built = await buildAttachments(list)
+    setImages((p) => [...p, ...built.images])
+    setFiles((p) => [...p, ...built.files])
+  }
   const [error, setError] = useState<string | null>(null)
   const [pick, setPick] = useState(0)
   const scroller = useRef<HTMLDivElement | null>(null)
+  const liveAll = useBotsStore((s) => s.live)
+  const status = useBotsStore((s) => s.status)
+  const running = useMemo(
+    () =>
+      team
+        .map((agent) => ({ agent, run: liveAll[`${root}::${agent.id}`] }))
+        .filter(({ agent, run }) => run && run.channel === channel && status[`${root}::${agent.id}`]?.state === 'working'),
+    [team, liveAll, status, root, channel],
+  )
+  const stepCount = running.reduce((n, r) => n + (r.run?.steps.length ?? 0), 0)
 
   // Follow the conversation when new messages arrive near the bottom.
   useLayoutEffect(() => {
     const el = scroller.current
     if (!el) return
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 240) el.scrollTop = el.scrollHeight
-  }, [messages.length, approvals.length])
+  }, [messages.length, approvals.length, running.length, stepCount])
   useEffect(() => {
     const el = scroller.current
     if (el) el.scrollTop = el.scrollHeight
@@ -173,15 +247,21 @@ export function BotChat({
     setPick(0)
   }
 
+  const hasAttachments = images.length + files.length > 0
   const send = async () => {
     const t = text.trim()
-    if (!t) return
+    if (!t && !hasAttachments) return
     setError(null)
+    const sent = { images, files }
     setText('')
+    setImages([])
+    setFiles([])
     try {
-      await onSend(t)
+      await onSend(t, hasAttachments ? sent : undefined)
     } catch (e) {
       setText(t)
+      setImages(sent.images)
+      setFiles(sent.files)
       setError(e instanceof Error ? e.message : String(e))
     }
   }
@@ -194,6 +274,9 @@ export function BotChat({
           {messages.map((m, i) => (
             <Message key={m.id} m={m} team={team} prev={messages[i - 1]} />
           ))}
+          {running.map(({ agent, run }) => (
+            <LiveRunCard key={agent.id} agent={agent} steps={run!.steps} />
+          ))}
           {approvals.map((a) => (
             <ApprovalCard key={a.requestId} a={a} team={team} />
           ))}
@@ -202,28 +285,65 @@ export function BotChat({
       <Box sx={{ px: 2, pb: 1.5, pt: 0.5 }}>
         <Box sx={{ maxWidth: 820, mx: 'auto', position: 'relative' }}>
           {options.length > 0 && (
-            <Stack sx={{ position: 'absolute', bottom: '100%', left: 0, mb: 0.75, minWidth: 220, p: 0.5, borderRadius: '10px', border: 1, borderColor: 'divider', bgcolor: 'background.paper', boxShadow: 6, zIndex: 2 }}>
-              {options.map((o, i) => (
-                <ButtonBase
-                  key={o.id}
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    complete(o.id)
-                  }}
-                  sx={{ justifyContent: 'flex-start', gap: 1, px: 1, py: 0.625, borderRadius: '6px', bgcolor: i === pick ? 'action.selected' : 'transparent' }}
-                >
-                  {o.agent ? <Avatar name={o.label} color={colorOf(o.agent)} size={20} /> : <Box sx={{ width: 20 }} />}
-                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                    {o.label}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    @{o.id}
-                  </Typography>
-                </ButtonBase>
-              ))}
-            </Stack>
+            <MentionShell title="Mention a teammate" width={360}>
+              <Box sx={{ px: 0.5, pb: 0.5 }}>
+                {options.map((o, i) => (
+                  <MentionRow
+                    key={o.id}
+                    active={i === pick}
+                    onSelect={() => complete(o.id)}
+                    onHover={() => setPick(i)}
+                    tint={o.agent ? colorOf(o.agent) : theme.palette.primary.main}
+                    icon={o.agent ? <Avatar name={o.label} color={colorOf(o.agent)} size={20} /> : <Box component="span" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>@</Box>}
+                    title={o.label}
+                    subtitle={o.agent ? (o.agent.role || `@${o.id}`) : 'Everyone on the team'}
+                    tag={<Box component="span" sx={{ fontSize: '0.625rem', color: 'text.disabled', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>@{o.id}</Box>}
+                  />
+                ))}
+              </Box>
+            </MentionShell>
           )}
-          <Stack direction="row" sx={{ alignItems: 'flex-end', gap: 1, px: 1.5, py: 1, borderRadius: '16px', border: 1, borderColor: 'divider', bgcolor: 'background.card' }}>
+          <Stack
+            onDragOver={(e) => {
+              if (!attachments) return
+              e.preventDefault()
+              setDragging(true)
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              if (!attachments) return
+              e.preventDefault()
+              setDragging(false)
+              void ingest(filesFromDataTransfer(e.dataTransfer))
+            }}
+            sx={{
+              gap: 0.75,
+              px: 1.5,
+              pt: 1,
+              pb: 0.75,
+              borderRadius: '16px',
+              border: 1,
+              borderColor: dragging ? 'primary.main' : 'divider',
+              bgcolor: 'background.card',
+              transition: 'border-color 120ms',
+            }}
+          >
+            {hasAttachments && (
+              <Stack direction="row" sx={{ gap: 0.5, flexWrap: 'wrap' }}>
+                {images.map((img, i) => (
+                  <Chip
+                    key={`img${i}`}
+                    label={`Image ${i + 1}`}
+                    kind="image"
+                    image={`data:${img.media_type};base64,${img.base64}`}
+                    onRemove={() => setImages((p) => p.filter((_, j) => j !== i))}
+                  />
+                ))}
+                {files.map((f, i) => (
+                  <Chip key={`file${i}`} label={f.name} kind="file" onRemove={() => setFiles((p) => p.filter((_, j) => j !== i))} />
+                ))}
+              </Stack>
+            )}
             <InputBase
               multiline
               maxRows={8}
@@ -256,16 +376,37 @@ export function BotChat({
                   void send()
                 }
               }}
-              sx={{ flex: 1, fontSize: '0.875rem', py: 0.25 }}
+              onPaste={(e) => {
+                const pasted = filesFromDataTransfer(e.clipboardData)
+                if (attachments && pasted.length > 0) {
+                  e.preventDefault()
+                  void ingest(pasted)
+                }
+              }}
+              sx={{ width: '100%', fontSize: '0.875rem', py: 0.25 }}
             />
-            <ButtonBase
-              aria-label="Send"
-              onClick={() => void send()}
-              disabled={!text.trim()}
-              sx={{ width: 30, height: 30, borderRadius: '50%', bgcolor: text.trim() ? 'text.primary' : 'action.disabledBackground', color: 'background.paper', flexShrink: 0 }}
-            >
-              <SendLinear size={15} color="currentColor" />
-            </ButtonBase>
+            <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5 }}>
+              {attachments && (
+                <AttachFileButton onAddImages={(i) => setImages((p) => [...p, ...i])} onAddFiles={(f) => setFiles((p) => [...p, ...f])} />
+              )}
+              {toolbar}
+              <Box sx={{ flex: 1 }} />
+              <ButtonBase
+                aria-label="Send"
+                onClick={() => void send()}
+                disabled={!text.trim() && !hasAttachments}
+                sx={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: '50%',
+                  bgcolor: text.trim() || hasAttachments ? 'text.primary' : 'action.disabledBackground',
+                  color: 'background.paper',
+                  flexShrink: 0,
+                }}
+              >
+                <SendLinear size={15} color="currentColor" />
+              </ButtonBase>
+            </Stack>
           </Stack>
           {error && (
             <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.5 }}>

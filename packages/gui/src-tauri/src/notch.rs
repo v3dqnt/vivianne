@@ -457,3 +457,58 @@ mod tests {
         assert!(same_path("C:\\Work\\Viv\\", "c:/work/viv"));
     }
 }
+
+// ── Preferences (Settings → Layout & shortcuts) ───────────────────────────
+
+/// Where the notch sits, how big it draws, and what it shows. Read by the
+/// positioning code here and by the notch's own page (a separate window, so
+/// it gets them over `notch:prefs`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NotchPrefs {
+    /// `center`, `left` or `right` along the top edge.
+    pub position: String,
+    /// 0.85 (small), 1 (medium) or 1.2 (large).
+    pub scale: f64,
+    /// List the agents at work.
+    pub show_agents: bool,
+    /// Show what the lead agent is doing right now.
+    pub show_activity: bool,
+    /// The talk button.
+    pub show_mic: bool,
+}
+
+impl Default for NotchPrefs {
+    fn default() -> Self {
+        Self { position: "center".into(), scale: 1.0, show_agents: true, show_activity: true, show_mic: true }
+    }
+}
+
+fn prefs_path() -> std::path::PathBuf {
+    crate::agent::paths::viv_home_path(&["notch-prefs.json"])
+}
+
+pub fn prefs() -> NotchPrefs {
+    std::fs::read_to_string(prefs_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn cmd_notch_prefs() -> Result<NotchPrefs, String> {
+    Ok(prefs())
+}
+
+#[tauri::command]
+pub async fn cmd_notch_set_prefs(app: tauri::AppHandle, prefs: NotchPrefs) -> Result<NotchPrefs, String> {
+    use tauri::Emitter;
+    let mut p = prefs;
+    if !matches!(p.position.as_str(), "center" | "left" | "right") {
+        p.position = "center".into();
+    }
+    p.scale = p.scale.clamp(0.75, 1.5);
+    std::fs::write(prefs_path(), serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let _ = app.emit("notch:prefs", &p);
+    if let Some(win) = crate::overlays::get(&app, crate::instant::window::LABEL) {
+        let _ = crate::instant::window::position(&win);
+    }
+    Ok(p)
+}

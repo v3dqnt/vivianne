@@ -18,7 +18,7 @@
  * job and main's alone — see the note in `main.tsx` about concurrent windows
  * answering the same request.
  */
-import { StrictMode, useMemo } from 'react'
+import { StrictMode, useEffect, useMemo } from 'react'
 import { createRoot } from 'react-dom/client'
 import { CssBaseline, ThemeProvider } from './ui'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -58,7 +58,17 @@ function Overlay() {
 function ThemedOverlay() {
   const mode = useThemeStore((s) => s.mode)
   const paletteId = useThemeStore((s) => s.paletteId)
-  const theme = useMemo(() => buildTheme(mode, paletteId), [mode, paletteId])
+  const accent = useThemeStore((s) => s.accent)
+  const font = useThemeStore((s) => s.font)
+  const customThemes = useThemeStore((s) => s.customThemes)
+  const loadCustom = useThemeStore((s) => s.loadCustom)
+  useEffect(() => void loadCustom(), [loadCustom])
+  // Overlays float over other apps: no wallpaper or glass, but the same
+  // palette, accent and type as the main window.
+  const theme = useMemo(
+    () => buildTheme(mode, paletteId, { custom: customThemes, accent, font }),
+    [mode, paletteId, customThemes, accent, font],
+  )
   return (
     <ThemeProvider theme={theme}>
       {/* Each overlay additionally calls `useTransparentWindowBody()`, which

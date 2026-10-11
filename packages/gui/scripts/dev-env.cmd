@@ -27,4 +27,18 @@ if not defined VSPATH (
   exit /b 1
 )
 call "%VSPATH%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+if /i not "%~1"=="build" goto run
+REM A release bundles the speech engine's DLLs (src-tauri\tauri.bundle-win.conf.json),
+REM which sherpa-rs-sys places in target\release from its build script. Tauri
+REM checks they exist before that script has necessarily run (and a restored
+REM build cache skips it), so run it first, every time. The old copies go
+REM first: they are hard links into sherpa's cache, which it can't copy onto.
+pushd "%~dp0..\src-tauri"
+del /q target\release\sherpa-onnx-c-api.dll target\release\onnxruntime.dll target\release\onnxruntime_providers_shared.dll 2>nul
+cargo clean --release -p sherpa-rs-sys || (popd & exit /b 1)
+cargo build --release -p sherpa-rs-sys || (popd & exit /b 1)
+popd
+tauri %* --config "%~dp0..\src-tauri\tauri.bundle-win.conf.json"
+exit /b %ERRORLEVEL%
+:run
 tauri %*

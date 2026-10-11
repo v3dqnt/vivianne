@@ -9,6 +9,7 @@ import {
   MagicpenLinear,
   ClockLinear,
   ColorSwatchLinear,
+  LayoutLinear,
   UserOctagonLinear,
   ArchiveLinear,
   MicrophoneLinear,
@@ -28,6 +29,7 @@ import { UsageSection } from './UsageSection'
 import { SkillsSection } from './SkillsSection'
 import { AutomationsSection } from './AutomationsSection'
 import { ThemesSection } from './ThemesSection'
+import { LayoutSection } from './LayoutSection'
 import { ComponentsSection } from './ComponentsSection'
 import { UpdatesSection } from './UpdatesSection'
 import { InstantSection } from './InstantSection'
@@ -80,7 +82,8 @@ const GROUPS: { label: string; items: SectionDef[] }[] = [
     label: 'App',
     items: [
       { id: 'diagnostics', label: 'Diagnostics', icon: FlashLinear },
-      { id: 'themes', label: 'Theme & layout', icon: ColorSwatchLinear },
+      { id: 'themes', label: 'Appearance', icon: ColorSwatchLinear },
+      { id: 'layout', label: 'Layout & shortcuts', icon: LayoutLinear },
       { id: 'components', label: 'Components', icon: ArchiveLinear },
       { id: 'updates', label: 'Updates', icon: SparkleLinear },
     ],
@@ -236,6 +239,7 @@ export function SettingsDialog() {
                 </Stack>
               )}
               {section === 'themes' && <ThemesSection />}
+              {section === 'layout' && <LayoutSection />}
               {section === 'components' && <ComponentsSection />}
               {section === 'updates' && <UpdatesSection />}
             </Box>

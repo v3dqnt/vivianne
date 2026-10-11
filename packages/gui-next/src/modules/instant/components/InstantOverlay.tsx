@@ -7,6 +7,10 @@ import { useInstantMic } from '../lib/useInstantMic'
 import { speak, stopSpeaking } from '../lib/instantTts'
 import { Notch, NOTCH_MUTED, type NotchTone } from './Notch'
 import { RestingNotch } from './RestingNotch'
+import type { RobotHeadState } from 'robot-heads'
+
+/** Steps that look things up: the face searches. */
+const SEARCHING = /^(web_|browser_|read|grep|glob|ls|recall|search|find|list|inspect|screenshot|ocr)/
 
 /** Mirrors `instant::route::Route`. */
 interface Route {
@@ -98,11 +102,15 @@ export function InstantOverlay() {
   // sufficient: `onSpeechStart` aborts the utterance the moment the user
   // actually speaks, which clears this before their words are transcribed.
   const talkingRef = useRef(false)
+  // The face's "speaking" state; the ref above is what the logic reads.
+  const [speaking, setSpeaking] = useState(false)
 
   const say = useCallback((text: string, signal?: AbortSignal) => {
     talkingRef.current = true
+    setSpeaking(true)
     return speak(text, { signal }).finally(() => {
       talkingRef.current = false
+      setSpeaking(false)
     })
   }, [])
 
@@ -313,6 +321,27 @@ export function InstantOverlay() {
   const tone: NotchTone =
     phase === 'listening' ? 'listening' : phase === 'error' ? 'error' : phase === 'done' ? 'done' : working || phase === 'transcribing' ? 'working' : 'idle'
 
+  // The robot: attentive while you talk, thinking until it picks a step,
+  // searching while it looks things up, talking while it speaks.
+  const running = steps.find((st) => st.status === 'running')
+  const face: RobotHeadState = speaking
+    ? 'speaking'
+    : phase === 'listening'
+      ? 'listening'
+      : phase === 'transcribing'
+        ? 'thinking'
+        : phase === 'error'
+          ? 'error'
+          : phase === 'done'
+            ? 'happy'
+            : working
+              ? !running
+                ? 'thinking'
+                : SEARCHING.test(running.tool)
+                  ? 'searching'
+                  : 'working'
+              : 'idle'
+
   // One line: what it heard while listening, the step it's on while working.
   const detail = download
     ? `Downloading speech model ${download.index}/${download.count} · ${download.percent}%`
@@ -357,6 +386,7 @@ export function InstantOverlay() {
   return (
     <Notch
       tone={tone}
+      face={face}
       title={statusFor(phase, steps.length > 0, route)}
       detail={detail}
       level={level}

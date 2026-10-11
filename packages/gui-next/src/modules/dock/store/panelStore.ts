@@ -13,8 +13,8 @@ import { closePanel, openPanel } from '../../workspace/layout'
  * the panel-level operation it always actually meant.
  */
 
-/** One kind of view a panel can host. `'custom'` renders a user-defined panel
- * playbook named by `panelName`. */
+/** One kind of view a panel can host. `'custom'` renders a mod's panel,
+ * named `<mod key>/<panel id>` by `panelName`. */
 export type DockViewKind = 'review' | 'files' | 'ide' | 'preview' | 'documents' | 'tasks' | 'multiplayer' | 'terminal' | 'agents' | 'plan' | 'document' | 'custom'
 
 /** Kept as the old name so `set_panel`'s values keep type-checking. */

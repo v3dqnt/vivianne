@@ -15,6 +15,7 @@ export type SettingsSection =
   | 'skills'
   | 'automations'
   | 'themes'
+  | 'layout'
   | 'components'
   | 'updates'
   | 'instant'

@@ -255,13 +255,7 @@ pub async fn get_agent_tool_definitions() -> Vec<serde_json::Value> {
 
     // Slow path: rebuild the full definition list
     let mut defs = static_tool_definitions();
-    for def in crate::coding_agent::playbooks::load_playbooks().into_iter().filter(|d| d.is_tool()) {
-        defs.push(serde_json::json!({
-            "name": def.name,
-            "description": def.description,
-            "parameters": def.parameters,
-        }));
-    }
+    defs.extend(crate::mods::tools::definitions());
     defs.extend(crate::coding_agent::custom_tools::tool_definitions());
     for (server, tool) in crate::mcp::list_all_tools().await {
         defs.push(serde_json::json!({
@@ -2137,12 +2131,8 @@ async fn execute_get_current_time_tool() -> AgentToolResult {
 /// to see what an MCP connection or playbook actually added this session.
 async fn execute_list_tools_tool(disabled_tools: &[String]) -> AgentToolResult {
     let defs = get_agent_tool_definitions().await;
-    // Scanned once, not once per tool: `load_playbooks` re-reads and re-parses
-    // every file in the playbooks directory on each call, so doing it inside
-    // the loop was ~50 directory scans (and 50xN JSON parses) to answer one
-    // question.
-    let playbook_names: std::collections::HashSet<String> =
-        crate::coding_agent::playbooks::load_playbooks().into_iter().filter(|p| p.is_tool()).map(|p| p.name).collect();
+    // Scanned once, not once per tool: listing mods reads every manifest.
+    let playbook_names: std::collections::HashSet<String> = crate::mods::tools::names();
     let custom_names = crate::coding_agent::custom_tools::custom_tool_names();
     let disabled: std::collections::HashSet<&str> = disabled_tools.iter().map(String::as_str).collect();
 
@@ -2261,15 +2251,17 @@ fn execute_set_panel_tool(args: &serde_json::Value, emit: &EventSender) -> Agent
     let Some(action) = args.get("action").and_then(|v| v.as_str()) else {
         return image_tool_err("Error: 'action' is required (\"open\" or \"close\").");
     };
-    // `custom:<name>` opens a panel-type playbook (see `coding_agent::playbooks`
-    // — `PlaybookDef::is_panel()`) — validated against what's actually on disk
-    // right now, not a fixed list, since these are added/removed without a restart.
-    let is_valid_custom = panel
-        .strip_prefix("custom:")
-        .is_some_and(|name| crate::coding_agent::playbooks::load_playbooks().iter().any(|p| p.is_panel() && p.name == name));
+    // `mod:<key>/<panel id>` opens a running mod's panel — validated against
+    // what's on disk right now, since mods come and go without a restart.
+    let is_valid_custom = panel.strip_prefix("mod:").is_some_and(|rest| {
+        let (key, id) = rest.split_once('/').unwrap_or((rest, ""));
+        crate::mods::find_on(key)
+            .and_then(|m| m.manifest)
+            .is_some_and(|m| m.contributes.panels.iter().any(|p| id.is_empty() || p.id == id))
+    });
     if !SETTABLE_PANELS.contains(&panel) && !is_valid_custom {
         return image_tool_err(format!(
-            "Error: unknown panel '{panel}' — must be one of: {}, or \"custom:<name>\" from list_tools/Settings → Mods → Playbooks.",
+            "Error: unknown panel '{panel}' — must be one of: {}, or \"mod:<key>/<panel>\" for a mod's panel (Settings → Mods).",
             SETTABLE_PANELS.join(", ")
         ));
     }
@@ -3053,7 +3045,7 @@ mod schema_registry_consistency_tests {
     #[test]
     fn every_constructed_tool_has_a_schema_entry() {
         let playbook_names: std::collections::HashSet<String> =
-            crate::coding_agent::playbooks::load_playbooks().into_iter().filter(|p| p.is_tool()).map(|p| p.name).collect();
+            crate::mods::tools::names();
         let custom_names = crate::coding_agent::custom_tools::custom_tool_names();
 
         let constructed: Vec<String> = crate::coding_agent::tool_exec::create_coding_tools(".".to_string())
@@ -3111,7 +3103,7 @@ mod schema_registry_consistency_tests {
     #[test]
     fn every_schema_entry_is_dispatchable() {
         let playbook_names: std::collections::HashSet<String> =
-            crate::coding_agent::playbooks::load_playbooks().into_iter().filter(|p| p.is_tool()).map(|p| p.name).collect();
+            crate::mods::tools::names();
         let constructed: std::collections::HashSet<String> =
             crate::coding_agent::tool_exec::create_coding_tools(".".to_string())
                 .iter()

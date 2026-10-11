@@ -3,19 +3,14 @@
 //! schemas, the execution loop, and per-tool handlers) so the two concerns
 //! don't have to be scrolled through together.
 
-/// Every top-level tool name a playbook must NOT be allowed to take:
+/// Every top-level tool name a mod's tool must NOT be allowed to take:
 /// every built-in tool's own name, plus `"computer"` — not itself a schema
 /// entry, but a name `agent::tool_exec` still dispatches as a silent alias
 /// for `dip` (see its match arm), so it needs to be off-limits too.
 ///
-/// `coding_agent::playbooks::load_playbooks` is the ONE place both the
-/// schema list (`agent::tool_exec::get_agent_tool_definitions`) and the
-/// `Tool` registry (`coding_agent::tool_exec::create_coding_tools`) source
-/// playbooks from, so filtering there — rather than in each caller — closes
-/// both problems a same-named playbook would otherwise cause with one check:
-/// a literal duplicate `"name"` entry in the JSON array sent to the model,
-/// and a playbook that can never actually run because the registry lookup
-/// returns the built-in with the same name first and stops looking.
+/// Mod manifests are validated against it (`mods::manifest`), so a mod
+/// can't add a tool that would duplicate a schema entry or never run
+/// because the built-in of the same name is found first.
 pub(crate) fn reserved_tool_names() -> std::collections::HashSet<String> {
     let mut names: std::collections::HashSet<String> =
         static_tool_definitions().iter().filter_map(|d| d.get("name").and_then(|v| v.as_str())).map(String::from).collect();
@@ -727,7 +722,7 @@ When you hit a login wall: call browser_session_status first, and if there is ge
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "panel": { "type": "string", "description": "One of: review (diff/review panel), files (workspace file tree), preview_dev (the Preview panel in dev-server mode), preview_browser (the Preview panel in browser mode — web_preview/browser_* activity), documents (the Preview panel in Documents mode — where the user views and edits pdf/docx/xlsx/pptx files; open it when working on a document with them), tasks (background subagent tasks), plan (the Plan panel — plans under review or being carried out), terminal (the bottom terminal panel). Or \"custom:<name>\" for a panel-type playbook (see list_tools for what's installed — Settings → Mods → Playbooks)." },
+                    "panel": { "type": "string", "description": "One of: review (diff/review panel), files (workspace file tree), preview_dev (the Preview panel in dev-server mode), preview_browser (the Preview panel in browser mode — web_preview/browser_* activity), documents (the Preview panel in Documents mode — where the user views and edits pdf/docx/xlsx/pptx files; open it when working on a document with them), tasks (background subagent tasks), plan (the Plan panel — plans under review or being carried out), terminal (the bottom terminal panel). Or \"mod:<key>/<panel id>\" for a panel a mod adds (Settings → Mods lists them)." },
                     "action": { "type": "string", "enum": ["open", "close"] }
                 },
                 "required": ["panel", "action"]

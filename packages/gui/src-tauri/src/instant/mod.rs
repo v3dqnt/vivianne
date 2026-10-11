@@ -32,6 +32,7 @@
 //! - [`risk`] — the static classifier that gates destructive steps.
 //! - [`pointer`] — a click-through cursor it can aim at things while narrating.
 
+pub mod chord;
 pub mod parakeet;
 pub mod pointer;
 pub mod risk;

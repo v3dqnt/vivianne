@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Box, Popover, Stack, Tooltip, Typography, ButtonBase, IconButton, Snackbar, CircularProgress, useTheme } from '../../../ui'
+import { Box, Popover, Stack, Tooltip, Typography, ButtonBase, IconButton, Snackbar, CircularProgress, alpha, useTheme } from '../../../ui'
 import { ArchiveLinear, ContextLinear } from '../../../icons'
 import { useModelStore } from '../store/modelStore'
 import { useAgentStore } from '../store/agentStore'
@@ -31,6 +31,46 @@ const SEGMENTS = [
   { key: 'assistant' as const, label: 'Replies', hint: "The agent's own messages, including reasoning." },
   { key: 'user' as const, label: 'Your messages', hint: 'Your prompts and attachments.' },
 ]
+
+const MONO = '"Geist Mono", ui-monospace, monospace'
+
+/** How full the window is, as a ring with the percentage inside. */
+function Ring({ pct, color, track }: { pct: number; color: string; track: string }) {
+  const r = 20
+  const c = 2 * Math.PI * r
+  return (
+    <Box sx={{ position: 'relative', width: 52, height: 52, flexShrink: 0 }}>
+      <svg width="52" height="52" viewBox="0 0 52 52" aria-hidden>
+        <circle cx="26" cy="26" r={r} fill="none" stroke={track} strokeWidth="5" />
+        <circle
+          cx="26"
+          cy="26"
+          r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth="5"
+          strokeLinecap="round"
+          strokeDasharray={`${(Math.max(pct, 1) / 100) * c} ${c}`}
+          transform="rotate(-90 26 26)"
+          style={{ transition: 'stroke-dasharray 300ms ease' }}
+        />
+      </svg>
+      <Typography sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 600, fontFamily: MONO }}>
+        {Math.round(pct)}%
+      </Typography>
+    </Box>
+  )
+}
+
+/** A small labelled number in the popover's footer. */
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <Stack sx={{ gap: 0.125 }}>
+      <Typography sx={{ fontSize: '0.625rem', textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.disabled' }}>{label}</Typography>
+      <Typography sx={{ fontSize: '0.75rem', fontFamily: MONO }}>{value}</Typography>
+    </Stack>
+  )
+}
 
 export function ContextUsageBar() {
   const theme = useTheme()
@@ -153,56 +193,103 @@ export function ContextUsageBar() {
         onClose={() => setAnchor(null)}
         anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
         transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        slotProps={{ paper: { sx: { p: 2, width: 320, borderRadius: 3 } } }}
+        slotProps={{
+          paper: {
+            sx: {
+              mt: -1,
+              width: 340,
+              borderRadius: '14px',
+              border: 1,
+              borderColor: 'divider',
+              bgcolor: 'background.paper',
+              overflow: 'hidden',
+              boxShadow: theme.palette.mode === 'dark' ? '0 16px 40px rgba(0,0,0,0.5), 0 2px 6px rgba(0,0,0,0.3)' : '0 16px 40px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.06)',
+            },
+          },
+        }}
       >
-        <Stack sx={{ gap: 0.25, mb: 1.5 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
-            Context
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {formatTokens(stats.contextTokens)} of {formatTokens(stats.contextWindow)} used · {formatTokens(Math.max(0, stats.contextWindow - stats.contextTokens))} left
-          </Typography>
+        {/* Header: a ring for how full the window is, and the numbers. */}
+        <Stack direction="row" sx={{ alignItems: 'center', gap: 1.75, p: 2, pb: 1.5 }}>
+          <Ring pct={pct} color={accent} track={alpha(theme.palette.text.primary, 0.08)} />
+          <Stack sx={{ minWidth: 0, flex: 1, gap: 0.25 }}>
+            <Typography sx={{ fontSize: '0.875rem', fontWeight: 600 }}>Context window</Typography>
+            <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
+              <Box component="span" sx={{ color: 'text.primary', fontFamily: MONO }}>{formatTokens(stats.contextTokens)}</Box> of{' '}
+              <Box component="span" sx={{ fontFamily: MONO }}>{formatTokens(stats.contextWindow)}</Box> used
+            </Typography>
+            <Typography noWrap sx={{ fontSize: '0.6875rem', color: 'text.disabled' }}>
+              {stats.modelName || stats.modelId} · {formatTokens(Math.max(0, stats.contextWindow - stats.contextTokens))} left
+            </Typography>
+          </Stack>
         </Stack>
 
-        <Stack sx={{ gap: 0.75 }}>
+        {/* The whole window as one bar, a segment per category, headroom left empty. */}
+        <Box sx={{ px: 2 }}>
+          <Box sx={{ display: 'flex', gap: '2px', height: 8, borderRadius: 4, overflow: 'hidden', bgcolor: alpha(theme.palette.text.primary, 0.06) }}>
+            {rows.map((r) => (
+              <Box key={r.key} sx={{ width: `${Math.max(r.share, 0.6)}%`, bgcolor: colors[r.key], transition: 'width 240ms ease' }} />
+            ))}
+          </Box>
+        </Box>
+
+        <Stack sx={{ px: 1, py: 1.25, gap: 0.25 }}>
           {rows.map((r) => (
             <Tooltip key={r.key} title={r.hint} placement="left">
-              <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
-                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: colors[r.key], flexShrink: 0 }} />
-                <Typography variant="caption" sx={{ flex: 1, minWidth: 0 }} noWrap>
+              <Stack direction="row" sx={{ alignItems: 'center', gap: 1.25, px: 1, py: 0.625, borderRadius: '9px', '&:hover': { bgcolor: 'action.hover' } }}>
+                <Box sx={{ width: 10, height: 10, borderRadius: '3px', bgcolor: colors[r.key], flexShrink: 0 }} />
+                <Typography noWrap sx={{ fontSize: '0.8125rem', flex: 1, minWidth: 0 }}>
                   {r.label}
                 </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
+                <Box sx={{ width: 64, height: 4, borderRadius: 2, bgcolor: alpha(theme.palette.text.primary, 0.06), overflow: 'hidden', flexShrink: 0 }}>
+                  <Box sx={{ width: `${accounted ? Math.max(4, (r.tokens / accounted) * 100) : 0}%`, height: '100%', bgcolor: colors[r.key] }} />
+                </Box>
+                <Typography sx={{ width: 44, textAlign: 'right', fontSize: '0.75rem', color: 'text.secondary', fontFamily: MONO }}>
                   {formatTokens(r.tokens)}
-                </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ width: 34, textAlign: 'right', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
-                  {r.share < 1 ? '<1' : Math.round(r.share)}%
                 </Typography>
               </Stack>
             </Tooltip>
           ))}
-        </Stack>
-
-        {/* `contextTokens` is computed over the message list only, while the
-            rows above also count the always-present system prompt and tool
-            schemas. Showing the gap is more honest than quietly reconciling
-            two numbers that genuinely measure different things. */}
-        {accounted > stats.contextTokens && (
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.5, lineHeight: 1.5 }}>
-            {formatTokens(accounted - stats.contextTokens)} of this is the standing prompt and tool schemas, which sit outside the
-            conversation history the percentage counts.
-          </Typography>
-        )}
-
-        <Stack direction="row" sx={{ justifyContent: 'space-between', mt: 1.5, pt: 1.5, borderTop: 1, borderColor: 'divider' }}>
-          <Typography variant="caption" color="text.secondary">
-            {stats.inputTokens} in · {stats.outputTokens} out this session
-          </Typography>
-          {sessionCost && (
-            <Typography variant="caption" color="text.secondary" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
-              {formatCost(sessionCost.cost)}
+          {/* `contextTokens` counts the conversation; the rows also count the
+              standing prompt and tool schemas. Said, rather than hidden. */}
+          {accounted > stats.contextTokens && (
+            <Typography sx={{ px: 1, pt: 0.75, fontSize: '0.6875rem', lineHeight: 1.5, color: 'text.disabled' }}>
+              {formatTokens(accounted - stats.contextTokens)} of this is the standing prompt and tool schemas, sent with every request
+              and outside the percentage.
             </Typography>
           )}
+        </Stack>
+
+        {/* Session totals and the one action this view offers. */}
+        <Stack direction="row" sx={{ gap: 1, px: 2, py: 1.25, borderTop: 1, borderColor: 'divider', bgcolor: alpha(theme.palette.text.primary, 0.02) }}>
+          <Stat label="In" value={formatTokens(stats.inputTokens)} />
+          <Stat label="Out" value={formatTokens(stats.outputTokens)} />
+          {stats.cacheRead > 0 && <Stat label="Cached" value={formatTokens(stats.cacheRead)} />}
+          {sessionCost && <Stat label="Cost" value={formatCost(sessionCost.cost)} />}
+          <Box sx={{ flex: 1 }} />
+          <Tooltip title={isBusy ? 'Wait for the current turn to finish' : 'Fold older history into a summary to free room'}>
+            <Box component="span" sx={{ display: 'flex', alignItems: 'center' }}>
+              <ButtonBase
+                disabled={compacting || isBusy || messageCount === 0}
+                onClick={() => void runCompact()}
+                sx={{
+                  gap: 0.75,
+                  px: 1.25,
+                  height: 28,
+                  borderRadius: '999px',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  border: 1,
+                  borderColor: 'divider',
+                  bgcolor: 'background.card',
+                  '&:hover': { bgcolor: 'action.hover' },
+                  '&.Mui-disabled, &:disabled': { opacity: 0.5 },
+                }}
+              >
+                {compacting ? <CircularProgress size={12} /> : <ArchiveLinear size={13} color="currentColor" />}
+                Compact
+              </ButtonBase>
+            </Box>
+          </Tooltip>
         </Stack>
       </Popover>
 

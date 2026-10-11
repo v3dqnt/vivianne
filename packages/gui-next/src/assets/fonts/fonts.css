@@ -36,3 +36,37 @@
   font-style: italic;
   font-display: swap;
 }
+
+/* Inter and Source Serif 4 (SIL Open Font License — Inter-LICENSE.txt,
+   SourceSerif4-LICENSE.txt): the alternatives in Settings → Appearance → Font. */
+@font-face {
+  font-family: 'Inter';
+  src: url('./Inter-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('./Inter-VariableItalic.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Source Serif 4';
+  src: url('./SourceSerif4-Variable.woff2') format('woff2-variations');
+  font-weight: 200 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Source Serif 4';
+  src: url('./SourceSerif4-VariableItalic.woff2') format('woff2-variations');
+  font-weight: 200 900;
+  font-style: italic;
+  font-display: swap;
+}

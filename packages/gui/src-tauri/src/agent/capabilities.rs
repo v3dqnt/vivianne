@@ -157,6 +157,15 @@ pub const GROUPS: &[CapabilityGroup] = &[
         triggers: &["make a report", "spreadsheet", "excel", "word document", "powerpoint", "slide deck", "presentation", "pdf", "docx", "xlsx", "pptx", "poster", "flyer", "invoice", "resume", "cv", "letter", "brochure", "one-pager", "social post", "instagram", "thumbnail", "generate an image", "draw me", "edit the document", "change the doc", "update the spreadsheet", "fix the slide", "design"],
     },
     CapabilityGroup {
+        name: "Extend Vivianne (mods)",
+        when: "The user wants something added to Vivianne's own interface: a panel, a sidebar widget, a way to show something in chat, a tool of their own, or a theme.",
+        tools: &["guide", "write", "edit"],
+        how: Some(
+            "Build it as a mod: read `guide` mods/index first, then write `~/.viv/mods/<id>/mod.json` and its pages (they load `/_sdk/v1.js`              and style with the --viv-* variables). Ask for the fewest permissions. A new mod is off until the user turns it on in              Settings → Mods, where they see its permissions; tell them so, and what each permission is for.",
+        ),
+        triggers: &["a mod that", "a mod for", "vivianne mod", "my mods", "widget", "add a panel", "sidebar section", "in the sidebar", "custom panel", "render my", "plugin for vivianne", "extension", "my own tool", "custom theme"],
+    },
+    CapabilityGroup {
         name: "Know the project",
         when: "Starting a new project, working on one for the first time, or any substantial work on a project: know what it is, how it's built and where it's going before acting.",
         tools: &["guide"],

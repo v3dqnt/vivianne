@@ -5,8 +5,9 @@
  * instead of a mix of shapes.
  */
 
-/** Every block in the transcript stops at the same width. */
-export const CHAT_MAX_WIDTH = 'min(82%, 720px)'
+/** Every block in the transcript stops at the same width. Sizes here read
+ * CSS variables Settings → Appearance sets (density, chat width). */
+export const CHAT_MAX_WIDTH = 'var(--chat-max-width, min(82%, 720px))'
 /** Corners of a top-level block (a message, a card). */
 export const CHAT_RADIUS = '14px'
 /** Corners of a card nested inside another (a step inside a group). */
@@ -14,9 +15,9 @@ export const CHAT_RADIUS_INNER = '10px'
 
 /** Type sizes: message text, a card's title, and the small print. */
 export const CHAT_FONT = {
-  text: '0.875rem',
-  title: '0.8125rem',
-  meta: '0.75rem',
+  text: 'var(--chat-font-text, 0.875rem)',
+  title: 'var(--chat-font-title, 0.8125rem)',
+  meta: 'var(--chat-font-meta, 0.75rem)',
 } as const
 
 /** The box every card sits in. */
@@ -35,7 +36,7 @@ export const CHAT_HEADER_SX = {
   gap: 1,
   px: 1.5,
   py: 0.75,
-  minHeight: 38,
+  minHeight: 'var(--chat-header-height, 38px)',
 } as const
 
 /** A card's title text. */

@@ -39,6 +39,7 @@ const EMBEDDED: &[(&str, &str)] = &[
     ("science/chemistry.md", include_str!("../../../../vivianne-guides/science/chemistry.md")),
     ("science/index.md", include_str!("../../../../vivianne-guides/science/index.md")),
     ("science/physics.md", include_str!("../../../../vivianne-guides/science/physics.md")),
+    ("mods/index.md", include_str!("../../../../vivianne-guides/mods/index.md")),
     ("projects/existing-project.md", include_str!("../../../../vivianne-guides/projects/existing-project.md")),
     ("projects/index.md", include_str!("../../../../vivianne-guides/projects/index.md")),
     ("projects/knowledge.md", include_str!("../../../../vivianne-guides/projects/knowledge.md")),

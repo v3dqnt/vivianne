@@ -2,7 +2,8 @@ import { StrictMode, useMemo } from 'react'
 import { createRoot } from 'react-dom/client'
 import { CssBaseline, ThemeProvider } from './ui'
 import { baselineExtras, buildTheme } from './theme'
-import { useThemeStore } from './modules/settings/store/themeStore'
+import { useThemeStore, themeOptions, activePaletteId } from './modules/settings/store/themeStore'
+import { AppearanceEffects } from './modules/settings/components/AppearanceEffects'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { hasTauri } from './ipc'
 import { invoke } from '@tauri-apps/api/core'
@@ -41,14 +42,19 @@ if (hasTauri() && getCurrentWindow().label === 'main') {
 }
 
 function ThemedApp() {
-  const mode = useThemeStore((s) => s.mode)
-  const paletteId = useThemeStore((s) => s.paletteId)
-  const theme = useMemo(() => buildTheme(mode, paletteId), [mode, paletteId])
+  const appearance = useThemeStore()
+  const mode = appearance.mode
+  const paletteId = activePaletteId(appearance)
+  const opts = themeOptions(appearance)
+  const key = JSON.stringify([mode, paletteId, opts])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const theme = useMemo(() => buildTheme(mode, paletteId, opts), [key])
   return (
     <ThemeProvider theme={theme}>
       {/* CssBaseline applies the theme's resets — including the no-root-scroll
           rule a desktop window needs. */}
       <CssBaseline extra={baselineExtras(mode)} />
+      <AppearanceEffects />
       <App />
     </ThemeProvider>
   )

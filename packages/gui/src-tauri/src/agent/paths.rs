@@ -54,13 +54,6 @@ pub fn viv_subagents_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// `~/.viv/playbooks` — user-defined tool definitions (see `coding_agent::playbooks`).
-pub fn viv_playbooks_dir() -> Result<PathBuf, String> {
-    let dir = viv_home()?.join("playbooks");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create playbooks directory: {e}"))?;
-    Ok(dir)
-}
-
 /// `~/.viv/camoufox` — persistent camoufox-browser install (npm-installed once,
 /// never via npx). Survives npm cache clears and app reinstallations.
 pub fn viv_camoufox_dir() -> Result<PathBuf, String> {

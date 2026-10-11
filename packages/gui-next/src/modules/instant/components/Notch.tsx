@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Box, ButtonBase, keyframes } from '../../../ui'
 import { call } from '../../../ipc'
+import type { RobotHeadState } from 'robot-heads'
+import { NotchFace } from './NotchFace'
 
 /** What the notch is saying, at a glance. */
 export type NotchTone = 'listening' | 'working' | 'done' | 'stopped' | 'error' | 'idle'
@@ -69,6 +71,8 @@ function Elapsed({ since }: { since: number }) {
 
 export interface NotchProps {
   tone: NotchTone
+  /** The robot's face; defaults to one that follows `tone`. */
+  face?: RobotHeadState
   /** Bold, short: "Vivianne", "Listening". */
   title: string
   /** One line of what's happening; clipped, never wraps. */
@@ -96,8 +100,14 @@ export interface NotchProps {
  * It sizes its own window to its content, so the transparent window never
  * covers more of the screen than the notch itself does.
  */
+/** The face a tone shows when the caller doesn't pick one. */
+function faceFor(tone: NotchTone): RobotHeadState {
+  return tone === 'done' ? 'happy' : tone === 'stopped' ? 'sleeping' : tone
+}
+
 export function Notch({
   tone,
+  face,
   title,
   detail,
   since,
@@ -149,7 +159,9 @@ export function Notch({
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, height: 34, pl: 1.5, pr: onStop ? 0.75 : 1.5, minWidth: 0 }}>
-          <Wave tone={tone} level={level} />
+          <NotchFace state={face ?? faceFor(tone)} />
+          {/* While listening, the bars still follow the microphone: proof it hears you. */}
+          {tone === 'listening' && <Wave tone={tone} level={level} />}
           <Box component="span" sx={{ fontSize: 12, fontWeight: 600, letterSpacing: '-0.005em', flexShrink: 0 }}>
             {title}
           </Box>

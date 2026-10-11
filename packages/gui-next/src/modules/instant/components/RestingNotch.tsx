@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Box, ButtonBase, keyframes } from '../../../ui'
+import { Box, ButtonBase } from '../../../ui'
 import { call, on } from '../../../ipc'
+import type { RobotHeadState } from 'robot-heads'
+import { NotchFace } from './NotchFace'
 
 /** Mirrors `notch::AgentStatus`. */
 export interface AgentStatus {
@@ -22,13 +24,6 @@ const MUTED = 'rgba(244,244,245,0.58)'
 const FAINT = 'rgba(244,244,245,0.38)'
 const SURFACE = '#0b0b0c'
 const AMBER = '#fbbf24'
-const GREEN = '#4ade80'
-const RED = '#ff8080'
-
-const pulse = keyframes`
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.35; }
-`
 
 function since(ms: number, now: number): string {
   const s = Math.max(0, Math.floor((now - ms) / 1000))
@@ -38,20 +33,21 @@ function since(ms: number, now: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
-function Dot({ state }: { state: AgentStatus['state'] }) {
-  const color = state === 'needs_you' ? AMBER : state === 'done' ? GREEN : state === 'failed' ? RED : state === 'stopped' ? FAINT : INK
-  return (
-    <Box
-      sx={{
-        width: 6,
-        height: 6,
-        borderRadius: '50%',
-        bgcolor: color,
-        flexShrink: 0,
-        animation: state === 'working' || state === 'needs_you' ? `${pulse} 1.6s ease-in-out infinite` : undefined,
-      }}
-    />
-  )
+/** What an agent's face shows, from its status and what it's doing now. */
+function faceOf(a: AgentStatus): RobotHeadState {
+  if (a.state === 'needs_you') return 'listening'
+  if (a.state === 'done') return 'happy'
+  if (a.state === 'failed') return 'error'
+  if (a.state === 'stopped') return 'sleeping'
+  const act = a.activity ?? ''
+  if (!act || act === 'Thinking') return 'thinking'
+  if (/search|read|look|brows|fetch|grep|find|open|scan|recall/i.test(act)) return 'searching'
+  return 'working'
+}
+
+/** An agent as a small robot head, in its own outline, showing its state. */
+function Face({ a, size }: { a: AgentStatus; size: number }) {
+  return <NotchFace state={faceOf(a)} size={size} name={a.kind === 'chat' ? 'Vivianne' : a.name} />
 }
 
 function Pill({ children, onClick, title }: { children: React.ReactNode; onClick: () => void; title?: string }) {
@@ -82,7 +78,7 @@ function Row({ a, now }: { a: AgentStatus; now: number }) {
   const live = a.state === 'working' || a.state === 'needs_you'
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.625, pl: a.kind === 'subagent' ? 2 : 0, minWidth: 0 }}>
-      <Dot state={a.state} />
+      <Face a={a} size={20} />
       <Box sx={{ minWidth: 0, flex: 1 }}>
         <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'baseline', minWidth: 0 }}>
           <Box component="span" sx={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -116,18 +112,31 @@ function Row({ a, now }: { a: AgentStatus; now: number }) {
  * Like the Viv Instant notch, it sizes its window to itself, so it never
  * covers more of the screen than it shows.
  */
+/** Mirrors `notch::NotchPrefs`. */
+export interface NotchPrefs {
+  position: 'center' | 'left' | 'right'
+  scale: number
+  showAgents: boolean
+  showActivity: boolean
+  showMic: boolean
+}
+
+export const DEFAULT_PREFS: NotchPrefs = { position: 'center', scale: 1, showAgents: true, showActivity: true, showMic: true }
+
 export function RestingNotch() {
   const [agents, setAgents] = useState<AgentStatus[]>([])
   const [open, setOpen] = useState(false)
   const [now, setNow] = useState(Date.now())
   const [chord, setChord] = useState('the wake keys')
+  const [prefs, setPrefs] = useState<NotchPrefs>(DEFAULT_PREFS)
   const ref = useRef<HTMLDivElement | null>(null)
   const closeTimer = useRef(0)
 
   useEffect(() => {
     void call<AgentStatus[]>('cmd_notch_status').then((a) => a && setAgents(a)).catch(() => {})
     void call<string>('cmd_instant_shortcut_label').then((l) => l && setChord(l)).catch(() => {})
-    const offs: Array<Promise<() => void>> = [on<AgentStatus[]>('notch:status', setAgents)]
+    void call<NotchPrefs>('cmd_notch_prefs').then((p) => p && setPrefs(p)).catch(() => {})
+    const offs: Array<Promise<() => void>> = [on<AgentStatus[]>('notch:status', setAgents), on<NotchPrefs>('notch:prefs', setPrefs)]
     return () => offs.forEach((p) => void p.then((off) => off()))
   }, [])
 
@@ -146,6 +155,8 @@ export function RestingNotch() {
   sync.current = () => {
     const el = ref.current
     if (!el) return
+    // The size preference is a transform, which the bounding box includes:
+    // this is the drawn size.
     const r = el.getBoundingClientRect()
     const width = Math.ceil(r.width)
     const height = Math.ceil(r.height)
@@ -179,7 +190,7 @@ export function RestingNotch() {
   const earliest = live.reduce((m, a) => Math.min(m, a.startedAt), Number.POSITIVE_INFINITY)
 
   return (
-    <Box sx={{ display: 'inline-flex' }}>
+    <Box sx={{ display: 'inline-flex', transform: prefs.scale === 1 ? undefined : `scale(${prefs.scale})`, transformOrigin: 'top left' }}>
       <Box
         ref={ref}
         onMouseEnter={enter}
@@ -200,13 +211,15 @@ export function RestingNotch() {
 
         {!open && lead && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, height: 26, px: 1.25, maxWidth: 380 }}>
-            <Dot state={lead.state} />
+            <Face a={lead} size={18} />
             <Box component="span" sx={{ fontSize: 11.5, fontWeight: 600, flexShrink: 0 }}>
               {needsYou.length ? 'Needs you' : live.length === 1 ? (lead.project ?? lead.name) : `${live.length} agents`}
             </Box>
-            <Box component="span" sx={{ fontSize: 11.5, color: MUTED, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
-              {lead.activity && lead.activity !== 'Thinking' ? lead.activity : lead.task}
-            </Box>
+            {prefs.showActivity && (
+              <Box component="span" sx={{ fontSize: 11.5, color: MUTED, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+                {lead.activity && lead.activity !== 'Thinking' ? lead.activity : lead.task}
+              </Box>
+            )}
             {Number.isFinite(earliest) && (
               <Box component="span" sx={{ fontSize: 11, color: FAINT, fontFamily: '"Geist Mono", ui-monospace, monospace', flexShrink: 0 }}>
                 {since(earliest, now)}
@@ -221,17 +234,21 @@ export function RestingNotch() {
               <Box component="span" sx={{ fontSize: 12, fontWeight: 600, flex: 1 }}>
                 {live.length ? `${live.length} working` : 'Vivianne'}
               </Box>
-              <Pill onClick={() => void call('cmd_notch_talk')} title={`Or hold ${chord}`}>
-                Talk
-              </Pill>
+              {prefs.showMic && (
+                <Pill onClick={() => void call('cmd_notch_talk')} title={`Or hold ${chord}`}>
+                  Talk
+                </Pill>
+              )}
               <Pill onClick={() => void call('cmd_notch_open_main')}>Open</Pill>
             </Box>
-            {live.map((a) => (
-              <Row key={a.id} a={a} now={now} />
-            ))}
-            {recent.slice(0, 3).map((a) => (
-              <Row key={a.id} a={a} now={now} />
-            ))}
+            {prefs.showAgents &&
+              live.map((a) => (
+                <Row key={a.id} a={a} now={now} />
+              ))}
+            {prefs.showAgents &&
+              recent.slice(0, 3).map((a) => (
+                <Row key={a.id} a={a} now={now} />
+              ))}
             {!agents.length && (
               <Box sx={{ fontSize: 11.5, color: MUTED, py: 0.5 }}>
                 Nothing running. Hold {chord} and ask anything, or tell an agent what to do.

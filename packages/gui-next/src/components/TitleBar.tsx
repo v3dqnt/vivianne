@@ -5,7 +5,6 @@ import { fileManagerName, terminalAppName } from '../lib/platform'
 import { FolderLinear, CommandSquareLinear, TickCircleLinear, PanelsLinear, LayoutLinear, SidebarLinear } from '../icons'
 import { useSidebarStore } from '../modules/sessions/store/sidebarStore'
 import { PRESET_LABELS, ZONE_LABELS, applyPreset, resetLayout, toggleZone, useWorkspace, type Preset, type Zone } from '../modules/workspace/layout'
-import { usePlaybookStore } from '../modules/settings/store/playbookStore'
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
 import { PairChip } from '../modules/multiplayer/components/PairChip'
 
@@ -18,9 +17,6 @@ function TitleBarActions() {
   const zones = useWorkspace((s) => s.zones)
   const [panelsAnchor, setPanelsAnchor] = useState<HTMLElement | null>(null)
   const [layoutAnchor, setLayoutAnchor] = useState<HTMLElement | null>(null)
-  // Panel playbooks are listed in each dock's own "add a view" menu now, but
-  // this is still where they get loaded — the docks read the same store.
-  const refreshCustomPanels = usePlaybookStore((s) => s.refresh)
   const openExternal = useProjectsStore((s) => s.openExternal)
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const projects = useProjectsStore((s) => s.projects)
@@ -39,10 +35,6 @@ function TitleBarActions() {
     transition: 'background-color 0.15s, color 0.15s',
     '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
   })
-
-  useEffect(() => {
-    void refreshCustomPanels()
-  }, [refreshCustomPanels])
 
   return (
     <Stack direction="row" sx={{ alignItems: 'center', gap: 0.25, flexShrink: 0, pr: 0.5, zIndex: 1 }}>

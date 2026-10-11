@@ -5,6 +5,7 @@ import { openPanel } from '../../workspace/layout'
 import { useGeneralAgents } from '../store/generalAgentsStore'
 import { useTeamStore, type TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey } from '../store/botsStore'
+import { useBotFace } from './AgentFace'
 import { Avatar, colorOf } from './bits'
 
 const EMPTY: TeamAgent[] = []
@@ -79,7 +80,7 @@ export function GeneralAgents({ labelSx }: { labelSx: object }) {
                     '&:hover': { bgcolor: active ? alpha(theme.palette.primary.main, 0.16) : 'action.hover' },
                   }}
                 >
-                  <Avatar name={a.name} color={colorOf(a)} size={20} />
+                  <RowFace root={root} agent={a} />
                   <Stack sx={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
                     <Typography variant="body2" noWrap sx={{ fontSize: '0.8125rem', fontWeight: active ? 600 : 500 }}>
                       {a.name}
@@ -102,4 +103,11 @@ export function GeneralAgents({ labelSx }: { labelSx: object }) {
       )}
     </Box>
   )
+}
+
+/** A row's face, live: its own component so each row subscribes to its own
+ * agent's state rather than the list re-rendering for all of them. */
+function RowFace({ root, agent }: { root: string | null; agent: TeamAgent }) {
+  const face = useBotFace(root, agent.id)
+  return <Avatar name={agent.name} color={colorOf(agent)} size={24} state={face} />
 }

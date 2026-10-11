@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Box, Stack, Typography, IconButton, InputBase, ButtonBase, Tooltip, Collapse, alpha, useTheme } from '../../../ui'
 import { ExportLinear, AddLinear, TrashLinear } from '../../../icons'
 import { useProjectsStore, projectColor, modeOf, GENERAL_PROJECT_ID } from '../store/projectsStore'
+import { SidebarMods } from '../../mods/components/SidebarMods'
 import { useDaysStore } from '../store/daysStore'
 import { useAgentStore } from '../../ai/store/agentStore'
 import { contentToText, type AgentMessage } from '../../ai/lib/types'
@@ -387,6 +388,11 @@ export function Sidebar() {
       </>
       )}
 
+      {/* Sections mods add (Settings → Mods). */}
+      <Box sx={{ flexShrink: 0, maxHeight: '45vh', overflowY: 'auto' }}>
+        <SidebarMods />
+      </Box>
+
       {/* Pinned to the bottom, folded: the archive is history, so it takes
           one line until asked for, and scrolls within its own space when
           open instead of pushing the team off the sidebar. */}
@@ -687,22 +693,7 @@ function TeamRow({ agent, runs, onClick }: { agent: TeamAgent; runs: AgentRun[] 
       }}
     >
       <Box sx={{ position: 'relative', flexShrink: 0 }}>
-        <Avatar name={agent.name} color={colorOf(agent)} size={22} />
-        {working && (
-          <Box
-            sx={{
-              position: 'absolute',
-              right: -1,
-              bottom: -1,
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              bgcolor: 'primary.main',
-              border: '2px solid',
-              borderColor: 'background.paper',
-            }}
-          />
-        )}
+        <Avatar name={agent.name} color={colorOf(agent)} size={24} state={working ? 'working' : 'idle'} />
       </Box>
       <Stack sx={{ minWidth: 0, flex: 1 }}>
         <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }} noWrap>

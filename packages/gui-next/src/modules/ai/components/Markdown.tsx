@@ -17,6 +17,8 @@ import { PhysicsBlock } from './sci/PhysicsBlock'
 import { Mol3DBlock } from './sci/Mol3DBlock'
 import { useThrottledValue } from '../../../lib/useThrottledValue'
 import { normalizeMath } from '../lib/mathText'
+import { useModsStore, chatRenderer } from '../../mods/store/modsStore'
+import { ModChatBlock } from '../../mods/components/ModChatBlock'
 
 const VIDEO_EXT = /\.(mp4|webm|mov|m4v)$/i
 const AUDIO_EXT = /\.(mp3|wav|ogg|m4a|flac)$/i
@@ -35,6 +37,8 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   // ~100ms keeps the visible text live-feeling while cutting redundant
   // full-message reparses during long replies.
   const throttledText = useThrottledValue(text, 100)
+  // Re-render when mods load or change: a fence may have gained a renderer.
+  const mods = useModsStore((s) => s.mods)
   const healed = normalizeMath(remend(throttledText))
 
   return (
@@ -103,7 +107,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
           },
           code(props) {
             const { children, className } = props
-            const match = /language-(\w+)/.exec(className ?? '')
+            const match = /language-([\w-]+)/.exec(className ?? '')
             // Inline code has no `language-*` className and no surrounding
             // `<pre>` — react-markdown gives both the same `code` renderer,
             // so the className is the only reliable inline/block signal.
@@ -123,6 +127,8 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
             if (match[1] === 'plot') return <PlotBlock code={code} />
             if (match[1] === 'physics') return <PhysicsBlock code={code} />
             if (match[1] === 'mol3d') return <Mol3DBlock code={code} />
+            // A fence a running mod renders (`contributes.chat`).
+            if (chatRenderer(mods, match[1])) return <ModChatBlock fence={match[1]} code={code} />
             return <CodeBlock code={code} lang={match[1]} />
           },
           // The `code` renderer above already produces CodeBlock's own
