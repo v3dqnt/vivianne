@@ -1,6 +1,8 @@
-# Vivianne Lab
+# 0nine Labs
 
-The research side of Vivianne. Vivianne is the harness: it runs any model and does real work with it. The lab is where we build our own models, and the bet is that the next good small model won't necessarily be a bigger transformer.
+**0nine Labs** (written 09 Labs, said "o-nine labs") is a small research lab and community working on the edge of AI: new kinds of models beyond the usual LLM, hardware that runs them efficiently, and devices that work together seamlessly whatever the brand.
+
+The lab's first project is [Vivianne](../README.md), the harness: it runs any model and does real work with it. This folder is where we build our own models, and the bet is that the next good small model won't necessarily be a bigger transformer.
 
 So the lab starts as a **family of models with different architectures**, kept small enough to train on a laptop and set up so they can be compared fairly. Every member:
 
@@ -24,13 +26,13 @@ Next candidates, roughly in order: a hybrid (SSM layers with a few attention lay
 Needs Python 3.10+ and PyTorch. A GPU (CUDA or Apple MPS) is used automatically; CPU works for the small configs.
 
 ```bash
-cd lab
+cd 0nine-labs
 python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install torch pytest
 
 pytest                                               # every member learns; AR members are causal
-python -m vivlab.train --model ssm --steps 2000      # train one, print a sample
-python -m vivlab.bench --steps 1000                  # train all four the same way, compare
+python -m oninelabs.train --model ssm --steps 2000      # train one, print a sample
+python -m oninelabs.bench --steps 1000                  # train all four the same way, compare
 ```
 
 With no `--data`, training uses this repository's own Markdown (about 500 KB), so nothing has to be downloaded. `--data shakespeare` fetches Tiny Shakespeare, and `--data path/to/file-or-folder` uses your own text. Model size comes from flags like `--d-model 384 --n-layers 6 --seq-len 512`. Every run goes to `runs/<name>/` (config, log, weights).
@@ -40,15 +42,15 @@ Results are reported in **bits per byte**, which is comparable across all member
 ## Layout
 
 ```
-vivlab/
+oninelabs/
   models/common.py       shared config, norms, attention, the ByteModel base class
   models/transformer.py  Viv-T
   models/ssm.py          Viv-S
   models/looped.py       Viv-L
   models/diffusion.py    Viv-D
   data.py                byte datasets
-  train.py               the trainer (python -m vivlab.train)
-  bench.py               the comparison (python -m vivlab.bench)
+  train.py               the trainer (python -m oninelabs.train)
+  bench.py               the comparison (python -m oninelabs.bench)
 tests/                   pytest
 ```
 

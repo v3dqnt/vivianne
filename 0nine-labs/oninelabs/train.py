@@ -1,7 +1,7 @@
 """Train one member of the family.
 
-    python -m vivlab.train --model ssm --steps 2000
-    python -m vivlab.train --model looped --data shakespeare --d-model 384 --n-layers 6
+    python -m oninelabs.train --model ssm --steps 2000
+    python -m oninelabs.train --model looped --data shakespeare --d-model 384 --n-layers 6
 
 Writes runs/<name>/{config.json, log.jsonl, model.pt} and prints a sample at the end.
 """

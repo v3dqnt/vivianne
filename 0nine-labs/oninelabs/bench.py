@@ -1,7 +1,7 @@
 """Train every member of the family on the same data, budget and width, and compare them.
 
-    python -m vivlab.bench --steps 500
-    python -m vivlab.bench --models ssm looped --data shakespeare --steps 3000
+    python -m oninelabs.bench --steps 500
+    python -m oninelabs.bench --models ssm looped --data shakespeare --steps 3000
 
 Prints a Markdown table and writes runs/bench/results.json. Also measures the two things only
 some members can do: Viv-L's quality at different loop counts (test-time compute), and

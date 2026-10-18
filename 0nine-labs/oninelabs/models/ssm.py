@@ -5,7 +5,7 @@ Each layer keeps a fixed-size state per channel and decides, per byte, how much 
 needed to generate is constant, which is what makes this family interesting for small hardware.
 
 The scan here is a readable sequential loop. A fused or chunked parallel scan is an open
-hardware-efficiency task for the lab (see lab/README.md).
+hardware-efficiency task for the lab (see 0nine-labs/README.md).
 """
 
 import math

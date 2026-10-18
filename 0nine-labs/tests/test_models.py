@@ -3,8 +3,8 @@ import math
 import pytest
 import torch
 
-from vivlab import FAMILY, Config, build
-from vivlab.data import ByteData
+from oninelabs import FAMILY, Config, build
+from oninelabs.data import ByteData
 
 TINY = Config(d_model=64, n_layers=3, n_heads=4, seq_len=32, d_state=8, mean_iterations=2, sample_steps=8)
 

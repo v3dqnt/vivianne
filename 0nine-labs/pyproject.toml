@@ -1,7 +1,7 @@
 [project]
-name = "vivlab"
+name = "oninelabs"
 version = "0.1.0"
-description = "Vivianne Lab: a family of small byte-level models with different architectures"
+description = "0nine Labs: a family of small byte-level models with different architectures"
 requires-python = ">=3.10"
 dependencies = ["torch>=2.2"]
 
@@ -9,7 +9,7 @@ dependencies = ["torch>=2.2"]
 dev = ["pytest"]
 
 [tool.setuptools]
-packages = ["vivlab", "vivlab.models"]
+packages = ["oninelabs", "oninelabs.models"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
