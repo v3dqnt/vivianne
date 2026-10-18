@@ -1,0 +1,7 @@
+runs/
+data/
+__pycache__/
+*.egg-info/
+.venv/
+# the repo root ignores every models/ folder (weights); this one is source
+!/vivlab/models/
