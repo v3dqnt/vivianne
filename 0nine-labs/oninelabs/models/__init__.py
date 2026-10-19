@@ -2,6 +2,7 @@
 
 from .common import Config, ByteModel
 from .diffusion import Diffusion
+from .hybrid import Hybrid
 from .looped import Looped
 from .ssm import SSM
 from .transformer import Transformer
@@ -11,6 +12,7 @@ FAMILY: dict[str, type[ByteModel]] = {
     "ssm": SSM,  # Viv-S, selective state space
     "looped": Looped,  # Viv-L, recurrent depth
     "diffusion": Diffusion,  # Viv-D, masked discrete diffusion
+    "hybrid": Hybrid,  # Viv-H, S + T + L + D in one model
 }
 
 

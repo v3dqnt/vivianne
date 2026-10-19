@@ -18,8 +18,9 @@ So the lab starts as a **family of models with different architectures**, kept s
 | **Viv-S** | `ssm` | Selective state space (Mamba-style), no attention. Each layer has a fixed-size memory and learns per byte what to keep, write and read. | Linear cost in length and constant memory while generating. How close can it get to attention on recall-heavy text? |
 | **Viv-L** | `looped` | Recurrent depth: one shared core block run *r* times in latent space, with *r* picked at inference. | Can it "think longer" without more parameters or tokens? Does quality keep improving as *r* grows past what it was trained on? |
 | **Viv-D** | `diffusion` | Masked discrete diffusion. Starts from a block of blanks and fills in the bytes it is surest of first. | Writes N bytes in far fewer than N forward passes. What do we lose in quality, and what do we gain in speed and editing (infilling)? |
+| **Viv-H** | `hybrid` | The others combined: an SSM backbone (S) with one attention layer (T), a looped core (L), and a diffusion drafter (D) that proposes the next 8 bytes for the backbone to check in one pass. | Does the mix beat each parent? How many bytes per backbone pass can the drafter save while the output stays exactly what the backbone would write? |
 
-Next candidates, roughly in order: a hybrid (SSM layers with a few attention layers), a mixture-of-experts version of the winner, an energy-based or JEPA-style model that predicts in latent space instead of bytes, and liquid / continuous-time networks for sensor and device signals.
+Next candidates, roughly in order: a mixture-of-experts version of the winner, an energy-based or JEPA-style model that predicts in latent space instead of bytes, and liquid / continuous-time networks for sensor and device signals.
 
 ## Run it
 
@@ -32,7 +33,7 @@ pip install torch pytest
 
 pytest                                               # every member learns; AR members are causal
 python -m oninelabs.train --model ssm --steps 2000      # train one, print a sample
-python -m oninelabs.bench --steps 1000                  # train all four the same way, compare
+python -m oninelabs.bench --steps 1000                  # train every member the same way, compare
 ```
 
 With no `--data`, training uses this repository's own Markdown (about 500 KB), so nothing has to be downloaded. `--data shakespeare` fetches Tiny Shakespeare, and `--data path/to/file-or-folder` uses your own text. Model size comes from flags like `--d-model 384 --n-layers 6 --seq-len 512`. Every run goes to `runs/<name>/` (config, log, weights).
@@ -48,6 +49,7 @@ oninelabs/
   models/ssm.py          Viv-S
   models/looped.py       Viv-L
   models/diffusion.py    Viv-D
+  models/hybrid.py       Viv-H
   data.py                byte datasets
   train.py               the trainer (python -m oninelabs.train)
   bench.py               the comparison (python -m oninelabs.bench)

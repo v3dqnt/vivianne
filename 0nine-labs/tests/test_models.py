@@ -21,7 +21,7 @@ def batch(b=4, t=TINY.seq_len + 1):
 
 def test_loss_starts_near_uniform(model):
     # a fresh model should be close to guessing among 256 bytes, ~ln(256) nats
-    loss = model.loss(batch()).item()
+    loss = model.eval().loss(batch()).item()
     assert math.isfinite(loss)
     assert abs(loss - math.log(256)) < 1.0
 
@@ -59,7 +59,8 @@ def test_autoregressive_members_are_causal(name):
     # changing a later byte must never change the prediction for an earlier position
     torch.manual_seed(0)
     model = build(name, TINY).eval()
-    model.iterations = 2 if name == "looped" else None
+    if hasattr(model, "iterations"):
+        model.iterations = 2
     x = batch(1, TINY.seq_len)
     y = x.clone()
     y[0, 20:] = (y[0, 20:] + 1) % 256
@@ -93,3 +94,25 @@ def test_data_windows(tmp_path):
     x = data.batch("train", 3, 16)
     assert x.shape == (3, 17)
     assert torch.all((x[:, 1:] - x[:, :-1]) % 256 == 1)
+
+
+def test_hybrid_drafting_matches_plain_decoding():
+    # with greedy sampling, draft-and-verify must write exactly what one-byte-at-a-time decoding writes
+    torch.manual_seed(0)
+    model = build("hybrid", TINY).eval()
+    prompt = torch.tensor([list(b"the quick ")])
+    fast = model.generate(prompt, 20, temperature=1e-5, top_k=1)
+    slow = super(type(model), model).generate(prompt, 20, temperature=1e-5, top_k=1)
+    assert fast.tolist() == slow.tolist()
+    assert model.last_generate_stats["passes"] <= 21
+
+
+def test_hybrid_eval_loss_is_backbone_only():
+    torch.manual_seed(0)
+    model = build("hybrid", TINY)
+    x = batch()
+    model.eval()
+    exact = model.loss(x).item()
+    model.train()
+    model.iterations = TINY.core_iterations
+    assert model.loss(x).item() > exact  # training adds the drafter's loss on top

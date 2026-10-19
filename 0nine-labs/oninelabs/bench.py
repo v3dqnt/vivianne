@@ -3,9 +3,10 @@
     python -m oninelabs.bench --steps 500
     python -m oninelabs.bench --models ssm looped --data shakespeare --steps 3000
 
-Prints a Markdown table and writes runs/bench/results.json. Also measures the two things only
-some members can do: Viv-L's quality at different loop counts (test-time compute), and
-generation speed in bytes per second.
+Prints a Markdown table and writes runs/bench/results.json. Also measures what only some
+members can do: quality at different loop counts for Viv-L and Viv-H (test-time compute),
+generation speed in bytes per second, and how many bytes Viv-H's drafter
+saves per backbone pass.
 """
 
 from __future__ import annotations
@@ -52,9 +53,11 @@ def main() -> None:
             eval_every=max(1, args.steps // 4), device=device, seed=args.seed,
         )
         result["gen_bytes_per_second"] = round(generation_speed(model, device), 1)
-        if name == "looped":
+        if getattr(model, "last_generate_stats", None):
+            result["bytes_per_pass"] = model.last_generate_stats["bytes_per_pass"]
+        if hasattr(model, "iterations"):  # the looped members: quality as the loop count changes
             result["bpb_by_iterations"] = {}
-            for r in (1, 2, cfg.mean_iterations, 2 * cfg.mean_iterations, 4 * cfg.mean_iterations):
+            for r in (1, 2, 4, 8, 16):
                 model.iterations = r
                 result["bpb_by_iterations"][r] = round(evaluate(model, data, 20, args.batch_size, device), 4)
             model.iterations = None
@@ -76,7 +79,9 @@ def main() -> None:
     for r in results:
         if "bpb_by_iterations" in r:
             curve = ", ".join(f"r={k}: {v:.3f}" for k, v in r["bpb_by_iterations"].items())
-            print(f"\nlooped, bits/byte by loop count: {curve}")
+            print(f"\n{r['model']}, bits/byte by loop count: {curve}")
+        if "bytes_per_pass" in r:
+            print(f"\n{r['model']}, bytes written per backbone pass: {r['bytes_per_pass']}")
     print(f"\n-> {out / 'results.json'}")
 
 

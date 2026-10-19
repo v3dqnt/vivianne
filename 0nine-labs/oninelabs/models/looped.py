@@ -15,6 +15,13 @@ import torch.nn as nn
 from .common import ByteModel, Config, RMSNorm, TransformerBlock
 
 
+def sample_iterations(mean: int) -> int:
+    """A loop count for one training step: log-normal around `mean`, with a tail long enough that
+    the model also sees deep runs."""
+    r = torch.distributions.LogNormal(torch.log(torch.tensor(float(mean))) - 0.5, 1.0).sample()
+    return int(r.clamp(1, 4 * mean).round())
+
+
 class Looped(ByteModel):
     name = "looped"
 
@@ -29,14 +36,8 @@ class Looped(ByteModel):
         self.init_weights()
         self.iterations: int | None = None  # set to fix r at inference; None samples it in training
 
-    def sample_iterations(self) -> int:
-        # log-normal-ish around the mean, heavy enough tail that the model sees deep runs
-        mean = self.cfg.mean_iterations
-        r = torch.distributions.LogNormal(torch.log(torch.tensor(float(mean))) - 0.5, 1.0).sample()
-        return int(r.clamp(1, 4 * mean).round())
-
     def forward(self, x: torch.Tensor, iterations: int | None = None) -> torch.Tensor:
-        r = iterations or self.iterations or (self.sample_iterations() if self.training else self.cfg.mean_iterations)
+        r = iterations or self.iterations or (sample_iterations(self.cfg.mean_iterations) if self.training else self.cfg.mean_iterations)
         e = self.prelude(self.embed(x))
         s = torch.randn_like(e) * 0.02
         # truncated backprop: only the last few iterations get gradients, so memory is flat in r

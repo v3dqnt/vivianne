@@ -28,9 +28,25 @@ class Config:
     backprop_iterations: int = 4
     # diffusion
     sample_steps: int = 64
+    # hybrid: core loop count, and the diffusion drafter that proposes blocks for the backbone to check
+    core_iterations: int = 2
+    block_size: int = 8
+    draft_layers: int = 2
+    draft_steps: int = 2
+    draft_weight: float = 0.3
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def sample(logits: torch.Tensor, temperature: float, top_k: int) -> torch.Tensor:
+    """Samples one byte per row of `logits` (..., vocab), keeping only the top_k most likely."""
+    logits = logits / max(temperature, 1e-5)
+    if top_k:
+        kth = torch.topk(logits, min(top_k, logits.size(-1))).values[..., -1:]
+        logits = logits.masked_fill(logits < kth, float("-inf"))
+    probs = F.softmax(logits, -1)
+    return torch.multinomial(probs.reshape(-1, probs.size(-1)), 1).view(probs.shape[:-1])
 
 
 class RMSNorm(nn.Module):
@@ -141,9 +157,6 @@ class ByteModel(nn.Module):
     def generate(self, prompt: torch.Tensor, n: int, temperature: float = 0.8, top_k: int = 40) -> torch.Tensor:
         x = prompt
         for _ in range(n):
-            logits = self(x[:, -self.cfg.seq_len :])[:, -1] / max(temperature, 1e-5)
-            if top_k:
-                kth = torch.topk(logits, min(top_k, logits.size(-1))).values[:, -1:]
-                logits = logits.masked_fill(logits < kth, float("-inf"))
-            x = torch.cat([x, torch.multinomial(F.softmax(logits, -1), 1)], dim=1)
+            logits = self(x[:, -self.cfg.seq_len :])[:, -1:]
+            x = torch.cat([x, sample(logits, temperature, top_k)], dim=1)
         return x
