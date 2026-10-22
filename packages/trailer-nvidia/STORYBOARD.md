@@ -121,18 +121,18 @@ version: v3
 
 **Motion:** the notch grows from the top edge (width, then height, eased), face animates, words reveal one by one (the app's own `RevealedText`). **Seam out:** the notch's text card detaches and flies forward to become a summary card (z toward camera). **Why:** voice access to every agent and project.
 
-## Frame 8 — It builds its own interface (44–50s, ~6s)
+## Frame 8 — It builds its own interface (64.2–72.6s in the cut, ~8.4s)
 
-- scene: An answer arrives as a summary card (title, status chip, numbers, findings); then "Make it yours." mod panels, tools and quick-access tiles snap into the window around it.
-- duration: 6s
-- transition_in: fly-in
-- status: built
+- scene: Asked for "a panel that shows every agent at work", Vivianne reads the mod guide and writes a mod (`mod.json`, `panel.html`). In Settings → Mods the new "Agent board" waits, off; its switch brings up the consent dialog ("Turn on Agent board?", one permission: see what your agents are doing); Turn on. The board slides into the dock with a live card per agent, and a later answer's ```` ```checklist ```` is drawn by the Checklist mod in the chat. Titles: "Ask for a panel. It builds the mod." → "Nothing runs until you turn it on." → "Make it yours." with "Panels, sidebar sections, chat components, tools and themes. Sandboxed."
+- duration: 8.4s
+- transition_in: blur-in (as the scenes before it)
+- status: built (`compositions/f08-mods.html`, states b1, b2, b4, b3)
 - voiceover: onscreen
-- audio: soft taps as tiles snap, small impact when the layout completes
-- constraint: no lorem ipsum: real card copy
-- ui_motion: a real summary card builds block by block in the chat (title, status chip, numbers, findings); the cursor presses the real "Show panels stacked" button and the side panels restack; Quick access tiles pop in.
+- audio: whoosh in, soft taps per step, pop as Settings opens, click on the switch, notification on the dialog, click on Turn on, whoosh as the board arrives, sparkle under the cards, pop on the checklist, low impact under "Make it yours."
+- constraint: only what 1.8.2 ships: the mods are the app's own presets (Agent dashboard, Checklist), run sandboxed in the capture and photographed; permission words from `mods::manifest`.
+- ui_motion: the chat builds (ask, the three steps, the reply); Settings → Mods opens; the cursor presses the Agent board's switch, the real consent dialog pops, the cursor presses Turn on; the board's cards fly into the dock; the second exchange rises and the checklist pops in.
 
-**Motion:** card flies to the window centre, then tiles assemble from x and y edges into the stacked panels and the quick-access grid. **Seam out:** the window tilts back on x and a terminal slides out from under it. **Why:** intelligent UI and mods are specific to Vivianne.
+**Motion:** arrives from below-left on a tilt, pushes into the chat, leans to the switch and the dialog, pulls back as the board lands, pushes into the dock, pans to the checklist, settles wide for the title. **Changed from v3:** the earlier "summary card", "Show panels stacked" and "Quick access" beat isn't in the build; mods are. Sidebar sections are left out: in a threads project the app doesn't show mods' sidebar sections (`Sidebar.tsx` renders `SidebarMods` only for team and company projects). **Why:** mods are specific to Vivianne, and she can build them herself.
 
 ## Frame 9 — Beyond the window (50–55s, ~5s)
 

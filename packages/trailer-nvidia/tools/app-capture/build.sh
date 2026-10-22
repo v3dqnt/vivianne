@@ -9,3 +9,6 @@ cd "$(dirname "$0")" && python build_app.py ../.. ../../../gui-next \
   f05-memory.tpl.html:f05-memory.html:m5 \
   f06-world.tpl.html:f06-world.html:v1 \
   f07-instant.tpl.html:f07-instant.html:e1
+# Frame 8 was captured after the rest: it has its own stylesheet, app-f08.css.
+CSS=app-f08.css python build_app.py ../.. ../../../gui-next \
+  f08-mods.tpl.html:f08-mods.html:b1,b2,b4,b3

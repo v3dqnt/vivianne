@@ -15,3 +15,11 @@ is hand-drawn: it is the app's own React/Emotion output.
 3. Build: `python build_app.py <trailer-day> <gui-next> a,b,c,d,e,f`
    → `assets/app/app.css`, `assets/app/fonts/`, `compositions/app.html`
    (from `app.tpl.html`; edit the template, not the output).
+
+Mods: a seed can set `window.__MODFILES` (`'<key>/<path>'` → text, e.g. from the
+app's own presets); capture.cjs serves those, and the SDK, at
+`http://vivmod.localhost/`, and photographs each mod's `<iframe>` into the dump
+(its DOM is out of reach). The browser reports a Windows user agent, as the app
+does on Windows. Frame 8 (`seeds/mods-common.js`, b1–b4) builds into its own
+`assets/app/app-f08.css` (`CSS=app-f08.css`, see build.sh).
+

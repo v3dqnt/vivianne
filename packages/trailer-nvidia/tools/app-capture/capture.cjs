@@ -16,9 +16,26 @@ fs.mkdirSync(OUT, { recursive: true })
   const browser = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox'] })
   const page = await browser.newPage()
   await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 })
+  // The app is captured as it runs on Windows (its title bar, and mod pages
+  // under http://vivmod.localhost/), wherever the capture itself runs.
+  await page.setUserAgent((await browser.userAgent()).replace(/\([^)]*\)/, '(Windows NT 10.0; Win64; x64)'))
+  // Mod pages: a seed lists its mods' files in window.__MODFILES ('<key>/<path>'
+  // -> text), standing in for the vivmod protocol; the SDK comes from gui-next.
+  const SDK = path.join(__dirname, '../../../gui-next/src/modules/mods/sdk/v1.js')
+  await page.setRequestInterception(true)
+  page.on('request', async (req) => {
+    const m = /^http:\/\/vivmod\.localhost\/([^?#]*)/.exec(req.url())
+    if (!m) return req.continue()
+    const file = decodeURIComponent(m[1])
+    const type = /\.js$/.test(file) ? 'text/javascript' : 'text/html'
+    if (file === '_sdk/v1.js') return req.respond({ status: 200, contentType: type, body: fs.readFileSync(SDK, 'utf8') })
+    const body = await page.evaluate((f) => (window.__MODFILES || {})[f] ?? null, file).catch(() => null)
+    return body == null ? req.respond({ status: 404, body: '' }) : req.respond({ status: 200, contentType: type, body })
+  })
   page.on('console', (m) => { if (m.type() === 'error') console.log('[page error]', m.text().slice(0, 200)) })
   page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 300)))
   await page.evaluateOnNewDocument(() => {
+    if (window !== window.top) return // mod pages: sandboxed, no storage
     // Light theme, the default palette; the NVIDIA edition's first-run card and
     // its one-time theme switch are marked done so neither covers the capture.
     localStorage.setItem('viv.appearance', JSON.stringify({ modePref: 'light', paletteId: 'terax' }))
@@ -123,6 +140,32 @@ fs.mkdirSync(OUT, { recursive: true })
       frames,
     )
   }
+  // A mod page is a sandboxed <iframe>, whose DOM the dump can't reach:
+  // photograph each one too (a single frame), as `.viv-flip > img`.
+  // Rects first, then every shot, then one swap: React may redraw a frame
+  // between calls, so they're found by order rather than by a tag.
+  const rects = await page.evaluate(() =>
+    [...document.querySelectorAll('iframe')].map((f) => {
+      const b = f.getBoundingClientRect()
+      return { x: b.x, y: b.y, width: b.width, height: b.height }
+    }),
+  )
+  const shots = []
+  for (const r of rects) shots.push(r.width < 12 || r.height < 12 ? null : (await page.screenshot({ type: 'png', encoding: 'base64', clip: r })).toString())
+  await page.evaluate((shots) => {
+    ;[...document.querySelectorAll('iframe')].forEach((el, i) => {
+      if (!shots[i]) return
+      const box = document.createElement('div')
+      box.className = 'viv-flip'
+      box.style.cssText = `position:relative;width:${el.clientWidth}px;height:${el.clientHeight}px`
+      const img = document.createElement('img')
+      img.src = 'data:image/png;base64,' + shots[i]
+      img.dataset.f = '0'
+      img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%'
+      box.appendChild(img)
+      el.replaceWith(box)
+    })
+  }, shots)
   const dump = await page.evaluate(() => {
     const css = []
     for (const sheet of document.styleSheets) {
