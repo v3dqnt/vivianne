@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vivianne trailer · storyboard v2</title>
+<style>
+  @font-face { font-family: "Sora"; src: url("assets/fonts/Sora-Variable.ttf") format("truetype"); font-weight: 100 800; }
+  @font-face { font-family: "Geist"; src: url("assets/fonts/Geist-Variable.woff2") format("woff2"); font-weight: 100 900; }
+  @font-face { font-family: "Geist Mono"; src: url("assets/fonts/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; }
+  :root {
+    --canvas: #ffffff; --surface: #f6f6f6; --surface2: #ffffff; --ink: #111111;
+    --mute: #6b6b6b; --faint: rgba(17,17,17,0.35); --hair: #e8e8e8;
+    --green: #76b900; --ring: linear-gradient(135deg, #4f8fe0 0%, #b7c2cc 55%, #e9edf0 100%);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #ececec; color: var(--ink); font-family: "Geist", system-ui, sans-serif; padding: 40px 48px 64px; }
+  header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
+  h1 { font-family: "Sora"; font-weight: 500; font-size: 34px; letter-spacing: -0.03em; margin: 0; }
+  h1 span { color: var(--mute); font-weight: 400; }
+  .dek { color: var(--mute); margin: 6px 0 0; font-size: 15px; }
+  .tag { font-family: "Geist Mono"; font-size: 12px; color: var(--mute); border: 1px solid var(--hair); border-radius: 999px; padding: 6px 12px; white-space: nowrap; }
+  .act { font-family: "Geist Mono"; font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--faint); margin: 28px 0 10px; border-top: 1px solid var(--hair); padding-top: 10px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  .cell { display: flex; flex-direction: column; gap: 8px; }
+  .frame { aspect-ratio: 16/9; container-type: inline-size; position: relative; overflow: hidden; border-radius: 10px; background: var(--canvas); border: 1px solid var(--hair); }
+  .label { display: flex; justify-content: space-between; font-family: "Geist Mono"; font-size: 11px; color: var(--mute); }
+  .label b { color: var(--ink); font-weight: 500; }
+  .note { font-size: 13px; line-height: 1.45; color: rgba(17,17,17,0.72); margin: 0; }
+  .note strong { color: var(--ink); font-weight: 500; }
+  .chip { align-self: flex-start; font-family: "Geist Mono"; font-size: 10.5px; color: #4a7400; border: 1px solid rgba(118,185,0,0.45); border-radius: 999px; padding: 3px 9px; }
+  /* frame primitives, all sized in cqw so the sheet matches 1920px frames */
+  .abs { position: absolute; }
+  .disp { font-family: "Sora"; font-weight: 500; letter-spacing: -0.03em; color: var(--ink); line-height: 1.05; }
+  .sub { font-family: "Sora"; font-weight: 400; letter-spacing: -0.02em; color: var(--mute); }
+  .mono { font-family: "Geist Mono"; }
+  .g { color: #4a7400; }
+  .win { background: var(--surface2); border: 0.1cqw solid var(--hair); border-radius: 0.75cqw; box-shadow: 0 0 0 0.1cqw rgba(17,17,17,0.06), 0 2.6cqw 6cqw rgba(17,17,17,0.14); }
+  .bar { height: 2cqw; border-bottom: 0.1cqw solid var(--hair); display: flex; align-items: center; gap: 0.5cqw; padding: 0 0.9cqw; }
+  .dot { width: 0.6cqw; height: 0.6cqw; border-radius: 50%; background: rgba(17,17,17,0.16); }
+  .card { background: var(--surface); border: 0.1cqw solid var(--hair); border-radius: 0.55cqw; }
+  .pill { border-radius: 99cqw; border: 0.1cqw solid var(--hair); padding: 0.35cqw 0.9cqw; font-size: 1cqw; color: var(--mute); display: inline-block; }
+  .ring { border-radius: 50%; background: var(--ring); }
+  .line { height: 0.55cqw; border-radius: 0.3cqw; background: rgba(17,17,17,0.08); }
+  .safe { position: absolute; inset: 10% 10%; border: 0.1cqw dashed rgba(17,17,17,0.06); pointer-events: none; }
+  .dims { font-family: "Geist Mono"; font-size: 12px; color: var(--mute); line-height: 1.7; }
+  .sw { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: -2px; margin-right: 6px; border: 1px solid var(--hair); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Vivianne <span>· trailer storyboard v2</span></h1>
+    <p class="dek">Every agent you run, in one harness, each task sent to the right Nemotron.</p>
+  </div>
+  <div class="tag">1920×1080 · 60s · 10 beats · no voice · sound design</div>
+</header>
+
+<div class="act">Act 1 · promise and engine</div>
+<div class="grid">
+
+  <!-- 01 -->
+  <div class="cell">
+    <div class="frame" id="frame-01">
+      <div class="safe"></div>
+      <div class="abs ring" style="left:44.5cqw;top:14cqw;width:11cqw;height:11cqw;"></div>
+      <div class="abs" style="left:45.6cqw;top:15.1cqw;width:8.8cqw;height:8.8cqw;border-radius:50%;background:var(--canvas);"></div>
+      <div class="abs disp" style="left:0;right:0;top:28.5cqw;text-align:center;font-size:6.2cqw;">Vivianne</div>
+      <div class="abs sub" style="left:0;right:0;top:37cqw;text-align:center;font-size:2.4cqw;">One harness. Every agent.</div>
+    </div>
+    <div class="label"><b>01 · OPEN</b><span>frame-01 · 0–4s</span></div>
+    <p class="note"><strong>The ring draws first,</strong> the wordmark rises from a mask on the impact, the tagline follows. Camera slowly pushes in on z.</p>
+    <span class="chip">seam: dolly back into a title bar</span>
+  </div>
+
+  <!-- 02 -->
+  <div class="cell">
+    <div class="frame" id="frame-02">
+      <div class="safe"></div>
+      <div class="abs mono" style="left:8cqw;top:9cqw;font-size:1.6cqw;color:var(--faint);line-height:2.1;letter-spacing:0.1em;">plan ▸ the ▸ migration ▸ read ▸ schema<br>&nbsp;&nbsp;&nbsp;&nbsp;tokens ▸ stream ▸ toward ▸ you<br>&nbsp;&nbsp;edit ▸ test ▸ answer ▸ cite</div>
+      <div class="abs disp" style="left:10cqw;top:27cqw;font-size:5cqw;">Thinks on NVIDIA <span class="g">Nemotron</span>.</div>
+      <div class="abs disp" style="left:10cqw;top:34cqw;font-size:5cqw;color:var(--mute);">Runs on Nebius Token Factory.</div>
+    </div>
+    <div class="label"><b>02 · ENGINE</b><span>frame-02 · 4–10s</span></div>
+    <p class="note"><strong>The camera dives through the chat</strong> into tokens streaming toward it; the two lines land 2s apart, green only on "Nemotron".</p>
+    <span class="chip">seam: stream bends into a card conveyor (pan right)</span>
+  </div>
+
+  <!-- 03 -->
+  <div class="cell">
+    <div class="frame" id="frame-03">
+      <div class="safe"></div>
+      <div class="abs sub mono" style="left:10cqw;top:8cqw;font-size:1.2cqw;letter-spacing:0.2em;text-transform:uppercase;">Graded locally</div>
+      <div class="abs card" style="left:10cqw;top:11cqw;width:22cqw;padding:1cqw;font-size:1.5cqw;">Plan the database migration</div>
+      <div class="abs" style="left:36cqw;top:9cqw;width:54cqw;">
+        <div class="card" style="padding:1.1cqw 1.4cqw;margin-bottom:1cqw;font-size:1.5cqw;display:flex;justify-content:space-between;opacity:.55"><span><span class="g">Nemotron Nano</span></span><span class="mono" style="color:var(--mute)">fastest</span></div>
+        <div class="card" style="padding:1.1cqw 1.4cqw;margin-bottom:1cqw;font-size:1.5cqw;display:flex;justify-content:space-between;opacity:.55"><span><span class="g">Nemotron Super</span></span><span class="mono" style="color:var(--mute)">balanced</span></div>
+        <div class="card" style="padding:1.1cqw 1.4cqw;font-size:1.5cqw;display:flex;justify-content:space-between;border-color:rgba(118,185,0,.6)"><span><span class="g">Nemotron Ultra</span> · Plan the database migration</span><span class="mono" style="color:var(--mute)">most capable</span></div>
+      </div>
+      <div class="abs disp" style="left:10cqw;top:32cqw;font-size:4.6cqw;">Hard problems go to Ultra.</div>
+      <div class="abs sub" style="left:10cqw;top:38.5cqw;font-size:1.9cqw;">Cost-aware routing. Each task, the right model.</div>
+    </div>
+    <div class="label"><b>03 · ROUTER</b><span>frame-03 · 10–19s</span></div>
+    <p class="note"><strong>Cards pass the grader and drop into three lanes in depth;</strong> the camera cranes down with the hard one. 1s hold on "Hard problems go to Ultra."</p>
+    <span class="chip">seam: lanes rotate 90° on y into a prism face</span>
+  </div>
+</div>
+
+<div class="act">Act 2 · how it works for you</div>
+<div class="grid">
+
+  <!-- 04 -->
+  <div class="cell">
+    <div class="frame" id="frame-04">
+      <div class="safe"></div>
+      <div class="abs win" style="left:18cqw;top:9cqw;width:22cqw;height:31cqw;transform:perspective(60cqw) rotateY(38deg);opacity:.5;">
+        <div class="bar"><span class="dot"></span><span class="dot"></span></div>
+        <div style="padding:1cqw;font-size:1.1cqw;color:var(--mute)">Threads<div class="line" style="margin-top:1cqw;width:80%"></div><div class="line" style="margin-top:.8cqw;width:60%"></div><div class="line" style="margin-top:.8cqw;width:70%"></div></div>
+      </div>
+      <div class="abs win" style="left:37cqw;top:7cqw;width:26cqw;height:34cqw;">
+        <div class="bar"><span class="dot"></span><span class="dot"></span></div>
+        <div style="padding:1.2cqw;">
+          <div class="card" style="padding:.8cqw;font-size:1.2cqw;text-align:center;width:12cqw;margin:0 auto 1.6cqw;">Project lead</div>
+          <div style="display:flex;gap:.8cqw;justify-content:center;">
+            <div class="card" style="padding:.6cqw;font-size:1cqw;">Build</div><div class="card" style="padding:.6cqw;font-size:1cqw;">Quality</div><div class="card" style="padding:.6cqw;font-size:1cqw;">Runtime</div>
+          </div>
+        </div>
+      </div>
+      <div class="abs win" style="left:60cqw;top:9cqw;width:22cqw;height:31cqw;transform:perspective(60cqw) rotateY(-38deg);opacity:.5;">
+        <div class="bar"><span class="dot"></span><span class="dot"></span></div>
+        <div style="padding:1cqw;font-size:1.1cqw;color:var(--mute)">Agent team</div>
+      </div>
+      <div class="abs disp" style="left:0;right:0;text-align:center;top:44cqw;font-size:3.4cqw;">A whole company.</div>
+    </div>
+    <div class="label"><b>04 · THREE WAYS TO WORK</b><span>frame-04 · 19–25s</span></div>
+    <p class="note"><strong>A prism turns 120° per face:</strong> "Threads." → "Agent teams." → "A whole company." Each face is the app's own sidebar, team room and org chart, rebuilt.</p>
+    <span class="chip">seam: fly into the lead node → point cloud</span>
+  </div>
+
+  <!-- 05 -->
+  <div class="cell">
+    <div class="frame" id="frame-05">
+      <div class="safe"></div>
+      <svg class="abs" style="left:0;top:0;width:100cqw;height:56.25cqw" viewBox="0 0 160 90">
+        <g stroke="rgba(17,17,17,0.14)" stroke-width="0.25"><line x1="20" y1="20" x2="34" y2="30"/><line x1="34" y1="30" x2="28" y2="48"/><line x1="34" y1="30" x2="52" y2="24"/><line x1="52" y1="24" x2="60" y2="40"/><line x1="28" y1="48" x2="44" y2="60"/></g>
+        <g fill="rgba(17,17,17,0.65)"><circle cx="20" cy="20" r="0.9"/><circle cx="34" cy="30" r="1.3"/><circle cx="28" cy="48" r="0.8"/><circle cx="52" cy="24" r="0.9"/><circle cx="60" cy="40" r="0.7"/><circle cx="44" cy="60" r="1"/><circle cx="14" cy="66" r="0.6"/><circle cx="66" cy="68" r="0.6"/></g>
+        <circle cx="34" cy="30" r="2.4" fill="none" stroke="#76b900" stroke-width="0.3"/>
+      </svg>
+      <div class="abs card" style="left:52cqw;top:12cqw;width:38cqw;padding:2cqw;">
+        <div class="disp" style="font-size:2.8cqw;margin-bottom:2cqw;">Memory that outlives the chat.</div>
+        <div style="font-size:1.4cqw;display:grid;grid-template-columns:auto 1fr;gap:1cqw 2cqw;">
+          <span class="mono" style="color:var(--mute)">Embeddings</span><span>NVIDIA <span class="g">Nemotron</span></span>
+          <span class="mono" style="color:var(--mute)">Search</span><span>meaning + keywords</span>
+          <span class="mono" style="color:var(--mute)">Upkeep</span><span>tidies itself while you're away</span>
+        </div>
+      </div>
+    </div>
+    <div class="label"><b>05 · MEMORY</b><span>frame-05 · 25–31s</span></div>
+    <p class="note"><strong>The camera drifts through the constellation</strong> while related points connect; the spec card slides in from the right, rows 0.25s apart.</p>
+    <span class="chip">seam: points collapse into a tab bar (pan up)</span>
+  </div>
+
+  <!-- 06 -->
+  <div class="cell">
+    <div class="frame" id="frame-06">
+      <div class="safe"></div>
+      <div class="abs win" style="left:6cqw;top:10cqw;width:30cqw;height:22cqw;opacity:.6">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="pill" style="font-size:.8cqw;padding:.1cqw .7cqw">example.com</span></div>
+        <div style="padding:1cqw"><div class="line" style="width:70%"></div><div class="line" style="width:50%;margin-top:.8cqw"></div></div>
+      </div>
+      <div class="abs win" style="left:38cqw;top:8cqw;width:26cqw;height:26cqw;">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span style="font-size:1cqw;color:var(--mute);margin-left:.4cqw">Sign in</span></div>
+        <div style="padding:1.6cqw;font-size:1.1cqw;color:var(--mute)">Password
+          <div class="card mono" style="margin-top:.6cqw;padding:.9cqw;font-size:1.6cqw;letter-spacing:.3em;color:var(--ink)">••••••••••</div>
+          <div style="margin-top:1cqw;font-size:1cqw"><span class="g">●</span> Filled from your vault</div>
+        </div>
+      </div>
+      <div class="abs win" style="left:66cqw;top:10cqw;width:28cqw;height:22cqw;opacity:.6">
+        <div class="bar"><span class="dot"></span><span class="dot"></span></div>
+        <div style="margin:2cqw;height:5cqw;border:0.2cqw solid #76b900;border-radius:.4cqw"></div>
+      </div>
+      <div class="abs disp" style="left:0;right:0;text-align:center;top:39cqw;font-size:3.6cqw;">Uses your passwords. Never sees them.</div>
+    </div>
+    <div class="label"><b>06 · ACTS IN YOUR WORLD</b><span>frame-06 · 31–38s</span></div>
+    <p class="note"><strong>Whip pans along x</strong> between "Your browser. Signed in as you.", "Any app on your desktop." and the vault field filling as dots.</p>
+    <span class="chip">seam: pan up to a screen's top edge</span>
+  </div>
+</div>
+
+<div class="act">Act 3 · reach, build, beyond · close</div>
+<div class="grid">
+
+  <!-- 07 -->
+  <div class="cell">
+    <div class="frame" id="frame-07">
+      <div class="safe"></div>
+      <div class="abs" style="left:30cqw;top:0;width:40cqw;background:#0b0b0c;border:0.1cqw solid rgba(255,255,255,.08);border-top:0;border-radius:0 0 1.6cqw 1.6cqw;padding:1cqw 1.6cqw 1.4cqw;">
+        <div style="display:flex;align-items:center;gap:1cqw;font-size:1.3cqw;"><span class="ring" style="width:1.8cqw;height:1.8cqw;display:inline-block"></span><b style="font-weight:600">Vivianne</b><span style="color:var(--mute)">Checking</span></div>
+        <div style="margin-top:.8cqw;font-size:1.4cqw;line-height:1.45">Three agents are working. On Vivianne, the lead is <span style="color:var(--faint)">fixing the build.</span></div>
+      </div>
+      <div class="abs disp" style="left:0;right:0;text-align:center;top:30cqw;font-size:5cqw;">Hold a key. Just say it.</div>
+    </div>
+    <div class="label"><b>07 · VIV INSTANT</b><span>frame-07 · 38–44s</span></div>
+    <p class="note"><strong>The notch drops from the top edge,</strong> the robot face talks and the words appear as they are spoken (the faint words are still to come).</p>
+    <span class="chip">seam: the answer flies forward as a card</span>
+  </div>
+
+  <!-- 08 -->
+  <div class="cell">
+    <div class="frame" id="frame-08">
+      <div class="safe"></div>
+      <div class="abs win" style="left:10cqw;top:7cqw;width:80cqw;height:40cqw;">
+        <div class="bar"><span class="dot"></span><span class="dot"></span></div>
+        <div class="abs card" style="left:2cqw;top:4cqw;width:44cqw;padding:1.6cqw;">
+          <div style="display:flex;justify-content:space-between;font-size:1.6cqw"><span>Build is green again</span><span class="pill" style="color:var(--green);border-color:rgba(118,185,0,.4)">done</span></div>
+          <div style="display:flex;gap:3cqw;margin:1.4cqw 0;"><div><div class="disp" style="font-size:3cqw">3</div><div class="mono" style="font-size:.9cqw;color:var(--mute)">FILES CHANGED</div></div><div><div class="disp" style="font-size:3cqw">12/12</div><div class="mono" style="font-size:.9cqw;color:var(--mute)">TESTS PASS</div></div></div>
+          <div class="line" style="width:90%"></div><div class="line" style="width:70%;margin-top:.7cqw"></div>
+        </div>
+        <div class="abs card" style="left:48cqw;top:4cqw;width:30cqw;height:14cqw;padding:1cqw;font-size:1.1cqw;color:var(--mute)">Mod panel · Kanban</div>
+        <div class="abs" style="left:48cqw;top:20cqw;width:30cqw;display:grid;grid-template-columns:1fr 1fr;gap:.8cqw;">
+          <div class="card" style="padding:.8cqw;font-size:1cqw">Terminal</div><div class="card" style="padding:.8cqw;font-size:1cqw">Plan</div><div class="card" style="padding:.8cqw;font-size:1cqw">Memory</div><div class="card" style="padding:.8cqw;font-size:1cqw">🚀 Deploy</div>
+        </div>
+      </div>
+      <div class="abs disp" style="left:0;right:0;text-align:center;top:49.5cqw;font-size:3cqw;">Make it yours.</div>
+    </div>
+    <div class="label"><b>08 · IT BUILDS ITS OWN INTERFACE</b><span>frame-08 · 44–50s</span></div>
+    <p class="note"><strong>The card lands centre, then mod panels and quick-access tiles snap in</strong> from the x and y edges. Card copy is illustrative but real in shape.</p>
+    <span class="chip">seam: window tilts back on x, terminal slides out</span>
+  </div>
+
+  <!-- 09 -->
+  <div class="cell">
+    <div class="frame" id="frame-09">
+      <div class="safe"></div>
+      <div class="abs win mono" style="left:14cqw;top:8cqw;width:72cqw;height:30cqw;transform:perspective(80cqw) rotateX(10deg);font-size:1.5cqw;">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span style="font-size:1cqw;color:var(--mute);margin-left:.4cqw">viv</span></div>
+        <div style="padding:1.6cqw;line-height:1.75;">
+          <div>$ viv run "fix the failing test" --model <span class="g">auto</span></div>
+          <div style="color:var(--mute)">[run] step 1: read</div>
+          <div style="color:var(--mute)">[run] step 2: edit</div>
+          <div style="color:var(--mute)">[run] done in 17.7s</div>
+          <div>$ viv load qwen3-8b</div>
+          <div style="color:var(--mute)">Loaded "qwen3-8b" · API: http://127.0.0.1:8080/v1</div>
+        </div>
+      </div>
+      <div class="abs disp" style="left:0;right:0;text-align:center;top:43cqw;font-size:3.6cqw;">Out of the window, too.</div>
+    </div>
+    <div class="label"><b>09 · BEYOND THE WINDOW</b><span>frame-09 · 50–55s</span></div>
+    <p class="note"><strong>Typing at a steady rate on a tilted terminal,</strong> output lines in the real <code>viv</code> format; slight push-in.</p>
+    <span class="chip">seam: everything flies back into the window (reverse z)</span>
+  </div>
+
+  <!-- 10 -->
+  <div class="cell">
+    <div class="frame" id="frame-10">
+      <div class="safe"></div>
+      <div class="abs ring" style="left:45cqw;top:13cqw;width:10cqw;height:10cqw;"></div>
+      <div class="abs" style="left:46cqw;top:14cqw;width:8cqw;height:8cqw;border-radius:50%;background:var(--canvas);"></div>
+      <div class="abs disp" style="left:0;right:0;text-align:center;top:27cqw;font-size:5.4cqw;">Vivianne</div>
+      <div class="abs sub" style="left:0;right:0;text-align:center;top:35cqw;font-size:1.8cqw;">Built on NVIDIA <span class="g">Nemotron</span> · Nebius Token Factory</div>
+    </div>
+    <div class="label"><b>10 · CLOSE</b><span>frame-10 · 55–60s</span></div>
+    <p class="note"><strong>Every layer flies back into the window,</strong> which folds into the logo ring (callback to 01); the credit line lands while layers still settle.</p>
+    <span class="chip">seam: end</span>
+  </div>
+
+  <!-- seam map -->
+  <div class="cell">
+    <div class="frame" style="padding:2.4cqw;">
+      <div class="mono" style="font-size:1.2cqw;color:var(--mute);letter-spacing:.2em;margin-bottom:2cqw">SEAM MAP</div>
+      <div class="mono" style="font-size:1.35cqw;line-height:2;">
+        01 → 02 &nbsp;dolly back (z)<br>02 → 03 &nbsp;stream bends, pan right (x)<br>03 → 04 &nbsp;rotate 90° (y)<br>04 → 05 &nbsp;fly into node (z)<br>05 → 06 &nbsp;collapse, pan up (y)<br>06 → 07 &nbsp;whip pans → tilt up (x, y)<br>07 → 08 &nbsp;card flies forward (z)<br>08 → 09 &nbsp;tilt back (x-rotation)<br>09 → 10 &nbsp;converge, reverse z
+      </div>
+    </div>
+    <div class="label"><b>SEAMS</b><span>9 seams, none repeated</span></div>
+  </div>
+
+  <!-- tokens -->
+  <div class="cell">
+    <div class="frame" style="padding:2.4cqw;">
+      <div class="mono" style="font-size:1.2cqw;color:var(--mute);letter-spacing:.2em;margin-bottom:1.6cqw">TOKENS</div>
+      <div style="font-size:1.25cqw;line-height:2;">
+        <span class="sw" style="background:#ffffff"></span>canvas #ffffff &nbsp; <span class="sw" style="background:#f6f6f6"></span>surface #f6f6f6<br>
+        <span class="sw" style="background:#111111"></span>ink #111111 &nbsp; <span class="sw" style="background:#76b900"></span>Nemotron / router only<br>
+        <span class="sw" style="background:linear-gradient(135deg,#4f8fe0,#b7c2cc,#e9edf0)"></span>logo ring only<br>
+        <span class="disp" style="font-size:1.5cqw">Sora</span> display · <span>Geist</span> captured app UI · <span class="mono">Geist Mono</span> code<br>
+        <span style="color:var(--mute)">Bans: fake numbers · generic harness features · glow · third-party logos · slideshow · screensaver</span>
+      </div>
+    </div>
+    <div class="label"><b>TOKENS</b><span>from DESIGN.md (white brand)</span></div>
+  </div>
+</div>
+</body>
+</html>

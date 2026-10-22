@@ -1,0 +1,5 @@
+renders/
+.hyperframes/
+tools/app-capture/out/
+node_modules/
+*.log

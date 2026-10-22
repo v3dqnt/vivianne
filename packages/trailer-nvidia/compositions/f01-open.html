@@ -1,0 +1,136 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+  </head>
+  <body>
+    <template>
+      <style>
+        @font-face {
+          font-family: "Sora";
+          src: url("assets/fonts/Sora-Variable.ttf") format("truetype");
+          font-weight: 100 800;
+        }
+        #f01-root {
+          position: absolute;
+          inset: 0;
+          overflow: hidden;
+          background: #ffffff;
+          font-family: "Sora", system-ui, sans-serif;
+          color: #111111;
+        }
+        /* The lens: static perspective. Only #f01-cam moves. */
+        #f01-stage {
+          position: absolute;
+          inset: 0;
+          perspective: 1200px;
+        }
+        #f01-cam {
+          position: absolute;
+          inset: 0;
+          transform-style: preserve-3d;
+        }
+        #f01-lockup {
+          position: absolute;
+          left: 0;
+          right: 0;
+          top: 380px;
+          height: 320px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 44px;
+          transform-style: preserve-3d;
+        }
+        /* A soft light the mark is born from. */
+        #f01-glow {
+          position: absolute;
+          left: 660px;
+          top: 240px;
+          width: 600px;
+          height: 600px;
+          border-radius: 50%;
+          background: radial-gradient(circle, rgba(118, 185, 0, 0.22) 0%, rgba(79, 143, 224, 0.12) 38%, rgba(255, 255, 255, 0) 70%);
+          opacity: 0;
+        }
+        #f01-mark {
+          position: relative;
+          width: 260px;
+          height: 260px;
+          flex: none;
+          transform-style: preserve-3d;
+        }
+        #f01-logo {
+          width: 260px;
+          height: 260px;
+          --a: 0deg;
+          -webkit-mask-image: conic-gradient(from 200deg, #000 var(--a), transparent var(--a));
+          mask-image: conic-gradient(from 200deg, #000 var(--a), transparent var(--a));
+        }
+        #f01-logo img {
+          width: 100%;
+          height: 100%;
+          display: block;
+        }
+        #f01-word {
+          display: flex;
+          font-size: 168px;
+          font-weight: 500;
+          letter-spacing: -0.05em;
+          line-height: 1;
+          transform-style: preserve-3d;
+          white-space: nowrap;
+        }
+        .f01-l {
+          display: inline-block;
+          transform-origin: 50% 80%;
+        }
+      </style>
+
+      <div id="f01-root" data-composition-id="f01-open" data-width="1920" data-height="1080">
+        <div id="f01-glow"></div>
+        <div id="f01-stage">
+          <div id="f01-cam">
+            <div id="f01-lockup">
+              <div id="f01-mark"><div id="f01-logo"><img src="assets/brand/vivianne-logo.png" alt="Vivianne" /></div></div>
+              <div id="f01-word"><span class="f01-l">V</span><span class="f01-l">i</span><span class="f01-l">v</span><span class="f01-l">i</span><span class="f01-l">a</span><span class="f01-l">n</span><span class="f01-l">n</span><span class="f01-l">e</span></div>
+            </div>
+          </div>
+        </div>
+
+        <audio id="f01-sfx-rise" data-hf-media-start-basis="local" src="assets/sfx/aurora.mp3" data-start="0.05" data-duration="4.0" data-track-index="61" data-volume="0.9"></audio>
+        <audio id="f01-sfx-hit" data-hf-media-start-basis="local" src="assets/sfx/impact-bass-1.mp3" data-start="1.55" data-duration="2.12" data-track-index="62" data-volume="0.5"></audio>
+        <audio id="f01-sfx-out" data-hf-media-start-basis="local" src="assets/sfx/whoosh.mp3" data-start="3.35" data-duration="0.57" data-track-index="63" data-volume="0.45"></audio>
+      </div>
+
+      <script>
+        (function () {
+          const tl = gsap.timeline({ paused: true });
+          const letters = [...document.querySelectorAll("#f01-word .f01-l")];
+
+          // ── The light, then the mark: the planet turns into view and its ring sweeps round.
+          tl.fromTo("#f01-glow", { opacity: 0, scale: 0.4 }, { opacity: 1, scale: 1.1, duration: 1.2, ease: "power2.out" }, 0);
+          tl.to("#f01-glow", { opacity: 0.35, scale: 1.4, duration: 1.8, ease: "power1.inOut" }, 1.2);
+          tl.fromTo("#f01-mark", { scale: 0.35, rotationY: -70, z: -500, filter: "blur(16px)", opacity: 0 }, { scale: 1, rotationY: 0, z: 0, filter: "blur(0px)", opacity: 1, duration: 1.15, ease: "expo.out" }, 0.25);
+          tl.fromTo("#f01-logo", { "--a": "0deg" }, { "--a": "360deg", duration: 1.0, ease: "power3.inOut" }, 0.35);
+          // Centred alone first, then it makes room for the name.
+          gsap.set("#f01-mark", { x: 470 });
+          tl.to("#f01-mark", { x: 0, duration: 0.8, ease: "power3.inOut" }, 1.2);
+
+          // ── The name: letters rise out of depth, tipping up into place.
+          gsap.set(letters, { opacity: 0, z: -420, rotationX: -80, y: 60, filter: "blur(10px)" });
+          tl.to(letters, { opacity: 1, z: 0, rotationX: 0, y: 0, filter: "blur(0px)", duration: 0.85, ease: "back.out(1.5)", stagger: 0.055 }, 1.45);
+          // A small lift on the landed word, so the hold breathes.
+          tl.to(letters, { y: -6, duration: 0.5, ease: "sine.inOut", stagger: 0.04, yoyo: true, repeat: 1 }, 2.4);
+
+          // ── Camera: a slow orbit round the lockup, then a push into the mark.
+          tl.fromTo("#f01-cam", { rotationY: 22, rotationX: 8, z: -260, x: 0 }, { rotationY: -10, rotationX: -2, z: 60, x: 0, duration: 3.2, ease: "power1.inOut" }, 0);
+          tl.to("#f01-cam", { z: 1050, x: 382, rotationY: -4, duration: 0.7, ease: "power3.in" }, 3.25);
+          tl.to("#f01-stage", { filter: "blur(14px)", opacity: 0, duration: 0.45, ease: "power2.in" }, 3.5);
+
+          window.__timelines["f01-open"] = tl;
+        })();
+      </script>
+    </template>
+  </body>
+</html>

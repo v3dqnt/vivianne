@@ -1,0 +1,54 @@
+{
+  "embedder": "all-MiniLM-L6-v2",
+  "categories": {
+    "knowledge-update": {
+      "questions": 17,
+      "recall_hit": 70.58823529411765,
+      "recall_hit_at_1": 58.8235294117647,
+      "retrieval_at_10": 94.11764705882354,
+      "mean_returned": 3.823529411764706
+    },
+    "multi-session": {
+      "questions": 17,
+      "recall_hit": 76.47058823529412,
+      "recall_hit_at_1": 52.94117647058823,
+      "retrieval_at_10": 94.11764705882354,
+      "mean_returned": 6.117647058823529
+    },
+    "single-session-assistant": {
+      "questions": 17,
+      "recall_hit": 94.11764705882354,
+      "recall_hit_at_1": 94.11764705882354,
+      "retrieval_at_10": 100.0,
+      "mean_returned": 5.705882352941177
+    },
+    "single-session-preference": {
+      "questions": 17,
+      "recall_hit": 58.8235294117647,
+      "recall_hit_at_1": 29.41176470588235,
+      "retrieval_at_10": 82.3529411764706,
+      "mean_returned": 4.470588235294118
+    },
+    "single-session-user": {
+      "questions": 16,
+      "recall_hit": 93.75,
+      "recall_hit_at_1": 81.25,
+      "retrieval_at_10": 100.0,
+      "mean_returned": 6.125
+    },
+    "temporal-reasoning": {
+      "questions": 16,
+      "recall_hit": 93.75,
+      "recall_hit_at_1": 93.75,
+      "retrieval_at_10": 100.0,
+      "mean_returned": 4.0
+    }
+  },
+  "overall": {
+    "questions": 100,
+    "recall_hit": 81.0,
+    "recall_hit_at_1": 68.0,
+    "retrieval_at_10": 95.0,
+    "mean_returned": 5.04
+  }
+}
