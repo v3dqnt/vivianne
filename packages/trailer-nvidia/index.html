@@ -36,7 +36,7 @@
     </style>
   </head>
   <body>
-    <div id="root" data-composition-id="main" data-start="0" data-duration="71.2" data-width="1920" data-height="1080">
+    <div id="root" data-composition-id="main" data-start="0" data-duration="81.65" data-width="1920" data-height="1080">
       <div id="f01-open" data-composition-id="f01-open" data-composition-src="compositions/f01-open.html" data-start="0" data-duration="4.05" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
       <div id="f02-engine" data-layout-allow-overlap data-composition-id="f02-engine" data-composition-src="compositions/f02-engine.html" data-start="3.6" data-duration="8" data-track-index="2" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
       <div id="f03-router" data-layout-allow-overlap data-composition-id="f03-router" data-composition-src="compositions/f03-router.html" data-start="11.2" data-duration="10" data-track-index="3" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
@@ -47,7 +47,9 @@
       <div id="f06-world" data-layout-allow-overlap data-composition-id="f06-world" data-composition-src="compositions/f06-world.html" data-start="49.7" data-duration="8.2" data-track-index="8" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
       <div id="f07-instant" data-layout-allow-overlap data-composition-id="f07-instant" data-composition-src="compositions/f07-instant.html" data-start="57.45" data-duration="7.2" data-track-index="9" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
       <div id="f08-ui" data-layout-allow-overlap data-composition-id="f08-ui" data-composition-src="compositions/f08-ui.html" data-start="64.2" data-duration="7" data-track-index="10" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
-      <div id="grain" class="clip" data-start="0" data-duration="71.2" data-track-index="20"></div>
+      <div id="f09-terminal" data-layout-allow-overlap data-composition-id="f09-terminal" data-composition-src="compositions/f09-terminal.html" data-start="70.75" data-duration="5.75" data-track-index="11" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+      <div id="f10-close" data-layout-allow-overlap data-composition-id="f10-close" data-composition-src="compositions/f10-close.html" data-start="76.05" data-duration="5.6" data-track-index="12" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+      <div id="grain" class="clip" data-start="0" data-duration="81.65" data-track-index="20"></div>
     </div>
     <script>
       const tl = gsap.timeline({ paused: true });
@@ -65,6 +67,8 @@
       arrive("f06-world", 49.7);
       arrive("f07-instant", 57.45);
       arrive("f08-ui", 64.2);
+      arrive("f09-terminal", 70.75);
+      arrive("f10-close", 76.05);
       window.__timelines["main"] = tl;
     </script>
   </body>

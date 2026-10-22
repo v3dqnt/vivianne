@@ -1,0 +1,191 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+  </head>
+  <body>
+    <template>
+      <!-- The terminal is designed; every line follows the format `viv` prints
+           (packages/gui/src-tauri/src/cli.rs and viv.rs). -->
+      <style>
+        @font-face {
+          font-family: "Sora";
+          src: url("assets/fonts/Sora-Variable.ttf") format("truetype");
+          font-weight: 100 800;
+        }
+        @font-face {
+          font-family: "Geist Mono";
+          src: url("assets/fonts/GeistMono-Variable.woff2") format("woff2");
+          font-weight: 100 900;
+        }
+        #f09-root {
+          position: absolute;
+          inset: 0;
+          overflow: hidden;
+          background: #ffffff;
+          font-family: "Sora", system-ui, sans-serif;
+          color: #111111;
+        }
+        #f09-stage {
+          position: absolute;
+          inset: 0;
+          perspective: 1400px;
+        }
+        #f09-space {
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 1920px;
+          height: 1080px;
+          transform-style: preserve-3d;
+        }
+        #f09-term {
+          position: absolute;
+          left: 300px;
+          top: 230px;
+          width: 1320px;
+          height: 720px;
+          border-radius: 18px;
+          overflow: hidden;
+          background: #0e0e10;
+          box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2), 0 50px 120px rgba(17, 17, 17, 0.28), 0 12px 30px rgba(17, 17, 17, 0.14);
+        }
+        .f09-bar {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          height: 48px;
+          padding: 0 18px;
+          background: #1a1a1d;
+          font-family: "Geist Mono", ui-monospace, monospace;
+          font-size: 15px;
+          color: #8a8a90;
+        }
+        .f09-bar i {
+          width: 13px;
+          height: 13px;
+          border-radius: 50%;
+          background: #3a3a40;
+        }
+        .f09-bar span {
+          margin-left: 14px;
+        }
+        #f09-body {
+          padding: 30px 36px;
+          font-family: "Geist Mono", ui-monospace, monospace;
+          font-size: 25px;
+          line-height: 1.62;
+          color: #e8e8ea;
+          white-space: pre;
+        }
+        .f09-l {
+          display: block;
+          opacity: 0;
+        }
+        .f09-l.dim {
+          color: #8a8a90;
+        }
+        .f09-p {
+          color: #9be22e;
+        }
+        .f09-ok {
+          color: #ffffff;
+        }
+        .f09-caret {
+          display: inline-block;
+          width: 13px;
+          height: 1.05em;
+          vertical-align: -0.17em;
+          background: #e8e8ea;
+        }
+        #f09-heads {
+          position: absolute;
+          left: 0;
+          right: 0;
+          top: 64px;
+          height: 120px;
+          text-align: center;
+        }
+        .f09-line {
+          position: absolute;
+          left: 0;
+          right: 0;
+          top: 0;
+          font-size: 72px;
+          font-weight: 500;
+          letter-spacing: -0.04em;
+          line-height: 1.08;
+        }
+        .f09-w {
+          display: inline-block;
+        }
+        .f09-w.g {
+          color: #6b6b6b;
+        }
+      </style>
+
+      <div id="f09-root" data-composition-id="f09-terminal" data-width="1920" data-height="1080">
+        <div id="f09-stage">
+          <div id="f09-space">
+            <div id="f09-term">
+              <div class="f09-bar"><i></i><i></i><i></i><span>orders-api — viv</span></div>
+              <div id="f09-body"><span class="f09-l" id="f09-c1"><span class="f09-p">$ </span><span id="f09-t1"></span><span class="f09-caret" id="f09-k1"></span></span><span class="f09-l dim">[run] working in C:\dev\orders-api</span><span class="f09-l dim">[run] step 1: bash</span><span class="f09-l dim">[run] step 2: read</span><span class="f09-l dim">[run] step 3: edit</span><span class="f09-l dim">[run] step 4: bash</span><span class="f09-l dim">[run] done in 38.4s</span><span class="f09-l f09-ok">Fixed: the refund was rounded before tax. 24 tests pass.</span><span class="f09-l" id="f09-c2"><span class="f09-p">$ </span><span id="f09-t2"></span><span class="f09-caret" id="f09-k2"></span></span><span class="f09-l dim">Loading Qwen3-8B-Q4_K_M.gguf ...</span><span class="f09-l f09-ok">Loaded "qwen3-8b" in 6s</span><span class="f09-l">  API: http://127.0.0.1:8080/v1   (model name: qwen3-8b)</span><span class="f09-l dim">  stop it with: viv unload qwen3-8b</span></div>
+            </div>
+          </div>
+        </div>
+        <div id="f09-heads">
+          <div class="f09-line" id="f09-h1"><span class="f09-w">Out</span> <span class="f09-w">of</span> <span class="f09-w">the</span> <span class="f09-w">window,</span> <span class="f09-w g">too.</span></div>
+          <div class="f09-line" id="f09-h2"><span class="f09-w">Local</span> <span class="f09-w">models.</span> <span class="f09-w g">One</span> <span class="f09-w g">command.</span></div>
+        </div>
+
+        <audio id="f09-sfx-type1" data-hf-media-start-basis="local" src="assets/sfx/typing.mp3" data-start="0.35" data-duration="0.9" data-track-index="130" data-volume="0.4"></audio>
+        <audio id="f09-sfx-enter1" data-hf-media-start-basis="local" src="assets/sfx/key-press.mp3" data-start="1.3" data-duration="0.4" data-track-index="131" data-volume="0.5"></audio>
+        <audio id="f09-sfx-done" data-hf-media-start-basis="local" src="assets/sfx/pop.mp3" data-start="2.75" data-duration="0.72" data-track-index="132" data-volume="0.3"></audio>
+        <audio id="f09-sfx-type2" data-hf-media-start-basis="local" src="assets/sfx/typing.mp3" data-start="3.1" data-duration="0.55" data-track-index="133" data-volume="0.4"></audio>
+        <audio id="f09-sfx-enter2" data-hf-media-start-basis="local" src="assets/sfx/key-press.mp3" data-start="3.7" data-duration="0.4" data-track-index="134" data-volume="0.5"></audio>
+        <audio id="f09-sfx-ok" data-hf-media-start-basis="local" src="assets/sfx/ping.mp3" data-start="4.2" data-duration="1.32" data-track-index="135" data-volume="0.3"></audio>
+      </div>
+
+      <script>
+        (function () {
+          const tl = gsap.timeline({ paused: true });
+          const root = document.getElementById("f09-root");
+          const lines = [...root.querySelectorAll(".f09-l")];
+
+          // ── Typing: each command at a steady rate, then the output, line by line.
+          const type = (out, text, t, dur) => {
+            const o = document.getElementById(out);
+            const p = { n: 0 };
+            tl.fromTo(p, { n: 0 }, { n: text.length, duration: dur, ease: "none", immediateRender: false, onUpdate: () => (o.textContent = text.slice(0, Math.round(p.n))) }, t);
+          };
+          const show = (el, t) => tl.fromTo(el, { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.18, ease: "power2.out", immediateRender: false }, t);
+          show(lines[0], 0.25);
+          type("f09-t1", 'viv run "fix the failing refunds test" --model auto', 0.35, 0.9);
+          tl.set("#f09-k1", { opacity: 0 }, 1.3);
+          [1.45, 1.7, 1.92, 2.14, 2.36, 2.58, 2.78].forEach((t, i) => show(lines[1 + i], t));
+          show(lines[8], 3.0);
+          type("f09-t2", "viv load qwen3-8b", 3.1, 0.55);
+          tl.set("#f09-k2", { opacity: 0 }, 3.7);
+          [3.85, 4.2, 4.32, 4.44].forEach((t, i) => show(lines[9 + i], t));
+
+          // ── Headlines.
+          const pop = (sel, t, out) => {
+            const ws = [...root.querySelectorAll(sel + " .f09-w")];
+            gsap.set(ws, { yPercent: 120, scale: 0.86, opacity: 0, filter: "blur(10px)" });
+            tl.to(ws, { yPercent: 0, scale: 1, opacity: 1, filter: "blur(0px)", duration: 0.7, ease: "back.out(1.7)", stagger: 0.06 }, t);
+            if (out) tl.to(ws, { opacity: 0, yPercent: -60, filter: "blur(8px)", duration: 0.3, ease: "power2.in", stagger: 0.02 }, out);
+          };
+          pop("#f09-h1", 0.2, 2.85);
+          pop("#f09-h2", 3.15);
+
+          // ── Camera: the terminal tilts up into view on x, eases in, then drifts.
+          tl.fromTo("#f09-space", { rotationX: 32, y: 120, z: -400 }, { rotationX: 4, y: 0, z: 0, duration: 1.2, ease: "power3.out" }, 0);
+          tl.to("#f09-space", { rotationX: 0, rotationY: -4, z: 120, x: -40, duration: 4.0, ease: "power1.inOut" }, 1.2);
+          tl.to(["#f09-stage", "#f09-heads"], { opacity: 0, filter: "blur(12px)", duration: 0.45, ease: "power2.in" }, 5.3);
+
+          window.__timelines["f09-terminal"] = tl;
+        })();
+      </script>
+    </template>
+  </body>
+</html>

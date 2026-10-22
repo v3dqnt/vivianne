@@ -13,6 +13,8 @@ SCENES = [
     ("f06-world", 49.7, 8.2),
     ("f07-instant", 57.45, 7.2),
     ("f08-ui", 64.2, 7),
+    ("f09-terminal", 70.75, 5.75),
+    ("f10-close", 76.05, 5.6),
 ]
 END = max(s + d for _, s, d in SCENES)
 import os
