@@ -160,7 +160,7 @@ pub fn tool_names(profile: Profile, messages: &[AgentMessage], all_tools: &HashS
             let mut core: HashSet<String> = CORE_TOOLS.iter().map(|t| t.to_string()).collect();
             // Tools the agent wrote for itself go to every model, local ones
             // too: they are few, and written because they're needed again.
-            let custom = crate::coding_agent::custom_tools::custom_tool_names();
+            let custom = crate::agent::tools::custom_tools::custom_tool_names();
             core.extend(all_tools.iter().filter(|t| custom.contains(*t)).cloned());
             core
         }

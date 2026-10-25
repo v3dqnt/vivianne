@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::tool_exec::{Tool, ToolResult};
+use crate::agent::tools::builtin::{Tool, ToolResult};
 
 /// Past this many, creating another asks for a review of the set.
 pub const SOFT_LIMIT: usize = 30;
@@ -190,7 +190,7 @@ fn clip(mut s: String) -> String {
 
 /// Run `tool.py` in `dir` with `args`, from `cwd`.
 async fn run_python(dir: &Path, args: &serde_json::Value, cwd: &str, timeout: Duration) -> ToolResult {
-    let Some(python) = super::checkers::python() else {
+    let Some(python) = crate::agent::tools::code::checkers::python() else {
         return ToolResult {
             content: "No Python found on PATH (the Microsoft Store stub doesn't count). Install Python 3 from python.org to use custom tools.".into(),
             is_error: true,
@@ -205,7 +205,7 @@ async fn run_python(dir: &Path, args: &serde_json::Value, cwd: &str, timeout: Du
     cmd.arg("-X").arg("utf8").arg(&runner).arg(dir.join("tool.py"));
     let workdir = if Path::new(cwd).is_dir() { cwd.to_string() } else { dir.to_string_lossy().into_owned() };
     cmd.current_dir(workdir).kill_on_drop(true);
-    cmd.env_clear().envs(super::sandbox::filtered_env()).env("PYTHONIOENCODING", "utf-8");
+    cmd.env_clear().envs(crate::agent::tools::code::sandbox::filtered_env()).env("PYTHONIOENCODING", "utf-8");
     cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
@@ -495,7 +495,7 @@ mod tests {
 
     #[tokio::test]
     async fn runs_a_tool_and_reports_its_errors() {
-        if super::super::checkers::python().is_none() {
+        if crate::agent::tools::code::checkers::python().is_none() {
             return;
         }
         let dir = std::env::temp_dir().join(format!("viv-ct-test-{}", std::process::id()));

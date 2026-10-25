@@ -29,7 +29,7 @@
 //!   fresh one takes over, so one hung window cannot wedge `dip` for good.
 //!
 //! Window listing, focusing, state changes and launching go through Win32
-//! directly (`super::win`) — faster than UI Automation, and a launched app's
+//! directly (`crate::agent::tools::desktop::win`) — faster than UI Automation, and a launched app's
 //! window is found and made the target automatically.
 
 use std::sync::mpsc;
@@ -44,8 +44,8 @@ use uiautomation::patterns::{
 use uiautomation::types::{ControlType, ElementMode, ExpandCollapseState, Handle, TreeScope, UIProperty};
 use uiautomation::{UIAutomation, UIElement};
 
-use super::tool_exec::ToolResult;
-use super::win;
+use crate::agent::tools::builtin::ToolResult;
+use crate::agent::tools::desktop::win;
 
 /// An id as models send it: a number, a numeric string ("3", "[3]", "#3") or
 /// a whole float. Anything else is `None`, so the caller's message applies.

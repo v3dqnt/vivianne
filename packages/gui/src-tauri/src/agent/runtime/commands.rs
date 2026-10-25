@@ -368,7 +368,7 @@ pub async fn cmd_agent_abort(state: State<'_, Arc<AppState>>) -> Result<(), Stri
 /// Stop from the activity notch: the run, and any typing mid-flight, now.
 #[tauri::command]
 pub async fn cmd_activity_stop(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    crate::coding_agent::win_cancel();
+    crate::agent::tools::desktop::win_cancel();
     crate::activity::end_run(&app, "stopped", "Stopping…".into());
     cmd_agent_abort(state).await
 }
@@ -918,7 +918,7 @@ pub struct SessionStats {
 pub async fn cmd_agent_session_stats(
     state: State<'_, Arc<AppState>>,
 ) -> Result<SessionStats, String> {
-    use crate::coding_agent::compaction::{calculate_context_tokens, message_char_len};
+    use crate::agent::runtime::compaction::{calculate_context_tokens, message_char_len};
 
     // Lock-free — see `cmd_debug_agent_status`'s comment.
     let model = state.agent_state.model().await;
@@ -1134,7 +1134,7 @@ pub fn cmd_list_tool_names() -> Vec<serde_json::Value> {
 
 /// List skills discovered across the given directories (plus the default
 /// `~/.viv/skills` directory). Reads real SKILL.md/*.md frontmatter via
-/// `coding_agent::skills::load_skills_from_dir` — this is the same loader the
+/// `agent::tools::skills::load_skills_from_dir` — this is the same loader the
 /// agent itself would use, so what the Settings UI shows here matches reality.
 ///
 /// Each skill's `status` is resolved here (not at parse time in `skills.rs`)
@@ -1153,7 +1153,7 @@ pub async fn cmd_list_skills(app: tauri::AppHandle, paths: Vec<String>) -> Resul
     }
 
     for dir in dirs_to_scan {
-        let result = crate::coding_agent::skills::load_skills_from_dir(&dir);
+        let result = crate::agent::tools::skills::load_skills_from_dir(&dir);
         all_skills.extend(result.skills);
         all_errors.extend(result.errors);
     }
@@ -1265,7 +1265,7 @@ pub struct FileTreeNode {
 }
 
 /// List a directory as a nested tree, gitignore-aware (reuses
-/// `coding_agent::tool_exec::IgnoreSet`, the same gitignore engine the
+/// `agent::tools::builtin::IgnoreSet`, the same gitignore engine the
 /// agent's own `list_dir` tool uses), depth- and entry-capped so a huge repo
 /// can't hang the UI or blow up the IPC payload.
 #[tauri::command]
@@ -1282,7 +1282,7 @@ pub async fn cmd_list_dir_tree(
     }
 
     tokio::task::spawn_blocking(move || {
-        let ignore = crate::coding_agent::tool_exec::IgnoreSet::from_root(&root_path);
+        let ignore = crate::agent::tools::builtin::IgnoreSet::from_root(&root_path);
         let mut counted = 0usize;
         Ok(build_file_tree(&root_path, &root_path, &ignore, 0, max_depth, &mut counted, max_entries))
     })
@@ -1293,7 +1293,7 @@ pub async fn cmd_list_dir_tree(
 fn build_file_tree(
     root: &std::path::Path,
     dir: &std::path::Path,
-    ignore: &crate::coding_agent::tool_exec::IgnoreSet,
+    ignore: &crate::agent::tools::builtin::IgnoreSet,
     level: usize,
     max_depth: usize,
     counted: &mut usize,
@@ -2755,9 +2755,9 @@ pub async fn cmd_restore_checkpoint(
 #[tauri::command]
 pub async fn cmd_inspect_document(
     path: String,
-) -> Result<Vec<crate::coding_agent::documents::DocPart>, String> {
+) -> Result<Vec<crate::agent::tools::files::documents::DocPart>, String> {
     tokio::task::spawn_blocking(move || {
-        crate::coding_agent::documents::inspect(std::path::Path::new(&path))
+        crate::agent::tools::files::documents::inspect(std::path::Path::new(&path))
     })
     .await
     .map_err(|e| format!("inspect task panicked: {e}"))?

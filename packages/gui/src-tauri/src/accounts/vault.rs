@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::coding_agent::tool_exec::ToolResult;
+use crate::agent::tools::builtin::ToolResult;
 
 const SERVICE: &str = "vivianne-vault";
 

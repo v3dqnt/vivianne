@@ -30,7 +30,7 @@ pub struct Permission {
 pub async fn cmd_mac_permissions() -> Result<Vec<Permission>, String> {
     #[cfg(target_os = "macos")]
     {
-        use crate::coding_agent::mac;
+        use crate::agent::tools::desktop::mac;
         let yes = |b: bool| if b { "granted" } else { "denied" };
         Ok(vec![
             Permission { id: "accessibility", label: "Accessibility", why: "Lets Vivianne read and operate other apps' buttons, fields and menus.", state: yes(mac::trusted()) },
@@ -49,7 +49,7 @@ pub async fn cmd_mac_permissions() -> Result<Vec<Permission>, String> {
 pub async fn cmd_mac_request_permission(id: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        use crate::coding_agent::mac;
+        use crate::agent::tools::desktop::mac;
         let pane = match id.as_str() {
             "accessibility" => {
                 mac::request_trust();

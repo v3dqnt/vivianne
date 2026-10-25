@@ -123,7 +123,7 @@ fn now_ms() -> u64 {
 pub fn target_path(tool_name: &str, args: &serde_json::Value, cwd: &str) -> Option<String> {
     let arg = CHECKPOINTABLE.iter().find(|(t, _)| *t == tool_name).map(|(_, a)| *a)?;
     let raw = args.get(arg).and_then(|v| v.as_str())?;
-    Some(crate::coding_agent::tool_exec::resolve_path(cwd, raw).to_string_lossy().into_owned())
+    Some(crate::agent::tools::builtin::resolve_path(cwd, raw).to_string_lossy().into_owned())
 }
 
 /// Capture the current state of `paths` before a tool modifies them.

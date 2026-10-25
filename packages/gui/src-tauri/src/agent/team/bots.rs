@@ -116,7 +116,7 @@ pub fn category(tool: &str) -> Option<Category> {
         "github_act" | "github_api" | "connect_mcp_server" | "create_automation" | "email" | "phone" => Category::Outside,
         t if t.starts_with("browser_") => Category::Web,
         t if t.starts_with("mcp__") => Category::Outside,
-        _ if crate::coding_agent::custom_tools::custom_tool_names().contains(tool) => Category::Commands,
+        _ if crate::agent::tools::custom_tools::custom_tool_names().contains(tool) => Category::Commands,
         _ => return None,
     })
 }
@@ -1346,7 +1346,7 @@ pub async fn cmd_bots_stop(app: tauri::AppHandle, root: String, bot_id: String) 
     };
     if let Some(f) = flag {
         f.store(true, Ordering::SeqCst);
-        crate::coding_agent::win_cancel();
+        crate::agent::tools::desktop::win_cancel();
     }
     emit_status(&app, &root, &bot_id);
     Ok(())

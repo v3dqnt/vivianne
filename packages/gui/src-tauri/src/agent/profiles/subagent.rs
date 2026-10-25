@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-use super::tool_exec::parse_frontmatter;
+use crate::agent::tools::builtin::parse_frontmatter;
 
 /// Enough of `agent::runtime::types::ModelRef` to actually run a turn with — a bare
 /// model id string isn't resolvable on its own (no lookup table maps ids to

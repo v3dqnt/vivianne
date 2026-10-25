@@ -846,12 +846,12 @@ impl PairActivityTool {
 }
 
 #[async_trait::async_trait]
-impl crate::coding_agent::tool_exec::Tool for PairActivityTool {
+impl crate::agent::tools::builtin::Tool for PairActivityTool {
     fn name(&self) -> &str {
         "pair_activity"
     }
-    async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> crate::coding_agent::tool_exec::ToolResult {
-        let res = |content: String, is_error: bool| crate::coding_agent::tool_exec::ToolResult { content, is_error, details: None };
+    async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> crate::agent::tools::builtin::ToolResult {
+        let res = |content: String, is_error: bool| crate::agent::tools::builtin::ToolResult { content, is_error, details: None };
         let Some(project) = multiplayer_project(&[self.cwd.clone()]) else {
             return res("This isn't a multiplayer project, so there's no partner activity.".into(), true);
         };

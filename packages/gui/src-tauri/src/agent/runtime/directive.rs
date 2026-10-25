@@ -221,10 +221,10 @@ pub(crate) async fn assemble_capability_blocks(
     let mut skills_block: Option<String> = None;
     if mention_scan_text.contains('@') {
         let all_skills = crate::agent::tools::exec::load_all_configured_skills().await;
-        let mentioned = crate::coding_agent::skills::skills_mentioned_in(mention_scan_text, &all_skills);
+        let mentioned = crate::agent::tools::skills::skills_mentioned_in(mention_scan_text, &all_skills);
         if !mentioned.is_empty() {
             let mentioned_owned: Vec<_> = mentioned.into_iter().cloned().collect();
-            let block = crate::coding_agent::skills::format_skills_for_prompt(&mentioned_owned);
+            let block = crate::agent::tools::skills::format_skills_for_prompt(&mentioned_owned);
             skills_block = Some(format!(
                 "\n\n<vivianne_mentioned_skills>\nThe user @mentioned these skills directly — use their full instructions below for this turn.{block}</vivianne_mentioned_skills>"
             ));

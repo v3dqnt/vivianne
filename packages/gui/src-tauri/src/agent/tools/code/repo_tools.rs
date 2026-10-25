@@ -9,7 +9,7 @@ use serde_json::json;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use super::tool_exec::{Tool, ToolResult};
+use crate::agent::tools::builtin::{Tool, ToolResult};
 
 const STRUCTURE_LIMIT: usize = 200;
 const DEPENDENCY_FILES: &[&str] = &[
@@ -218,7 +218,7 @@ fn walk_structure(root: &Path, depth: usize) -> (Vec<String>, bool) {
             .flatten()
             .filter_map(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
-                if super::tool_exec::ALWAYS_SKIP_DIRS.contains(&name.as_str()) { return None; }
+                if crate::agent::tools::builtin::ALWAYS_SKIP_DIRS.contains(&name.as_str()) { return None; }
                 let ft = e.file_type().ok()?;
                 Some((name, e.path(), ft.is_dir()))
             })

@@ -1,7 +1,7 @@
 //! Commands behind the document viewer: read a file for preview, change one
 //! part of it, and put earlier bytes back for undo.
 //!
-//! Editing goes through `coding_agent::documents::apply_edit` — the same
+//! Editing goes through `agent::tools::files::documents::apply_edit` — the same
 //! in-place XML edit the agent's `edit_document` tool uses — so a change made
 //! by hand in the viewer keeps every style, formula and image exactly as an
 //! agent edit does. The viewer never regenerates a file.
@@ -57,7 +57,7 @@ pub async fn cmd_edit_document_part(path: String, part: String, text: String) ->
     tokio::task::spawn_blocking(move || {
         let p = Path::new(&path);
         check(p, EDITABLE)?;
-        crate::coding_agent::documents::apply_edit(p, &part, &text)
+        crate::agent::tools::files::documents::apply_edit(p, &part, &text)
     })
     .await
     .map_err(|e| format!("edit task failed: {e}"))?
@@ -102,13 +102,13 @@ mod tests {
 
         let original = cmd_read_document_bytes(p.clone()).await.unwrap();
         cmd_edit_document_part(p.clone(), "Sales!A2".into(), "125".into()).await.unwrap();
-        let cell = |parts: Vec<crate::coding_agent::documents::DocPart>| {
+        let cell = |parts: Vec<crate::agent::tools::files::documents::DocPart>| {
             parts.into_iter().find(|x| x.id == "Sales!A2").map(|x| x.text).unwrap_or_default()
         };
-        assert_eq!(cell(crate::coding_agent::documents::inspect(&path).unwrap()), "125");
+        assert_eq!(cell(crate::agent::tools::files::documents::inspect(&path).unwrap()), "125");
 
         cmd_restore_document_bytes(p.clone(), original.clone()).await.unwrap();
-        assert_eq!(cell(crate::coding_agent::documents::inspect(&path).unwrap()), "120");
+        assert_eq!(cell(crate::agent::tools::files::documents::inspect(&path).unwrap()), "120");
         assert_eq!(cmd_read_document_bytes(p).await.unwrap(), original);
         let _ = std::fs::remove_dir_all(&dir);
     }

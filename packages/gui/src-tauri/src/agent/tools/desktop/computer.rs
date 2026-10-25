@@ -2,7 +2,7 @@
 //!
 //! - **Pixel mode** (this file): screenshots, the mouse, the keyboard. Works
 //!   on anything, including games and canvas UIs.
-//! - **Structured mode** (`super::dip`, Windows): the app's real UI tree —
+//! - **Structured mode** (`crate::agent::tools::desktop::dip`, Windows): the app's real UI tree —
 //!   read in one round trip, acted on by element id.
 //!
 //! ## Screenshots are scaled, and coordinates follow them
@@ -16,7 +16,7 @@
 //! afterwards is in that image's pixels and is mapped back to the screen
 //! here. What the model sees is exactly the space it clicks in.
 //!
-//! On Windows, input goes through `super::win` (`SendInput`): Unicode
+//! On Windows, input goes through `crate::agent::tools::desktop::win` (`SendInput`): Unicode
 //! typing, the full key map, and — the part that made typing "not work" —
 //! making sure the agent's target window is in front, not Vivianne. Other
 //! platforms keep `enigo`.
@@ -25,7 +25,7 @@ use base64::Engine;
 use serde_json::json;
 use std::sync::Mutex;
 
-use super::tool_exec::ToolResult;
+use crate::agent::tools::builtin::ToolResult;
 
 #[cfg(target_os = "windows")]
 pub(crate) async fn execute_computer_tool(args: &serde_json::Value, app: &tauri::AppHandle) -> ToolResult {
@@ -34,14 +34,14 @@ pub(crate) async fn execute_computer_tool(args: &serde_json::Value, app: &tauri:
         None => return err("'action' is required"),
     };
     match action {
-        "snapshot" => super::dip::execute_dip_snapshot_tool(app, args).await,
-        "find" => super::dip::execute_dip_find_tool(args).await,
-        "read_text" => super::dip::execute_dip_read_text_tool(args).await,
-        "interact" => super::dip::execute_dip_interact_tool(app, args).await,
-        "list_windows" => super::dip::execute_dip_list_windows_tool().await,
-        "focus_window" => super::dip::execute_dip_focus_window_tool(args).await,
-        "window_action" => super::dip::execute_dip_window_action_tool(args).await,
-        "launch_app" => super::dip::execute_dip_launch_app_tool(args).await,
+        "snapshot" => crate::agent::tools::desktop::dip::execute_dip_snapshot_tool(app, args).await,
+        "find" => crate::agent::tools::desktop::dip::execute_dip_find_tool(args).await,
+        "read_text" => crate::agent::tools::desktop::dip::execute_dip_read_text_tool(args).await,
+        "interact" => crate::agent::tools::desktop::dip::execute_dip_interact_tool(app, args).await,
+        "list_windows" => crate::agent::tools::desktop::dip::execute_dip_list_windows_tool().await,
+        "focus_window" => crate::agent::tools::desktop::dip::execute_dip_focus_window_tool(args).await,
+        "window_action" => crate::agent::tools::desktop::dip::execute_dip_window_action_tool(args).await,
+        "launch_app" => crate::agent::tools::desktop::dip::execute_dip_launch_app_tool(args).await,
         "point_at" | "highlight" | "clear_pointer" => execute_narration_action(action, args, app),
         "screenshot" => run_blocking(capture_screenshot_for(args.clone())).await,
         "zoom" => run_blocking(zoom_for(args.clone())).await,
@@ -67,7 +67,7 @@ pub(crate) async fn execute_computer_tool(args: &serde_json::Value, app: &tauri:
 /// the field holds rather than on what was sent. Costs no model step.
 #[cfg(target_os = "windows")]
 async fn verify_typed(mut result: ToolResult, typed: &str) -> ToolResult {
-    let now = super::dip::focused_text().await;
+    let now = crate::agent::tools::desktop::dip::focused_text().await;
     result.content.push_str(&match now {
         Some(field) => match typed_landed(typed, &field) {
             true => format!(" Read back: the field contains it {VERIFIED_MARK}."),
@@ -101,14 +101,14 @@ pub(crate) fn typed_landed(typed: &str, field: &str) -> bool {
 pub(crate) async fn execute_computer_tool(args: &serde_json::Value, app: &tauri::AppHandle) -> ToolResult {
     let action = args.get("action").and_then(|v| v.as_str()).unwrap_or_default();
     match action {
-        "snapshot" => super::dip_mac::execute_dip_snapshot_tool(app, args).await,
-        "find" => super::dip_mac::execute_dip_find_tool(args).await,
-        "read_text" => super::dip_mac::execute_dip_read_text_tool(args).await,
-        "interact" => super::dip_mac::execute_dip_interact_tool(app, args).await,
-        "list_windows" => super::dip_mac::execute_dip_list_windows_tool().await,
-        "focus_window" => super::dip_mac::execute_dip_focus_window_tool(args).await,
-        "window_action" => super::dip_mac::execute_dip_window_action_tool(args).await,
-        "launch_app" => super::dip_mac::execute_dip_launch_app_tool(args).await,
+        "snapshot" => crate::agent::tools::desktop::dip_mac::execute_dip_snapshot_tool(app, args).await,
+        "find" => crate::agent::tools::desktop::dip_mac::execute_dip_find_tool(args).await,
+        "read_text" => crate::agent::tools::desktop::dip_mac::execute_dip_read_text_tool(args).await,
+        "interact" => crate::agent::tools::desktop::dip_mac::execute_dip_interact_tool(app, args).await,
+        "list_windows" => crate::agent::tools::desktop::dip_mac::execute_dip_list_windows_tool().await,
+        "focus_window" => crate::agent::tools::desktop::dip_mac::execute_dip_focus_window_tool(args).await,
+        "window_action" => crate::agent::tools::desktop::dip_mac::execute_dip_window_action_tool(args).await,
+        "launch_app" => crate::agent::tools::desktop::dip_mac::execute_dip_launch_app_tool(args).await,
         "point_at" | "highlight" | "clear_pointer" => execute_narration_action(action, args, app),
         "screenshot" => run_blocking(capture_screenshot_for(args.clone())).await,
         "zoom" => run_blocking(zoom_for(args.clone())).await,
@@ -116,8 +116,8 @@ pub(crate) async fn execute_computer_tool(args: &serde_json::Value, app: &tauri:
         _ => {
             // Keys and text go to the app being driven, never into Vivianne
             // (which is in front whenever the user just spoke to it).
-            if matches!(action, "type" | "key" | "hold_key" | "key_down" | "key_up") && super::mac::trusted() {
-                if let Err(e) = tokio::task::spawn_blocking(super::mac::ensure_target_front).await.unwrap_or_else(|e| Err(e.to_string())) {
+            if matches!(action, "type" | "key" | "hold_key" | "key_down" | "key_up") && crate::agent::tools::desktop::mac::trusted() {
+                if let Err(e) = tokio::task::spawn_blocking(crate::agent::tools::desktop::mac::ensure_target_front).await.unwrap_or_else(|e| Err(e.to_string())) {
                     return err(e);
                 }
             }
@@ -138,7 +138,7 @@ pub(crate) async fn execute_computer_tool(args: &serde_json::Value, app: &tauri:
 /// Read the focused field back after typing (see the Windows `verify_typed`).
 #[cfg(target_os = "macos")]
 async fn verify_typed_mac(mut result: ToolResult, typed: &str) -> ToolResult {
-    match super::dip_mac::focused_text().await {
+    match crate::agent::tools::desktop::dip_mac::focused_text().await {
         Some(field) if typed_landed(typed, &field) => result.content.push_str(&format!(" Read back: the field contains it {VERIFIED_MARK}.")),
         Some(_) => result.content.push_str(" Read back: MISMATCH — the focused field doesn't contain what was typed. Fix it before saying it's done."),
         None => result.content.push_str(" Couldn't read the field back: check it landed with read_text before saying it's done."),
@@ -272,14 +272,14 @@ fn pick_monitor(args: &serde_json::Value) -> Result<xcap::Monitor, String> {
         return monitors.get(i as usize).cloned().ok_or_else(|| format!("no monitor {i} — there are {}", monitors.len()));
     }
     #[cfg(target_os = "windows")]
-    if let Some((x, y, w, h)) = super::win::target().and_then(super::win::rect) {
+    if let Some((x, y, w, h)) = crate::agent::tools::desktop::win::target().and_then(crate::agent::tools::desktop::win::rect) {
         if let Ok(m) = xcap::Monitor::from_point(x + w / 2, y + h / 2) {
             return Ok(m);
         }
     }
     #[cfg(target_os = "windows")]
     {
-        let (cx, cy) = super::win::cursor();
+        let (cx, cy) = crate::agent::tools::desktop::win::cursor();
         if let Ok(m) = xcap::Monitor::from_point(cx, cy) {
             return Ok(m);
         }
@@ -328,15 +328,15 @@ fn capture_screenshot_for(args: serde_json::Value) -> impl FnOnce() -> ToolResul
         {
             let want_window = args.get("window").and_then(|v| v.as_bool()).unwrap_or(false);
             if want_window {
-                if let Some(t) = super::win::target() {
-                    if let Some((x, y, w, h)) = super::win::rect(t) {
+                if let Some(t) = crate::agent::tools::desktop::win::target() {
+                    if let Some((x, y, w, h)) = crate::agent::tools::desktop::win::rect(t) {
                         let x0 = x.max(mx);
                         let y0 = y.max(my);
                         let x1 = (x + w).min(mx + mw as i32);
                         let y1 = (y + h).min(my + mh as i32);
                         if x1 > x0 && y1 > y0 {
                             region = (x0, y0, (x1 - x0) as u32, (y1 - y0) as u32);
-                            what = format!("'{}'", super::win::title(t));
+                            what = format!("'{}'", crate::agent::tools::desktop::win::title(t));
                         }
                     }
                 }
@@ -416,16 +416,16 @@ fn zoom_for(args: serde_json::Value) -> impl FnOnce() -> ToolResult + Send {
 /// actually went.
 #[cfg(target_os = "windows")]
 fn front_note() -> String {
-    let fg = super::win::foreground();
+    let fg = crate::agent::tools::desktop::win::foreground();
     if fg == 0 {
         return String::new();
     }
-    format!(" In front: '{}'.", super::win::title(fg))
+    format!(" In front: '{}'.", crate::agent::tools::desktop::win::title(fg))
 }
 
 #[cfg(target_os = "windows")]
 fn windows_pointer_action(args: &serde_json::Value, app: &tauri::AppHandle) -> ToolResult {
-    use super::win::{self, MouseButton};
+    use crate::agent::tools::desktop::win::{self, MouseButton};
     let action = args.get("action").and_then(|v| v.as_str()).unwrap_or_default();
     let text = args.get("text").and_then(|v| v.as_str());
     let at = coordinate(args, "coordinate");

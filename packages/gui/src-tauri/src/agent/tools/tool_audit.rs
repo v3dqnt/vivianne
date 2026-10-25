@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use serde_json::json;
 
-use super::tool_exec::create_coding_tools;
+use crate::agent::tools::builtin::create_coding_tools;
 
 fn scratch_project() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("viv-tool-audit-{}", uuid::Uuid::new_v4()));

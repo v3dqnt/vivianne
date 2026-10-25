@@ -4,6 +4,10 @@
 //! means checked" rule, and the Tauri commands that drive it.
 
 pub mod agent;
+pub mod compaction;
+pub mod context_shaping;
+pub mod streaming;
+pub mod subagents;
 pub mod commands;
 pub mod directive;
 pub mod events;

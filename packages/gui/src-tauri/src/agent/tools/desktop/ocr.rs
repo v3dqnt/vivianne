@@ -169,7 +169,7 @@ async fn ocr_via_rapidocr(path: &Path) -> Result<String, String> {
         // Least-privilege env, same as bash/powershell: an image-reading
         // subprocess has no business seeing provider API keys.
         .env_clear()
-        .envs(super::sandbox::filtered_env())
+        .envs(crate::agent::tools::code::sandbox::filtered_env())
         .kill_on_drop(true)
         .output();
     let output = match tokio::time::timeout(std::time::Duration::from_secs(RAPIDOCR_TIMEOUT_SECS), child).await {

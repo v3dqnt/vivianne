@@ -23,7 +23,7 @@ use serde::Serialize;
 use tauri::Emitter;
 
 use crate::agent::runtime::types::{AgentMessage, AgentToolResult, MessageContent};
-use crate::coding_agent::orchestration::{SubagentRegistry, SubagentStatus};
+use crate::agent::runtime::subagents::{SubagentRegistry, SubagentStatus};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -490,7 +490,7 @@ pub async fn execute_team_run(
                 let over = m.started.is_some_and(|t| t.elapsed() > limit);
                 if stop || over {
                     let why = if stop { "the team run was stopped" } else { "it ran past the run's time limit" };
-                    crate::coding_agent::orchestration::cancel_subagent(&h, Some(why.into()));
+                    crate::agent::runtime::subagents::cancel_subagent(&h, Some(why.into()));
                 }
                 let status = h.lock().unwrap_or_else(|e| e.into_inner()).status.clone();
                 match status {

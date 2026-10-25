@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::coding_agent::subagent_profiles::{SubagentModelOverride, SubagentProfile};
+use crate::agent::profiles::subagent::{SubagentModelOverride, SubagentProfile};
 
 const MASTER_ID: &str = "master";
 
@@ -340,7 +340,7 @@ fn read_agent(path: &Path) -> Option<TeamAgent> {
         return None;
     }
     let text = std::fs::read_to_string(path).ok()?;
-    let (fm, body) = crate::coding_agent::tool_exec::parse_frontmatter::<TeamFrontmatter>(&text);
+    let (fm, body) = crate::agent::tools::builtin::parse_frontmatter::<TeamFrontmatter>(&text);
     Some(TeamAgent {
         name: fm.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| id.clone()),
         id,

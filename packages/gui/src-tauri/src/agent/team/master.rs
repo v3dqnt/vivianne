@@ -90,7 +90,7 @@ async fn read_master(root: &Path) -> Option<(MasterFrontmatter, Option<String>, 
     let charter = tokio::fs::read_to_string(charter_path(root)).await.ok()?;
     let (frontmatter, instructions) = match tokio::fs::read_to_string(master_path(root)).await {
         Ok(text) => {
-            let (fm, body) = crate::coding_agent::tool_exec::parse_frontmatter::<MasterFrontmatter>(&text);
+            let (fm, body) = crate::agent::tools::builtin::parse_frontmatter::<MasterFrontmatter>(&text);
             // Compared with line endings normalised: an editor on Windows will
             // happily resave the untouched placeholder as CRLF.
             let body = body.replace("\r\n", "\n");

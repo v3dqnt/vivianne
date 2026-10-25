@@ -6,6 +6,7 @@
 ///   prompt, hooks, recovery, and the Tauri commands that drive it
 /// - `tools` — tool schemas, dispatch, profiles and the self-contained tools
 /// - `memory` — what the agent remembers across sessions
+/// - `profiles` — what specialises the base agent
 /// - `models` — which model does the work, and what it costs
 /// - `sessions` — projects and their conversations
 /// - `team` — specialists, team runs, bots, plans
@@ -16,6 +17,7 @@
 pub mod background;
 pub mod changes;
 pub mod models;
+pub mod profiles;
 pub mod runtime;
 pub mod sessions;
 pub mod system;

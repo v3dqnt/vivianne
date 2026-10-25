@@ -344,7 +344,7 @@ async fn refresh(root: &Path, embedder: Option<(Embedder, String)>) -> (Index, S
     let root_buf = root.to_path_buf();
     let seen: Vec<(String, u64, u64, PathBuf)> = tokio::task::spawn_blocking(move || {
         let mut out = Vec::new();
-        super::tool_exec::walk_files(&root_buf, MAX_FILES, |p| {
+        crate::agent::tools::builtin::walk_files(&root_buf, MAX_FILES, |p| {
             let ext_ok = p.extension().and_then(|e| e.to_str()).is_some_and(|e| SEARCHABLE_EXTS.contains(&e.to_ascii_lowercase().as_str()));
             if !ext_ok {
                 return true;

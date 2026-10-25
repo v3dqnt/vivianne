@@ -535,12 +535,12 @@ async fn run_steps(
     master: &crate::agent::runtime::state::AgentState,
     app: &tauri::AppHandle,
 ) {
-    use crate::coding_agent::orchestration::{SubagentRegistry, SubagentStatus};
+    use crate::agent::runtime::subagents::{SubagentRegistry, SubagentStatus};
     loop {
         if cancelled(&plan.id) {
             for s in state.steps.values_mut().filter(|s| s.status == "running") {
                 if let Some(h) = s.task_id.as_deref().and_then(|t| SubagentRegistry::global().get(t)) {
-                    crate::coding_agent::orchestration::cancel_subagent(&h, Some("the plan was stopped".into()));
+                    crate::agent::runtime::subagents::cancel_subagent(&h, Some("the plan was stopped".into()));
                 }
                 s.status = "failed".into();
                 s.output = Some("Stopped before it finished.".into());

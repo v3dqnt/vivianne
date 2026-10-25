@@ -193,10 +193,10 @@ fn font_face_css() -> &'static str {
             format!("@font-face{{font-family:'{family}';font-style:{style};font-weight:100 900;font-display:block;src:url(data:font/woff2;base64,{}) format('woff2');}}", b64(bytes))
         };
         [
-            face("Inter", "normal", include_bytes!("../../fonts/inter.woff2")),
-            face("Inter", "italic", include_bytes!("../../fonts/inter-italic.woff2")),
-            face("Source Serif 4", "normal", include_bytes!("../../fonts/source-serif-4.woff2")),
-            face("Source Serif 4", "italic", include_bytes!("../../fonts/source-serif-4-italic.woff2")),
+            face("Inter", "normal", include_bytes!("../../../../fonts/inter.woff2")),
+            face("Inter", "italic", include_bytes!("../../../../fonts/inter-italic.woff2")),
+            face("Source Serif 4", "normal", include_bytes!("../../../../fonts/source-serif-4.woff2")),
+            face("Source Serif 4", "italic", include_bytes!("../../../../fonts/source-serif-4-italic.woff2")),
         ]
         .concat()
     })

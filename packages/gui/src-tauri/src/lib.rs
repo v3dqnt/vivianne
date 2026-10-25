@@ -26,7 +26,6 @@ pub mod multiplayer;
 use crate::multiplayer::MultiplayerState;
 
 // New modules
-pub mod coding_agent;
 pub mod lsp;
 pub mod mcp;
 
@@ -355,16 +354,16 @@ try `viv help`", cli::program_args()[0]);
       crate::skills_hub::cmd_skills_remove,
       crate::ai::embedding::cmd_list_embedding_models,
       crate::ai::embedding::cmd_test_embedder,
-      crate::coding_agent::tool_exec::cmd_web_search_test,
+      crate::agent::tools::builtin::cmd_web_search_test,
       crate::notch::cmd_notch_open_with_files,
       crate::agent::runtime::commands::cmd_memory_delete,
       crate::agent::runtime::commands::cmd_memory_edit,
       crate::agent::runtime::commands::cmd_clone_session,
       crate::agent::runtime::commands::cmd_list_skills,
       crate::agent::runtime::commands::cmd_save_skill_file,
-      crate::coding_agent::custom_tools::cmd_list_custom_tools,
-      crate::coding_agent::custom_tools::cmd_delete_custom_tool,
-      crate::coding_agent::custom_tools::cmd_custom_tool_source,
+      crate::agent::tools::custom_tools::cmd_list_custom_tools,
+      crate::agent::tools::custom_tools::cmd_delete_custom_tool,
+      crate::agent::tools::custom_tools::cmd_custom_tool_source,
       crate::agent::runtime::commands::cmd_agent_respond_permission,
       crate::agent::runtime::commands::cmd_agent_answer_question,
       crate::agent::runtime::commands::cmd_agent_respond_confirmation,
@@ -419,9 +418,9 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::runtime::commands::cmd_get_project_dir,
       crate::agent::runtime::commands::cmd_set_project_dir,
       // Grok-parity coding-agent commands (subagents, plan mode, ask-user)
-      crate::coding_agent::commands::cmd_coding_list_subagents,
-      crate::coding_agent::commands::cmd_coding_get_subagent_messages,
-      crate::coding_agent::commands::cmd_coding_kill_subagent,
+      crate::agent::tools::commands::cmd_coding_list_subagents,
+      crate::agent::tools::commands::cmd_coding_get_subagent_messages,
+      crate::agent::tools::commands::cmd_coding_kill_subagent,
       crate::agent::team::plans::cmd_plan_list,
       crate::agent::team::plans::cmd_plan_get,
       crate::agent::team::plans::cmd_plan_mode_get,
@@ -432,8 +431,8 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::background::run_ledger::cmd_long_task_get,
       crate::agent::background::run_ledger::cmd_long_task_control,
       crate::agent::background::run_ledger::cmd_long_task_resume_prompt,
-      crate::coding_agent::commands::cmd_coding_register_stream_channel,
-      crate::coding_agent::computer::cmd_capture_screen,
+      crate::agent::tools::commands::cmd_coding_register_stream_channel,
+      crate::agent::tools::desktop::computer::cmd_capture_screen,
       crate::instant::stt::cmd_instant_stt_preload,
       crate::instant::stt::cmd_instant_stt_transcribe,
       crate::instant::session::cmd_instant_run,
@@ -608,14 +607,14 @@ try `viv help`", cli::program_args()[0]);
       // else touches the session dir, not before first paint, so this runs
       // on its own thread rather than blocking `.setup()` (and the window
       // show that waits on it). Spilled tool output (see
-      // `coding_agent::context_shaping`) has no owning session to get
+      // `agent::runtime::context_shaping`) has no owning session to get
       // cleaned up with, so it ages out on a timer here too, same reasoning.
       std::thread::spawn(|| {
         let pruned = crate::agent::runtime::commands::prune_empty_sessions();
         if pruned > 0 {
           log::info!("[sessions] pruned {pruned} empty session(s)");
         }
-        let pruned_spill = crate::coding_agent::context_shaping::prune_old_spill_files();
+        let pruned_spill = crate::agent::runtime::context_shaping::prune_old_spill_files();
         if pruned_spill > 0 {
           log::info!("[spill] pruned {pruned_spill} old spill file(s)");
         }
@@ -746,7 +745,7 @@ try `viv help`", cli::program_args()[0]);
 
       // Local OCR's tool dispatcher has no AppHandle of its own — this is how
       // it reaches the managed LlamaManager to pause local models for RAM.
-      crate::coding_agent::ocr::install_app_handle(app.handle().clone());
+      crate::agent::tools::desktop::ocr::install_app_handle(app.handle().clone());
 
       // Initialize dev-server process manager (Live Preview panel)
       app.manage(Arc::new(DevServerManager::default()));

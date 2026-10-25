@@ -10,10 +10,10 @@
 //! by any tool-execution path and has been removed rather than wired up,
 //! since a working gate already exists.
 
-use crate::coding_agent::orchestration::{
+use crate::agent::runtime::subagents::{
     KillTaskTool, SubagentRegistry, SubagentStatus,
 };
-use crate::coding_agent::tool_exec::Tool as _;
+use crate::agent::tools::builtin::Tool as _;
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,8 +101,8 @@ pub async fn cmd_coding_kill_subagent(id: String) -> Result<String, String> {
 /// canonical Channel use case.
 #[tauri::command]
 pub async fn cmd_coding_register_stream_channel(
-    channel: tauri::ipc::Channel<crate::coding_agent::streaming::StreamBatch>,
+    channel: tauri::ipc::Channel<crate::agent::runtime::streaming::StreamBatch>,
 ) -> Result<(), String> {
-    crate::coding_agent::streaming::set_stream_channel(channel);
+    crate::agent::runtime::streaming::set_stream_channel(channel);
     Ok(())
 }

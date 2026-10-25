@@ -64,7 +64,7 @@ pub(crate) fn fast_path_ok(name: &str, args: &serde_json::Value, disabled: &[Str
         && !(PATH_SCOPED_TOOLS.contains(&name)
             && !workspace_folders.is_empty()
             && args.get("path").and_then(|v| v.as_str()).is_some_and(|p| {
-                let resolved = crate::coding_agent::tool_exec::resolve_path(cwd, p);
+                let resolved = crate::agent::tools::builtin::resolve_path(cwd, p);
                 !path_in_workspace(&resolved, workspace_folders)
             }))
 }
@@ -222,7 +222,7 @@ pub(crate) async fn compute_restrictions(state: &AgentState) -> Restrictions {
         }
     }
     // Fourth restriction source: a subagent profile's tool allowlist (see
-    // `coding_agent::subagent_profiles`). Unlike the three above, this is an
+    // `agent::profiles::subagent`). Unlike the three above, this is an
     // ALLOWlist, not a denylist — everything NOT named gets disabled. `None`
     // (the default for the main agent, and for a subagent whose profile
     // didn't specify one) means no restriction from this source at all.
@@ -283,7 +283,7 @@ pub async fn get_agent_tool_definitions() -> std::sync::Arc<Vec<serde_json::Valu
     // Slow path: rebuild the full definition list
     let mut defs = static_tool_definitions();
     defs.extend(crate::mods::tools::definitions());
-    defs.extend(crate::coding_agent::custom_tools::tool_definitions());
+    defs.extend(crate::agent::tools::custom_tools::tool_definitions());
     let mut mcp = crate::mcp::list_all_tools().await;
     mcp.sort_by(|(a, x), (b, y)| (a, &x.name).cmp(&(b, &y.name)));
     for (server, tool) in mcp {
@@ -369,7 +369,7 @@ pub(crate) fn path_in_workspace(resolved: &std::path::Path, folders: &[String]) 
 /// `details`, doubling the memory this result held for its lifetime (and the
 /// IPC payload size) for no reason — nothing downstream reads it back out of
 /// `details` once it's been surfaced as a proper content block.
-fn tool_result_to_agent_result(res: crate::coding_agent::tool_exec::ToolResult, vision_capable: bool) -> AgentToolResult {
+fn tool_result_to_agent_result(res: crate::agent::tools::builtin::ToolResult, vision_capable: bool) -> AgentToolResult {
     let mut content = vec![MessageContent::Text { text: res.content }];
     let mut details = res.details.unwrap_or(serde_json::Value::Null);
     if vision_capable {
@@ -396,10 +396,10 @@ pub async fn execute_tool_calls(
     let mut slots: Vec<Option<AgentMessage>> = (0..total).map(|_| None).collect();
     let workspace_folders = state.workspace_folders().await;
     let cwd = workspace_folders.first().cloned().unwrap_or_else(|| ".".to_string());
-    let tools = crate::coding_agent::tool_exec::create_coding_tools(cwd.clone());
+    let tools = crate::agent::tools::builtin::create_coding_tools(cwd.clone());
     // Custom tools are Python the agent wrote: they run with the same reach
     // as `math` or `bash`, so they take the same approval.
-    let custom_names = crate::coding_agent::custom_tools::custom_tool_names();
+    let custom_names = crate::agent::tools::custom_tools::custom_tool_names();
     let bot_policy = state.bot_policy().await;
     // Global setting OR this session's own unattended flag. Viv Instant sets
     // the latter because it is spoken to rather than watched — there is no one
@@ -484,7 +484,7 @@ pub async fn execute_tool_calls(
                 let is_image = tc.arguments.get("path").and_then(|v| v.as_str())
                     .and_then(|p| std::path::Path::new(p).extension())
                     .and_then(|e| e.to_str())
-                    .map(|e| crate::coding_agent::tool_exec::is_image_ext(&e.to_ascii_lowercase()))
+                    .map(|e| crate::agent::tools::builtin::is_image_ext(&e.to_ascii_lowercase()))
                     .unwrap_or(false);
                 if is_image {
                     tc.arguments["ocr"] = serde_json::json!(true);
@@ -684,7 +684,7 @@ pub async fn execute_tool_calls(
         let mut needs_approval = needs_gate(&tool_call) || custom_names.contains(&tool_call.name);
         if PATH_SCOPED_TOOLS.contains(&tool_call.name.as_str()) && !workspace_folders.is_empty() {
             if let Some(path_arg) = tool_call.arguments.get("path").and_then(|v| v.as_str()) {
-                let resolved = crate::coding_agent::tool_exec::resolve_path(&cwd, path_arg);
+                let resolved = crate::agent::tools::builtin::resolve_path(&cwd, path_arg);
                 if !path_in_workspace(&resolved, &workspace_folders) {
                     needs_approval = true;
                     approval_reason = Some(format!("wants to access '{}', which is outside your workspace folders", resolved.display()));
@@ -707,7 +707,7 @@ pub async fn execute_tool_calls(
                 crate::agent::team::Handover::Delegate
             };
             let refusal = written.iter().find_map(|p| {
-                crate::agent::team::write_refusal(&cwd, &owned, &crate::coding_agent::tool_exec::resolve_path(&cwd, p), p, handover)
+                crate::agent::team::write_refusal(&cwd, &owned, &crate::agent::tools::builtin::resolve_path(&cwd, p), p, handover)
             });
             if let Some(text) = refusal {
                 let refused = AgentToolResult {
@@ -1023,7 +1023,7 @@ pub async fn execute_tool_calls(
             // instead of an "unknown tool" error it has to recover from.
             //
             // Merged pixel-mode + (Windows-only) structured-mode tool — see
-            // `coding_agent::computer::execute_computer_tool`. Needs
+            // `agent::tools::desktop::computer::execute_computer_tool`. Needs
             // `&tauri::AppHandle` (structured mode drives the highlight
             // overlay), so it's dispatched here rather than through the
             // plain `Tool` trait registry below.
@@ -1032,7 +1032,7 @@ pub async fn execute_tool_calls(
             if notch {
                 crate::activity::begin_action(app, &tool_call.arguments);
             }
-            let result = crate::coding_agent::computer::execute_computer_tool(&tool_call.arguments, app).await;
+            let result = crate::agent::tools::desktop::computer::execute_computer_tool(&tool_call.arguments, app).await;
             if notch {
                 crate::activity::end_action(app);
             }
@@ -1693,7 +1693,7 @@ async fn subagent_source_tag(app: &tauri::AppHandle, kind: &str) -> String {
 /// employee (`AgentState::delegation_allowed`) may fan out to plain
 /// subagents of its own; nothing below that may delegate. Registers into the same `SubagentRegistry` that
 /// `task_output`/`wait_tasks`/`kill_task` (ordinary `Tool` impls in
-/// `coding_agent::orchestration`, dispatched through the generic fallback
+/// `agent::runtime::subagents`, dispatched through the generic fallback
 /// below) read from — only the *spawn* side needs direct access to
 /// `AgentState`/`AppHandle`, so only `task` itself is special-cased.
 pub(crate) async fn execute_task_tool(
@@ -1702,7 +1702,7 @@ pub(crate) async fn execute_task_tool(
     parent_state: &AgentState,
     app: &tauri::AppHandle,
 ) -> AgentToolResult {
-    use crate::coding_agent::orchestration::{SubagentHandle, SubagentRegistry, SubagentStatus};
+    use crate::agent::runtime::subagents::{SubagentHandle, SubagentRegistry, SubagentStatus};
 
     let refuse = |text: &str| AgentToolResult {
         content: vec![MessageContent::Text { text: text.to_string() }],
@@ -1770,12 +1770,12 @@ pub(crate) async fn execute_task_tool(
         .map(crate::agent::team::to_profile)
         .or_else(|| {
             crate::agent::system::paths::viv_subagents_dir().ok().and_then(|dir| {
-                crate::coding_agent::subagent_profiles::load_profiles_from_dir(&dir.to_string_lossy())
+                crate::agent::profiles::subagent::load_profiles_from_dir(&dir.to_string_lossy())
                     .into_iter()
                     .find(|p| p.name == subagent_type)
             })
         })
-        .or_else(|| crate::coding_agent::subagent_profiles::find_builtin(&subagent_type));
+        .or_else(|| crate::agent::profiles::subagent::find_builtin(&subagent_type));
 
     // Resolve the actual task prompt: an explicit `prompt` always wins;
     // otherwise fall back to the matched profile's preset `default_prompt`
@@ -2009,7 +2009,7 @@ async fn drive_subagent(
     prompt: String,
     child_depth: usize,
     source_tag: String,
-    handle: &std::sync::Arc<std::sync::Mutex<crate::coding_agent::orchestration::SubagentHandle>>,
+    handle: &std::sync::Arc<std::sync::Mutex<crate::agent::runtime::subagents::SubagentHandle>>,
 ) -> (String, u32, u32) {
     let mut sub_context = AgentContext {
         system_prompt: sub_system_prompt.clone(),
@@ -2058,7 +2058,7 @@ async fn drive_subagent(
                     let turns = msgs.iter().filter(|m| matches!(m, AgentMessage::Assistant { .. })).count() as u32;
                     let tool_calls = msgs.iter().filter(|m| matches!(m, AgentMessage::ToolResult { .. })).count() as u32;
                     drop(msgs);
-                    h.status = crate::coding_agent::orchestration::SubagentStatus::Running { turns, tool_calls };
+                    h.status = crate::agent::runtime::subagents::SubagentStatus::Running { turns, tool_calls };
                 }
             }
         }
@@ -2216,7 +2216,7 @@ async fn execute_list_tools_tool(disabled_tools: &[String]) -> AgentToolResult {
     let defs = get_agent_tool_definitions().await;
     // Scanned once, not once per tool: listing mods reads every manifest.
     let playbook_names: std::collections::HashSet<String> = crate::mods::tools::names();
-    let custom_names = crate::coding_agent::custom_tools::custom_tool_names();
+    let custom_names = crate::agent::tools::custom_tools::custom_tool_names();
     let disabled: std::collections::HashSet<&str> = disabled_tools.iter().map(String::as_str).collect();
 
     let mut lines = Vec::with_capacity(defs.len());
@@ -2247,7 +2247,7 @@ async fn execute_list_tools_tool(disabled_tools: &[String]) -> AgentToolResult {
 async fn execute_list_subagent_profiles_tool(project_root: Option<String>) -> AgentToolResult {
     let custom = crate::agent::system::paths::viv_subagents_dir()
         .ok()
-        .map(|dir| crate::coding_agent::subagent_profiles::load_profiles_from_dir(&dir.to_string_lossy()))
+        .map(|dir| crate::agent::profiles::subagent::load_profiles_from_dir(&dir.to_string_lossy()))
         .unwrap_or_default();
     // A custom profile whose name matches a built-in SHADOWS it: `task`
     // resolves `subagent_type` by checking `~/.viv/subagents` first and only
@@ -2273,7 +2273,7 @@ async fn execute_list_subagent_profiles_tool(project_root: Option<String>) -> Ag
         .into_iter()
         .chain(custom.clone().into_iter().filter(|p| !team_ids.contains(&p.name)))
         .chain(
-            crate::coding_agent::subagent_profiles::builtin_profiles()
+            crate::agent::profiles::subagent::builtin_profiles()
                 .into_iter()
                 .filter(|b| !shadowed.contains(&b.name)),
         );
@@ -2446,7 +2446,7 @@ async fn execute_terminal_send_tool(args: &serde_json::Value, app: &tauri::AppHa
     // Same destructive-command denylist bash/powershell/playbooks enforce — a
     // PTY is a shell like any other, and was the one execution path that
     // reached one without passing through this.
-    if let Some(reason) = crate::coding_agent::sandbox::check_command(&data) {
+    if let Some(reason) = crate::agent::tools::code::sandbox::check_command(&data) {
         return text_result(format!("Error: {reason}"));
     }
     // A REPL/shell waits for Enter, not just the characters — matching what a
@@ -2467,7 +2467,7 @@ async fn execute_terminal_read_tool(args: &serde_json::Value, app: &tauri::AppHa
         // Same budget bash/powershell output goes through — a verbose build
         // in a PTY can otherwise put a quarter-megabyte of scrollback into
         // one tool result with no notice that anything was elided.
-        Ok(data) => text_result(crate::coding_agent::context_shaping::trim_middle_bytes(
+        Ok(data) => text_result(crate::agent::runtime::context_shaping::trim_middle_bytes(
             &data,
             TERMINAL_READ_BUDGET_BYTES / 4,
             3 * TERMINAL_READ_BUDGET_BYTES / 4,
@@ -2843,7 +2843,7 @@ async fn generate_image_google(app: &tauri::AppHandle, prompt: &str, model: &str
 /// (`settings.json`'s `skills` array). Shared by the `read_skill` tool here
 /// and by `cmd_agent_prompt`'s system-prompt catalog/`@mention` injection, so
 /// both see exactly the same set the Settings UI's `cmd_list_skills` shows.
-pub(crate) async fn load_all_configured_skills() -> Vec<crate::coding_agent::skills::Skill> {
+pub(crate) async fn load_all_configured_skills() -> Vec<crate::agent::tools::skills::Skill> {
     let mut dirs: Vec<String> = read_settings_json()
         .await
         .get("skills")
@@ -2856,7 +2856,7 @@ pub(crate) async fn load_all_configured_skills() -> Vec<crate::coding_agent::ski
 
     let mut all = Vec::new();
     for dir in dirs {
-        all.extend(crate::coding_agent::skills::load_skills_from_dir(&dir).skills);
+        all.extend(crate::agent::tools::skills::load_skills_from_dir(&dir).skills);
     }
     all
 }
@@ -3186,9 +3186,9 @@ mod schema_registry_consistency_tests {
     fn every_constructed_tool_has_a_schema_entry() {
         let playbook_names: std::collections::HashSet<String> =
             crate::mods::tools::names();
-        let custom_names = crate::coding_agent::custom_tools::custom_tool_names();
+        let custom_names = crate::agent::tools::custom_tools::custom_tool_names();
 
-        let constructed: Vec<String> = crate::coding_agent::tool_exec::create_coding_tools(".".to_string())
+        let constructed: Vec<String> = crate::agent::tools::builtin::create_coding_tools(".".to_string())
             .iter()
             .map(|t| t.name().to_string())
             .filter(|name| !playbook_names.contains(name) && !custom_names.contains(name))
@@ -3245,7 +3245,7 @@ mod schema_registry_consistency_tests {
         let playbook_names: std::collections::HashSet<String> =
             crate::mods::tools::names();
         let constructed: std::collections::HashSet<String> =
-            crate::coding_agent::tool_exec::create_coding_tools(".".to_string())
+            crate::agent::tools::builtin::create_coding_tools(".".to_string())
                 .iter()
                 .map(|t| t.name().to_string())
                 .collect();

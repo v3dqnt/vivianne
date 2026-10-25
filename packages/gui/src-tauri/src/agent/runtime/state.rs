@@ -49,7 +49,7 @@ struct AgentStateInner {
     llm_summary_enabled: bool,
     /// How many of the most recent images (user attachments + computer-tool
     /// screenshots) stay intact in live context; older ones are evicted to a
-    /// text placeholder each turn (`coding_agent::context_shaping::evict_old_images`).
+    /// text placeholder each turn (`agent::runtime::context_shaping::evict_old_images`).
     image_keep_last_n: u32,
     /// Active workspace folders — first entry is "primary" (used for
     /// relative-path resolution in tool execution, the same role the old

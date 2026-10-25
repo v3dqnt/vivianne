@@ -105,7 +105,7 @@ fn paint(app: &tauri::AppHandle, state: &'static str, action: String) {
 /// makes it click-through for the action's duration.
 pub fn begin_action(app: &tauri::AppHandle, args: &serde_json::Value) {
     GENERATION.fetch_add(1, Ordering::SeqCst);
-    crate::coding_agent::win_cancel_reset();
+    crate::agent::tools::desktop::win_cancel_reset();
     let win = match crate::overlays::ensure(app, LABEL) {
         Ok(w) => w,
         Err(e) => {

@@ -30,7 +30,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use futures::future::{BoxFuture, FutureExt, Shared};
 
-use crate::coding_agent::tool_exec::ToolResult;
+use crate::agent::tools::builtin::ToolResult;
 
 /// How long an unclaimed speculation stays servable. Short on purpose: it
 /// bounds how stale a grep or listing can be against an edit made outside
@@ -129,7 +129,7 @@ fn stamp(cwd: &str, name: &str, args: &serde_json::Value) -> Option<(SystemTime,
     if name != "read" {
         return None;
     }
-    let path = crate::coding_agent::tool_exec::resolve_path(cwd, args.get("path")?.as_str()?);
+    let path = crate::agent::tools::builtin::resolve_path(cwd, args.get("path")?.as_str()?);
     let meta = std::fs::metadata(path).ok()?;
     Some((meta.modified().ok()?, meta.len()))
 }
@@ -146,7 +146,7 @@ pub fn launch(scope: &Scope, name: &str, args: serde_json::Value) {
     }
     let (cwd, tool, call_args) = (scope.cwd.clone(), name.to_string(), args.clone());
     let task = tokio::spawn(async move {
-        let tools = crate::coding_agent::tool_exec::create_coding_tools(cwd);
+        let tools = crate::agent::tools::builtin::create_coding_tools(cwd);
         match tools.iter().find(|t| t.name() == tool) {
             Some(t) => Some(t.execute(&call_args, ".").await),
             None => None,

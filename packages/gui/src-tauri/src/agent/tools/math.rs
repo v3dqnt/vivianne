@@ -183,7 +183,7 @@ async fn existing_python() -> Option<PathBuf> {
     FOUND
         .get_or_init(|| async {
             let check = format!("import {}", PACKAGES.join(", "));
-            for path in crate::coding_agent::checkers::real_pythons() {
+            for path in crate::agent::tools::code::checkers::real_pythons() {
                 let mut cmd = command(&path);
                 cmd.args(["-c", &check]).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
                 if let Ok(Ok(status)) = tokio::time::timeout(Duration::from_secs(20), cmd.status()).await {
@@ -231,7 +231,7 @@ async fn ensure_env() -> Result<(PathBuf, bool), String> {
         install.args(["pip", "install", "--only-binary", ":all:", "--python"]).arg(&python).args(PACKAGES);
         run_setup_step(install, "Installing the maths packages").await?;
     } else {
-        let system = crate::coding_agent::checkers::python()
+        let system = crate::agent::tools::code::checkers::python()
             .ok_or_else(|| {
                 "The math tool needs Python 3.9+ (or uv). Install it from python.org and try again.".to_string()
             })?;

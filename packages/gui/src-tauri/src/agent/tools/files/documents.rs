@@ -31,8 +31,8 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use super::doc_design::{self as dd, Block, Chart, DocMeta, Image, Slide, Theme};
-use super::tool_exec::{err, resolve_path, Tool, ToolResult};
+use crate::agent::tools::files::doc_design::{self as dd, Block, Chart, DocMeta, Image, Slide, Theme};
+use crate::agent::tools::builtin::{err, resolve_path, Tool, ToolResult};
 
 pub struct CreateDocumentTool {
     cwd: String,

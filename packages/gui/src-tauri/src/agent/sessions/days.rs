@@ -377,7 +377,7 @@ fn spawn_summary_upgrade(
 ) {
     tauri::async_runtime::spawn(async move {
         let transcript: Vec<AgentMessage> = prev_messages.into_iter().filter(|m| !is_handoff(m)).collect();
-        let rendered = crate::coding_agent::compaction::render_transcript_for_summary(&transcript);
+        let rendered = crate::agent::runtime::compaction::render_transcript_for_summary(&transcript);
         if rendered.trim().is_empty() {
             return;
         }

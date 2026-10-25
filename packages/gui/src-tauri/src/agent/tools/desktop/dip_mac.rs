@@ -1,5 +1,5 @@
-//! DIP's structured mode on macOS — the counterpart of `super::dip` (Windows
-//! UI Automation), built on the Accessibility API (`super::mac`).
+//! DIP's structured mode on macOS — the counterpart of `crate::agent::tools::desktop::dip` (Windows
+//! UI Automation), built on the Accessibility API (`crate::agent::tools::desktop::mac`).
 //!
 //! Same surface, same output: a snapshot lists a window's controls as
 //! `[id] Role "Name" = "value"` lines, `interact` acts on an id, and windows
@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::mac::{self, cf_to_string, Element, Window};
-use super::tool_exec::ToolResult;
+use crate::agent::tools::desktop::mac::{self, cf_to_string, Element, Window};
+use crate::agent::tools::builtin::ToolResult;
 
 fn err(msg: impl Into<String>) -> ToolResult {
     ToolResult { content: format!("Error: {}", msg.into()), is_error: true, details: None }

@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
 use crate::agent::runtime::types::{AgentMessage, MessageContent};
-use crate::coding_agent::orchestration::{SubagentRegistry, SubagentStatus};
+use crate::agent::runtime::subagents::{SubagentRegistry, SubagentStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

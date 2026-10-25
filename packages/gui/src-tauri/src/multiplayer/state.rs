@@ -349,7 +349,7 @@ impl MultiplayerState {
     /// or no connection at all both just drop the message with a log line
     /// rather than propagating backpressure to the caller — the same
     /// "silently do nothing until there's a sink" shape as
-    /// `coding_agent::streaming::send_batch`, extended with "and don't
+    /// `agent::runtime::streaming::send_batch`, extended with "and don't
     /// block if the sink is slow."
     pub async fn broadcast_session_message(&self, message: &AgentMessage) {
         let Some(tx) = self.outbound_tx.read().await.clone() else { return };

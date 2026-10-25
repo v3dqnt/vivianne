@@ -21,7 +21,7 @@ use std::time::Duration;
 use tauri::ipc::Channel;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use super::tool_exec::ToolResult;
+use crate::agent::tools::builtin::ToolResult;
 
 // ── Live output transport ───────────────────────────────────────────────────
 //
@@ -104,7 +104,7 @@ const BATCH_MAX_LINES: usize = 50;
 /// (and cheap to call unconditionally) otherwise.
 async fn cap_live_stream(buf: &mut String) {
     if buf.len() > STREAM_LIVE_CAP_BYTES {
-        *buf = super::context_shaping::spill_and_trim_middle_bytes(buf, MAX_STREAM_BYTES / 4, 3 * MAX_STREAM_BYTES / 4).await;
+        *buf = crate::agent::runtime::context_shaping::spill_and_trim_middle_bytes(buf, MAX_STREAM_BYTES / 4, 3 * MAX_STREAM_BYTES / 4).await;
     }
 }
 
@@ -124,7 +124,7 @@ pub(crate) async fn run_streaming(
         .current_dir(cwd)
         .kill_on_drop(true)
         .env_clear()
-        .envs(super::sandbox::filtered_env())
+        .envs(crate::agent::tools::code::sandbox::filtered_env())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = match cmd.spawn() {
@@ -220,7 +220,7 @@ pub(crate) async fn run_streaming(
         // truncated before it ever becomes a persisted message), unlike
         // `prune_aging_tool_results`'s callers, whose original is already on
         // disk in the session file.
-        combined = super::context_shaping::spill_and_trim_middle_bytes(&combined, MAX_STREAM_BYTES / 4, 3 * MAX_STREAM_BYTES / 4).await;
+        combined = crate::agent::runtime::context_shaping::spill_and_trim_middle_bytes(&combined, MAX_STREAM_BYTES / 4, 3 * MAX_STREAM_BYTES / 4).await;
     }
     let body = if combined.is_empty() { "(no output)".to_string() } else { combined };
     let content = format!(

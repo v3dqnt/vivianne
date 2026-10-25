@@ -50,16 +50,16 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         // `computer` is NOT registered here — it needs `&tauri::AppHandle`
         // (structured mode drives the highlight overlay) and goes through
         // the dispatch-chain pattern in `agent/tool_exec.rs` instead, same
-        // reasoning as `run_script`/PTC. See `coding_agent::computer`.
-        Box::new(super::apply_patch::ApplyPatchTool::new(cwd.clone())),
-        Box::new(super::documents::CreateDocumentTool::new(cwd.clone())),
-        Box::new(super::documents::InspectDocumentTool::new(cwd.clone())),
-        Box::new(super::documents::EditDocumentTool::new(cwd.clone())),
-        Box::new(super::repo_tools::RepoCloneTool::new()),
-        Box::new(super::repo_tools::RepoOverviewTool::new(cwd.clone())),
-        Box::new(super::github::GithubTool::new(cwd.clone())),
-        Box::new(super::github::GithubActTool::new(cwd.clone())),
-        Box::new(super::github::GithubApiTool::new()),
+        // reasoning as `run_script`/PTC. See `agent::tools::desktop::computer`.
+        Box::new(crate::agent::tools::files::apply_patch::ApplyPatchTool::new(cwd.clone())),
+        Box::new(crate::agent::tools::files::documents::CreateDocumentTool::new(cwd.clone())),
+        Box::new(crate::agent::tools::files::documents::InspectDocumentTool::new(cwd.clone())),
+        Box::new(crate::agent::tools::files::documents::EditDocumentTool::new(cwd.clone())),
+        Box::new(crate::agent::tools::code::repo_tools::RepoCloneTool::new()),
+        Box::new(crate::agent::tools::code::repo_tools::RepoOverviewTool::new(cwd.clone())),
+        Box::new(crate::agent::tools::code::github::GithubTool::new(cwd.clone())),
+        Box::new(crate::agent::tools::code::github::GithubActTool::new(cwd.clone())),
+        Box::new(crate::agent::tools::code::github::GithubApiTool::new()),
         Box::new(crate::multiplayer::collab::PairActivityTool::new(cwd.clone())),
         Box::new(GlobTool::new(cwd.clone())),
         Box::new(PowerShellTool::new(cwd.clone())),
@@ -89,16 +89,16 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         // `question` tool already dispatched in `agent/tool_exec.rs`
         // (`execute_question_tool`, real GUI round-trip). Deleted rather
         // than wired up, since a working one already exists.
-        Box::new(super::orchestration::TaskOutputTool::new()),
-        Box::new(super::orchestration::KillTaskTool::new()),
-        Box::new(super::custom_tools::CreateToolTool::new(cwd.clone())),
-        Box::new(super::custom_tools::DeleteToolTool),
-        Box::new(super::custom_tools::ListCustomToolsTool),
+        Box::new(crate::agent::runtime::subagents::TaskOutputTool::new()),
+        Box::new(crate::agent::runtime::subagents::KillTaskTool::new()),
+        Box::new(crate::agent::tools::custom_tools::CreateToolTool::new(cwd.clone())),
+        Box::new(crate::agent::tools::custom_tools::DeleteToolTool),
+        Box::new(crate::agent::tools::custom_tools::ListCustomToolsTool),
     ];
     // ── User-made: tools from running mods (`crate::mods`) ─────────────────
     tools.extend(crate::mods::tools::tools(&cwd));
     // ── Agent-written: custom tools (~/.viv/tools/<name>/) ─────────────────
-    tools.extend(super::custom_tools::registry(&cwd));
+    tools.extend(crate::agent::tools::custom_tools::registry(&cwd));
     tools
 }
 
@@ -484,7 +484,7 @@ impl Tool for BashTool {
 
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let command = args["command"].as_str().unwrap_or("").to_string();
-        if let Some(reason) = super::sandbox::check_command(&command) {
+        if let Some(reason) = crate::agent::tools::code::sandbox::check_command(&command) {
             return ToolResult { content: reason.to_string(), is_error: true, details: None };
         }
         let timeout_secs = args["timeout"]
@@ -501,7 +501,7 @@ impl Tool for BashTool {
         // elsewhere) since the tool contract and model-generated commands are
         // POSIX syntax; falling back to cmd/powershell would silently
         // misinterpret that syntax rather than fail loudly.
-        super::streaming::run_streaming("bash", "bash", &["-c", &command], &self.cwd, timeout_secs).await
+        crate::agent::runtime::streaming::run_streaming("bash", "bash", &["-c", &command], &self.cwd, timeout_secs).await
     }
 }
 
@@ -640,7 +640,7 @@ const MAX_SEARCH_FILES_SCANNED: usize = 4000;
 
 // ── Code search ──────────────────────────────────────────────────────────
 // Semantic + BM25 hybrid search over a per-project embedding index — see
-// `coding_agent::semantic_index` for how it works and why.
+// `agent::tools::code::semantic_index` for how it works and why.
 
 pub struct CodeSearchTool {
     cwd: String,
@@ -660,7 +660,7 @@ impl Tool for CodeSearchTool {
 
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let query = args["query"].as_str().unwrap_or("").trim().to_string();
-        if super::semantic_index::tokens(&query).is_empty() && query.len() < 3 {
+        if crate::agent::tools::code::semantic_index::tokens(&query).is_empty() && query.len() < 3 {
             return ToolResult { content: "'query' must describe what to look for".to_string(), is_error: true, details: None };
         }
         let path = args["path"].as_str().unwrap_or(".").to_string();
@@ -669,7 +669,7 @@ impl Tool for CodeSearchTool {
             return ToolResult { content: format!("Not a folder: {}", root.display()), is_error: true, details: None };
         }
 
-        let (hits, status) = super::semantic_index::search(&root, &query, 10).await;
+        let (hits, status) = crate::agent::tools::code::semantic_index::search(&root, &query, 10).await;
         let mode = match status.embedder {
             Some(e) => format!("semantic ({}) + keyword", e.label()),
             None => "keyword only".to_string(),
@@ -797,7 +797,7 @@ impl Tool for PowerShellTool {
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
         let command = args["command"].as_str().unwrap_or("").to_string();
         if command.trim().is_empty() { return err("'command' is required"); }
-        if let Some(reason) = super::sandbox::check_command(&command) {
+        if let Some(reason) = crate::agent::tools::code::sandbox::check_command(&command) {
             return err(reason);
         }
         let timeout_secs = args["timeout"].as_u64().unwrap_or(DEFAULT_PS_TIMEOUT_SECS).min(MAX_PS_TIMEOUT_SECS).max(1);
@@ -809,7 +809,7 @@ impl Tool for PowerShellTool {
         // and quicker to start — else Windows PowerShell 5.1, which every
         // Windows machine has.
         let exe = if cfg!(windows) && which::which("pwsh").is_err() { "powershell" } else { "pwsh" };
-        super::streaming::run_streaming(
+        crate::agent::runtime::streaming::run_streaming(
             "powershell",
             exe,
             &["-NoProfile", "-NonInteractive", "-Command", &command],
@@ -961,7 +961,7 @@ impl Tool for WebFetchTool {
         // overflow is spilled to disk and the notice names the file — the model
         // can `read` or `grep` the rest instead of re-fetching and hoping the
         // part it needs lands inside the cap this time.
-        let out = super::context_shaping::spill_and_trim_middle_bytes(
+        let out = crate::agent::runtime::context_shaping::spill_and_trim_middle_bytes(
             &text,
             MAX_WEB_BYTES / 2,
             MAX_WEB_BYTES / 2,
@@ -1455,7 +1455,7 @@ impl Tool for DiagnosticsTool {
 
         // No server, or it didn't answer in time: the language's own tools.
         let root = std::path::Path::new(&self.cwd);
-        if let Some(result) = super::checkers::check_file(&full_path, root).await {
+        if let Some(result) = crate::agent::tools::code::checkers::check_file(&full_path, root).await {
             return if result.problems.is_empty() {
                 ok(format!("No errors in {path} (checked with {}).", result.checker))
             } else {
@@ -1723,7 +1723,7 @@ impl Tool for ReadTool {
         // that wrote a document must be able to read it back to check it.
         if matches!(ext.as_str(), "docx" | "xlsx" | "pptx") {
             let p = full.clone();
-            return match tokio::task::spawn_blocking(move || crate::coding_agent::documents::inspect(&p)).await {
+            return match tokio::task::spawn_blocking(move || crate::agent::tools::files::documents::inspect(&p)).await {
                 Ok(Ok(parts)) => {
                     let filled: Vec<_> = parts.iter().filter(|x| !x.text.trim().is_empty()).collect();
                     let body = filled.iter().map(|x| format!("[{}] {}", x.label, x.text)).collect::<Vec<_>>().join("\n");
@@ -1884,12 +1884,12 @@ async fn read_image(display_path: String, full: PathBuf, do_ocr: bool) -> ToolRe
     }
 
     if do_ocr {
-        let ocr_result = super::ocr::ocr_image(&full).await;
+        let ocr_result = crate::agent::tools::desktop::ocr::ocr_image(&full).await;
         if !ocr_result.text.is_empty() {
             content.push_str(&format!("\n  OCR text ({}):\n{}", ocr_result.method.method_str(), ocr_result.text));
         } else {
             let hint = match ocr_result.method {
-                super::ocr::OcrMethod::Unavailable => {
+                crate::agent::tools::desktop::ocr::OcrMethod::Unavailable => {
                     "\n  OCR not available: set HUGGINGFACE_TOKEN env var for API inference, or check internet connection."
                 }
                 _ => "\n  OCR returned no text (image may not contain readable text).",

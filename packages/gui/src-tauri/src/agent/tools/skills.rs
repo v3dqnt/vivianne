@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-use super::tool_exec::parse_frontmatter;
+use crate::agent::tools::builtin::parse_frontmatter;
 
 /// Parsed frontmatter from a skill file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

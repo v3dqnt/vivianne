@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use super::tool_exec::{Tool, ToolResult};
+use crate::agent::tools::builtin::{Tool, ToolResult};
 use crate::agent::runtime::types::AgentMessage;
 
 // ── Subagent registry ───────────────────────────────────────────────────────

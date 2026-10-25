@@ -488,7 +488,7 @@ pub async fn cmd_notch_stop(app: tauri::AppHandle, thread: String, registry: tau
     let state = registry.resolve(Some(thread.as_str())).await;
     state.abort_flag.store(true, std::sync::atomic::Ordering::SeqCst);
     // Typing mid-flight stops now, not at the end of the string.
-    crate::coding_agent::win_cancel();
+    crate::agent::tools::desktop::win_cancel();
     let _ = app;
     Ok(())
 }

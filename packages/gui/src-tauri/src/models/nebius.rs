@@ -22,7 +22,7 @@
 
 use std::time::Duration;
 
-use crate::coding_agent::tool_exec::ToolResult;
+use crate::agent::tools::builtin::ToolResult;
 
 /// Longest a job may be asked to run. Per-second billing makes a loop that
 /// forgets to stop expensive; the CLI allows up to 168 h.

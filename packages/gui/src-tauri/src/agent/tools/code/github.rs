@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::time::Duration;
 
-use super::tool_exec::{Tool, ToolResult};
+use crate::agent::tools::builtin::{Tool, ToolResult};
 
 const API: &str = "https://api.github.com";
 

@@ -69,9 +69,9 @@ pub fn press(app: &tauri::AppHandle) {
 fn foreground_title() -> String {
     #[cfg(windows)]
     {
-        let h = crate::coding_agent::win::foreground();
+        let h = crate::agent::tools::desktop::win::foreground();
         if h != 0 {
-            let t = crate::coding_agent::win::title(h);
+            let t = crate::agent::tools::desktop::win::title(h);
             if !t.trim().is_empty() {
                 return t;
             }

@@ -1,6 +1,6 @@
 //! macOS primitives for `dip`: the Accessibility API, apps and windows.
 //!
-//! The counterpart of `super::win`. Structured control on macOS is the
+//! The counterpart of `crate::agent::tools::desktop::win`. Structured control on macOS is the
 //! Accessibility API (`AXUIElement`), the same interface VoiceOver uses: every
 //! app's windows and controls as a tree of elements with roles, titles, values
 //! and actions. It needs the user to allow Vivianne under System Settings →

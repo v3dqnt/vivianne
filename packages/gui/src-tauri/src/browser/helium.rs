@@ -25,7 +25,7 @@ use serde::Serialize;
 use tauri::Emitter;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::coding_agent::tool_exec::ToolResult;
+use crate::agent::tools::builtin::ToolResult;
 
 pub const PORT: u16 = 47321;
 /// Fixed by the `key` in the extension's manifest.

@@ -82,7 +82,7 @@ STRUCTURED MODE — Windows. PREFER THIS for any normal app: it is faster and fa
 );
 
 /// The macOS half of the `dip` description — structured mode through the
-/// Accessibility API (`coding_agent::dip_mac`).
+/// Accessibility API (`agent::tools::desktop::dip_mac`).
 #[cfg(target_os = "macos")]
 const STRUCTURED_MODE_DOC: &str = concat!(
     "
@@ -95,7 +95,7 @@ STRUCTURED MODE — macOS (Accessibility). PREFER THIS for any normal app: it is
 pub(crate) fn static_tool_definitions() -> Vec<serde_json::Value> {
     // The `computer` tool's action list — cross-platform "pixel mode" plus,
     // on Windows only, "structured mode" (real UI Automation tree instead of
-    // guessed pixel coordinates; see `coding_agent::dip`). Built as a plain
+    // guessed pixel coordinates; see `agent::tools::desktop::dip`). Built as a plain
     // Vec so the schema's `enum` only ever lists actions that actually
     // dispatch on this platform — see `computer::execute_computer_tool`.
     let mut computer_actions = vec![
@@ -1069,7 +1069,7 @@ When you hit a login wall: call browser_session_status first, and if there is ge
     ];
 
     let mut defs = defs;
-    defs.extend(crate::coding_agent::github::schemas());
+    defs.extend(crate::agent::tools::code::github::schemas());
     defs.push(crate::multiplayer::collab::pair_activity_schema());
     defs
 }

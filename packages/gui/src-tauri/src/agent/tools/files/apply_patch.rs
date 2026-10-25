@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::path::PathBuf;
 
-use super::tool_exec::{resolve_path, Tool, ToolResult};
+use crate::agent::tools::builtin::{resolve_path, Tool, ToolResult};
 
 #[derive(Debug)]
 enum HunkKind {

@@ -67,7 +67,7 @@ impl Verification {
                 s(args, "path").or_else(|| s(args, "file_path")).map(|p| (Domain::Files, p.to_string()))
             }
             ("apply_patch", _) => Some((Domain::Files, "the patched files".to_string())),
-            ("dip" | "computer", "type") if output.contains(crate::coding_agent::computer::VERIFIED_MARK) => None,
+            ("dip" | "computer", "type") if output.contains(crate::agent::tools::desktop::computer::VERIFIED_MARK) => None,
             ("dip" | "computer", "type") => Some((Domain::Desktop, "the text you typed".to_string())),
             ("dip" | "computer", "key" | "left_click" | "double_click" | "triple_click" | "right_click" | "left_click_drag") => {
                 Some((Domain::Desktop, "your clicks and key presses in the app".to_string()))

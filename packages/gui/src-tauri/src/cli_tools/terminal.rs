@@ -157,7 +157,7 @@ fn build_command(shell_id: &str, cwd: &str, strip_secrets: bool) -> CommandBuild
     // whole point of it is to be the shell they'd have gotten anyway.
     if strip_secrets {
         cmd.env_clear();
-        for (k, v) in crate::coding_agent::sandbox::filtered_env() {
+        for (k, v) in crate::agent::tools::code::sandbox::filtered_env() {
             cmd.env(k, v);
         }
     }

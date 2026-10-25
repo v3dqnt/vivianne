@@ -334,7 +334,7 @@ mod compaction_message_shape_tests {
     use crate::agent::runtime::types::{AgentMessage, MessageContent};
 
     /// Regression test for the bug this phase's research uncovered: the old
-    /// (dead) `coding_agent::compaction::compact()` inserted an
+    /// (dead) `agent::runtime::compaction::compact()` inserted an
     /// `AgentMessage::Custom` as its summary message, but this function's
     /// `Custom` arm always returns an empty `content_blocks` — a
     /// Custom-based compaction summary would silently vanish from the
@@ -621,7 +621,7 @@ pub async fn run_agent_loop_continue(
         // evicted one regardless, so keeping only the most recent few is a
         // clean token-budget win. The replacement text makes the eviction
         // visible to the model, so it won't hallucinate still seeing it.
-        crate::coding_agent::context_shaping::shape_history(&mut context.messages, state.image_keep_last_n().await as usize);
+        crate::agent::runtime::context_shaping::shape_history(&mut context.messages, state.image_keep_last_n().await as usize);
 
         // Convert context messages to AI messages
         drop_orphaned_tool_results(&mut context.messages);
@@ -685,7 +685,7 @@ pub async fn run_agent_loop_continue(
             log::warn!(
                 "[loop] request body exceeds the {MAX_REQUEST_BYTES}-byte safety cap after pruning/compaction — evicting all but the newest image, then dropping the oldest half of history if still over"
             );
-            crate::coding_agent::context_shaping::evict_old_images(&mut context.messages, 1);
+            crate::agent::runtime::context_shaping::evict_old_images(&mut context.messages, 1);
             let converted = convert_agent_messages_to_ai(&context.messages);
             if estimate_messages_json_size(&converted) > MAX_REQUEST_BYTES {
                 let keep_from = context.messages.len() / 2;
@@ -735,7 +735,7 @@ pub async fn run_agent_loop_continue(
                 overflow_compacted = true;
                 log::warn!("[loop] request no longer fits the context window; compacting and retrying");
                 maybe_compact_context(context, state, app, &model, true).await;
-                crate::coding_agent::context_shaping::evict_old_images(&mut context.messages, 1);
+                crate::agent::runtime::context_shaping::evict_old_images(&mut context.messages, 1);
                 step -= 1;
                 has_more_tool_calls = true;
                 continue;
@@ -1191,7 +1191,7 @@ pub async fn run_agent_loop_continue(
 /// summary, and keep `state`'s persisted message list in sync with the
 /// trimmed `context`. The summary is LLM-authored (Goal/Constraints/Progress/
 /// Decisions/Next-Steps/Relevant-Files — see
-/// `coding_agent::compaction::generate_llm_summary`) when
+/// `agent::runtime::compaction::generate_llm_summary`) when
 /// `state.llm_summary_enabled()` is on, falling back to the deterministic
 /// Mermaid tool-call diagram (`generate_mermaid_summary`) on timeout/error/
 /// empty response or when the toggle is off. No-op when compaction is
@@ -1235,7 +1235,7 @@ pub(crate) fn context_budgets(context_window: u32) -> (u32, u32) {
 }
 
 pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &AgentState, app: &tauri::AppHandle, model: &ModelRef, force: bool) -> bool {
-    use crate::coding_agent::compaction::{calculate_context_tokens_incremental, find_cut_point, generate_llm_summary, generate_mermaid_summary, CompactionConfig};
+    use crate::agent::runtime::compaction::{calculate_context_tokens_incremental, find_cut_point, generate_llm_summary, generate_mermaid_summary, CompactionConfig};
 
     if !state.compaction_enabled().await {
         return false;

@@ -454,7 +454,7 @@ pub async fn status(root: &str) -> MemoryStatus {
     MemoryStatus {
         root: root.to_string(),
         entry_count: entries.len(),
-        estimated_tokens: crate::coding_agent::compaction::estimate_tokens(&full) as usize,
+        estimated_tokens: crate::agent::runtime::compaction::estimate_tokens(&full) as usize,
         bytes: full.len(),
         preview,
         state,

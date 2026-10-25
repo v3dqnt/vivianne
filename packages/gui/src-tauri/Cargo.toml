@@ -185,7 +185,7 @@ bzip2 = "0.6"
 tar = "0.4"
 # Native microphone capture where WKWebView has no getUserMedia (macOS < 12).
 cpal = "0.16"
-# The Accessibility API's CF types (`coding_agent::mac`), and NSWorkspace /
+# The Accessibility API's CF types (`agent::tools::desktop::mac`), and NSWorkspace /
 # NSRunningApplication for apps. Same versions Tauri already pulls in.
 core-foundation = "0.10"
 objc2 = "0.6"
@@ -208,7 +208,7 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
   "Win32_System_Registry",
-  # Clipboard paste for typing long text (coding_agent::win::paste_text).
+  # Clipboard paste for typing long text (agent::tools::desktop::win::paste_text).
   "Win32_System_DataExchange",
   "Win32_System_Memory",
   # Process list (and who launched whom) and memory use.
