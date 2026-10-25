@@ -234,7 +234,7 @@ checksum = "fb5dfbc6d8d2675589ccbe4d0fd61df2419075625f8c1a62325e718e2b0049f9"
 
 [[package]]
 name = "app"
-version = "1.8.2"
+version = "1.9.0"
 dependencies = [
  "async-stream",
  "async-trait",

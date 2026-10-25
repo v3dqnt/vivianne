@@ -4,6 +4,8 @@ All notable changes to Vivianne are documented here.
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-10-25
+
 ### Changed
 
 - **Viv Instant and the notch are off in this release.** No wake or assist chord, no resting notch, no Viv Instant tray entry or settings, and the Laya engine is no longer started at launch (cost-aware routing still starts it the first time it asks). Dictation in the message box and the computer-control Stop notch are unchanged. They come back in a later release.
@@ -53,6 +55,9 @@ All notable changes to Vivianne are documented here.
 
 ### Changed
 
+- **Agent chats work like the main chat.** An agent's DM shows its full conversation with tool calls you can open, its own plan and to-do panels, and plan approvals as a short note instead of raw text. **Go back** to any message: the conversation is cut there and every file the agent changed after it is put back.
+- **Interactive replies from agents.** Agents can answer with OpenUI cards (forms, tables, charts, buttons that reply to the agent).
+- **Agents use the same model picker as the chat**, Auto included.
 - Replies are plain text with no bubble; tool calls and steps are quiet text rows that open on click. Your messages are a soft grey bubble.
 - Images in chat load from local paths and the web, and open in a viewer.
 - Errors share one compact style across Settings. The Subagents tab is gone from Settings.
@@ -60,6 +65,9 @@ All notable changes to Vivianne are documented here.
 
 ### Fixed
 
+- **Agents make real documents.** A PDF or Word file an agent wrote could come out blank when the model named its fields differently (`content` for text, `heading_level` for levels). Those names are understood now, and a document with no words is refused instead of saved. Agents also read back a file they made before saying it's done.
+- **Agents say why they stopped.** A provider's rate limit (such as OpenRouter's free-models-per-day) used to end an agent's turn silently; the note now shows in its chat, with what to do.
+- **Agents are faster on long conversations.** Their transcript is trimmed in one batch when it gets long instead of a little every turn, so the provider's prompt cache keeps working, and **Auto** picks a model for each turn as it does in the chat.
 - Scheduled automations did nothing in this version of the app. They run again, as Workflows.
 - OpenAI-compatible hosts (Groq, Together, NVIDIA NIM and others) reported no token counts, so usage and cost read zero. Streams ask for usage again.
 - A reasoning model that only called a tool no longer shows its chain of thought as the reply.
