@@ -45,6 +45,9 @@ collect.sh
 llama.cpp/
 llama.cpp-src/
 models/
+# ...but not the Rust modules named models.
+!packages/*/src-tauri/src/models/
+!packages/*/src-tauri/src/**/models/
 raw-models/
 ssm-moe/
 # Rust build output.
