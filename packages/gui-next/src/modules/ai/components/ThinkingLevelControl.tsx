@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { Box, Button, Popover, Slider, Stack, Typography, alpha } from '../../../ui'
-import { Setting2Linear } from '../../../icons'
 import { THINKING_LEVELS, type ThinkingLevel } from '../lib/types'
 import { useModelStore } from '../store/modelStore'
 
@@ -47,7 +46,6 @@ export function ThinkingLevelControl() {
         onClick={(e) => setAnchor(e.currentTarget)}
         title={`Thinking: ${current.label}`}
         aria-label={`Thinking level: ${current.label}`}
-        endIcon={<Setting2Linear size={12} color="currentColor" />}
         sx={{
           textTransform: 'none',
           fontSize: '0.8125rem',
@@ -60,9 +58,8 @@ export function ThinkingLevelControl() {
           '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
         }}
       >
-        <Box component="span" className="cq-label">
-          {current.label}
-        </Box>
+        {/* Always shown: the level in use must be readable at any width. */}
+        <Box component="span">{current.label}</Box>
       </Button>
       <Popover
         open={!!anchor}

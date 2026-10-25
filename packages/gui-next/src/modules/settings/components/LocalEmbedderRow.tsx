@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Stack, Typography, Button, CircularProgress } from '../../../ui'
+import { Stack, Typography, Button, CircularProgress, Alert } from '../../../ui'
 import { call, on } from '../../../ipc'
 
 /** Mirrors `ai::local_onnx::LocalModelStatus`. */
@@ -110,9 +110,9 @@ export function LocalEmbedderRow() {
         )
       })}
       {error && (
-        <Typography variant="caption" color="error">
+        <Alert severity="error">
           {error}
-        </Typography>
+        </Alert>
       )}
     </Stack>
   )

@@ -91,6 +91,11 @@ export function sidebarSections(mods: ModInfo[]) {
   return runningMods(mods).flatMap((m) => m.manifest!.contributes.sidebar.map((s) => ({ mod: m, section: s })))
 }
 
+/** Quick access tiles from running mods. */
+export function quickTiles(mods: ModInfo[]) {
+  return runningMods(mods).flatMap((m) => (m.manifest!.contributes.quickAccess ?? []).map((tile) => ({ mod: m, tile })))
+}
+
 /** Mods waiting on the user: new, or asking for more than they were given. */
 export const modsNeedingAttention = (mods: ModInfo[]) =>
   mods.filter((m) => m.status === 'needsApproval' || m.status === 'permissionsChanged')

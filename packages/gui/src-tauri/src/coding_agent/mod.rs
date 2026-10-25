@@ -1,5 +1,5 @@
 //! Coding Agent module — shared tool implementations + grok-parity surface
-//! (subagent orchestration, plan mode, ask-user, OpenCode-style shortcuts,
+//! (subagent orchestration, ask-user, OpenCode-style shortcuts,
 //! streaming executors) used by the main `agent::` loop's tool registry
 //! (`tool_exec::create_coding_tools`).
 //!
@@ -30,24 +30,21 @@ pub fn win_cancel_reset() {
     #[cfg(target_os = "windows")]
     win::cancel_reset();
 }
-pub mod tools_ext;
 pub mod apply_patch;
 pub mod repo_tools;
 pub mod compaction;
 pub mod doc_design;
 pub mod documents;
-pub mod document_edit;
 pub mod custom_tools;
 pub mod skills;
 pub mod subagent_profiles;
 pub mod commands;
 pub mod sandbox;
 
-// Grok-parity feature set — subagent orchestration, plan mode, ask-user,
+// Grok-parity feature set — subagent orchestration, ask-user,
 // enriched read/list, memory tools, OpenCode-style shortcuts, streaming
 // executors.
 pub mod orchestration;
-pub mod tools_enh;
 pub mod streaming;
 pub mod context_shaping;
 pub mod ocr;

@@ -13,7 +13,7 @@
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-use crate::agent::llama_manager::LlamaManager;
+use crate::agent::models::llama_manager::LlamaManager;
 use tauri::Manager;
 
 // ── Constants ────────────────────────────────────────────────────────────────

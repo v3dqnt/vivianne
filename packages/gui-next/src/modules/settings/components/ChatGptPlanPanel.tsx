@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Box, Button, ButtonBase, CircularProgress, Stack, Typography } from '../../../ui'
+import { Box, Button, ButtonBase, CircularProgress, Stack, Typography, Alert } from '../../../ui'
 import { call } from '../../../ipc'
 import { useModelStore } from '../../ai/store/modelStore'
 
@@ -135,9 +135,9 @@ export function ChatGptPlanPanel({ onChange }: { onChange?: (status: ChatGptStat
       )}
 
       {error && (
-        <Typography variant="caption" color="error.main" sx={{ lineHeight: 1.5 }}>
+        <Alert severity="error">
           {error}
-        </Typography>
+        </Alert>
       )}
     </Stack>
   )

@@ -1,20 +1,32 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Box, ButtonBase, InputBase, Stack, Typography, alpha, useTheme } from '../../../ui'
-import { SendLinear, CloseLinear, DocumentTextLinear } from '../../../icons'
+import { Box, ButtonBase, Stack, Typography, alpha, useTheme } from '../../../ui'
 import { Markdown } from '../../ai/components/Markdown'
-import { AttachFileButton } from '../../ai/components/AttachFileButton'
-import { buildAttachments, filesFromDataTransfer } from '../../ai/lib/attachments'
-import type { ImageAttachment, FileAttachment } from '../../ai/lib/types'
+import { ReportMarkdown } from '../../ai/components/ReportMarkdown'
+import { ChatComposer, AttachmentChip } from '../../ai/components/ChatComposer'
 import type { TeamAgent } from '../store/teamStore'
 import { useBotsStore, type BotMessage, type DmAttachments, type PendingApproval } from '../store/botsStore'
-import { Avatar, colorOf } from './bits'
+import { Avatar, LiveAvatar, colorOf, faceOf } from './bits'
 import { LiveRunCard, StepsToggle } from './BotSteps'
 import { MentionShell, MentionRow } from '../../ai/components/MentionMenu'
+import { FollowUpContext } from '../../ai/components/InteractiveBlock'
+import { MessageList } from '../../ai/components/MessageList'
+import { TodoPanel } from '../../ai/components/TodoPanel'
+import { isPlanNoteText, PlanNoteDivider } from '../../ai/components/HandoffDivider'
+import type { AgentMessage } from '../../ai/lib/types'
 
 const KIND_LABEL: Partial<Record<BotMessage['kind'], string>> = {
   needs_you: 'Needs you',
   routine: 'Routine',
   checkin: 'Check-in',
+}
+
+/** When the transcript's newest message was written. */
+function lastTs(t: AgentMessage[]): number {
+  for (let i = t.length - 1; i >= 0; i--) {
+    const ts = (t[i] as { timestamp?: number }).timestamp
+    if (typeof ts === 'number') return ts
+  }
+  return 0
 }
 
 function time(ts: number): string {
@@ -25,7 +37,7 @@ function time(ts: number): string {
     : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }
 
-function Message({ m, team, prev }: { m: BotMessage; team: TeamAgent[]; prev: BotMessage | undefined }) {
+function Message({ m, team, prev, root }: { m: BotMessage; team: TeamAgent[]; prev: BotMessage | undefined; root: string }) {
   const theme = useTheme()
   const bot = team.find((a) => a.id === m.from)
   // Consecutive posts by the same author within 5 minutes read as one.
@@ -37,18 +49,20 @@ function Message({ m, team, prev }: { m: BotMessage; team: TeamAgent[]; prev: Bo
       </Typography>
     )
   }
+  // A plan approval or plan comments, sent by the app for the user: a marker, not the XML.
+  if (m.from === 'user' && isPlanNoteText(m.text)) return <PlanNoteDivider text={m.text} />
   if (m.from === 'user') {
     return (
       <Stack sx={{ alignItems: 'flex-end', mt: grouped ? 0.25 : 1.25 }}>
         {m.attachments && m.attachments.length > 0 && (
           <Stack direction="row" sx={{ gap: 0.5, flexWrap: 'wrap', justifyContent: 'flex-end', mb: 0.5, maxWidth: '80%' }}>
             {m.attachments.map((a, i) => (
-              <Chip key={`${a.name}${i}`} label={a.name} kind={a.kind} />
+              <AttachmentChip key={`${a.name}${i}`} label={a.name} kind={a.kind} />
             ))}
           </Stack>
         )}
         {m.text !== '(attachments)' && (
-          <Box sx={{ maxWidth: '80%', px: 1.5, py: 1, borderRadius: '14px', bgcolor: alpha(theme.palette.text.primary, 0.07), fontSize: '0.875rem' }}>
+          <Box sx={{ maxWidth: '80%', px: 1.75, py: 1.125, borderRadius: '18px', bgcolor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.09 : 0.06), fontSize: '0.875rem' }}>
             <Markdown text={m.text} />
           </Box>
         )}
@@ -60,7 +74,9 @@ function Message({ m, team, prev }: { m: BotMessage; team: TeamAgent[]; prev: Bo
   const needs = m.kind === 'needs_you'
   return (
     <Stack direction="row" sx={{ gap: 1.25, mt: grouped ? 0.25 : 1.5, alignItems: 'flex-start' }}>
-      <Box sx={{ width: 28, flexShrink: 0 }}>{!grouped && <Avatar name={bot?.name ?? m.from} color={color} size={28} />}</Box>
+      <Box sx={{ width: 28, flexShrink: 0 }}>
+        {!grouped && (bot ? <LiveAvatar root={root} agent={bot} size={28} /> : <Avatar name={m.from} color={color} size={28} />)}
+      </Box>
       <Stack sx={{ minWidth: 0, flex: 1 }}>
         {!grouped && (
           <Stack direction="row" sx={{ alignItems: 'baseline', gap: 0.75 }}>
@@ -92,37 +108,10 @@ function Message({ m, team, prev }: { m: BotMessage; team: TeamAgent[]; prev: Bo
             ...(needs ? { mt: 0.5, p: 1.25, borderRadius: '10px', border: 1, borderColor: alpha(theme.palette.warning.main, 0.4), bgcolor: alpha(theme.palette.warning.main, 0.06) } : {}),
           }}
         >
-          <Markdown text={m.text} />
+          {needs ? <Markdown text={m.text} /> : <ReportMarkdown text={m.text} />}
         </Box>
         {m.steps && m.steps.length > 0 && <StepsToggle steps={m.steps} />}
       </Stack>
-    </Stack>
-  )
-}
-
-/** An attachment, as a small chip: name and kind, with remove when pending. */
-function Chip({ label, kind, image, onRemove }: { label: string; kind: 'image' | 'file'; image?: string; onRemove?: () => void }) {
-  return (
-    <Stack
-      direction="row"
-      aria-label={`${kind === 'image' ? 'Image' : 'File'}: ${label}`}
-      sx={{ alignItems: 'center', gap: 0.75, pl: image ? 0.375 : 1, pr: onRemove ? 0.375 : 1, py: 0.375, borderRadius: '10px', border: 1, borderColor: 'divider', bgcolor: 'background.paper', maxWidth: 240 }}
-    >
-      {image ? (
-        <Box component="img" src={image} alt="" sx={{ width: 26, height: 26, borderRadius: '7px', objectFit: 'cover', flexShrink: 0 }} />
-      ) : (
-        <Box sx={{ display: 'inline-flex', color: 'text.secondary', flexShrink: 0 }}>
-          <DocumentTextLinear size={13} color="currentColor" />
-        </Box>
-      )}
-      <Typography variant="caption" noWrap sx={{ fontSize: '0.75rem', minWidth: 0 }}>
-        {label}
-      </Typography>
-      {onRemove && (
-        <ButtonBase aria-label={`Remove ${label}`} onClick={onRemove} sx={{ borderRadius: '6px', p: 0.25, color: 'text.secondary', '&:hover': { color: 'text.primary' } }}>
-          <CloseLinear size={12} color="currentColor" />
-        </ButtonBase>
-      )}
     </Stack>
   )
 }
@@ -135,7 +124,7 @@ function ApprovalCard({ a, team }: { a: PendingApproval; team: TeamAgent[] }) {
   return (
     <Stack sx={{ gap: 1, p: 1.25, my: 1, borderRadius: '12px', border: 1, borderColor: alpha(theme.palette.warning.main, 0.45), bgcolor: alpha(theme.palette.warning.main, 0.06) }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
-        {bot && <Avatar name={bot.name} color={colorOf(bot)} size={22} />}
+        {bot && <Avatar {...faceOf(bot)} size={22} />}
         <Typography variant="body2" sx={{ fontWeight: 600, flex: 1, minWidth: 0 }}>
           {bot?.name ?? a.botId} wants to use <code>{a.toolName}</code>
         </Typography>
@@ -179,6 +168,8 @@ export function BotChat({
   empty,
   attachments = false,
   toolbar,
+  transcript,
+  onRevertTo,
 }: {
   /** The project, and which conversation this is (`room` or a bot id): runs
    * replying here show live, step by step. */
@@ -195,19 +186,15 @@ export function BotChat({
   attachments?: boolean
   /** Controls at the composer's left edge (a DM's model picker). */
   toolbar?: React.ReactNode
+  /** A DM's full working transcript. When there is one, the conversation is
+   * shown the way the main chat shows it: every tool call with its result,
+   * files and previews inline, instead of replies with folded steps. */
+  transcript?: AgentMessage[] | null
+  /** Go back to just before transcript message `index` (files included). */
+  onRevertTo?: (index: number) => Promise<void>
 }) {
   const theme = useTheme()
   const [text, setText] = useState('')
-  const [images, setImages] = useState<ImageAttachment[]>([])
-  const [files, setFiles] = useState<FileAttachment[]>([])
-  const [dragging, setDragging] = useState(false)
-  const ingest = async (list: File[]) => {
-    if (!attachments || list.length === 0) return
-    const built = await buildAttachments(list)
-    setImages((p) => [...p, ...built.images])
-    setFiles((p) => [...p, ...built.files])
-  }
-  const [error, setError] = useState<string | null>(null)
   const [pick, setPick] = useState(0)
   const scroller = useRef<HTMLDivElement | null>(null)
   const liveAll = useBotsStore((s) => s.live)
@@ -247,33 +234,53 @@ export function BotChat({
     setPick(0)
   }
 
-  const hasAttachments = images.length + files.length > 0
-  const send = async () => {
-    const t = text.trim()
-    if (!t && !hasAttachments) return
-    setError(null)
-    const sent = { images, files }
-    setText('')
-    setImages([])
-    setFiles([])
-    try {
-      await onSend(t, hasAttachments ? sent : undefined)
-    } catch (e) {
-      setText(t)
-      setImages(sent.images)
-      setFiles(sent.files)
-      setError(e instanceof Error ? e.message : String(e))
+  const onMentionKey = (e: React.KeyboardEvent) => {
+    if (options.length === 0) return false
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const n = options.length
+      setPick((p) => (e.key === 'ArrowDown' ? (p + 1) % n : (p - 1 + n) % n))
+      return true
     }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      complete(options[pick].id)
+      return true
+    }
+    return false
   }
 
   return (
-    <Stack sx={{ flex: 1, minHeight: 0 }}>
+    <Stack sx={{ flex: 1, minHeight: 0, position: 'relative' }}>
+      {/* The agent's todo list, pinned over its conversation like the main chat's. */}
+      {transcript && transcript.length > 0 && <TodoPanel messages={transcript} />}
       <Box ref={scroller} sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 2, py: 1.5 }}>
         <Box sx={{ maxWidth: 820, mx: 'auto' }}>
-          {messages.length === 0 && approvals.length === 0 ? empty : null}
-          {messages.map((m, i) => (
-            <Message key={m.id} m={m} team={team} prev={messages[i - 1]} />
-          ))}
+          {messages.length === 0 && approvals.length === 0 && !transcript?.length ? empty : null}
+          {/* A button in a summary card answers in this conversation, not the main chat. */}
+          <FollowUpContext.Provider value={(t) => void onSend(t)}>
+            {transcript && transcript.length > 0 ? (
+              <>
+                <MessageList
+                  messages={transcript}
+                  readOnly
+                  emptyText=""
+                  onRevertTo={onRevertTo}
+                  revertNote="Files it changed after this point are put back as they were."
+                />
+                {/* Since the transcript was last saved: what you sent while the turn
+                    runs, and notes such as a failed model call. The agent's own
+                    replies are already in the transcript. */}
+                {messages
+                  .filter((m) => (m.from === 'user' || m.from === 'system') && m.ts > lastTs(transcript))
+                  .map((m) => (
+                    <Message key={m.id} m={m} team={team} prev={undefined} root={root} />
+                  ))}
+              </>
+            ) : (
+              messages.map((m, i) => <Message key={m.id} m={m} team={team} prev={messages[i - 1]} root={root} />)
+            )}
+          </FollowUpContext.Provider>
           {running.map(({ agent, run }) => (
             <LiveRunCard key={agent.id} agent={agent} steps={run!.steps} />
           ))}
@@ -283,136 +290,40 @@ export function BotChat({
         </Box>
       </Box>
       <Box sx={{ px: 2, pb: 1.5, pt: 0.5 }}>
-        <Box sx={{ maxWidth: 820, mx: 'auto', position: 'relative' }}>
-          {options.length > 0 && (
-            <MentionShell title="Mention a teammate" width={360}>
-              <Box sx={{ px: 0.5, pb: 0.5 }}>
-                {options.map((o, i) => (
-                  <MentionRow
-                    key={o.id}
-                    active={i === pick}
-                    onSelect={() => complete(o.id)}
-                    onHover={() => setPick(i)}
-                    tint={o.agent ? colorOf(o.agent) : theme.palette.primary.main}
-                    icon={o.agent ? <Avatar name={o.label} color={colorOf(o.agent)} size={20} /> : <Box component="span" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>@</Box>}
-                    title={o.label}
-                    subtitle={o.agent ? (o.agent.role || `@${o.id}`) : 'Everyone on the team'}
-                    tag={<Box component="span" sx={{ fontSize: '0.625rem', color: 'text.disabled', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>@{o.id}</Box>}
-                  />
-                ))}
-              </Box>
-            </MentionShell>
-          )}
-          <Stack
-            onDragOver={(e) => {
-              if (!attachments) return
-              e.preventDefault()
-              setDragging(true)
+        <Box sx={{ maxWidth: 820, mx: 'auto' }}>
+          <ChatComposer
+            value={text}
+            onChange={(t) => {
+              setText(t)
+              setPick(0)
             }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={(e) => {
-              if (!attachments) return
-              e.preventDefault()
-              setDragging(false)
-              void ingest(filesFromDataTransfer(e.dataTransfer))
-            }}
-            sx={{
-              gap: 0.75,
-              px: 1.5,
-              pt: 1,
-              pb: 0.75,
-              borderRadius: '16px',
-              border: 1,
-              borderColor: dragging ? 'primary.main' : 'divider',
-              bgcolor: 'background.card',
-              transition: 'border-color 120ms',
-            }}
-          >
-            {hasAttachments && (
-              <Stack direction="row" sx={{ gap: 0.5, flexWrap: 'wrap' }}>
-                {images.map((img, i) => (
-                  <Chip
-                    key={`img${i}`}
-                    label={`Image ${i + 1}`}
-                    kind="image"
-                    image={`data:${img.media_type};base64,${img.base64}`}
-                    onRemove={() => setImages((p) => p.filter((_, j) => j !== i))}
-                  />
-                ))}
-                {files.map((f, i) => (
-                  <Chip key={`file${i}`} label={f.name} kind="file" onRemove={() => setFiles((p) => p.filter((_, j) => j !== i))} />
-                ))}
-              </Stack>
-            )}
-            <InputBase
-              multiline
-              maxRows={8}
-              value={text}
-              placeholder={placeholder}
-              onChange={(e) => {
-                setText(e.target.value)
-                setPick(0)
-              }}
-              onKeyDown={(e) => {
-                if (options.length > 0) {
-                  if (e.key === 'ArrowDown') {
-                    e.preventDefault()
-                    setPick((p) => (p + 1) % options.length)
-                    return
-                  }
-                  if (e.key === 'ArrowUp') {
-                    e.preventDefault()
-                    setPick((p) => (p - 1 + options.length) % options.length)
-                    return
-                  }
-                  if (e.key === 'Enter' || e.key === 'Tab') {
-                    e.preventDefault()
-                    complete(options[pick].id)
-                    return
-                  }
-                }
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  void send()
-                }
-              }}
-              onPaste={(e) => {
-                const pasted = filesFromDataTransfer(e.clipboardData)
-                if (attachments && pasted.length > 0) {
-                  e.preventDefault()
-                  void ingest(pasted)
-                }
-              }}
-              sx={{ width: '100%', fontSize: '0.875rem', py: 0.25 }}
-            />
-            <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5 }}>
-              {attachments && (
-                <AttachFileButton onAddImages={(i) => setImages((p) => [...p, ...i])} onAddFiles={(f) => setFiles((p) => [...p, ...f])} />
-              )}
-              {toolbar}
-              <Box sx={{ flex: 1 }} />
-              <ButtonBase
-                aria-label="Send"
-                onClick={() => void send()}
-                disabled={!text.trim() && !hasAttachments}
-                sx={{
-                  width: 30,
-                  height: 30,
-                  borderRadius: '50%',
-                  bgcolor: text.trim() || hasAttachments ? 'text.primary' : 'action.disabledBackground',
-                  color: 'background.paper',
-                  flexShrink: 0,
-                }}
-              >
-                <SendLinear size={15} color="currentColor" />
-              </ButtonBase>
-            </Stack>
-          </Stack>
-          {error && (
-            <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.5 }}>
-              {error}
-            </Typography>
-          )}
+            onSubmit={(t, a) => onSend(t.trim(), a.images.length + a.files.length > 0 ? a : undefined)}
+            placeholder={placeholder}
+            attachments={attachments}
+            onKeyDownFirst={onMentionKey}
+            left={toolbar}
+            overlay={
+              options.length > 0 && (
+                <MentionShell title="Mention a teammate" width={360}>
+                  <Box sx={{ px: 0.5, pb: 0.5 }}>
+                    {options.map((o, i) => (
+                      <MentionRow
+                        key={o.id}
+                        active={i === pick}
+                        onSelect={() => complete(o.id)}
+                        onHover={() => setPick(i)}
+                        tint={o.agent ? colorOf(o.agent) : theme.palette.primary.main}
+                        icon={o.agent ? <Avatar {...faceOf(o.agent)} size={20} /> : <Box component="span" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>@</Box>}
+                        title={o.label}
+                        subtitle={o.agent ? (o.agent.role || `@${o.id}`) : 'Everyone on the team'}
+                        tag={<Box component="span" sx={{ fontSize: '0.625rem', color: 'text.disabled', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>@{o.id}</Box>}
+                      />
+                    ))}
+                  </Box>
+                </MentionShell>
+              )
+            }
+          />
         </Box>
       </Box>
     </Stack>

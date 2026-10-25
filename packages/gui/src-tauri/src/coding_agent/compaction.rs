@@ -3,7 +3,7 @@
 //! Summarizes older conversation entries to keep context window usage
 //! within model limits.
 
-use crate::agent::types::AgentMessage;
+use crate::agent::runtime::types::AgentMessage;
 
 /// Settings controlling when and how compaction occurs.
 pub struct CompactionConfig {
@@ -29,10 +29,10 @@ pub fn estimate_tokens(text: &str) -> u32 {
 }
 
 /// Extract text from message content array.
-fn extract_text_from_content(content: &[crate::agent::types::MessageContent]) -> String {
+fn extract_text_from_content(content: &[crate::agent::runtime::types::MessageContent]) -> String {
     content.iter()
         .filter_map(|c| {
-            if let crate::agent::types::MessageContent::Text { text } = c {
+            if let crate::agent::runtime::types::MessageContent::Text { text } = c {
                 Some(text.as_str())
             } else {
                 None
@@ -51,16 +51,16 @@ fn extract_text_from_content(content: &[crate::agent::types::MessageContent]) ->
 /// fire on a fraction of the configured budget.
 pub(crate) fn message_char_len(msg: &AgentMessage) -> usize {
     // Sums string length by walking the `serde_json::Value` tree directly
-    // (`crate::agent::loop_core::estimate_json_value_raw_str_len`) rather
+    // (`crate::agent::runtime::loop_core::estimate_json_value_raw_str_len`) rather
     // than `.to_string().len()`, which allocates and formats a full JSON
     // string just to throw it away — on this function's actual hot path
     // (`calculate_context_tokens_incremental`, called twice per loop
     // iteration on tool args/details) that's a real allocation per call, not
     // a one-off.
-    use crate::agent::loop_core::estimate_json_value_raw_str_len as json_len;
-    fn content_len(content: &[crate::agent::types::MessageContent]) -> usize {
-        use crate::agent::loop_core::estimate_json_value_raw_str_len as json_len;
-        use crate::agent::types::MessageContent;
+    use crate::agent::runtime::loop_core::estimate_json_value_raw_str_len as json_len;
+    fn content_len(content: &[crate::agent::runtime::types::MessageContent]) -> usize {
+        use crate::agent::runtime::loop_core::estimate_json_value_raw_str_len as json_len;
+        use crate::agent::runtime::types::MessageContent;
         content.iter().map(|c| match c {
             MessageContent::Text { text } => text.len(),
             MessageContent::Thinking { thinking } => thinking.len(),
@@ -145,7 +145,7 @@ const MAX_MERMAID_NODES: usize = 40;
 /// command for bash/powershell), generalized with a first-string-argument
 /// fallback so every other tool (code_search's query, task's description,
 /// generate_image's prompt, ...) gets a sensible label for free.
-fn tool_call_descriptor(tc: &crate::agent::types::ToolCall) -> String {
+fn tool_call_descriptor(tc: &crate::agent::runtime::types::ToolCall) -> String {
     let detail = match tc.name.as_str() {
         "write" | "edit" | "apply_patch" => tc.arguments.get("path").and_then(|v| v.as_str()),
         "bash" | "powershell" => tc.arguments.get("command").and_then(|v| v.as_str()),
@@ -164,7 +164,7 @@ fn tool_call_descriptor(tc: &crate::agent::types::ToolCall) -> String {
 /// hand, following the same "heuristic distillation over an LLM digest"
 /// tradeoff as `build_turn_memory_summary`.
 pub fn generate_mermaid_summary(messages: &[AgentMessage]) -> String {
-    use crate::agent::types::MessageContent;
+    use crate::agent::runtime::types::MessageContent;
 
     // tool_call_id -> is_error, so nodes can be marked failed.
     let mut result_errors: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
@@ -239,14 +239,14 @@ const LLM_SUMMARY_SYSTEM_PROMPT: &str = "You are compacting an AI coding agent's
 /// silently produces no summary at all.
 pub async fn generate_llm_summary(
     app: &tauri::AppHandle,
-    model: &crate::agent::types::ModelRef,
+    model: &crate::agent::runtime::types::ModelRef,
     messages: &[AgentMessage],
 ) -> Option<String> {
     let transcript = render_transcript_for_summary(messages);
     if transcript.trim().is_empty() {
         return None;
     }
-    let call = crate::ai::completion::complete_text(app, model, LLM_SUMMARY_SYSTEM_PROMPT, &transcript);
+    let call = crate::ai::completion::complete_background(app, model, LLM_SUMMARY_SYSTEM_PROMPT, &transcript);
     match tokio::time::timeout(std::time::Duration::from_secs(25), call).await {
         Ok(Ok(response)) if !response.trim().is_empty() => {
             Some(format!("<compacted_history>\n{}\n</compacted_history>", response.trim()))
@@ -272,7 +272,7 @@ pub async fn generate_llm_summary(
 /// the summarization call's own context for no benefit; the point of
 /// compaction is to shed exactly that bulk).
 pub(crate) fn render_transcript_for_summary(messages: &[AgentMessage]) -> String {
-    use crate::agent::types::MessageContent;
+    use crate::agent::runtime::types::MessageContent;
     let mut out = String::new();
     for msg in messages {
         match msg {
@@ -307,35 +307,35 @@ pub(crate) fn render_transcript_for_summary(messages: &[AgentMessage]) -> String
     out
 }
 
-impl From<&crate::agent::types::MessageContent> for crate::ai::types::MessageContent {
-    fn from(content: &crate::agent::types::MessageContent) -> Self {
+impl From<&crate::agent::runtime::types::MessageContent> for crate::ai::types::MessageContent {
+    fn from(content: &crate::agent::runtime::types::MessageContent) -> Self {
         match content {
-            crate::agent::types::MessageContent::Text { text } => {
+            crate::agent::runtime::types::MessageContent::Text { text } => {
                 crate::ai::types::MessageContent::Text { text: text.clone() }
             }
-            crate::agent::types::MessageContent::Image { url, base64, media_type } => {
+            crate::agent::runtime::types::MessageContent::Image { url, base64, media_type } => {
                 crate::ai::types::MessageContent::Image {
                     url: url.clone(),
                     base64: base64.clone(),
                     media_type: media_type.clone(),
                 }
             }
-            crate::agent::types::MessageContent::Thinking { thinking } => {
+            crate::agent::runtime::types::MessageContent::Thinking { thinking } => {
                 crate::ai::types::MessageContent::Thinking {
                     thinking: thinking.clone(),
                     thinking_signature: None,
                     redacted: false,
                 }
             }
-            crate::agent::types::MessageContent::ToolCall(tc) => {
+            crate::agent::runtime::types::MessageContent::ToolCall(tc) => {
                 crate::ai::types::MessageContent::ToolCall(crate::ai::types::ToolCall {
                     id: tc.id.clone(),
                     name: tc.name.clone(),
                     arguments: tc.arguments.clone(),
-                    thought_signature: None,
+                    thought_signature: tc.thought_signature.clone(),
                 })
             }
-            crate::agent::types::MessageContent::ToolResult(tr) => {
+            crate::agent::runtime::types::MessageContent::ToolResult(tr) => {
                 crate::ai::types::MessageContent::ToolResult {
                     tool_call_id: tr.tool_call_id.clone(),
                     content: tr.content.iter().map(Into::into).collect(),
@@ -349,11 +349,11 @@ impl From<&crate::agent::types::MessageContent> for crate::ai::types::MessageCon
 #[cfg(test)]
 mod mermaid_tests {
     use super::*;
-    use crate::agent::types::{MessageContent, ToolCall};
+    use crate::agent::runtime::types::{MessageContent, ToolCall};
 
     fn tool_call_msg(id: &str, name: &str, args: serde_json::Value) -> AgentMessage {
         AgentMessage::Assistant {
-            content: vec![MessageContent::ToolCall(ToolCall { id: id.into(), name: name.into(), arguments: args })],
+            content: vec![MessageContent::ToolCall(ToolCall { id: id.into(), name: name.into(), arguments: args, thought_signature: None })],
             stop_reason: "tool_use".into(),
             error_message: None,
             timestamp: 0,
@@ -429,7 +429,7 @@ mod mermaid_tests {
 #[cfg(test)]
 mod llm_summary_transcript_tests {
     use super::*;
-    use crate::agent::types::{MessageContent, ToolCall};
+    use crate::agent::runtime::types::{MessageContent, ToolCall};
 
     #[test]
     fn renders_user_assistant_and_tool_result_lines() {
@@ -438,7 +438,7 @@ mod llm_summary_transcript_tests {
             AgentMessage::Assistant {
                 content: vec![
                     MessageContent::Text { text: "Looking into it.".into() },
-                    MessageContent::ToolCall(ToolCall { id: "t1".into(), name: "read".into(), arguments: serde_json::json!({ "path": "a.rs" }) }),
+                    MessageContent::ToolCall(ToolCall { id: "t1".into(), name: "read".into(), arguments: serde_json::json!({ "path": "a.rs" }), thought_signature: None }),
                 ],
                 stop_reason: "tool_use".into(),
                 error_message: None,

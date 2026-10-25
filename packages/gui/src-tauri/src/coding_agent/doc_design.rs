@@ -395,13 +395,50 @@ fn str_of<'a>(b: &'a Value, k: &str) -> &'a str {
     b.get(k).and_then(|v| v.as_str()).unwrap_or("")
 }
 
+/// A block's words. Models name the field several ways (`text`, `content`,
+/// `body`, ...); every one means the same thing, and dropping the words because
+/// of the key is how a document came out blank.
+fn text_of(b: &Value) -> String {
+    for k in ["text", "content", "body", "value", "markdown"] {
+        match b.get(k) {
+            Some(Value::String(s)) if !s.trim().is_empty() => return s.clone(),
+            Some(Value::Array(a)) if !a.is_empty() => {
+                let parts: Vec<String> = a.iter().map(|v| v.as_str().map(String::from).unwrap_or_else(|| text_of(v))).filter(|s| !s.is_empty()).collect();
+                if !parts.is_empty() {
+                    return parts.join("\n");
+                }
+            }
+            _ => {}
+        }
+    }
+    String::new()
+}
+
+/// List items from `items` (or a synonym), failing that from the lines of the
+/// block's text, with bullet and number markers removed.
+fn items_of(b: &Value, out: &mut Vec<(String, u8)>) {
+    for k in ["items", "bullets", "points", "list"] {
+        if b.get(k).and_then(|v| v.as_array()).is_some_and(|a| !a.is_empty()) {
+            list_items(b.get(k), 0, out);
+            return;
+        }
+    }
+    for line in text_of(b).lines() {
+        let t = line.trim().trim_start_matches(['\u{2022}', '-', '*', '\u{2013}', '\u{00b7}']).trim_start();
+        let t = t.trim_start_matches(|c: char| c.is_ascii_digit()).trim_start_matches(['.', ')']).trim_start();
+        if !t.is_empty() {
+            out.push((t.to_string(), 0));
+        }
+    }
+}
+
 fn list_items(v: Option<&Value>, level: u8, out: &mut Vec<(String, u8)>) {
     for item in v.and_then(|v| v.as_array()).into_iter().flatten() {
         match item {
             Value::String(s) => out.push((s.clone(), level)),
             Value::Object(_) => {
-                out.push((str_of(item, "text").to_string(), level));
-                list_items(item.get("items"), (level + 1).min(2), out);
+                out.push((text_of(item), level));
+                list_items(item.get("items").or(item.get("children")), (level + 1).min(2), out);
             }
             other => out.push((cell_text(other), level)),
         }
@@ -467,15 +504,32 @@ pub fn parse_blocks(v: Option<&Value>, cwd: &Path) -> Result<Vec<Block>, String>
     let arr = v.and_then(|b| b.as_array()).ok_or("`blocks` must be an array")?;
     let mut out = Vec::new();
     for (i, b) in arr.iter().enumerate() {
-        let kind = str_of(b, "type");
-        let text = str_of(b, "text").to_string();
+        // Common names for the same block, normalised.
+        let raw = str_of(b, "type").trim().to_lowercase();
+        let (kind, implied_level): (&str, Option<u64>) = match raw.as_str() {
+            "h1" | "title" => ("heading", Some(1)),
+            "h2" | "subheading" | "subtitle" => ("heading", Some(2)),
+            "h3" => ("heading", Some(3)),
+            "p" | "para" | "body" => ("paragraph", None),
+            "bullet" | "bulleted" | "bullet_list" | "bulleted_list" | "unordered_list" | "ul" => ("bullets", None),
+            "ordered" | "ordered_list" | "numbered_list" | "ol" => ("numbered", None),
+            "hr" | "separator" => ("divider", None),
+            _ => (raw.as_str(), None),
+        };
+        let text = text_of(b);
         let at = |e: String| format!("block {i} ({kind}): {e}");
         out.push(match kind {
-            "heading" => Block::Heading { text, level: b.get("level").and_then(|l| l.as_u64()).unwrap_or(1).clamp(1, 3) as u8 },
+            "heading" => Block::Heading {
+                text,
+                level: implied_level
+                    .or_else(|| ["level", "heading_level", "depth"].iter().find_map(|k| b.get(*k).and_then(|l| l.as_u64())))
+                    .unwrap_or(1)
+                    .clamp(1, 3) as u8,
+            },
             "" | "paragraph" | "text" => Block::Paragraph { text },
             "bullets" | "list" | "numbered" => {
                 let mut items = Vec::new();
-                list_items(b.get("items"), 0, &mut items);
+                items_of(b, &mut items);
                 Block::List { items, ordered: kind == "numbered" || b.get("ordered").and_then(|o| o.as_bool()).unwrap_or(false) }
             }
             "table" => Block::Table {
@@ -523,6 +577,23 @@ pub fn parse_blocks(v: Option<&Value>, cwd: &Path) -> Result<Vec<Block>, String>
                 ))
             }
         });
+    }
+    // Words that went nowhere would make a blank document that only looks
+    // finished: refuse it, and say where the words go.
+    let textual = |b: &Block| matches!(b, Block::Heading { .. } | Block::Paragraph { .. } | Block::Quote { .. } | Block::Code { .. } | Block::Callout { .. } | Block::List { .. } | Block::Table { .. });
+    let wordy = |b: &Block| match b {
+        Block::Heading { text, .. } | Block::Paragraph { text } | Block::Quote { text, .. } | Block::Code { text, .. } => !text.trim().is_empty(),
+        Block::Callout { text, title, .. } => !text.trim().is_empty() || !title.trim().is_empty(),
+        Block::List { items, .. } => items.iter().any(|(t, _)| !t.trim().is_empty()),
+        Block::Table { rows, .. } => rows.iter().flatten().any(|c| !c.trim().is_empty()),
+        _ => true,
+    };
+    let total = out.iter().filter(|b| textual(b)).count();
+    let empty = out.iter().filter(|b| textual(b) && !wordy(b)).count();
+    if total > 0 && empty * 2 > total {
+        return Err(format!(
+            "{empty} of {total} text blocks have no words, so the document would come out mostly blank. Put each block's words in `text` (lists: `items`, an array of strings; tables: `rows`) and try again."
+        ));
     }
     Ok(out)
 }
@@ -1605,5 +1676,39 @@ mod tests {
         assert_eq!(layouts, ["title", "bullets", "stats", "quote"]);
         let html = deck_html(&s, &Theme::preset("modern"));
         assert_eq!(html.matches("class=\"slide").count(), 4);
+    }
+
+    #[test]
+    fn words_under_any_key_reach_the_document() {
+        // The shape a model actually sent: `content` instead of `text`,
+        // `heading_level`, and a `bullet` block with its items in the text.
+        let blocks = parse_blocks(
+            Some(&serde_json::json!([
+                { "type": "heading", "content": "Goa", "heading_level": 2 },
+                { "content": "Five days in South Goa." },
+                { "type": "bullet", "content": "\u{2022} Flights\n\u{2022} Hotel" },
+                { "type": "divider", "content": null }
+            ])),
+            Path::new("."),
+        )
+        .unwrap();
+        match &blocks[0] {
+            Block::Heading { text, level } => assert_eq!((text.as_str(), *level), ("Goa", 2)),
+            _ => panic!("heading"),
+        }
+        match &blocks[1] {
+            Block::Paragraph { text } => assert_eq!(text, "Five days in South Goa."),
+            _ => panic!("paragraph"),
+        }
+        match &blocks[2] {
+            Block::List { items, .. } => assert_eq!(items.iter().map(|i| i.0.as_str()).collect::<Vec<_>>(), ["Flights", "Hotel"]),
+            _ => panic!("list"),
+        }
+    }
+
+    #[test]
+    fn a_document_with_no_words_is_refused() {
+        let err = parse_blocks(Some(&serde_json::json!([{ "type": "heading", "words": "x" }, { "type": "paragraph" }, { "type": "paragraph" }])), Path::new(".")).unwrap_err();
+        assert!(err.contains("no words"), "{err}");
     }
 }

@@ -87,6 +87,9 @@ pub fn provider_spec(provider: &str) -> Option<ProviderSpec> {
         "cerebras" => ProviderSpec { default_base_url: Some("https://api.cerebras.ai/v1"), api_kind: OpenAiChat },
         "nvidia" | "nvidia-nim" => ProviderSpec { default_base_url: Some("https://integrate.api.nvidia.com/v1"), api_kind: OpenAiChat },
         "huggingface" => ProviderSpec { default_base_url: Some("https://router.huggingface.co/v1"), api_kind: OpenAiChat },
+        // Nebius Token Factory: OpenAI-compatible, hosts NVIDIA's Nemotron
+        // models among others.
+        "nebius" => ProviderSpec { default_base_url: Some("https://api.tokenfactory.nebius.com/v1"), api_kind: OpenAiChat },
         // No default: the URL is account-specific (account id, optional
         // gateway id — see `api::cloudflare::resolve_cloudflare_url`). The
         // model's own `base_url` must carry the already-resolved endpoint,
@@ -142,9 +145,17 @@ mod tests {
 
     #[test]
     fn openai_compatible_hosts_share_the_chat_kind() {
-        for p in ["groq", "xai", "deepseek", "together", "fireworks", "openrouter", "cerebras", "nvidia", "nvidia-nim", "huggingface", "cloudflare-workers-ai"] {
+        for p in ["groq", "xai", "deepseek", "together", "fireworks", "openrouter", "cerebras", "nvidia", "nvidia-nim", "huggingface", "cloudflare-workers-ai", "nebius"] {
             assert_eq!(provider_spec(p).unwrap_or_else(|| panic!("missing spec for {p}")).api_kind, ApiKind::OpenAiChat);
         }
+    }
+
+    #[test]
+    fn nebius_resolves_to_its_token_factory() {
+        let spec = provider_spec("nebius").unwrap();
+        assert_eq!(resolve_base_url(&spec, None), Some("https://api.tokenfactory.nebius.com/v1"));
+        // A model's own base URL (a dedicated endpoint) still wins.
+        assert_eq!(resolve_base_url(&spec, Some("https://dedicated.example/v1")), Some("https://dedicated.example/v1"));
     }
 
     #[test]

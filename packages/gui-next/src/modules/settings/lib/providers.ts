@@ -24,6 +24,7 @@ export const CLOUD_PROVIDERS: ProviderMeta[] = [
   { id: 'openrouter', label: 'OpenRouter' },
   { id: 'cerebras', label: 'Cerebras' },
   { id: 'nvidia-nim', label: 'NVIDIA NIM' },
+  { id: 'nebius', label: 'Nebius Token Factory' },
   { id: 'huggingface', label: 'Hugging Face' },
   { id: 'cloudflare-workers-ai', label: 'Cloudflare Workers AI' },
 ]

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Stack, Typography, Divider, Button, ButtonBase, IconButton, CircularProgress, Dialog, TextField, Select, MenuItem, Chip, Collapse } from '../../../ui'
+import { Stack, Typography, Divider, Button, ButtonBase, IconButton, CircularProgress, Dialog, TextField, Select, MenuItem, Chip, Collapse, Alert } from '../../../ui'
 import { ImportLinear, TrashLinear, Link2Linear, CommandLinear, GlobalLinear, ArrowDownLinear } from '../../../icons'
 import { useMcpStore } from '../store/mcpStore'
 import { DEFAULT_MCP_TIMEOUT_MS, type McpServerConfig, type McpTransportConfig } from '../lib/mcp'
@@ -265,9 +265,9 @@ function AddServerDialog({ open, onClose }: { open: boolean; onClose: () => void
         )}
 
         {error && (
-          <Typography variant="caption" color="error.main">
+          <Alert severity="error">
             {error}
-          </Typography>
+          </Alert>
         )}
 
         <Stack direction="row" sx={{ gap: 1 }}>

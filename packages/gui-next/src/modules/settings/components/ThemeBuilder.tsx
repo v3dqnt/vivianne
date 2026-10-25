@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Stack, Typography, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Box, ButtonGroup, getContrastRatio } from '../../../ui'
+import { Stack, Typography, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Box, ButtonGroup, getContrastRatio, Alert } from '../../../ui'
 import { allPalettes, themeTokens, type PaletteDef, type TokenSet } from '../../../theme'
 import { useThemeStore, type ThemeMode } from '../store/themeStore'
 
@@ -184,9 +184,9 @@ export function ThemeBuilder({ base, editing, onClose }: { base: PaletteDef; edi
             })}
           </Stack>
           {error && (
-            <Typography variant="caption" color="error">
+            <Alert severity="error">
               {error}
-            </Typography>
+            </Alert>
           )}
         </Stack>
       </DialogContent>

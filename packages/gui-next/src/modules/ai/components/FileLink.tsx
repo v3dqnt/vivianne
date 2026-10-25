@@ -1,4 +1,6 @@
-import { Box, alpha } from '../../../ui'
+import { Box } from '../../../ui'
+import { call } from '../../../ipc'
+import { dirName } from '../lib/filePaths'
 import { usePanelStore } from '../../dock/store/panelStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
 
@@ -31,44 +33,62 @@ export function filePathArg(args: Record<string, unknown> | undefined): string |
  * highlighted, and opening in the Preview panel on click. The full path is
  * on hover.
  */
-export function FileLink({ path }: { path: string }) {
+export function FileLink({ path, label, prose = false }: { path: string; label?: string; prose?: boolean }) {
   const root = useWorkspaceStore((s) => s.folders[0] ?? null)
   const full = resolvePath(path, root)
+  const open = () => usePanelStore.getState().openDocument(full)
+  const reveal = () => void call('cmd_open_external', { path: dirName(full), target: 'explorer' })
   return (
     <Box
       component="span"
       role="link"
       tabIndex={0}
-      title={`${full}\nOpen in Preview`}
+      title={`${full}\nClick to open in Preview. Ctrl+click or right-click to show in the folder.`}
       onClick={(e) => {
         // Inside a card header that toggles on click: open, don't toggle.
         e.stopPropagation()
-        usePanelStore.getState().openDocument(full)
+        if (e.ctrlKey || e.metaKey) reveal()
+        else open()
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        reveal()
       }}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
           e.stopPropagation()
-          usePanelStore.getState().openDocument(full)
+          open()
         }
       }}
-      sx={{
-        fontFamily: '"Geist Mono", ui-monospace, monospace',
-        fontSize: '0.75rem',
-        color: 'info.main',
-        px: 0.5,
-        py: '1px',
-        borderRadius: '4px',
-        bgcolor: (t) => alpha(t.palette.info.main, 0.1),
-        cursor: 'pointer',
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        minWidth: 0,
-        '&:hover': { textDecoration: 'underline' },
-        '&:focus-visible': { outline: 1, outlineColor: 'info.main' },
-      }}
+      sx={
+        prose
+          ? {
+              // Inside a sentence: wraps with it, reads as a link, not a chip.
+              color: 'primary.main',
+              fontFamily: '"Geist Mono", ui-monospace, monospace',
+              fontSize: '0.8125em',
+              fontWeight: 500,
+              cursor: 'pointer',
+              wordBreak: 'break-word',
+              '&:hover': { textDecoration: 'underline' },
+              '&:focus-visible': { outline: 1, outlineColor: 'primary.main' },
+            }
+          : {
+              fontWeight: 600,
+              color: 'primary.main',
+              borderRadius: '4px',
+              '&:hover': { textDecoration: 'underline' },
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              minWidth: 0,
+              '&:focus-visible': { outline: 1, outlineColor: 'primary.main' },
+            }
+      }
     >
-      {baseName(path)}
+      {label ?? baseName(path)}
     </Box>
   )
 }

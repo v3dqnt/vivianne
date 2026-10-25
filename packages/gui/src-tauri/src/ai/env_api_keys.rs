@@ -27,6 +27,7 @@ fn get_api_key_env_vars(provider: &str) -> Option<Vec<&'static str>> {
         "moonshotai" | "moonshotai-cn" => Some(vec!["MOONSHOT_API_KEY"]),
         "huggingface" => Some(vec!["HF_TOKEN"]),
         "fireworks" => Some(vec!["FIREWORKS_API_KEY"]),
+        "nebius" => Some(vec!["NEBIUS_API_KEY"]),
         "together" => Some(vec!["TOGETHER_API_KEY"]),
         "opencode" | "opencode-go" => Some(vec!["OPENCODE_API_KEY"]),
         "kimi-coding" => Some(vec!["KIMI_API_KEY"]),

@@ -6,7 +6,7 @@ import { useGeneralAgents } from '../store/generalAgentsStore'
 import { useTeamStore, type TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey } from '../store/botsStore'
 import { useBotFace } from './AgentFace'
-import { Avatar, colorOf } from './bits'
+import { Avatar, faceOf } from './bits'
 
 const EMPTY: TeamAgent[] = []
 
@@ -109,5 +109,5 @@ export function GeneralAgents({ labelSx }: { labelSx: object }) {
  * agent's state rather than the list re-rendering for all of them. */
 function RowFace({ root, agent }: { root: string | null; agent: TeamAgent }) {
   const face = useBotFace(root, agent.id)
-  return <Avatar name={agent.name} color={colorOf(agent)} size={24} state={face} />
+  return <Avatar {...faceOf(agent)} size={24} state={face} animate />
 }

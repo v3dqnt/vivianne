@@ -47,9 +47,9 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use super::protocol::WireMessage;
 use super::MultiplayerState;
-use crate::agent::projects::Project;
-use crate::agent::types::{AgentMessage, MessageContent};
-use crate::agent::usage_store::DayUsage;
+use crate::agent::sessions::projects::Project;
+use crate::agent::runtime::types::{AgentMessage, MessageContent};
+use crate::agent::models::usage_store::DayUsage;
 
 /// Newest entries shown to the agent in one `<pair_activity>` block.
 const INJECT_MAX_ENTRIES: usize = 8;
@@ -143,7 +143,7 @@ static STORE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn store_path(project_id: &str) -> Option<PathBuf> {
     let safe: String = project_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
-    let dir = crate::agent::paths::viv_agent_dir().ok()?.join("multiplayer");
+    let dir = crate::agent::system::paths::viv_agent_dir().ok()?.join("multiplayer");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir.join(format!("{safe}.json")))
 }
@@ -157,7 +157,7 @@ fn load(project_id: &str) -> Store {
 
 fn save(project_id: &str, store: &Store) {
     if let (Some(p), Ok(json)) = (store_path(project_id), serde_json::to_string(store)) {
-        let _ = crate::agent::commands::write_session_file_atomic(&p, &json);
+        let _ = crate::agent::runtime::commands::write_session_file_atomic(&p, &json);
     }
 }
 
@@ -180,7 +180,7 @@ fn bounded(v: &mut Vec<ActivityEntry>) {
 // ── Project lookups ───────────────────────────────────────────────────────
 
 fn multiplayer_project(folders: &[String]) -> Option<Project> {
-    crate::agent::projects::find_project_for_workspace(folders).filter(|p| p.multiplayer.is_some())
+    crate::agent::sessions::projects::find_project_for_workspace(folders).filter(|p| p.multiplayer.is_some())
 }
 
 fn state(app: &AppHandle) -> Option<Arc<MultiplayerState>> {
@@ -470,7 +470,7 @@ async fn bundle_since(dir: &Path, base: Option<&str>) -> Result<Option<(Option<S
 }
 
 async fn is_idle(app: &AppHandle) -> bool {
-    app.try_state::<Arc<crate::agent::commands::AppState>>().is_some_and(|s| s.agent.try_lock().is_ok())
+    app.try_state::<Arc<crate::agent::runtime::commands::AppState>>().is_some_and(|s| s.agent.try_lock().is_ok())
 }
 
 /// Merge the partner's fetched commits. Returns a note for the user when it
@@ -500,7 +500,7 @@ async fn merge_partner(dir: &Path, author: &str) -> Result<(), String> {
 /// Right before a run in a multiplayer project: bring in the partner's
 /// pending commits, then show the agent what the partner did that it hasn't
 /// seen yet.
-pub async fn before_run(app: &AppHandle, folders: &[String], agent_state: &crate::agent::state::AgentState) {
+pub async fn before_run(app: &AppHandle, folders: &[String], agent_state: &crate::agent::runtime::state::AgentState) {
     let Some(project) = multiplayer_project(folders) else { return };
     let Some(dir) = project.path.clone().map(PathBuf::from) else { return };
     let author = my_name(app).await;
@@ -631,9 +631,9 @@ async fn flush(app: &AppHandle, st: &MultiplayerState, project: &Project) {
 
 /// Every usage record from this project's conversation (and its subagents).
 pub async fn my_usage(project_id: &str) -> BTreeMap<String, DayUsage> {
-    let suffix = format!(":{}", crate::agent::conversation::conversation_id(project_id));
+    let suffix = format!(":{}", crate::agent::sessions::conversation::conversation_id(project_id));
     let mut out: BTreeMap<String, DayUsage> = BTreeMap::new();
-    for (day, sources) in crate::agent::usage_store::read_history_by_source().await {
+    for (day, sources) in crate::agent::models::usage_store::read_history_by_source().await {
         for (tag, u) in sources {
             if tag.ends_with(&suffix) {
                 let d = out.entry(day.clone()).or_default();
@@ -651,7 +651,7 @@ pub async fn my_usage(project_id: &str) -> BTreeMap<String, DayUsage> {
 }
 
 fn project_for_peer(peer_id: &str) -> Option<Project> {
-    crate::agent::projects::list_all().into_iter().find(|p| p.multiplayer.as_ref().is_some_and(|m| m.peer_id == peer_id))
+    crate::agent::sessions::projects::list_all().into_iter().find(|p| p.multiplayer.as_ref().is_some_and(|m| m.peer_id == peer_id))
 }
 
 /// A connection to `peer_id` just opened.

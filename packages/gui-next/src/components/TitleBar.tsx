@@ -7,6 +7,7 @@ import { useSidebarStore } from '../modules/sessions/store/sidebarStore'
 import { PRESET_LABELS, ZONE_LABELS, applyPreset, resetLayout, toggleZone, useWorkspace, type Preset, type Zone } from '../modules/workspace/layout'
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
 import { PairChip } from '../modules/multiplayer/components/PairChip'
+import { EditionBadge } from '../modules/hackathon/EditionBadge'
 
 const TRAFFIC_LIGHT_SIZE = 12
 
@@ -274,6 +275,7 @@ export function TitleBar() {
         <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500 }}>
           Vivianne
         </Typography>
+        <EditionBadge />
       </Box>
 
       <TitleBarActions />

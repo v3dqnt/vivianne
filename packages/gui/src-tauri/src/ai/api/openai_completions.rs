@@ -598,7 +598,7 @@ pub async fn stream_chat_completions(
     // Finalize tool calls into output.content
     finalize_output(&mut output, &state);
 
-    output.stop_reason = state.stop_reason.clone();
+    output.stop_reason = final_stop_reason(&state);
     output.error_message = state.error_message.clone();
 
     // Emit final done event
@@ -621,6 +621,20 @@ fn process_chunk(
     app: &AppHandle,
     stream_id: &str,
 ) {
+    for event in apply_chunk(chunk, state, output, stream_id) {
+        let _ = app.emit("ai-stream-token", &event);
+    }
+}
+
+/// The state change for one streamed chunk, and the events it produces. No
+/// app handle, so the wire handling is testable against recorded streams.
+fn apply_chunk(
+    chunk: &ChatCompletionChunk,
+    state: &mut StreamState,
+    output: &mut AssistantMessage,
+    stream_id: &str,
+) -> Vec<StreamTokenEvent> {
+    let mut events: Vec<StreamTokenEvent> = Vec::new();
     // Update usage
     if let Some(ref usage) = chunk.usage {
         output.usage = parse_usage_from_chunk(usage);
@@ -628,7 +642,7 @@ fn process_chunk(
 
     let choice = match chunk.choices.as_ref().and_then(|c| c.first()) {
         Some(c) => c,
-        None => return,
+        None => return events,
     };
 
     // Choice-level usage fallback
@@ -647,7 +661,7 @@ fn process_chunk(
 
     let delta = match &choice.delta {
         Some(d) => d,
-        None => return,
+        None => return events,
     };
 
     // Text delta — routed through ThinkTagParser first so a deployment that
@@ -670,7 +684,7 @@ fn process_chunk(
                     message: None,
                     is_thinking,
                 };
-                let _ = app.emit("ai-stream-token", &event);
+                events.push(event);
             }
         }
     }
@@ -697,7 +711,7 @@ fn process_chunk(
                 message: None,
                 is_thinking: true,
             };
-            let _ = app.emit("ai-stream-token", &event);
+            events.push(event);
         }
     }
 
@@ -746,6 +760,17 @@ fn process_chunk(
             }
         }
     }
+    events
+}
+
+/// How the turn ended. Some servers say "stop" even when they called tools;
+/// with tool calls present it is a tool-call turn.
+fn final_stop_reason(state: &StreamState) -> String {
+    if state.stop_reason == "stop" && !state.tool_calls.is_empty() {
+        "tool_calls".to_string()
+    } else {
+        state.stop_reason.clone()
+    }
 }
 
 fn finalize_output(output: &mut AssistantMessage, state: &StreamState) {
@@ -754,7 +779,8 @@ fn finalize_output(output: &mut AssistantMessage, state: &StreamState) {
     // discarding it. Only fall back to using it as the answer text itself
     // when there was no real content at all (pure-reasoning streams would
     // otherwise be a blank reply).
-    if !state.text.is_empty() && !state.reasoning.is_empty() {
+    let has_tool_calls = !state.tool_calls.is_empty();
+    if (!state.text.is_empty() || has_tool_calls) && !state.reasoning.is_empty() {
         output.content.push(MessageContent::Thinking {
             thinking: state.reasoning.clone(),
             thinking_signature: None,
@@ -763,7 +789,9 @@ fn finalize_output(output: &mut AssistantMessage, state: &StreamState) {
     }
     let final_text = if !state.text.is_empty() {
         state.text.clone()
-    } else if !state.reasoning.is_empty() {
+    } else if !state.reasoning.is_empty() && !has_tool_calls {
+        // Only when there is nothing else: with tool calls, the reasoning
+        // was thinking, and showing it as the answer leaks the chain of thought.
         state.reasoning.clone()
     } else {
         String::new()
@@ -780,7 +808,13 @@ fn finalize_output(output: &mut AssistantMessage, state: &StreamState) {
     indices.sort_unstable();
     for idx in indices {
         if let Some(tc) = state.tool_calls.get(&idx) {
-            output.content.push(MessageContent::ToolCall(tc.clone()));
+            let mut tc = tc.clone();
+            // Some compatible servers never send a call id; the result has
+            // to be matched back to its call by something.
+            if tc.id.is_empty() {
+                tc.id = format!("call_{idx}");
+            }
+            output.content.push(MessageContent::ToolCall(tc));
         }
     }
 }
@@ -885,5 +919,149 @@ mod function_state_error_tests {
     fn returns_none_for_malformed_body() {
         assert_eq!(parse_function_state_error("not json at all"), None);
         assert_eq!(parse_function_state_error(""), None);
+    }
+}
+
+/// The wire handling, against streams shaped like what OpenAI-compatible
+/// hosts (Nebius Token Factory serving Nemotron among them) send. Replace
+/// these with recorded streams when a live key is at hand.
+#[cfg(test)]
+mod stream_fixture_tests {
+    use super::*;
+
+    /// Feed `data:` payloads (the JSON after each `data: `) through the
+    /// same state machine the live stream uses.
+    fn run(chunks: &[&str]) -> (AssistantMessage, Vec<StreamTokenEvent>) {
+        let mut state = StreamState::default();
+        let mut output = make_error_message("m", "nebius", "openai-chat", "");
+        output.stop_reason = String::new();
+        output.error_message = None;
+        let mut events = Vec::new();
+        for c in chunks {
+            let chunk: ChatCompletionChunk = serde_json::from_str(c).unwrap_or_else(|e| panic!("bad fixture {c}: {e}"));
+            events.extend(apply_chunk(&chunk, &mut state, &mut output, "s1"));
+        }
+        finalize_output(&mut output, &state);
+        output.stop_reason = final_stop_reason(&state);
+        (output, events)
+    }
+
+    fn text_of(m: &AssistantMessage) -> String {
+        m.content.iter().filter_map(|c| if let MessageContent::Text { text } = c { Some(text.as_str()) } else { None }).collect()
+    }
+    fn thinking_of(m: &AssistantMessage) -> String {
+        m.content.iter().filter_map(|c| if let MessageContent::Thinking { thinking, .. } = c { Some(thinking.as_str()) } else { None }).collect()
+    }
+    fn calls_of(m: &AssistantMessage) -> Vec<ToolCall> {
+        m.content.iter().filter_map(|c| if let MessageContent::ToolCall(t) = c { Some(t.clone()) } else { None }).collect()
+    }
+
+    #[test]
+    fn reasoning_then_answer_keeps_them_apart() {
+        let (m, events) = run(&[
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"The user wants a greeting. "}}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"reasoning_content":"Keep it short."}}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"content":"Hello"}}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"content":" there!"},"finish_reason":"stop"}]}"#,
+            r#"{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":9,"total_tokens":21}}"#,
+        ]);
+        assert_eq!(text_of(&m), "Hello there!");
+        assert_eq!(thinking_of(&m), "The user wants a greeting. Keep it short.");
+        assert_eq!(m.stop_reason, "stop");
+        // The thinking was streamed as thinking, the answer as the answer.
+        assert!(events.iter().filter(|e| e.is_thinking).count() == 2);
+        assert!(events.iter().filter(|e| !e.is_thinking).count() == 2);
+        // Usage arrives on a final chunk with no choices.
+        assert_eq!(m.usage.input, 12);
+        assert_eq!(m.usage.output, 9);
+    }
+
+    #[test]
+    fn the_reasoning_field_can_be_called_reasoning() {
+        let (m, _) = run(&[
+            r#"{"choices":[{"delta":{"reasoning":"hmm"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"Done."},"finish_reason":"stop"}]}"#,
+        ]);
+        assert_eq!(thinking_of(&m), "hmm");
+        assert_eq!(text_of(&m), "Done.");
+    }
+
+    #[test]
+    fn tool_arguments_split_across_chunks_are_joined() {
+        let (m, _) = run(&[
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"read","arguments":""}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"src/main.rs\"}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ]);
+        let calls = calls_of(&m);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_a");
+        assert_eq!(calls[0].name, "read");
+        assert_eq!(calls[0].arguments, serde_json::json!({ "path": "src/main.rs" }));
+        assert_eq!(m.stop_reason, "tool_calls");
+    }
+
+    #[test]
+    fn two_tool_calls_in_one_turn_keep_their_own_arguments() {
+        let (m, _) = run(&[
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c0","function":{"name":"read","arguments":"{\"path\":\"a\"}"}},{"index":1,"id":"c1","function":{"name":"grep","arguments":"{\"pattern\":"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"\"todo\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+        ]);
+        let calls = calls_of(&m);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].arguments, serde_json::json!({ "path": "a" }));
+        assert_eq!(calls[1].arguments, serde_json::json!({ "pattern": "todo" }));
+    }
+
+    #[test]
+    fn a_reasoning_model_that_only_calls_a_tool_does_not_answer_with_its_thoughts() {
+        // Reasoning first, then a tool call and no content: the chain of
+        // thought must not become the visible reply.
+        let (m, _) = run(&[
+            r#"{"choices":[{"delta":{"reasoning_content":"I should read the file first."}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"read","arguments":"{\"path\":\"x\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+        ]);
+        assert_eq!(text_of(&m), "", "no answer text: the model only called a tool");
+        assert_eq!(thinking_of(&m), "I should read the file first.");
+        assert_eq!(calls_of(&m).len(), 1);
+    }
+
+    #[test]
+    fn a_pure_reasoning_reply_is_still_shown() {
+        // A model that streams its whole answer in the reasoning field and
+        // calls nothing: better shown than blank.
+        let (m, _) = run(&[
+            r#"{"choices":[{"delta":{"reasoning_content":"The capital is Paris."},"finish_reason":"stop"}]}"#,
+        ]);
+        assert_eq!(text_of(&m), "The capital is Paris.");
+    }
+
+    #[test]
+    fn a_tool_call_without_an_id_gets_one() {
+        let (m, _) = run(&[
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"bash","arguments":"{\"command\":\"ls\"}"}}]},"finish_reason":"stop"}]}"#,
+        ]);
+        let calls = calls_of(&m);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_0");
+        // A server that says "stop" while calling tools still gets the loop to run them.
+        assert_eq!(m.stop_reason, "tool_calls");
+    }
+
+    #[test]
+    fn think_tags_in_content_are_split_out() {
+        let (m, _) = run(&[
+            r#"{"choices":[{"delta":{"content":"<think>plan it</think>The answer."},"finish_reason":"stop"}]}"#,
+        ]);
+        assert_eq!(thinking_of(&m), "plan it");
+        assert_eq!(text_of(&m), "The answer.");
+    }
+
+    #[test]
+    fn length_is_reported_as_length() {
+        let (m, _) = run(&[r#"{"choices":[{"delta":{"content":"cut off"},"finish_reason":"length"}]}"#]);
+        assert_eq!(m.stop_reason, "length");
+        assert_eq!(text_of(&m), "cut off");
     }
 }

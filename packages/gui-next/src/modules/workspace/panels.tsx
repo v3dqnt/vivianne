@@ -7,7 +7,7 @@ import type {
   IWatermarkPanelProps,
   DockviewGroupPanel,
 } from 'dockview-react'
-import { AddLinear, CloseLinear, LayerLinear, MaximizeLinear, MinimizeLinear, ArrowDownLinear } from '../../icons'
+import { AddLinear, CloseLinear, LayerLinear, MaximizeLinear, MinimizeLinear } from '../../icons'
 import { hasTauri } from '../../ipc'
 import { ChatView } from '../ai/components/ChatView'
 import { useProjectsStore, modeOf, GENERAL_PROJECT_ID } from '../sessions/store/projectsStore'
@@ -15,7 +15,9 @@ import { useGeneralAgents } from '../team/store/generalAgentsStore'
 import { useBotsStore } from '../team/store/botsStore'
 import { useModsStore, modPanels } from '../mods/store/modsStore'
 import { ADDABLE, PANELS, type PanelKind } from './registry'
-import { openPanel, setZoneVisible, zoneOf, ZONE_LABELS } from './layout'
+import { openPanel, saveStack, stackZone, unstackZone, zoneOf, ZONE_LABELS, type StackItem } from './layout'
+import { StackedPanels } from './Stack'
+import { QuickAccess } from './QuickAccess'
 import { usePanelStore } from '../dock/store/panelStore'
 
 // Every panel body but the chat is loaded when its panel first appears, not
@@ -31,6 +33,8 @@ const BackgroundTasksPanel = lazy(() =>
   import('../dock/components/BackgroundTasksPanel').then((m) => ({ default: m.BackgroundTasksPanel })),
 )
 const PlanPanel = lazy(() => import('../plan/components/PlanPanel').then((m) => ({ default: m.PlanPanel })))
+const TimelinePanel = lazy(() => import('../timeline/TimelinePanel').then((m) => ({ default: m.TimelinePanel })))
+const MemoryPanel = lazy(() => import('../memory/MemoryPanel').then((m) => ({ default: m.MemoryPanel })))
 const TeamRoom = lazy(() => import('../team/components/TeamRoom').then((m) => ({ default: m.TeamRoom })))
 const AgentsPanel = lazy(() => import('../team/components/AgentsPanel').then((m) => ({ default: m.AgentsPanel })))
 const ModPanel = lazy(() => import('../mods/components/ModPanel').then((m) => ({ default: m.ModPanel })))
@@ -42,6 +46,9 @@ const MultiplayerWorkspacePanel = lazy(() =>
 interface Params {
   kind: PanelKind
   panelName?: string
+  /** A `stack` panel: what it holds and each one's relative height. */
+  items?: StackItem[]
+  sizes?: number[]
 }
 
 /** Every panel fills its box and scrolls itself; the group never scrolls. */
@@ -160,6 +167,16 @@ export const COMPONENTS: Record<PanelKind, FunctionComponent<IDockviewPanelProps
       <PlanPanel />
     </Fill>
   ),
+  timeline: () => (
+    <Fill>
+      <TimelinePanel />
+    </Fill>
+  ),
+  memory: () => (
+    <Fill>
+      <MemoryPanel />
+    </Fill>
+  ),
   // Documents were a panel (and a panel per file) before they became a mode
   // of Preview. A saved layout or the agent's set_panel can still ask for
   // them; both land in Preview.
@@ -176,6 +193,29 @@ export const COMPONENTS: Record<PanelKind, FunctionComponent<IDockviewPanelProps
       <ModPanel name={props.params.panelName ?? null} />
     </Fill>
   ),
+  quick: () => (
+    <Fill>
+      <QuickAccess />
+    </Fill>
+  ),
+  // The right panel's panels, one above another. Each is rendered by the same
+  // component a tab of its kind would use.
+  stack: (props) => (
+    <StackedPanels
+      items={props.params.items ?? []}
+      sizes={props.params.sizes}
+      save={saveStack}
+      toTabs={unstackZone}
+      closeAll={() => props.api.close()}
+      render={(item, close) => {
+        const Body = COMPONENTS[item.kind]
+        // A minimal stand-in for the dockview props a tab would get: the
+        // bodies read `params`, and the few that close themselves use `api.close`.
+        const inner = { params: { kind: item.kind, panelName: item.panelName }, api: { close } } as unknown as IDockviewPanelProps<Params>
+        return <Body {...inner} />
+      }}
+    />
+  ),
 }
 
 /** A tab: icon, title, and a close button — none for the chat, which can be
@@ -183,7 +223,6 @@ export const COMPONENTS: Record<PanelKind, FunctionComponent<IDockviewPanelProps
 export function PanelTab(props: IDockviewPanelHeaderProps<Params>) {
   const kind = props.params.kind
   const def = PANELS[kind] ?? PANELS.custom
-  const Icon = def.icon
   const [title, setTitle] = useState(props.api.title ?? def.title)
   useEffect(() => {
     const d = props.api.onDidTitleChange((e) => setTitle(e.title))
@@ -201,7 +240,6 @@ export function PanelTab(props: IDockviewPanelHeaderProps<Params>) {
       }}
       sx={{ alignItems: 'center', gap: 0.75, px: 1.25, height: '100%', maxWidth: 220, '&:hover .viv-tab-close': { opacity: 1 } }}
     >
-      <Icon size={12} color="currentColor" />
       <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.75rem', fontWeight: 500 }}>
         {title}
       </Box>
@@ -265,7 +303,8 @@ export function GroupActions(props: IDockviewHeaderActionsProps) {
     return () => d.dispose()
   }, [props.api, props.containerApi])
 
-  const zone = zoneOf(props.group)
+  const activeKind = (props.group.activePanel?.params as Params | undefined)?.kind
+  const closable = !!activeKind && (PANELS[activeKind] ?? PANELS.custom).closable
 
   const add = (kind: PanelKind, panelName?: string) => {
     setAnchor(null)
@@ -281,30 +320,34 @@ export function GroupActions(props: IDockviewHeaderActionsProps) {
   return (
     <Stack direction="row" sx={{ alignItems: 'center', gap: 0.25, px: 0.75, height: '100%' }}>
       <Tooltip title="Add a panel here">
-        <Box component="button" type="button" aria-label="Add a panel" onClick={(e) => setAnchor(e.currentTarget as HTMLElement)} sx={headerBtnSx}>
+        <Box component="button" type="button" className="viv-add-panel" aria-label="Add a panel" aria-expanded={!!anchor} onClick={(e) => setAnchor(e.currentTarget as HTMLElement)} sx={headerBtnSx}>
           <AddLinear size={13} color="currentColor" />
         </Box>
       </Tooltip>
-      {zone ? (
-        // A zone is hidden rather than maximized: it belongs to the window
-        // edge, and the title bar's panel toggle brings it back.
-        <Tooltip title={`Hide ${ZONE_LABELS[zone].toLowerCase()}`}>
-          <Box component="button" type="button" aria-label={`Hide ${ZONE_LABELS[zone]}`} onClick={() => setZoneVisible(zone, false)} sx={headerBtnSx}>
-            <Box sx={{ display: 'grid', transform: zone === 'right' ? 'rotate(-90deg)' : 'none' }}>
-              <ArrowDownLinear size={12} color="currentColor" />
-            </Box>
+      {zoneOf(props.group) === 'right' && props.group.panels.length > 1 && (
+        <Tooltip title="Show panels stacked">
+          <Box component="button" type="button" className="viv-add-panel" aria-label="Show panels stacked" onClick={stackZone} sx={headerBtnSx}>
+            <LayerLinear size={13} color="currentColor" />
           </Box>
         </Tooltip>
-      ) : (
-        <Tooltip title={maximized ? 'Restore' : 'Maximize'}>
-          <Box
-            component="button"
-            type="button"
-            aria-label={maximized ? 'Restore group size' : 'Maximize group'}
-            onClick={() => (maximized ? props.api.exitMaximized() : props.api.maximize())}
-            sx={headerBtnSx}
-          >
-            {maximized ? <MinimizeLinear size={12} color="currentColor" /> : <MaximizeLinear size={12} color="currentColor" />}
+      )}
+      <Tooltip title={maximized ? 'Restore' : 'Expand'}>
+        <Box
+          component="button"
+          type="button"
+          aria-label={maximized ? 'Restore group size' : 'Expand group'}
+          onClick={() => (maximized ? props.api.exitMaximized() : props.api.maximize())}
+          sx={headerBtnSx}
+        >
+          {maximized ? <MinimizeLinear size={12} color="currentColor" /> : <MaximizeLinear size={12} color="currentColor" />}
+        </Box>
+      </Tooltip>
+      {/* Close what is showing here. The chat can't be closed; a zone left
+          empty offers its utilities (see ZoneEmptyState). */}
+      {closable && (
+        <Tooltip title="Close">
+          <Box component="button" type="button" aria-label="Close panel" onClick={() => props.group.activePanel?.api.close()} sx={headerBtnSx}>
+            <CloseLinear size={12} color="currentColor" />
           </Box>
         </Tooltip>
       )}

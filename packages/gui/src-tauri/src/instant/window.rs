@@ -89,13 +89,26 @@ pub fn is_active() -> bool {
 /// The chord went down: listen. Whatever was running is stopped first, since
 /// holding the chord again means a new instruction.
 pub fn press(app: &tauri::AppHandle) {
+    press_with(app, None);
+}
+
+/// The assist chord went down: as `press`, but the overlay is told which
+/// window the user is looking at.
+pub fn press_assist(app: &tauri::AppHandle, window_title: String) {
+    press_with(app, Some(window_title));
+}
+
+fn press_with(app: &tauri::AppHandle, assist: Option<String>) {
+    if !super::ENABLED {
+        return;
+    }
     if HELD.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         crate::instant::session::abort(&app);
-        show_and_activate(&app, true);
+        show_and_activate(&app, true, assist);
     });
 }
 
@@ -121,6 +134,9 @@ pub async fn cmd_instant_dismiss(app: tauri::AppHandle) -> Result<(), String> {
 /// already on those keys, and a separate dismiss chord is one more thing to
 /// remember at exactly the moment something is going wrong.
 pub fn toggle(app: &tauri::AppHandle) {
+    if !super::ENABLED {
+        return;
+    }
     // Off the shortcut handler: the first summon creates the window, and
     // window creation must not run inside the event-loop callback.
     let app = app.clone();
@@ -134,12 +150,12 @@ fn toggle_now(app: &tauri::AppHandle) {
         return;
     }
     // From the tray there is no key to hold: listen until a pause instead.
-    show_and_activate(app, false);
+    show_and_activate(app, false, None);
 }
 
 /// Show the notch and start listening; `hold` listens until the chord is
 /// released, otherwise until the speaker pauses.
-fn show_and_activate(app: &tauri::AppHandle, hold: bool) {
+fn show_and_activate(app: &tauri::AppHandle, hold: bool, assist: Option<String>) {
     // Created on first summon (and again after it has been closed for
     // sitting idle) — see `crate::overlays`.
     let win = match crate::overlays::ensure(app, LABEL) {
@@ -171,7 +187,7 @@ fn show_and_activate(app: &tauri::AppHandle, hold: bool) {
     // to the overlay instead of the app being driven.
     ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
     // Through the overlay queue: on a first summon the page is still loading.
-    crate::overlays::emit(app, LABEL, "instant:activate", serde_json::json!({ "hold": hold }));
+    crate::overlays::emit(app, LABEL, "instant:activate", serde_json::json!({ "hold": hold, "assist": assist }));
 }
 
 /// The resting notch: up, small, showing the agents' status, not listening.

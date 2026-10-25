@@ -48,10 +48,13 @@ const time = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: 
  * opened.
  *
  * Memoized: MessageList re-renders per streamed token, and this widget sits
- * inside it — with zero props, `memo` lets it bail out of all of those. */
-export const TodoPanel = memo(function TodoPanel() {
+ * inside it — with zero props, `memo` lets it bail out of all of those.
+ * `messages` shows another conversation's todos (an agent's DM) instead of
+ * the main chat's. */
+export const TodoPanel = memo(function TodoPanel({ messages }: { messages?: AgentMessage[] } = {}) {
   const [expanded, setExpanded] = useState(false)
-  const { todos, doneAt } = useAgentStore((s) => latestPlan(s.messages))
+  const fromChat = useAgentStore((s) => (messages ? EMPTY : latestPlan(s.messages)))
+  const { todos, doneAt } = messages ? latestPlan(messages) : fromChat
   const doneCount = todos.filter((t) => t.status === 'completed').length
 
   if (todos.length === 0) return null

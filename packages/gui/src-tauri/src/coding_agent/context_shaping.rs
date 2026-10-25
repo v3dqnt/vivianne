@@ -1,6 +1,6 @@
 //! Per-turn, in-memory context shaping — ages old tool-result text in place
 //! (and, Tier 2, evicts old images) independent of full compaction.
-//! Complements `agent::loop_core::maybe_compact_context`: compaction removes
+//! Complements `agent::runtime::loop_core::maybe_compact_context`: compaction removes
 //! whole old messages and replaces them with a summary; this shapes
 //! individual messages that stay in history, so a single 200KB tool output
 //! from ten turns ago doesn't sit untouched in every subsequent LLM request
@@ -11,7 +11,7 @@
 //! moment it was created. This only shapes what's sent to the LLM for the
 //! rest of the live run, keeping full fidelity in the session file.
 
-use crate::agent::types::{AgentMessage, MessageContent};
+use crate::agent::runtime::types::{AgentMessage, MessageContent};
 
 /// The newest tool results kept in full. Older ones are masked (below).
 pub const KEEP_RECENT_TOOL_RESULTS: usize = 10;
@@ -181,7 +181,7 @@ pub(crate) async fn spill_and_trim_middle_bytes(text: &str, head_bytes: usize, t
 /// its path. `None` on any failure (directory unavailable, disk full, ...) —
 /// spilling is a nice-to-have, never worth failing the tool call over.
 async fn spill(text: &str) -> Option<String> {
-    let dir = crate::agent::paths::viv_spill_dir().ok()?;
+    let dir = crate::agent::system::paths::viv_spill_dir().ok()?;
     let path = dir.join(format!("{}.txt", uuid::Uuid::new_v4()));
     tokio::fs::write(&path, text).await.ok()?;
     Some(path.display().to_string())
@@ -197,7 +197,7 @@ const SPILL_MAX_AGE_DAYS: u64 = 7;
 /// age is the only practical bound. Called once at startup, matching
 /// `commands::prune_empty_sessions`'s spot in `lib.rs`'s `.setup()`.
 pub fn prune_old_spill_files() -> usize {
-    let Ok(dir) = crate::agent::paths::viv_spill_dir() else { return 0 };
+    let Ok(dir) = crate::agent::system::paths::viv_spill_dir() else { return 0 };
     let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(SPILL_MAX_AGE_DAYS * 24 * 60 * 60);
     let Ok(entries) = std::fs::read_dir(&dir) else { return 0 };
     let mut pruned = 0usize;

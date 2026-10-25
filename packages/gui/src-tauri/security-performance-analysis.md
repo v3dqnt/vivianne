@@ -304,7 +304,7 @@ The camoufox-browser integration launches a Firefox fork with fingerprint spoofi
 
 #### PERF-01: SQLite connection opened per operation
 
-**Location:** `src/agent/memory_store.rs:40-68` — `open_and_init()`  
+**Location:** `src/agent/memory/store.rs:40-68` — `open_and_init()`  
 **Impact:** High — unnecessary CPU overhead on every memory operation
 
 Every memory store function (`insert_entry`, `search_fts`, `search_vector`, `all_entries`, etc.) opens a **new SQLite connection** inside `spawn_blocking`. This means:
@@ -346,7 +346,7 @@ For a typical user with months of daily usage data, this file grows large. With 
 
 #### PERF-03: Brute-force O(n) vector search
 
-**Location:** `src/agent/memory_store.rs:305-340` — `search_vector()`  
+**Location:** `src/agent/memory/store.rs:305-340` — `search_vector()`  
 **Impact:** High — linear scan of all embeddings
 
 ```rust
@@ -429,7 +429,7 @@ Every 30 seconds, the scheduler reads all automations, checks each one's cron sc
 
 #### PERF-07: Sequential `spawn_blocking` per SQLite operation
 
-**Location:** `src/agent/memory_store.rs` — all functions  
+**Location:** `src/agent/memory/store.rs` — all functions  
 **Impact:** Medium — context switching overhead
 
 Every memory store function spawns a separate blocking task:

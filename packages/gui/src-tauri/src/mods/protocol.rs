@@ -9,7 +9,8 @@
 
 use std::path::{Path, PathBuf};
 use tauri::http;
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use super::{ModInfo, Status};
@@ -112,6 +113,43 @@ fn not_found(why: &str) -> http::Response<Vec<u8>> {
     respond(404, "text/plain; charset=utf-8", Some("default-src 'none'"), why.as_bytes().to_vec())
 }
 
+/// Mini-apps from chat (```widget fences), by id, kept for the session.
+static WIDGETS: LazyLock<Mutex<HashMap<String, std::sync::Arc<str>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// What every widget page starts with: the theme as CSS variables, sizing to
+/// its content, and `vivianne.followUp(text)` to ask in chat. It talks to the
+/// app only by `postMessage`, which the app checks came from this frame.
+const WIDGET_BOOT: &str = r#"<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>:root{color-scheme:light dark}html,body{margin:0;background:transparent;color:var(--viv-foreground,#111);font:14px/1.5 var(--viv-font,system-ui,sans-serif)}*{box-sizing:border-box}</style>
+<script>(function(){var p=parent;window.vivianne={followUp:function(t){p.postMessage({viv:'followUp',text:String(t)},'*')}};
+addEventListener('message',function(e){var d=e.data;if(!d||d.viv!=='theme')return;var r=document.documentElement;for(var k in d.tokens)r.style.setProperty('--viv-'+k.replace(/[A-Z]/g,function(c){return'-'+c.toLowerCase()}),d.tokens[k]);r.style.setProperty('--viv-font',d.font);r.style.colorScheme=d.mode;});
+function size(){p.postMessage({viv:'resize',height:Math.ceil(document.documentElement.scrollHeight)},'*')}
+addEventListener('load',function(){size();new ResizeObserver(size).observe(document.documentElement)});p.postMessage({viv:'ready'},'*')})();</script>
+"#;
+
+/// Keep a widget's page; returns the id it's served under (`/_widget/<id>`).
+#[tauri::command]
+pub async fn cmd_widget_put(html: String) -> Result<String, String> {
+    if html.len() > 2_000_000 {
+        return Err("That widget is too large to show.".into());
+    }
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    html.hash(&mut h);
+    let id = format!("{:016x}", h.finish());
+    let mut w = WIDGETS.lock().unwrap_or_else(|e| e.into_inner());
+    // ponytail: unbounded only up to a few hundred widgets per session; an LRU if chats ever hold thousands.
+    if w.len() > 500 {
+        w.clear();
+    }
+    w.insert(id.clone(), html.into());
+    Ok(id)
+}
+
+/// A widget gets scripts and styles inline, images from data: — and no
+/// network, no frames, no forms that leave.
+const WIDGET_CSP: &str = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' blob:; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; worker-src blob:; frame-src 'none'; form-action 'none'; base-uri 'none'; sandbox allow-scripts";
+
 /// Handle one request.
 pub fn handle(request: &http::Request<Vec<u8>>) -> http::Response<Vec<u8>> {
     let path = request.uri().path();
@@ -119,6 +157,13 @@ pub fn handle(request: &http::Request<Vec<u8>>) -> http::Response<Vec<u8>> {
     let mut parts = path.trim_start_matches('/').splitn(2, '/');
     let key = parts.next().unwrap_or("");
     let rest = parts.next().unwrap_or("");
+    if key == "_widget" {
+        let html = WIDGETS.lock().unwrap_or_else(|e| e.into_inner()).get(rest).cloned();
+        return match html {
+            Some(body) => respond(200, "text/html; charset=utf-8", Some(WIDGET_CSP), format!("<!doctype html>{WIDGET_BOOT}{}", &*body).into_bytes()),
+            None => not_found("this widget is gone; reload the chat"),
+        };
+    }
     if key == "_sdk" {
         return if rest == "v1.js" {
             respond(200, "text/javascript; charset=utf-8", None, SDK_V1.as_bytes().to_vec())

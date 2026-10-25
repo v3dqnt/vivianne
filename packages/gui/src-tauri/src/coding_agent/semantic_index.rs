@@ -131,7 +131,7 @@ fn index_path(root: &Path) -> Option<PathBuf> {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     std::hash::Hash::hash(&canon.to_string_lossy().to_lowercase(), &mut hasher);
     let id = std::hash::Hasher::finish(&hasher);
-    let dir = crate::agent::paths::viv_home().ok()?.join("index");
+    let dir = crate::agent::system::paths::viv_home().ok()?.join("index");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir.join(format!("{id:016x}.json")))
 }
@@ -421,7 +421,7 @@ async fn refresh(root: &Path, embedder: Option<(Embedder, String)>) -> (Index, S
 
     if let Some(p) = path {
         if let Ok(json) = serde_json::to_string(&index) {
-            let _ = crate::agent::commands::write_session_file_atomic(&p, &json);
+            let _ = crate::agent::runtime::commands::write_session_file_atomic(&p, &json);
         }
     }
     (index, status)

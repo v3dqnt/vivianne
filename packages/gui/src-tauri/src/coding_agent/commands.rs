@@ -1,12 +1,11 @@
 //! Coding Agent Commands — Tauri command bindings that bridge the tool-side
-//! registries (subagents, plan mode, streaming output) and the GUI. The
+//! registries (subagents, streaming output) and the GUI. The
 //! frontend calls them to:
 //!   * inspect / cancel background subagents launched by the `task` tool
-//!   * inspect / toggle plan mode + read the current plan text
 //!   * register the live-output channel for streaming shell tools
 //!
 //! Per-tool approval (the "ask before this runs" gate) lives in
-//! `agent::tool_exec`'s `bypassMode`/`GATED_TOOLS` check, not here — an
+//! `agent::tools::exec`'s `bypassMode`/`GATED_TOOLS` check, not here — an
 //! earlier, separate `PermissionManager` in this module was never consulted
 //! by any tool-execution path and has been removed rather than wired up,
 //! since a working gate already exists.
@@ -71,7 +70,7 @@ pub async fn cmd_coding_list_subagents() -> Result<Vec<SubagentSummary>, String>
 /// error) for an unknown id, matching this module's existing "unknown id
 /// degrades quietly" convention (`cmd_coding_kill_subagent` et al.).
 #[tauri::command]
-pub async fn cmd_coding_get_subagent_messages(id: String) -> Result<Vec<crate::agent::types::AgentMessage>, String> {
+pub async fn cmd_coding_get_subagent_messages(id: String) -> Result<Vec<crate::agent::runtime::types::AgentMessage>, String> {
     let Some(arc) = SubagentRegistry::global().get(&id) else {
         return Ok(Vec::new());
     };

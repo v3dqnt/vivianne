@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Stack, Typography, Button, ButtonBase, LinearProgress, Divider } from '../../../ui'
+import { Stack, Typography, Button, ButtonBase, LinearProgress, Divider, Alert } from '../../../ui'
 import { TickCircleLinear, ImportLinear } from '../../../icons'
 import { call, on } from '../../../ipc'
 import { useOptionalComponentsStore } from '../store/optionalComponentsStore'
@@ -60,9 +60,9 @@ function Row({
         </Stack>
       )}
       {progress.error && (
-        <Typography variant="caption" color="error.main">
+        <Alert severity="error">
           {progress.error}
-        </Typography>
+        </Alert>
       )}
     </Stack>
   )

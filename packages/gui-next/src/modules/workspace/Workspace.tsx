@@ -1,10 +1,10 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { Box, GlobalStyles, alpha, useTheme } from '../../ui'
 import { DockviewReact, themeDark, themeLight, type DockviewTheme } from 'dockview-react'
 import 'dockview-react/dist/styles/dockview.css'
 import { SURFACE_RADIUS } from '../../theme'
 import { COMPONENTS, GroupActions, PanelTab, ZoneEmptyState } from './panels'
-import { attach, detach } from './layout'
+import { attach, detach, fitZones, setFitMeasure } from './layout'
 
 /**
  * The main window's panel area: every panel, the chat included, in one
@@ -31,6 +31,33 @@ export function Workspace() {
 
   useEffect(() => () => detach(), [])
 
+  // Dockview lays itself out on a resize but says nothing about it, so the
+  // zones are re-fitted to the new size here: a window dragged smaller gives
+  // the chat its room back, and one dragged larger returns what stepped aside.
+  const frame = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const el = frame.current
+    if (!el) return
+    setFitMeasure(() => {
+      const cs = getComputedStyle(el)
+      return {
+        width: el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+        height: el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom),
+      }
+    })
+    let raf = 0
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(fitZones)
+    })
+    ro.observe(el)
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+      setFitMeasure(null)
+    }
+  }, [])
+
   const p = theme.palette
   const t = p.tokens
   const fast = `${theme.transitions.duration.fast}ms`
@@ -39,7 +66,7 @@ export function Workspace() {
     // Terax's shell: panes float on the frame, with horizontal gutters only
     // (8px at the window edge, a narrow gap between panes). Panes meet the
     // title bar flush, so the header's own padding isn't doubled.
-    <Box sx={{ flex: 1, minWidth: 0, height: '100%', bgcolor: 'background.chrome', pr: 1, pb: 1, pl: 0.5 }}>
+    <Box ref={frame} sx={{ flex: 1, minWidth: 0, height: '100%', bgcolor: 'background.chrome', pr: 1, pb: 1, pl: 0.5 }}>
       <GlobalStyles
         styles={{
           // Doubled class for specificity: dockview's own theme class sets
@@ -88,6 +115,15 @@ export function Workspace() {
             border: `1px solid ${t.border}`,
             boxShadow: theme.elevation.pane,
           },
+          // A group that only holds a stack has no surface of its own: each
+          // card in it is the surface, and the gaps between them show the
+          // frame, not a black strip.
+          '.viv-dock .dv-groupview:has([data-viv-stack])': {
+            backgroundColor: 'transparent',
+            border: 'none',
+            boxShadow: 'none',
+            overflow: 'visible',
+          },
           // Tabs: 28px, rounded-md, the active one a soft ink tint with a
           // hairline ring and a small shadow. No underlines, no dividers.
           '.viv-dock .dv-tabs-and-actions-container': {
@@ -105,6 +141,17 @@ export function Workspace() {
           },
           '.viv-dock .dv-tab:not(.dv-active-tab):hover': { color: t.foreground, backgroundColor: alpha(t.foreground, 0.04) },
           '.viv-dock .dv-tab.dv-active-tab': { boxShadow: `inset 0 0 0 1px ${alpha(t.foreground, 0.05)}, ${theme.elevation.sm}` },
+          // A group with one panel is just a title: no pill, no tint, and
+          // the tab's own close gives way to the one at the strip's end.
+          '.viv-dock .dv-tabs-container .dv-tab:only-child, .viv-dock .dv-tabs-container .dv-tab:only-child:hover': {
+            backgroundColor: 'transparent',
+            boxShadow: 'none',
+            color: t.foreground,
+          },
+          '.viv-dock .dv-tabs-container .dv-tab:only-child .viv-tab-close': { display: 'none' },
+          // The "add a panel" button is there when wanted, not always.
+          '.viv-dock .viv-add-panel': { opacity: 0, transition: `opacity ${fast}` },
+          '.viv-dock .dv-tabs-and-actions-container:hover .viv-add-panel, .viv-dock .viv-add-panel:focus-visible, .viv-dock .viv-add-panel[aria-expanded="true"]': { opacity: 1 },
         }}
       />
       <DockviewReact

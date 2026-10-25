@@ -7,8 +7,9 @@ import { useAuthStore } from '../store/authStore'
 import { useCustomProviderStore } from '../store/customProviderStore'
 import { ProviderRow } from './ProviderRow'
 import { ChatGptPlanPanel, chatGptStatus } from './ChatGptPlanPanel'
+import { RoutingPanel } from './RoutingPanel'
 
-// Deterministic color per provider id — same trick `ModelSelector.tsx` uses
+// Deterministic color per provider id — same trick `ModelPicker.tsx` uses
 // for its picker marks, duplicated locally rather than shared since it's a
 // five-line pure function and the two call sites want slightly different
 // sizes/contexts.
@@ -354,6 +355,38 @@ export function ProvidersSection() {
             color="text.secondary"
             sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.6875rem', px: 1, mb: 0.5 }}
           >
+            Models
+          </Typography>
+          <ButtonBase
+            onClick={() => setSelected('__routing__')}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              px: 1,
+              py: 0.75,
+              borderRadius: 1.5,
+              width: '100%',
+              justifyContent: 'flex-start',
+              bgcolor: selected === '__routing__' ? 'action.selected' : 'transparent',
+              '&:hover': { bgcolor: 'action.hover' },
+            }}
+          >
+            <Typography variant="body2" sx={{ flex: 1, textAlign: 'left' }}>
+              Cost-aware routing
+            </Typography>
+            <Typography variant="caption" sx={{ fontWeight: 700, color: 'warning.main', fontSize: '0.625rem' }}>
+              BETA
+            </Typography>
+          </ButtonBase>
+        </Stack>
+
+        <Stack sx={{ gap: 0.25 }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.6875rem', px: 1, mb: 0.5 }}
+          >
             Custom providers
           </Typography>
           {customProviders.map((p) => (
@@ -395,7 +428,8 @@ export function ProvidersSection() {
         )}
         {showCustomForm && <CustomProviderForm providerId={selectedCustom ? selectedCustom.id : null} onSaved={setSelected} onRemoved={() => setSelected(null)} />}
         {selected === '__chatgpt__' && <ChatGptPlanPanel onChange={(s) => setPlanConnected(!!s?.signedIn && s.sharing)} />}
-        {!selectedCloud && !showCustomForm && selected !== '__chatgpt__' && (
+        {selected === '__routing__' && <RoutingPanel />}
+        {!selectedCloud && !showCustomForm && selected !== '__chatgpt__' && selected !== '__routing__' && (
           <Stack sx={{ height: '100%', alignItems: 'center', justifyContent: 'center' }}>
             <Typography variant="body2" color="text.secondary">
               Select a provider to configure it.

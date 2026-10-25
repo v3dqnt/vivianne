@@ -2,62 +2,26 @@
 /// Agent module — Rust rewrite of `packages/agent/src/`
 ///
 /// Architecture: Actor model with tokio channels for event streaming.
-/// - `types` — shared data types (messages, events, config)
-/// - `state` — AgentStateWRState with interior mutability
-/// - `events` — AgentEvent channel/stream types
-/// - `loop_core` — core agent loop logic (orchestrates LLM calls, tool execution)
-/// - `tool_exec` — tool call execution
-/// - `agent` — high-level Agent struct with lifecycle management
+/// - `runtime` — the loop: `Agent`, state, messages, events, the system
+///   prompt, hooks, recovery, and the Tauri commands that drive it
+/// - `tools` — tool schemas, dispatch, profiles and the self-contained tools
+/// - `memory` — what the agent remembers across sessions
+/// - `models` — which model does the work, and what it costs
+/// - `sessions` — projects and their conversations
+/// - `team` — specialists, team runs, bots, plans
+/// - `background` — automations and long tasks
+/// - `changes` — checkpoints and the change review
+/// - `system` — data paths, telemetry, notifications, dev servers
 
-pub mod types;
-pub mod state;
-pub mod events;
-pub mod loop_core;
-pub mod tool_exec;
-pub(crate) mod tool_schemas;
-mod ptc;
-pub mod agent;
-pub mod commands;
-pub mod days;
-pub mod master;
+pub mod background;
+pub mod changes;
+pub mod models;
+pub mod runtime;
+pub mod sessions;
+pub mod system;
 pub mod team;
-pub mod conversation;
-pub mod runs;
-pub mod math;
-pub mod office;
-pub mod review;
+pub mod tools;
 pub mod memory;
-pub mod memory_rerank;
-pub mod memory_store;
-pub mod memory_graph;
-pub mod memory_evolve;
-pub mod memory_sleep;
-#[cfg(test)]
-mod memory_bench;
-pub mod bots;
-pub mod contact;
-pub mod guides;
-pub mod diagram_check;
-pub mod verification;
-pub mod rrf;
-pub mod paths;
-pub mod usage_store;
-pub mod telemetry;
-pub mod hooks;
-pub mod checkpoints;
-pub mod recovery;
-pub mod run_ledger;
-pub mod plans;
-pub mod team_run;
-pub mod capabilities;
-pub mod tool_profile;
-pub mod directive;
-pub mod personas;
-pub mod project_instructions;
-pub mod projects;
-pub mod notifications;
-pub mod llama_manager;
-pub mod dev_server_manager;
 
 use serde::{Deserialize, Serialize};
 
@@ -66,12 +30,12 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 //
 // Only `Agent` is re-exported flat — it's the one type external callers
-// (`agent::commands::AppState`) actually reach for as `crate::agent::Agent`.
+// (`agent::runtime::commands::AppState`) actually reach for as `crate::agent::Agent`.
 // `types`/`state`/`events` are not: every real caller already qualifies
-// through its submodule (`agent::types::AgentMessage`, etc.), so a blanket
+// through its submodule (`agent::runtime::types::AgentMessage`, etc.), so a blanket
 // glob re-export here would just be an unused second path to the same types.
 
-pub use agent::Agent;
+pub use runtime::agent::Agent;
 
 // ============================================================================
 // Error types

@@ -265,7 +265,24 @@ async function applyThreadWorkspace() {
   }
 }
 
+/** The last few threads' transcripts, so switching back shows instantly
+ * while the backend loads the real one behind it. */
+const recent = new Map<string, AgentMessage[]>()
+const RECENT_MAX = 8
+function remember(id: string | null, messages: AgentMessage[]) {
+  if (!id || messages.length === 0) return
+  recent.delete(id)
+  recent.set(id, messages)
+  if (recent.size > RECENT_MAX) recent.delete(recent.keys().next().value!)
+}
+
 async function loadThread(id: string) {
+  remember(useDaysStore.getState().todayId, useAgentStore.getState().messages)
+  const cached = recent.get(id)
+  if (cached) {
+    useDaysStore.setState({ todayId: id, viewing: null, earlier: [], earlierStart: 0 })
+    useAgentStore.setState({ messages: cached, streamingIndex: null })
+  }
   await call('cmd_load_session', { id })
   await applyThreadWorkspace()
   useDaysStore.setState({ todayId: id, viewing: null, earlier: [], earlierStart: 0 })

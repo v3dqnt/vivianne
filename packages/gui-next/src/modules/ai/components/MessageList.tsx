@@ -12,6 +12,8 @@ import { RunSummary } from './RunSummary'
 import { ToolGroup } from './ToolGroup'
 import { groupTranscript } from '../lib/toolGroups'
 import { findCheckpoints } from '../lib/checkpoints'
+import { sourcesByMessage } from '../lib/sources'
+import { Sources } from './Sources'
 import { CheckpointCard } from './CheckpointCard'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { TodoPanel } from './TodoPanel'
@@ -25,6 +27,10 @@ import { TodoPanel } from './TodoPanel'
  * exactly like it did live. Read-only drops everything that would act on the
  * live agent: revert, edit, the busy indicator and the todo panel.
  */
+/** Each transcript row: off-screen rows skip layout and paint
+ * (`content-visibility`), keeping their last size so scrolling stays put. */
+const ROW_SX = { pb: 1.5, contentVisibility: 'auto', containIntrinsicSize: 'auto 120px' } as const
+
 export function MessageList({
   messages: savedMessages,
   earlier,
@@ -34,6 +40,8 @@ export function MessageList({
   readOnly = false,
   sessionId,
   emptyText,
+  onRevertTo,
+  revertNote,
 }: {
   messages?: AgentMessage[]
   /** Messages compacted out of the model's context, shown read-only above
@@ -49,6 +57,11 @@ export function MessageList({
   /** The saved conversation's id, when showing one — its change reviews live
    * under that id rather than today's. */
   sessionId?: string
+  /** Revert for a conversation that isn't the main chat (an agent's DM):
+   * enables "revert to here" even when `readOnly`. */
+  onRevertTo?: (index: number) => Promise<void>
+  /** What reverting does there, for the confirmation. */
+  revertNote?: string
 } = {}) {
   const liveMessages = useAgentStore((s) => s.messages)
   const messages = savedMessages ?? liveMessages
@@ -64,7 +77,8 @@ export function MessageList({
   const isBusy = readOnly ? false : liveBusy
   const liveStreamingIndex = useAgentStore((s) => s.streamingIndex)
   const streamingIndex = readOnly ? null : liveStreamingIndex
-  const revertToIndex = useAgentStore((s) => s.revertToIndex)
+  const mainRevert = useAgentStore((s) => s.revertToIndex)
+  const revertToIndex = onRevertTo ?? mainRevert
   const setDraft = useAgentStore((s) => s.setDraft)
   const containerRef = useRef<HTMLDivElement>(null)
   // Whether the user was already at (or near) the bottom before this update —
@@ -82,6 +96,7 @@ export function MessageList({
   }, [messages])
 
   const checkpoints = useMemo(() => findCheckpoints(messages), [messages])
+  const sources = useMemo(() => sourcesByMessage(messages), [messages])
   const transcript = useMemo(
     () => groupTranscript(messages, streamingIndex, new Set(checkpoints.keys())),
     [messages, streamingIndex, checkpoints],
@@ -171,7 +186,7 @@ export function MessageList({
   // Keyed by position in the whole archive, so loading an older page in
   // front doesn't remount (and re-highlight) everything already on screen.
   const earlierItems = (earlier ?? []).map((m, i) => (
-    <Box key={`e${earlierStart + i}`} sx={{ pb: 1.5 }}>
+    <Box key={`e${earlierStart + i}`} sx={ROW_SX}>
       <MessageBubble message={m} index={i} />
     </Box>
   ))
@@ -187,14 +202,18 @@ export function MessageList({
   // Omitting the callbacks is what hides a bubble's revert and edit
   // actions — history is not editable.
   const renderMessage = (i: number, compact = false) => (
-    <MessageBubble
-      message={messages[i]}
-      index={i}
-      streaming={isBusy && streamingIndex === i}
-      onRevert={readOnly ? undefined : setRevertTarget}
-      onEdit={readOnly ? undefined : startEdit}
-      compact={compact}
-    />
+    <>
+      <MessageBubble
+        message={messages[i]}
+        index={i}
+        streaming={isBusy && streamingIndex === i}
+        onRevert={readOnly && !onRevertTo ? undefined : setRevertTarget}
+        onEdit={readOnly ? undefined : startEdit}
+        compact={compact}
+      />
+      {/* What the turn's web searches drew on, under its closing reply. */}
+      {sources.has(i) && !(isBusy && streamingIndex === i) && <Sources sources={sources.get(i)!} />}
+    </>
   )
   /** The review appears once an assignment is over — never under the one
    * still running, whose change set isn't final yet. */
@@ -214,16 +233,16 @@ export function MessageList({
   // row's key never changes under it.
   const items = transcript.map((item) =>
     item.kind === 'checkpoint' ? (
-      <Box key={`c${item.index}`} sx={{ pb: 1.5 }}>
+      <Box key={`c${item.index}`} sx={ROW_SX}>
         <CheckpointCard checkpoint={checkpoints.get(item.index)!} />
       </Box>
     ) : item.kind === 'message' ? (
-      <Box key={item.index} sx={{ pb: 1.5 }}>
+      <Box key={item.index} sx={ROW_SX}>
         {renderMessage(item.index)}
         {reviewAfter([item.index])}
       </Box>
     ) : (
-      <Box key={`g${item.start}`} sx={{ pb: 1.5 }}>
+      <Box key={`g${item.start}`} sx={ROW_SX}>
         <ToolGroup tools={item.toolIndices.map((i) => messages[i] as ToolResultMessage)}>
           {item.indices.map((i) => (
             <Box key={i}>{renderMessage(i, true)}</Box>
@@ -237,14 +256,14 @@ export function MessageList({
   // conversation, and only for work that took more than a single reply.
   if (!readOnly && !isBusy && lastRun && ['done', 'stopped', 'paused', 'blocked'].includes(lastRun.status) && lastRun.steps > 1) {
     items.push(
-      <Box key={`summary-${lastRun.key}`} sx={{ pb: 1.5 }}>
+      <Box key={`summary-${lastRun.key}`} sx={ROW_SX}>
         <RunSummary ledger={lastRun} />
       </Box>,
     )
   }
   if (showTrailingIndicator) {
     items.push(
-      <Box key="trailing-indicator" sx={{ pb: 1.5 }}>
+      <Box key="trailing-indicator" sx={ROW_SX}>
         <ThinkingIndicator />
       </Box>,
     )
@@ -277,7 +296,7 @@ export function MessageList({
         <DialogContent>
           <DialogContentText variant="body2">
             {revertTarget !== null && messages.length > 0
-              ? `This removes ${messages.length - revertTarget} message${messages.length - revertTarget === 1 ? '' : 's'} after this one, including any tool calls and their results. This can't be undone.`
+              ? `This removes ${messages.length - revertTarget} message${messages.length - revertTarget === 1 ? '' : 's'} after this one, including any tool calls and their results.${revertNote ? ' ' + revertNote : " This can't be undone."}`
               : ''}
           </DialogContentText>
         </DialogContent>

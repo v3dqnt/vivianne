@@ -3,6 +3,8 @@ import { Box, ButtonBase, keyframes } from '../../../ui'
 import { call } from '../../../ipc'
 import type { RobotHeadState } from 'robot-heads'
 import { NotchFace } from './NotchFace'
+import { usePop, reducedMotion, EASE_OUT } from '../lib/motion'
+import gsap from 'gsap'
 
 /** What the notch is saying, at a glance. */
 export type NotchTone = 'listening' | 'working' | 'done' | 'stopped' | 'error' | 'idle'
@@ -13,6 +15,10 @@ const INK = '#f4f4f5'
 const MUTED = 'rgba(244,244,245,0.58)'
 const FAINT = 'rgba(244,244,245,0.4)'
 const SURFACE = '#0b0b0c'
+
+/** How long the pill takes to settle into a new size. */
+const SETTLE_MS = 320
+const EASE = 'cubic-bezier(0.22, 1, 0.36, 1)'
 
 const bounce = keyframes`
   0%, 100% { transform: scaleY(0.35); }
@@ -39,7 +45,7 @@ function Wave({ tone, level }: { tone: NotchTone; level: number }) {
             bgcolor: color,
             opacity: tone === 'stopped' ? 0.5 : 1,
             transformOrigin: 'center',
-            transition: 'transform 90ms linear',
+            transition: 'transform 140ms cubic-bezier(0.22, 1, 0.36, 1)',
             transform:
               tone === 'listening'
                 ? `scaleY(${Math.max(0.18, Math.min(1, level * 9 * k))})`
@@ -119,50 +125,94 @@ export function Notch({
   resizeCommand,
   minWidth = 200,
 }: NotchProps) {
+  // The content is measured in an inner box; the pill itself animates to that
+  // size, and the window is kept at least as big as the pill throughout so
+  // nothing is clipped mid-animation. Resizing the window directly would snap.
   const ref = useRef<HTMLDivElement | null>(null)
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null)
+  const [animate, setAnimate] = useState(false)
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
-    let last = ''
+    let sent = { w: 0, h: 0 }
+    let timer = 0
+    const push = (w: number, h: number) => {
+      if (w === sent.w && h === sent.h) return
+      sent = { w, h }
+      void call(resizeCommand, { width: w, height: h }).catch(() => {})
+    }
     const sync = () => {
-      const r = el.getBoundingClientRect()
-      const width = Math.ceil(r.width)
-      const height = Math.ceil(r.height)
-      const key = `${width}x${height}`
-      if (key === last) return
-      last = key
-      void call(resizeCommand, { width, height }).catch(() => {})
+      // +2 for the side borders.
+      const w = Math.ceil(el.offsetWidth) + 2
+      const h = Math.ceil(el.offsetHeight)
+      setSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }))
+      // Grow the window first, shrink it once the pill has finished easing.
+      window.clearTimeout(timer)
+      push(Math.max(sent.w, w), Math.max(sent.h, h))
+      timer = window.setTimeout(() => push(w, h), SETTLE_MS + 60)
     }
     sync()
     const ro = new ResizeObserver(sync)
     ro.observe(el)
-    return () => ro.disconnect()
+    const enable = window.setTimeout(() => setAnimate(true), 50)
+    return () => {
+      ro.disconnect()
+      window.clearTimeout(timer)
+      window.clearTimeout(enable)
+    }
   }, [resizeCommand])
 
+  // The face pops when the state changes; the title and the second line
+  // slide in when they change, so a new step reads as news.
+  const faceRef = useRef<HTMLDivElement | null>(null)
+  usePop(faceRef, tone)
+  const titleRef = useRef<HTMLSpanElement | null>(null)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const hasBody = !!body
+  useLayoutEffect(() => {
+    if (!titleRef.current || reducedMotion()) return
+    const t = gsap.from(titleRef.current, { y: 5, opacity: 0, duration: 0.35, ease: EASE_OUT, clearProps: 'all' })
+    return () => void t.revert()
+  }, [title])
+  useLayoutEffect(() => {
+    if (!bodyRef.current || reducedMotion()) return
+    const t = gsap.from(bodyRef.current, { y: -6, opacity: 0, duration: 0.45, delay: 0.08, ease: EASE_OUT, clearProps: 'all' })
+    return () => void t.revert()
+  }, [hasBody])
+
   return (
-    <Box sx={{ display: 'inline-flex' }}>
+    // A block flex row, not an inline box: an inline-flex wrapper sits on a
+    // text baseline and its line box leaves a gap above the pill, which is
+    // what kept the notch from touching the top of the screen.
+    <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', lineHeight: 0 }}>
       <Box
-        ref={ref}
         sx={{
           position: 'relative',
-          width: 'fit-content',
+          width: size ? size.w : 'fit-content',
+          height: size ? size.h : 'auto',
           minWidth,
-          maxWidth: 460,
+          maxWidth: 462,
           bgcolor: SURFACE,
           color: INK,
           borderRadius: '0 0 16px 16px',
           border: '1px solid rgba(255,255,255,0.08)',
           borderTop: 0,
+          boxSizing: 'border-box',
           overflow: 'hidden',
           fontFamily: 'inherit',
+          lineHeight: 'normal',
           userSelect: 'none',
+          transition: animate ? `width ${SETTLE_MS}ms ${EASE}, height ${SETTLE_MS}ms ${EASE}` : 'none',
         }}
       >
+      <Box ref={ref} sx={{ width: 'max-content', minWidth: minWidth - 2, maxWidth: 460 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, height: 34, pl: 1.5, pr: onStop ? 0.75 : 1.5, minWidth: 0 }}>
-          <NotchFace state={face ?? faceFor(tone)} />
+          <Box ref={faceRef} sx={{ display: 'flex', flexShrink: 0 }}>
+            <NotchFace state={face ?? faceFor(tone)} />
+          </Box>
           {/* While listening, the bars still follow the microphone: proof it hears you. */}
           {tone === 'listening' && <Wave tone={tone} level={level} />}
-          <Box component="span" sx={{ fontSize: 12, fontWeight: 600, letterSpacing: '-0.005em', flexShrink: 0 }}>
+          <Box ref={titleRef} component="span" sx={{ fontSize: 12, fontWeight: 600, letterSpacing: '-0.005em', flexShrink: 0 }}>
             {title}
           </Box>
           {detail && (
@@ -190,7 +240,7 @@ export function Notch({
                 color: INK,
                 bgcolor: 'rgba(255,255,255,0.09)',
                 flexShrink: 0,
-                transition: 'background-color 120ms, color 120ms',
+                transition: 'background-color 200ms ease, color 200ms ease',
                 '&:hover': { bgcolor: 'rgba(255,90,90,0.22)', color: '#ffb4b4' },
               }}
             >
@@ -200,13 +250,14 @@ export function Notch({
           )}
         </Box>
         {body && (
-          <Box sx={{ px: 1.5, pb: 1.25, mt: -0.25, fontSize: 12, lineHeight: 1.45, color: INK, maxWidth: 460 }}>
+          <Box ref={bodyRef} sx={{ px: 1.5, pb: 1.25, mt: -0.25, fontSize: 12, lineHeight: 1.45, color: INK, maxWidth: 460 }}>
             {body}
           </Box>
         )}
+      </Box>
         {progress != null && (
           <Box sx={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 2, bgcolor: 'rgba(255,255,255,0.08)' }}>
-            <Box sx={{ height: '100%', width: `${Math.round(Math.max(0, Math.min(1, progress)) * 100)}%`, bgcolor: INK, transition: 'width 120ms linear' }} />
+            <Box sx={{ height: '100%', width: `${Math.round(Math.max(0, Math.min(1, progress)) * 100)}%`, bgcolor: INK, transition: 'width 160ms linear' }} />
           </Box>
         )}
       </Box>

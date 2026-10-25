@@ -727,13 +727,15 @@ export function Alert({ severity = 'success', action, icon, sx, children, classN
   const c = severity === 'info' ? p.tokens.mutedForeground : p[severity as ColorName].main
   const styles: SxObject = {
     ...theme.typography.body2,
+    // One compact size everywhere: errors and notices read as the same thing.
+    fontSize: '0.8125rem',
     backgroundColor: severity === 'error' ? alpha(p.error.main, p.mode === 'dark' ? 0.1 : 0.06) : p.background.card,
     color: severity === 'error' ? p.error.main : p.text.primary,
     border: `1px solid ${severity === 'error' ? alpha(p.error.main, 0.25) : p.divider}`,
     borderRadius: theme.radius['2xl'],
     display: 'flex',
     gap: 10,
-    padding: '8px 14px',
+    padding: '6px 12px',
     '& .ui-Alert-icon': { padding: '3px 0', display: 'flex', fontSize: 16, color: c, flexShrink: 0 },
     '& .ui-Alert-message': { padding: '2px 0', minWidth: 0, overflow: 'auto', lineHeight: 1.5 },
     '& .ui-Alert-action': { display: 'flex', alignItems: 'flex-start', paddingLeft: 12, marginLeft: 'auto', marginRight: -6 },

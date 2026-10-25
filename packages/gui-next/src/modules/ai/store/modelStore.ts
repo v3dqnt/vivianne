@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { call } from '../../../ipc'
+import { call, on } from '../../../ipc'
 import { preconnectProvider } from '../providers/shared'
 import type { DiscoveredModel, SessionStats, ThinkingLevel } from '../lib/types'
 
@@ -26,6 +26,8 @@ interface ModelStoreState {
   initialized: boolean
   init: () => Promise<void>
   selectModel: (model: SelectableModel) => Promise<void>
+  /** What the Auto router last picked, per the `router_decision` event. */
+  routed: { model: string; level: string | null; by: string | null } | null
   setThinkingLevel: (level: ThinkingLevel) => Promise<void>
   refreshStats: () => Promise<void>
 }
@@ -42,25 +44,31 @@ export const useModelStore = create<ModelStoreState>((set, get) => ({
   thinkingLevel: 'low',
   loading: false,
   initialized: false,
+  routed: null,
 
   init: async () => {
     if (get().initialized) return
     set({ initialized: true, loading: true })
+    void on<DiscoveredModel[]>('models_refreshed', (list) => set({ models: list }))
+    void on<{ model: string; level: string | null; by: string | null }>('router_decision', (e) => set({ routed: { model: e.model, level: e.level ?? null, by: e.by ?? null } }))
     try {
-      const [models, stats, sessionCost] = await Promise.all([
-        call<DiscoveredModel[]>('cmd_list_available_models'),
-        call<SessionStats>('cmd_agent_session_stats'),
-        fetchSessionCost(),
+      // Each lands as it arrives: the list is the slow one, and the current
+      // model's name should not wait for it.
+      await Promise.all([
+        call<DiscoveredModel[]>('cmd_list_available_models').then((models) => set({ models: models ?? [] })),
+        call<SessionStats>('cmd_agent_session_stats').then((stats) => {
+          set({ stats: stats ?? null })
+          if (stats?.provider && stats.provider !== 'router') preconnectProvider(stats.provider)
+        }),
+        fetchSessionCost().then((sessionCost) => set({ sessionCost })),
       ])
-      set({ models: models ?? [], stats: stats ?? null, sessionCost })
-      if (stats?.provider) preconnectProvider(stats.provider)
     } finally {
       set({ loading: false })
     }
   },
 
   selectModel: async (model) => {
-    preconnectProvider(model.provider)
+    if (model.provider !== 'router') preconnectProvider(model.provider)
     await call('cmd_agent_set_model', {
       id: model.id,
       name: model.name,

@@ -79,3 +79,11 @@ packages/gui/src-tauri/.vivianne/
 # Rendered trailer output — regenerated, not source
 packages/trailer/out.mp4
 packages/trailer/out/
+# Extra cargo target dirs (CARGO_TARGET_DIR=target-t2 and the like).
+packages/*/src-tauri/target-*/
+# Vivianne's own per-project data from dogfooding this repo: memory databases,
+# remembered entries, agent files. Private; never published.
+.viv/
+
+# Local trailer project (1.5 GB of media); the trailer lives on branch trailer-nvidia
+packages/trailer-day/

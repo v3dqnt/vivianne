@@ -11,7 +11,7 @@ use iroh::{Endpoint, EndpointId};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, RwLock};
 
-use crate::agent::types::AgentMessage;
+use crate::agent::runtime::types::AgentMessage;
 use super::protocol::{self, WireMessage, ALPN, PROTOCOL_VERSION};
 
 /// How long a single frame write may take before the connection is
@@ -160,7 +160,7 @@ impl MultiplayerState {
     /// can be the one who gets dialed, so this has to be listening
     /// regardless of whether this instance ever calls `connect`. Every
     /// inbound connection is checked against
-    /// `agent::projects::is_authorized_peer` *before* any stream is opened
+    /// `agent::sessions::projects::is_authorized_peer` *before* any stream is opened
     /// or a single protocol byte is exchanged — an unrecognized peer is
     /// closed immediately. Knowing this machine's pairing code was never
     /// meant to be equivalent to being let in; only a peer some multiplayer
@@ -179,7 +179,7 @@ impl MultiplayerState {
                     }
                 };
                 let peer_id = conn.remote_id().to_string();
-                if !crate::agent::projects::is_authorized_peer(&peer_id) {
+                if !crate::agent::sessions::projects::is_authorized_peer(&peer_id) {
                     log::warn!("[multiplayer] rejected connection from unauthorized peer {peer_id}");
                     conn.close(1u32.into(), b"peer not authorized for any multiplayer project");
                     return;

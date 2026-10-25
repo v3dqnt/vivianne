@@ -1,4 +1,8 @@
 import { memo, type ReactNode } from 'react'
+import { ChatImage } from './ImageBlock'
+import { InteractiveBlock } from './InteractiveBlock'
+import { WidgetBlock } from './WidgetBlock'
+import { OpenUIBlock } from './OpenUIBlock'
 import { Box, Link } from '../../../ui'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -19,6 +23,8 @@ import { useThrottledValue } from '../../../lib/useThrottledValue'
 import { normalizeMath } from '../lib/mathText'
 import { useModsStore, chatRenderer } from '../../mods/store/modsStore'
 import { ModChatBlock } from '../../mods/components/ModChatBlock'
+import { remarkFiles } from '../lib/remarkFiles'
+import { FileLink } from './FileLink'
 
 const VIDEO_EXT = /\.(mp4|webm|mov|m4v)$/i
 const AUDIO_EXT = /\.(mp3|wav|ogg|m4a|flac)$/i
@@ -84,8 +90,14 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
       }}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
+        remarkPlugins={[remarkGfm, remarkMath, remarkFiles]}
         components={{
+          // File names and paths (see `remarkFiles`) open in the Preview.
+          span: ({ children, ...rest }) => {
+            const file = (rest as Record<string, unknown>)['data-file']
+            if (typeof file === 'string') return <FileLink path={file} label={String(children)} prose />
+            return <span>{children}</span>
+          },
           a: ({ href, children }) => {
             // The model has no real way to emit a native <video>/<audio> tag
             // through markdown — a plain link to a media file is the only
@@ -103,7 +115,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
             const url = typeof src === 'string' ? src : ''
             if (VIDEO_EXT.test(url)) return <Box component="video" src={url} controls sx={{ maxWidth: '100%', borderRadius: 1.5, my: 1 }} />
             if (AUDIO_EXT.test(url)) return <Box component="audio" src={url} controls sx={{ width: '100%', my: 1 }} />
-            return <Box component="img" src={url} alt={alt} sx={{ maxWidth: '100%', borderRadius: 1.5, my: 1 }} />
+            return url ? <ChatImage src={url} alt={alt} inline /> : null
           },
           code(props) {
             const { children, className } = props
@@ -121,6 +133,9 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
             // the explanation is, not buried in a collapsed tool card.
             if (match[1] === 'mermaid') return <MermaidBlock code={code} />
             if (match[1] === 'chart') return <ChartBlock code={code} />
+            if (match[1] === 'ui') return <InteractiveBlock code={code} />
+            if (match[1] === 'widget') return <WidgetBlock code={code} />
+            if (match[1] === 'openui-lang' || match[1] === 'openui') return <OpenUIBlock code={code} />
             if (match[1] === 'model3d') return <Model3DBlock code={code} />
             if (match[1] === 'chem') return <ChemBlock code={code} />
             if (match[1] === 'bio') return <BioBlock code={code} />

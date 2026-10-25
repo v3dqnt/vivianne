@@ -83,6 +83,8 @@ fn classify_capabilities(provider: &str, id: &str) -> (bool, bool, bool) {
                 "vision", "-vl-", "vl-instruct", "llava", "pixtral", "vila",
                 "gemini", "grok-4", "grok-2-vision", "phi-3-vision", "phi-3.5-vision",
                 "qwen2-vl", "qwen2.5-vl", "internvl", "molmo", "neva",
+                // NVIDIA's "Omni" Nemotrons take images (and audio, video).
+                "omni",
             ]
             .iter()
             .any(|p| l.contains(p)),
@@ -270,71 +272,84 @@ async fn fetch_google(api_key: &str) -> Result<Vec<DiscoveredModel>, String> {
         .collect())
 }
 
-/// Discover models for every provider we have a resolvable credential for.
-/// Providers whose live call fails (bad key, network error, endpoint down)
-/// are silently skipped — never shown with fabricated data.
-pub async fn discover_all(auth: &AuthState) -> Vec<DiscoveredModel> {
-    let mut out = Vec::new();
+/// How long one provider gets before it is given up on. A slow or dead
+/// endpoint costs the picker this much at most, not its own long timeout.
+const PROVIDER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
-    macro_rules! try_fetch {
-        ($provider:expr, $fut:expr) => {
-            if let Some(key) = resolve_key(auth, $provider).await {
-                match $fut(key).await {
-                    Ok(mut models) => out.append(&mut models),
-                    Err(e) => log::warn!("model discovery: {e}"),
-                }
-            }
-        };
+/// Providers whose model lists are fetched live, and how.
+const PROVIDERS: &[&str] = &[
+    "anthropic", "google", "openai", "mistral", "groq", "xai", "deepseek", "together", "fireworks", "openrouter", "cerebras", "nvidia-nim", "nebius",
+];
+
+async fn fetch_one(auth: &AuthState, provider: &str) -> Vec<DiscoveredModel> {
+    let Some(key) = resolve_key(auth, provider).await else { return Vec::new() };
+    let call = async {
+        match provider {
+            "anthropic" => fetch_anthropic(&key).await,
+            "google" => fetch_google(&key).await,
+            "openai" => fetch_openai_style("https://api.openai.com/v1", &key, "openai", "openai-chat", &[]).await,
+            "mistral" => fetch_openai_style("https://api.mistral.ai/v1", &key, "mistral", "mistral-chat", &[]).await,
+            "groq" => fetch_openai_style("https://api.groq.com/openai/v1", &key, "groq", "openai-chat", &[]).await,
+            "xai" => fetch_openai_style("https://api.x.ai/v1", &key, "xai", "openai-chat", &[]).await,
+            "deepseek" => fetch_openai_style("https://api.deepseek.com/v1", &key, "deepseek", "openai-chat", &[]).await,
+            "together" => fetch_openai_style("https://api.together.xyz/v1", &key, "together", "openai-chat", &[]).await,
+            "fireworks" => fetch_openai_style("https://api.fireworks.ai/inference/v1", &key, "fireworks", "openai-chat", &[]).await,
+            "openrouter" => fetch_openai_style("https://openrouter.ai/api/v1", &key, "openrouter", "openai-chat", &[]).await,
+            "cerebras" => fetch_openai_style("https://api.cerebras.ai/v1", &key, "cerebras", "openai-chat", &[]).await,
+            "nvidia-nim" => fetch_openai_style("https://integrate.api.nvidia.com/v1", &key, "nvidia-nim", "openai-chat", &[]).await,
+            // Nebius Token Factory lists the models the account can use,
+            // Nemotron tiers included; ids come from here, never hard-coded.
+            "nebius" => fetch_openai_style("https://api.tokenfactory.nebius.com/v1", &key, "nebius", "openai-chat", &[]).await,
+            _ => Ok(Vec::new()),
+        }
+    };
+    match tokio::time::timeout(PROVIDER_TIMEOUT, call).await {
+        Ok(Ok(models)) => models,
+        Ok(Err(e)) => {
+            log::warn!("model discovery: {e}");
+            Vec::new()
+        }
+        Err(_) => {
+            log::warn!("model discovery: {provider} did not answer within {}s", PROVIDER_TIMEOUT.as_secs());
+            Vec::new()
+        }
     }
+}
 
+/// Discover models for every provider we have a resolvable credential for,
+/// all at once. Providers whose live call fails (bad key, network error,
+/// endpoint down, too slow) are silently skipped, never shown with
+/// fabricated data.
+pub async fn discover_all(auth: &AuthState) -> Vec<DiscoveredModel> {
     // Signed in with ChatGPT: the plan's own model list, at no per-token cost
     // (usage counts against the plan, not a bill).
-    match crate::ai::chatgpt::list_models(auth).await {
-        Ok(models) => out.extend(models.into_iter().map(|(id, name)| DiscoveredModel {
-            supports_vision: model_supports_vision("openai", &id),
-            id,
-            name: format!("{name} (ChatGPT plan)"),
-            provider: crate::ai::chatgpt::PROVIDER.to_string(),
-            api: "openai-responses".to_string(),
-            input_cost_per_million: Some(0.0),
-            output_cost_per_million: Some(0.0),
-            ..Default::default()
-        })),
-        Err(e) if e.starts_with("Not signed in") => {}
-        Err(e) => log::warn!("model discovery: {e}"),
+    let chatgpt = async {
+        match tokio::time::timeout(PROVIDER_TIMEOUT, crate::ai::chatgpt::list_models(auth)).await {
+            Ok(Ok(models)) => models
+                .into_iter()
+                .map(|(id, name)| DiscoveredModel {
+                    supports_vision: model_supports_vision("openai", &id),
+                    id,
+                    name: format!("{name} (ChatGPT plan)"),
+                    provider: crate::ai::chatgpt::PROVIDER.to_string(),
+                    api: "openai-responses".to_string(),
+                    input_cost_per_million: Some(0.0),
+                    output_cost_per_million: Some(0.0),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+            Ok(Err(e)) if e.starts_with("Not signed in") => Vec::new(),
+            Ok(Err(e)) => {
+                log::warn!("model discovery: {e}");
+                Vec::new()
+            }
+            Err(_) => Vec::new(),
+        }
+    };
+    let (mut out, rest) = futures::join!(chatgpt, futures::future::join_all(PROVIDERS.iter().map(|p| fetch_one(auth, p))));
+    for mut models in rest {
+        out.append(&mut models);
     }
-    try_fetch!("anthropic", |key: String| async move { fetch_anthropic(&key).await });
-    try_fetch!("google", |key: String| async move { fetch_google(&key).await });
-    try_fetch!("openai", |key: String| async move {
-        fetch_openai_style("https://api.openai.com/v1", &key, "openai", "openai-chat", &[]).await
-    });
-    try_fetch!("mistral", |key: String| async move {
-        fetch_openai_style("https://api.mistral.ai/v1", &key, "mistral", "mistral-chat", &[]).await
-    });
-    try_fetch!("groq", |key: String| async move {
-        fetch_openai_style("https://api.groq.com/openai/v1", &key, "groq", "openai-chat", &[]).await
-    });
-    try_fetch!("xai", |key: String| async move {
-        fetch_openai_style("https://api.x.ai/v1", &key, "xai", "openai-chat", &[]).await
-    });
-    try_fetch!("deepseek", |key: String| async move {
-        fetch_openai_style("https://api.deepseek.com/v1", &key, "deepseek", "openai-chat", &[]).await
-    });
-    try_fetch!("together", |key: String| async move {
-        fetch_openai_style("https://api.together.xyz/v1", &key, "together", "openai-chat", &[]).await
-    });
-    try_fetch!("fireworks", |key: String| async move {
-        fetch_openai_style("https://api.fireworks.ai/inference/v1", &key, "fireworks", "openai-chat", &[]).await
-    });
-    try_fetch!("openrouter", |key: String| async move {
-        fetch_openai_style("https://openrouter.ai/api/v1", &key, "openrouter", "openai-chat", &[]).await
-    });
-    try_fetch!("cerebras", |key: String| async move {
-        fetch_openai_style("https://api.cerebras.ai/v1", &key, "cerebras", "openai-chat", &[]).await
-    });
-    try_fetch!("nvidia-nim", |key: String| async move {
-        fetch_openai_style("https://integrate.api.nvidia.com/v1", &key, "nvidia-nim", "openai-chat", &[]).await
-    });
 
     // Azure (deployments are resource-specific, no generic discovery endpoint),
     // Bedrock (SigV4, not a bearer-token REST call), and HuggingFace (different
@@ -353,9 +368,102 @@ pub async fn discover_all(auth: &AuthState) -> Vec<DiscoveredModel> {
     out
 }
 
+// ── Remembering the list ────────────────────────────────────────────────────
+//
+// The list only changes when the user adds a key or a provider ships a model,
+// so asking every provider on every start is wasted time. The last list is
+// kept in memory and on disk and returned at once; a fresh one is fetched in
+// the background and replaces it.
+
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// How old the list may be before a refresh is started behind it.
+pub const FRESH_FOR: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Clone, Serialize, Deserialize)]
+struct Cached {
+    at_ms: u64,
+    /// The providers that had keys when it was fetched. A different set means
+    /// a key was added or removed and the list is wrong.
+    providers: Vec<String>,
+    models: Vec<DiscoveredModel>,
+}
+
+static MEMORY: Mutex<Option<Cached>> = Mutex::new(None);
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+fn cache_path() -> std::path::PathBuf {
+    crate::agent::system::paths::viv_home_path(&["models-cache.json"])
+}
+
+fn load_cached() -> Option<Cached> {
+    if let Some(c) = MEMORY.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return Some(c);
+    }
+    let c: Cached = serde_json::from_str(&std::fs::read_to_string(cache_path()).ok()?).ok()?;
+    *MEMORY.lock().unwrap_or_else(|e| e.into_inner()) = Some(c.clone());
+    Some(c)
+}
+
+fn store_cached(c: &Cached) {
+    *MEMORY.lock().unwrap_or_else(|e| e.into_inner()) = Some(c.clone());
+    if let Ok(json) = serde_json::to_string(c) {
+        let _ = std::fs::write(cache_path(), json);
+    }
+}
+
+/// Which providers can be listed right now (they have a usable key).
+async fn keyed_providers(auth: &AuthState) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in PROVIDERS {
+        if resolve_key(auth, p).await.is_some() {
+            out.push(p.to_string());
+        }
+    }
+    out
+}
+
+/// What the picker needs: the last known list at once when there is one that
+/// matches the keys now configured, otherwise a fresh one. `stale` says a
+/// refresh is worth starting behind it.
+pub async fn list_cached_or_fresh(auth: &AuthState, force: bool) -> (Vec<DiscoveredModel>, bool) {
+    let providers = keyed_providers(auth).await;
+    if !force {
+        if let Some(c) = load_cached() {
+            if c.providers == providers {
+                let stale = now_ms().saturating_sub(c.at_ms) > FRESH_FOR.as_millis() as u64;
+                return (c.models, stale);
+            }
+        }
+    }
+    let models = discover_all(auth).await;
+    store_cached(&Cached { at_ms: now_ms(), providers, models: models.clone() });
+    (models, false)
+}
+
+/// Fetch a fresh list and remember it.
+pub async fn refresh(auth: &AuthState) -> Vec<DiscoveredModel> {
+    let providers = keyed_providers(auth).await;
+    let models = discover_all(auth).await;
+    store_cached(&Cached { at_ms: now_ms(), providers, models: models.clone() });
+    models
+}
+
 #[cfg(test)]
 mod capability_tests {
     use super::classify_capabilities;
+
+    #[test]
+    fn nemotron_chat_models_are_text_unless_omni() {
+        // The reasoning tiers are text-in, text-out; Omni takes images too.
+        assert_eq!(classify_capabilities("nebius", "nvidia/nemotron-3-ultra-550b-a55b"), (false, false, false));
+        assert_eq!(classify_capabilities("nebius", "nvidia/nemotron-3-nano-30b-a3b"), (false, false, false));
+        assert_eq!(classify_capabilities("nebius", "nvidia/nemotron-3-nano-omni"), (false, false, true));
+    }
 
     #[test]
     fn image_models_flagged() {

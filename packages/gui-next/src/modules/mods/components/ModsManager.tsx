@@ -143,9 +143,9 @@ function ModRow({ mod, onConsent }: { mod: ModInfo; onConsent: (m: ModInfo) => v
           {summary(mod)}
         </Typography>
         {mod.error && (
-          <Typography variant="caption" color="error">
+          <Alert severity="error">
             {mod.error}
-          </Typography>
+          </Alert>
         )}
         {mod.status === 'permissionsChanged' && (
           <Typography variant="caption" color="warning.main">

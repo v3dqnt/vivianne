@@ -4,8 +4,7 @@
 //! `skills.rs` uses for its own file-backed definitions). A set of read-only
 //! built-ins ships unconditionally (see `builtin_profiles`) so the Settings
 //! UI has real, useful content before a user creates their first custom one
-//! — mirrors `agent::personas::PERSONAS`'s hardcoded-const pattern, just
-//! richer (tool restrictions + model override, not only a prompt fragment).
+//! — tool restrictions and a model override, not only a prompt fragment.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -13,7 +12,7 @@ use std::path::Path;
 
 use super::tool_exec::parse_frontmatter;
 
-/// Enough of `agent::types::ModelRef` to actually run a turn with — a bare
+/// Enough of `agent::runtime::types::ModelRef` to actually run a turn with — a bare
 /// model id string isn't resolvable on its own (no lookup table maps ids to
 /// provider/api/base_url in Rust; that resolution normally happens once,
 /// client-side, in the model picker). The frontend already has this full
@@ -249,49 +248,6 @@ fn load_profile_from_file(path: &Path) -> Result<SubagentProfile, Box<dyn std::e
 }
 
 
-/// Slugify a display name into a safe filename stem — same character policy
-/// `cmd_save_skill_file` uses, so file names stay predictable/greppable.
-pub fn slugify(name: &str) -> String {
-    let stem: String = name.trim().chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
-    if stem.trim_matches('-').is_empty() { "subagent".to_string() } else { stem }
-}
-
-/// Write (create or overwrite) a custom profile as `<dir>/<slug>.md`.
-/// `original_id` — when editing an existing profile, this is its current
-/// filename stem; if the (possibly renamed) new slug differs, the old file
-/// is removed after a successful write so renaming doesn't leave a stale
-/// duplicate behind.
-pub fn save_profile(dir: &str, profile: &SubagentProfile, original_id: Option<&str>) -> Result<String, String> {
-    let slug = slugify(&profile.name);
-    fs::create_dir_all(dir).map_err(|e| format!("Failed to create subagents directory: {e}"))?;
-    let path = Path::new(dir).join(format!("{slug}.md"));
-
-    let frontmatter = SubagentFrontmatter {
-        name: Some(profile.name.clone()),
-        color: profile.color.clone(),
-        model: profile.model.clone(),
-        description: Some(profile.description.clone()),
-        allowed_tools: profile.allowed_tools.clone(),
-        inject_agents_md: profile.inject_agents_md,
-        default_prompt: profile.default_prompt.clone(),
-    };
-    let yaml = serde_yaml::to_string(&frontmatter).map_err(|e| format!("Failed to serialize profile: {e}"))?;
-    let content = format!("---\n{yaml}---\n\n{}\n", profile.system_prompt.trim());
-    fs::write(&path, content).map_err(|e| format!("Failed to write subagent profile: {e}"))?;
-
-    if let Some(prev) = original_id {
-        if prev != slug {
-            let _ = fs::remove_file(Path::new(dir).join(format!("{prev}.md")));
-        }
-    }
-    Ok(slug)
-}
-
-pub fn delete_profile(dir: &str, id: &str) -> Result<(), String> {
-    let path = Path::new(dir).join(format!("{id}.md"));
-    fs::remove_file(&path).map_err(|e| format!("Failed to delete subagent profile: {e}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,70 +263,29 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_through_save_and_load() {
+    fn loads_a_custom_profile_file() {
         let dir = std::env::temp_dir().join(format!("viv_subagent_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("code-reviewer.md"),
+            "---
+name: code-reviewer
+allowed_tools: [read, grep]
+inject_agents_md: false
+default_prompt: Review {context}.
+---
 
-        let profile = SubagentProfile {
-            id: String::new(),
-            name: "code-reviewer".to_string(),
-            color: Some("amber".to_string()),
-            model: Some(SubagentModelOverride {
-                id: "claude-sonnet-5".to_string(),
-                name: "Sonnet 5".to_string(),
-                api: "anthropicMessages".to_string(),
-                provider: "anthropic".to_string(),
-                base_url: None,
-                max_tokens: 8192,
-                context_window: 200_000,
-            }),
-            description: "Reviews code for bugs.".to_string(),
-            allowed_tools: Some(vec!["read".to_string(), "grep".to_string()]),
-            system_prompt: "You review code, you don't write it.".to_string(),
-            inject_agents_md: false,
-            builtin: false,
-            default_prompt: Some("Review the code at {context} for bugs.".to_string()),
-        };
-        let slug = save_profile(dir.to_str().unwrap(), &profile, None).unwrap();
-        assert_eq!(slug, "code-reviewer");
-
+You review code, you don't write it.
+",
+        )
+        .unwrap();
         let loaded = load_profiles_from_dir(dir.to_str().unwrap());
         fs::remove_dir_all(&dir).ok();
-
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].name, "code-reviewer");
-        assert_eq!(loaded[0].model.as_ref().map(|m| m.id.as_str()), Some("claude-sonnet-5"));
         assert_eq!(loaded[0].allowed_tools, Some(vec!["read".to_string(), "grep".to_string()]));
         assert!(!loaded[0].inject_agents_md);
         assert_eq!(loaded[0].system_prompt, "You review code, you don't write it.");
-        assert_eq!(loaded[0].default_prompt.as_deref(), Some("Review the code at {context} for bugs."));
-    }
-
-    #[test]
-    fn renaming_removes_the_old_file() {
-        let dir = std::env::temp_dir().join(format!("viv_subagent_rename_test_{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-
-        let mut profile = SubagentProfile {
-            id: String::new(),
-            name: "old-name".to_string(),
-            color: None,
-            model: None,
-            description: "d".to_string(),
-            allowed_tools: None,
-            system_prompt: "p".to_string(),
-            inject_agents_md: true,
-            builtin: false,
-            default_prompt: None,
-        };
-        save_profile(dir.to_str().unwrap(), &profile, None).unwrap();
-        profile.name = "new-name".to_string();
-        save_profile(dir.to_str().unwrap(), &profile, Some("old-name")).unwrap();
-
-        let loaded = load_profiles_from_dir(dir.to_str().unwrap());
-        fs::remove_dir_all(&dir).ok();
-
-        assert_eq!(loaded.len(), 1, "renaming must not leave the old file behind");
-        assert_eq!(loaded[0].name, "new-name");
+        assert_eq!(loaded[0].default_prompt.as_deref(), Some("Review {context}."));
     }
 }

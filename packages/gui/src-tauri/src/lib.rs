@@ -2,10 +2,24 @@ use std::sync::Arc;
 
 use tauri::Manager;
 
+pub mod browser;
+pub mod system;
+pub mod ui;
+pub mod models;
+pub mod skills;
+pub mod cli_tools;
+pub use browser::{camoufox, browser_sessions, live_browser, live_browser_agent, helium};
+pub use system::{background, mac_permissions, updates, optional_components, docker_installer, file_preview};
+pub use ui::{overlays, notch, appearance, activity};
+pub use models::{local_models, nebius};
+pub use skills::{skill_scan, skills_hub};
+pub use cli_tools::{cli, viv, terminal};
+pub use accounts::{vault};
+pub use agent::background::automation;
 pub mod ai;
 use crate::ai::auth::{AuthState, auth_read_credential, auth_store_api_key, auth_store_oauth, auth_delete_credential, auth_is_authenticated, auth_resolve_api_key, CredentialPool, cmd_pool_list, cmd_pool_add, cmd_pool_remove, cmd_pool_set_strategy, cmd_pool_get_strategy, cmd_pool_reset_cooldowns};
 pub mod agent;
-use crate::agent::commands::AppState;
+use crate::agent::runtime::commands::AppState;
 pub mod accounts;
 use crate::accounts::AccountState;
 pub mod multiplayer;
@@ -15,7 +29,6 @@ use crate::multiplayer::MultiplayerState;
 pub mod coding_agent;
 pub mod lsp;
 pub mod mcp;
-mod file_preview;
 
 /// Makes `cargo test` able to run at all on Windows.
 ///
@@ -61,32 +74,53 @@ fn cmd_instant_shortcut_label() -> String {
 fn cmd_instant_chord() -> String {
   crate::instant::chord::current()
 }
-mod updates;
-pub mod camoufox;
-pub mod browser_sessions;
-pub mod live_browser;
-pub mod live_browser_agent;
-pub mod docker_installer;
-pub mod optional_components;
-pub mod background;
 pub mod instant;
-pub mod overlays;
-pub mod activity;
-pub mod notch;
-pub mod mac_permissions;
-pub mod helium;
-pub mod supercharge;
 pub mod mods;
-pub mod appearance;
 pub mod connections;
-pub mod automation;
-pub mod terminal;
 use crate::automation::AutomationStore;
-use crate::agent::llama_manager::LlamaManager;
-use crate::agent::dev_server_manager::DevServerManager;
+use crate::agent::models::llama_manager::LlamaManager;
+use crate::agent::system::dev_server_manager::DevServerManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Whether this process was started to run unattended: `--headless` or
+/// `VIV_HEADLESS=1`. The same app, the same webview (the agent's providers
+/// still run there), but nothing shown: no main window, no notch, no overlays.
+/// Meant for a server with a virtual display (`xvfb-run`), so agents, routines
+/// and bots keep running while no one is at a screen.
+pub fn headless() -> bool {
+  static HEADLESS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+  *HEADLESS.get_or_init(|| {
+    cli::is_run() || std::env::args().any(|a| a == "--headless") || std::env::var("VIV_HEADLESS").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+  })
+}
+
 pub fn run() {
+  // `app run "<task>"`: one task from the command line (see `cli`).
+  // `viv models|load|ps|...`: local-model commands that never start the app.
+  if viv::handles(&cli::program_args()) {
+    std::process::exit(viv::dispatch(&cli::program_args()));
+  }
+  if viv::is_unknown_command(&cli::program_args()) {
+    eprintln!("viv: unknown command \"{}\"
+
+try `viv help`", cli::program_args()[0]);
+    std::process::exit(2);
+  }
+  if cli::wants_help(&cli::program_args()) {
+    println!("{}", cli::help());
+    std::process::exit(0);
+  }
+  let cli_run = match cli::parse(&cli::program_args()) {
+    Some(Ok(args)) => {
+      cli::enable_native();
+      Some(args)
+    }
+    Some(Err(message)) => {
+      eprintln!("{message}");
+      std::process::exit(2);
+    }
+    None => None,
+  };
   // macOS: an app opened from Finder or the Dock gets launchd's bare PATH
   // (/usr/bin:/bin:…), not the one the user's shell builds — so Homebrew's
   // git, node, cargo and the rest would be invisible to every tool Vivianne
@@ -99,8 +133,8 @@ pub fn run() {
   // webview storage (layout, last thread, …) must be separate too, or two
   // instances would share and overwrite each other's UI state.
   #[cfg(windows)]
-  if crate::agent::paths::profile().is_some() {
-    if let Ok(home) = crate::agent::paths::viv_home() {
+  if crate::agent::system::paths::profile().is_some() {
+    if let Ok(home) = crate::agent::system::paths::viv_home() {
       let dir = home.join("webview");
       let _ = std::fs::create_dir_all(&dir);
       std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &dir);
@@ -123,6 +157,16 @@ pub fn run() {
           // The wake chord is push-to-talk: pressed starts listening,
           // released sends what was said. Escape acts on press only.
           let pressed = event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed;
+          // "Ask about this window" is held like the wake chord; it
+          // differs only in what it tells the overlay.
+          if crate::instant::assist::is_assist(shortcut) {
+            if pressed {
+              crate::instant::assist::press(app);
+            } else {
+              crate::instant::window::release(app);
+            }
+            return;
+          }
           if shortcut.key != tauri_plugin_global_shortcut::Code::Escape {
             if pressed {
               crate::instant::window::press(app);
@@ -162,116 +206,125 @@ pub fn run() {
       cmd_pool_get_strategy,
       cmd_pool_reset_cooldowns,
       // Agent commands
-      crate::agent::commands::cmd_agent_prompt,
-      crate::agent::commands::cmd_agent_continue,
-      crate::agent::commands::cmd_agent_reset,
-      crate::agent::commands::cmd_agent_abort,
-      crate::agent::commands::cmd_agent_steer,
-      crate::agent::commands::cmd_agent_steering_queue,
-      crate::agent::commands::cmd_agent_follow_up_queue,
-      crate::agent::commands::cmd_agent_clear_queues,
-      crate::agent::commands::cmd_agent_get_queues,
-      crate::agent::commands::cmd_agent_remove_queued,
-      crate::agent::commands::cmd_agent_messages,
-      crate::agent::commands::cmd_agent_set_model,
-      crate::agent::commands::cmd_agent_set_thinking_level,
-      crate::agent::commands::cmd_agent_set_persona_mode,
-      crate::agent::commands::cmd_agent_set_compaction_config,
-      crate::agent::commands::cmd_agent_get_compaction_config,
-      crate::agent::commands::cmd_compact_now,
-      crate::agent::commands::cmd_agent_get_workspace,
-      crate::agent::commands::cmd_agent_set_workspace,
-      crate::agent::commands::cmd_create_workspace_folder,
-      crate::agent::commands::cmd_agent_set_steering_mode,
-      crate::agent::commands::cmd_agent_set_follow_up_mode,
-      crate::agent::commands::cmd_debug_agent_status,
-      crate::agent::commands::cmd_agent_session_stats,
-      crate::agent::commands::cmd_get_models_config,
-      crate::agent::commands::cmd_save_models_config,
-      crate::agent::commands::cmd_get_settings,
-      crate::agent::days::cmd_open_today,
-      crate::agent::days::cmd_list_days,
-      crate::agent::days::cmd_read_session_messages,
-      crate::agent::days::cmd_list_archive,
-      crate::agent::master::cmd_draft_charter,
-      crate::agent::master::cmd_create_master,
-      crate::agent::master::cmd_get_master,
-      crate::agent::master::cmd_master_kickoff_prompt,
-      crate::agent::master::cmd_onboarding_questions,
-      crate::agent::master::cmd_open_agent_file,
+      crate::agent::runtime::commands::cmd_agent_prompt,
+      crate::agent::runtime::commands::cmd_agent_continue,
+      crate::agent::runtime::commands::cmd_agent_reset,
+      crate::agent::runtime::commands::cmd_agent_abort,
+      crate::agent::runtime::commands::cmd_agent_steer,
+      crate::agent::runtime::commands::cmd_agent_steering_queue,
+      crate::agent::runtime::commands::cmd_agent_follow_up_queue,
+      crate::agent::runtime::commands::cmd_agent_clear_queues,
+      crate::agent::runtime::commands::cmd_agent_get_queues,
+      crate::agent::runtime::commands::cmd_agent_remove_queued,
+      crate::agent::runtime::commands::cmd_agent_messages,
+      crate::agent::runtime::commands::cmd_agent_set_model,
+      crate::agent::runtime::commands::cmd_agent_set_thinking_level,
+      crate::agent::runtime::commands::cmd_agent_set_persona_mode,
+      crate::agent::runtime::commands::cmd_agent_set_compaction_config,
+      crate::agent::runtime::commands::cmd_agent_get_compaction_config,
+      crate::agent::runtime::commands::cmd_compact_now,
+      crate::agent::runtime::commands::cmd_agent_get_workspace,
+      crate::agent::runtime::commands::cmd_agent_set_workspace,
+      crate::agent::runtime::commands::cmd_create_workspace_folder,
+      crate::agent::runtime::commands::cmd_agent_set_steering_mode,
+      crate::agent::runtime::commands::cmd_agent_set_follow_up_mode,
+      crate::agent::runtime::commands::cmd_debug_agent_status,
+      crate::agent::runtime::commands::cmd_agent_session_stats,
+      crate::agent::runtime::commands::cmd_get_models_config,
+      crate::agent::runtime::commands::cmd_save_models_config,
+      crate::agent::runtime::commands::cmd_get_settings,
+      crate::agent::sessions::days::cmd_open_today,
+      crate::agent::sessions::days::cmd_list_days,
+      crate::agent::sessions::days::cmd_read_session_messages,
+      crate::agent::sessions::days::cmd_list_archive,
+      crate::agent::team::master::cmd_draft_charter,
+      crate::agent::team::master::cmd_create_master,
+      crate::agent::team::master::cmd_get_master,
+      crate::agent::team::master::cmd_master_kickoff_prompt,
+      crate::agent::team::master::cmd_onboarding_questions,
+      crate::agent::team::master::cmd_open_agent_file,
       crate::agent::team::cmd_list_team,
       crate::agent::team::cmd_save_team_agent,
       crate::agent::team::cmd_approve_team_agent,
       crate::agent::team::cmd_delete_team_agent,
-      crate::agent::conversation::cmd_open_conversation,
-      crate::agent::conversation::cmd_read_conversation_archive,
-      crate::agent::runs::cmd_list_agent_runs,
-      crate::agent::runs::cmd_read_run_messages,
-      crate::agent::runs::cmd_comment_on_run,
-      crate::agent::office::cmd_read_document_bytes,
-      crate::agent::commands::cmd_system_roots,
+      crate::agent::sessions::conversation::cmd_open_conversation,
+      crate::agent::sessions::conversation::cmd_read_conversation_archive,
+      crate::agent::team::runs::cmd_list_agent_runs,
+      crate::agent::team::runs::cmd_read_run_messages,
+      crate::agent::team::runs::cmd_comment_on_run,
+      crate::agent::tools::office::cmd_read_document_bytes,
+      crate::agent::runtime::commands::cmd_system_roots,
       crate::multiplayer::commands::cmd_multiplayer_launch_test_partner,
       crate::multiplayer::commands::cmd_multiplayer_test_partner_id,
       crate::multiplayer::commands::cmd_app_profile,
       crate::multiplayer::collab::cmd_multiplayer_collab,
       crate::multiplayer::collab::cmd_multiplayer_dismiss_notes,
-      crate::agent::office::cmd_edit_document_part,
-      crate::agent::office::cmd_restore_document_bytes,
-      crate::agent::review::cmd_assignment_changes,
-      crate::agent::review::cmd_undo_assignment,
-      crate::agent::commands::cmd_list_tool_names,
-      crate::agent::commands::cmd_register_local_endpoint,
-      crate::agent::commands::cmd_unregister_local_endpoint,
-      crate::agent::commands::cmd_list_local_endpoints,
-      crate::agent::llama_manager::cmd_llama_start,
-      crate::agent::llama_manager::cmd_llama_stop,
-      crate::agent::llama_manager::cmd_llama_status,
-      crate::agent::llama_manager::cmd_llama_list,
-      crate::agent::llama_manager::cmd_llama_register,
-      crate::agent::llama_manager::cmd_llama_unregister,
-      crate::agent::dev_server_manager::cmd_dev_server_register,
-      crate::agent::dev_server_manager::cmd_dev_server_unregister,
-      crate::agent::dev_server_manager::cmd_dev_server_start,
-      crate::agent::dev_server_manager::cmd_dev_server_stop,
-      crate::agent::dev_server_manager::cmd_dev_server_list,
-      crate::agent::commands::cmd_save_settings,
-      crate::agent::commands::cmd_get_sessions,
-      crate::agent::commands::cmd_get_active_session_id,
-      crate::agent::projects::cmd_list_projects,
-      crate::agent::projects::cmd_create_project,
-      crate::agent::projects::cmd_create_multiplayer_project,
-      crate::agent::projects::cmd_update_project,
-      crate::agent::projects::cmd_open_external,
-      crate::agent::projects::cmd_delete_project,
-      crate::agent::projects::cmd_get_session_project_map,
-      crate::agent::projects::cmd_assign_session_project,
-      crate::agent::commands::cmd_delete_session,
-      crate::agent::commands::cmd_write_text_file,
-      crate::agent::commands::cmd_read_file_raw,
-      crate::agent::commands::cmd_load_session,
-      crate::agent::commands::cmd_save_current_session,
-      crate::agent::commands::cmd_rename_session,
-      crate::agent::commands::cmd_new_session,
-      crate::agent::commands::cmd_agent_revert_to_index,
-      crate::agent::commands::cmd_get_usage_history,
-      crate::agent::commands::cmd_telemetry_track,
-      crate::agent::commands::cmd_get_telemetry_summary,
-      crate::agent::commands::cmd_list_checkpoints,
-      crate::agent::commands::cmd_inspect_document,
+      crate::agent::tools::office::cmd_edit_document_part,
+      crate::agent::tools::office::cmd_restore_document_bytes,
+      crate::agent::changes::review::cmd_assignment_changes,
+      crate::agent::changes::review::cmd_undo_assignment,
+      crate::agent::runtime::commands::cmd_list_tool_names,
+      crate::agent::runtime::commands::cmd_register_local_endpoint,
+      crate::agent::runtime::commands::cmd_unregister_local_endpoint,
+      crate::agent::runtime::commands::cmd_list_local_endpoints,
+      crate::agent::models::llama_manager::cmd_llama_start,
+      crate::agent::models::llama_manager::cmd_llama_stop,
+      crate::agent::models::llama_manager::cmd_llama_status,
+      crate::agent::models::llama_manager::cmd_llama_list,
+      crate::agent::models::llama_manager::cmd_llama_register,
+      crate::local_models::cmd_hardware_info,
+      crate::local_models::cmd_local_model_download,
+      crate::local_models::cmd_local_model_cancel,
+      crate::local_models::cmd_local_models_list,
+      crate::local_models::cmd_local_model_delete,
+      crate::local_models::cmd_llama_server_path,
+      crate::local_models::cmd_llama_install,
+      crate::agent::models::llama_manager::cmd_llama_unregister,
+      crate::agent::system::dev_server_manager::cmd_dev_server_register,
+      crate::agent::system::dev_server_manager::cmd_dev_server_unregister,
+      crate::agent::system::dev_server_manager::cmd_dev_server_start,
+      crate::agent::system::dev_server_manager::cmd_dev_server_stop,
+      crate::agent::system::dev_server_manager::cmd_dev_server_list,
+      crate::agent::runtime::commands::cmd_save_settings,
+      crate::agent::runtime::commands::cmd_get_sessions,
+      crate::agent::runtime::commands::cmd_get_active_session_id,
+      crate::agent::sessions::projects::cmd_list_projects,
+      crate::agent::sessions::projects::cmd_create_project,
+      crate::agent::sessions::projects::cmd_create_multiplayer_project,
+      crate::agent::sessions::projects::cmd_update_project,
+      crate::agent::sessions::projects::cmd_open_external,
+      crate::agent::sessions::projects::cmd_delete_project,
+      crate::agent::sessions::projects::cmd_get_session_project_map,
+      crate::agent::sessions::projects::cmd_assign_session_project,
+      crate::agent::runtime::commands::cmd_delete_session,
+      crate::agent::runtime::commands::cmd_write_text_file,
+      crate::agent::runtime::commands::cmd_read_file_raw,
+      crate::agent::runtime::commands::cmd_load_session,
+      crate::agent::runtime::commands::cmd_save_current_session,
+      crate::agent::runtime::commands::cmd_rename_session,
+      crate::agent::runtime::commands::cmd_new_session,
+      crate::agent::runtime::commands::cmd_agent_revert_to_index,
+      crate::agent::runtime::commands::cmd_get_usage_history,
+      crate::agent::runtime::commands::cmd_telemetry_track,
+      crate::agent::runtime::commands::cmd_get_telemetry_summary,
+      crate::agent::runtime::commands::cmd_list_checkpoints,
+      crate::agent::runtime::commands::cmd_inspect_document,
       crate::browser_sessions::cmd_browser_session_status,
       crate::browser_sessions::cmd_browser_import_cookies,
       crate::browser_sessions::cmd_browser_reset_session,
       crate::browser_sessions::cmd_browser_cookies_dir,
       crate::browser_sessions::cmd_browser_list_cookie_files,
-      crate::agent::commands::cmd_restore_checkpoint,
-      crate::agent::commands::cmd_clear_telemetry,
-      crate::agent::commands::cmd_submit_bug_report,
+      crate::agent::runtime::commands::cmd_restore_checkpoint,
+      crate::agent::runtime::commands::cmd_clear_telemetry,
+      crate::agent::runtime::commands::cmd_submit_bug_report,
       // Updates / changelog / announcements
       crate::file_preview::cmd_read_file_preview,
       cmd_instant_shortcut_error,
       cmd_instant_shortcut_label,
       cmd_instant_chord,
       crate::instant::chord::cmd_instant_set_chord,
+      crate::instant::assist::cmd_instant_assist_chord,
+      crate::instant::assist::cmd_instant_set_assist_chord,
       crate::background::cmd_hide_to_background,
       crate::background::cmd_quit_app,
       crate::updates::cmd_app_version,
@@ -282,87 +335,103 @@ pub fn run() {
       crate::updates::cmd_get_announcements,
       crate::updates::cmd_check_for_update,
       crate::updates::cmd_install_update,
-      crate::agent::commands::cmd_session_cost,
-      crate::agent::commands::cmd_list_dir_tree,
-      crate::agent::commands::cmd_read_file_content,
-      crate::agent::notifications::cmd_test_notification,
-      crate::agent::commands::cmd_fork_session,
-      crate::agent::commands::cmd_clone_session,
-      crate::agent::commands::cmd_list_skills,
-      crate::agent::commands::cmd_save_skill_file,
+      crate::agent::runtime::commands::cmd_session_cost,
+      crate::agent::runtime::commands::cmd_list_dir_tree,
+      crate::agent::runtime::commands::cmd_read_file_content,
+      crate::agent::system::notifications::cmd_test_notification,
+      crate::agent::runtime::commands::cmd_fork_session,
+      crate::agent::runtime::commands::cmd_fork_session_at,
+      crate::agent::runtime::commands::cmd_memory_list,
+      crate::agent::runtime::commands::cmd_get_usage_by_model,
+      crate::ai::embedding::cmd_embedder_refresh,
+      crate::agent::models::routing::cmd_routing_savings,
+      crate::agent::models::difficulty::cmd_routing_classify,
+      crate::local_models::cmd_gguf_info,
+      crate::skills_hub::cmd_skills_catalog,
+      crate::skills_hub::cmd_skills_describe,
+      crate::skills_hub::cmd_skills_preview,
+      crate::skills_hub::cmd_skills_install,
+      crate::skills_hub::cmd_skills_installed,
+      crate::skills_hub::cmd_skills_remove,
+      crate::ai::embedding::cmd_list_embedding_models,
+      crate::ai::embedding::cmd_test_embedder,
+      crate::coding_agent::tool_exec::cmd_web_search_test,
+      crate::notch::cmd_notch_open_with_files,
+      crate::agent::runtime::commands::cmd_memory_delete,
+      crate::agent::runtime::commands::cmd_memory_edit,
+      crate::agent::runtime::commands::cmd_clone_session,
+      crate::agent::runtime::commands::cmd_list_skills,
+      crate::agent::runtime::commands::cmd_save_skill_file,
       crate::coding_agent::custom_tools::cmd_list_custom_tools,
       crate::coding_agent::custom_tools::cmd_delete_custom_tool,
       crate::coding_agent::custom_tools::cmd_custom_tool_source,
-      crate::agent::commands::cmd_list_subagent_profiles,
-      crate::agent::commands::cmd_save_subagent_profile,
-      crate::agent::commands::cmd_delete_subagent_profile,
-      crate::agent::commands::cmd_agent_respond_permission,
-      crate::agent::commands::cmd_agent_answer_question,
-      crate::agent::commands::cmd_agent_respond_confirmation,
-      crate::agent::commands::cmd_memory_status,
-      crate::agent::commands::cmd_memory_enable,
-      crate::agent::commands::cmd_memory_disable,
-      crate::agent::commands::cmd_memory_configure,
-      crate::agent::commands::cmd_memory_configure_extraction,
-      crate::agent::commands::cmd_memory_purge,
-      crate::agent::commands::cmd_memory_remember,
-      crate::agent::commands::cmd_memory_forget,
-      crate::agent::commands::cmd_memory_recall,
-      crate::agent::commands::cmd_mcp_add_server,
-      crate::agent::commands::cmd_mcp_remove_server,
-      crate::agent::commands::cmd_mcp_list_servers,
-      crate::agent::commands::cmd_mcp_list_tools,
-      crate::agent::commands::cmd_mcp_authorize,
-      crate::agent::commands::cmd_web_preview_navigate,
-      crate::agent::commands::cmd_web_preview_back,
-      crate::agent::commands::cmd_web_preview_forward,
-      crate::agent::commands::cmd_web_preview_refresh,
-      crate::agent::commands::cmd_web_preview_screenshot,
-      crate::agent::commands::cmd_web_preview_click_at,
-      crate::agent::commands::cmd_web_preview_type,
-      crate::agent::commands::cmd_web_preview_press,
-      crate::agent::commands::cmd_web_preview_scroll,
+      crate::agent::runtime::commands::cmd_agent_respond_permission,
+      crate::agent::runtime::commands::cmd_agent_answer_question,
+      crate::agent::runtime::commands::cmd_agent_respond_confirmation,
+      crate::agent::runtime::commands::cmd_memory_status,
+      crate::agent::runtime::commands::cmd_memory_enable,
+      crate::agent::runtime::commands::cmd_memory_disable,
+      crate::agent::runtime::commands::cmd_memory_configure,
+      crate::agent::runtime::commands::cmd_memory_configure_extraction,
+      crate::agent::runtime::commands::cmd_memory_purge,
+      crate::agent::runtime::commands::cmd_memory_remember,
+      crate::agent::runtime::commands::cmd_memory_forget,
+      crate::agent::runtime::commands::cmd_memory_recall,
+      crate::agent::runtime::commands::cmd_mcp_add_server,
+      crate::agent::runtime::commands::cmd_mcp_remove_server,
+      crate::agent::runtime::commands::cmd_mcp_list_servers,
+      crate::agent::runtime::commands::cmd_mcp_list_tools,
+      crate::agent::runtime::commands::cmd_mcp_authorize,
+      crate::agent::runtime::commands::cmd_web_preview_navigate,
+      crate::agent::runtime::commands::cmd_web_preview_back,
+      crate::agent::runtime::commands::cmd_web_preview_forward,
+      crate::agent::runtime::commands::cmd_web_preview_refresh,
+      crate::agent::runtime::commands::cmd_web_preview_screenshot,
+      crate::agent::runtime::commands::cmd_web_preview_click_at,
+      crate::agent::runtime::commands::cmd_web_preview_type,
+      crate::agent::runtime::commands::cmd_web_preview_press,
+      crate::agent::runtime::commands::cmd_web_preview_scroll,
       crate::live_browser::cmd_live_browser_show,
       crate::live_browser::cmd_live_browser_hide,
       crate::live_browser::cmd_live_browser_close,
       crate::live_browser::cmd_live_browser_url,
       crate::live_browser::cmd_live_browser_eval,
-      crate::agent::commands::cmd_check_docker_status,
-      crate::agent::commands::cmd_install_docker,
+      crate::agent::runtime::commands::cmd_check_docker_status,
+      crate::agent::runtime::commands::cmd_install_docker,
       crate::optional_components::cmd_get_optional_components_status,
       crate::optional_components::cmd_start_optional_components_download,
-      crate::agent::commands::cmd_terminal_list_shells,
-      crate::agent::commands::cmd_terminal_spawn,
-      crate::agent::commands::cmd_terminal_write,
-      crate::agent::commands::cmd_terminal_resize,
-      crate::agent::commands::cmd_terminal_close,
-      crate::agent::commands::cmd_lsp_diagnostics,
-      crate::agent::commands::cmd_git_current_branch,
-      crate::agent::commands::cmd_terminal_list_sessions,
-      crate::agent::commands::cmd_git_remote,
-      crate::agent::commands::cmd_git_log,
-      crate::agent::commands::cmd_git_branches,
-      crate::agent::commands::cmd_git_status,
-      crate::agent::commands::cmd_git_diff_stat,
-      crate::agent::commands::cmd_git_diff_file,
-      crate::agent::commands::cmd_git_checkout_branch,
-      crate::agent::commands::cmd_git_create_branch,
-      crate::agent::commands::cmd_get_project_dir,
-      crate::agent::commands::cmd_set_project_dir,
+      crate::agent::runtime::commands::cmd_terminal_list_shells,
+      crate::agent::runtime::commands::cmd_terminal_spawn,
+      crate::agent::runtime::commands::cmd_terminal_write,
+      crate::agent::runtime::commands::cmd_terminal_resize,
+      crate::agent::runtime::commands::cmd_terminal_close,
+      crate::agent::runtime::commands::cmd_lsp_diagnostics,
+      crate::agent::runtime::commands::cmd_git_current_branch,
+      crate::agent::runtime::commands::cmd_terminal_list_sessions,
+      crate::agent::runtime::commands::cmd_git_remote,
+      crate::agent::runtime::commands::cmd_git_log,
+      crate::agent::runtime::commands::cmd_git_branches,
+      crate::agent::runtime::commands::cmd_git_status,
+      crate::agent::runtime::commands::cmd_git_diff_stat,
+      crate::agent::runtime::commands::cmd_git_diff_file,
+      crate::agent::runtime::commands::cmd_git_checkout_branch,
+      crate::agent::runtime::commands::cmd_git_create_branch,
+      crate::agent::runtime::commands::cmd_get_project_dir,
+      crate::agent::runtime::commands::cmd_set_project_dir,
       // Grok-parity coding-agent commands (subagents, plan mode, ask-user)
       crate::coding_agent::commands::cmd_coding_list_subagents,
       crate::coding_agent::commands::cmd_coding_get_subagent_messages,
       crate::coding_agent::commands::cmd_coding_kill_subagent,
-      crate::agent::plans::cmd_plan_list,
-      crate::agent::plans::cmd_plan_get,
-      crate::agent::plans::cmd_plan_mode_get,
-      crate::agent::plans::cmd_plan_mode_set,
-      crate::agent::plans::cmd_plan_approve,
-      crate::agent::plans::cmd_plan_cancel,
-      crate::agent::team_run::cmd_team_run_get,
-      crate::agent::run_ledger::cmd_long_task_get,
-      crate::agent::run_ledger::cmd_long_task_control,
-      crate::agent::run_ledger::cmd_long_task_resume_prompt,
+      crate::agent::team::plans::cmd_plan_list,
+      crate::agent::team::plans::cmd_plan_get,
+      crate::agent::team::plans::cmd_plan_mode_get,
+      crate::agent::team::plans::cmd_plan_mode_set,
+      crate::agent::team::plans::cmd_plan_approve,
+      crate::agent::team::plans::cmd_plan_cancel,
+      crate::agent::team::run::cmd_team_run_get,
+      crate::agent::background::run_ledger::cmd_long_task_get,
+      crate::agent::background::run_ledger::cmd_long_task_control,
+      crate::agent::background::run_ledger::cmd_long_task_resume_prompt,
       crate::coding_agent::commands::cmd_coding_register_stream_channel,
       crate::coding_agent::computer::cmd_capture_screen,
       crate::instant::stt::cmd_instant_stt_preload,
@@ -382,7 +451,11 @@ pub fn run() {
       crate::activity::cmd_activity_set_size,
       crate::ai::chatgpt::cmd_chatgpt_status,
       crate::helium::cmd_helium_status,
-      crate::supercharge::cmd_supercharge_status,
+      crate::vault::cmd_vault_list,
+      crate::vault::cmd_vault_save,
+      crate::vault::cmd_vault_delete,
+      crate::helium::cmd_chromium_browsers,
+      crate::helium::cmd_open_browser_extensions,
       crate::connections::cmd_connections_list,
       crate::connections::cmd_connections_connect,
       crate::connections::cmd_connections_cancel,
@@ -398,8 +471,9 @@ pub fn run() {
       crate::notch::cmd_notch_app_ready,
       crate::notch::cmd_notch_prefs,
       crate::notch::cmd_notch_set_prefs,
-      crate::agent::memory_sleep::cmd_memory_sleep_now,
+      crate::agent::memory::sleep::cmd_memory_sleep_now,
       crate::mods::cmd_mods_list,
+      crate::mods::protocol::cmd_widget_put,
       crate::mods::cmd_mods_set_enabled,
       crate::mods::cmd_mods_trust_project,
       crate::mods::cmd_mods_create,
@@ -426,39 +500,38 @@ pub fn run() {
       crate::instant::native_mic::cmd_instant_mic_stop,
       crate::notch::cmd_notch_stop,
       crate::instant::session::cmd_instant_delegate_done,
-      crate::agent::diagram_check::cmd_diagram_check_done,
-      crate::supercharge::cmd_supercharge_scan,
-      crate::supercharge::cmd_supercharge_apply,
-      crate::supercharge::cmd_supercharge_restore,
+      crate::agent::tools::diagram_check::cmd_diagram_check_done,
       crate::helium::cmd_helium_open_extension_folder,
-      crate::agent::bots::cmd_bots_room,
-      crate::agent::bots::cmd_bots_post,
-      crate::agent::bots::cmd_bots_dm,
-      crate::agent::bots::cmd_bots_dm_send,
-      crate::agent::bots::cmd_bots_status,
-      crate::agent::bots::cmd_general_agents_root,
-      crate::agent::contact::cmd_contact_get,
-      crate::agent::contact::cmd_contact_providers,
-      crate::agent::contact::cmd_contact_create_email,
-      crate::agent::contact::cmd_contact_remove_email,
-      crate::agent::contact::cmd_contact_search_numbers,
-      crate::agent::contact::cmd_contact_buy_number,
-      crate::agent::contact::cmd_contact_release_number,
-      crate::agent::contact::cmd_contact_set_inbound,
-      crate::agent::bots::cmd_bots_settings,
-      crate::agent::bots::cmd_bots_save_settings,
-      crate::agent::bots::cmd_bots_stop,
-      crate::agent::bots::cmd_bots_reset,
-      crate::agent::bots::cmd_bots_memory,
-      crate::agent::bots::cmd_bots_save_memory,
-      crate::agent::bots::cmd_bots_routines,
-      crate::agent::bots::cmd_bots_save_routine,
-      crate::agent::bots::cmd_bots_delete_routine,
-      crate::agent::bots::cmd_bots_run_routine,
+      crate::agent::team::bots::cmd_bots_room,
+      crate::agent::team::bots::cmd_bots_post,
+      crate::agent::team::bots::cmd_bots_dm,
+      crate::agent::team::bots::cmd_bots_thread,
+      crate::agent::team::bots::cmd_bots_revert,
+      crate::agent::team::bots::cmd_bots_dm_send,
+      crate::agent::team::bots::cmd_bots_status,
+      crate::agent::team::bots::cmd_general_agents_root,
+      crate::agent::team::contact::cmd_contact_get,
+      crate::agent::team::contact::cmd_contact_providers,
+      crate::agent::team::contact::cmd_contact_create_email,
+      crate::agent::team::contact::cmd_contact_remove_email,
+      crate::agent::team::contact::cmd_contact_search_numbers,
+      crate::agent::team::contact::cmd_contact_buy_number,
+      crate::agent::team::contact::cmd_contact_release_number,
+      crate::agent::team::contact::cmd_contact_set_inbound,
+      crate::agent::team::bots::cmd_bots_settings,
+      crate::agent::team::bots::cmd_bots_save_settings,
+      crate::agent::team::bots::cmd_bots_stop,
+      crate::agent::team::bots::cmd_bots_reset,
+      crate::agent::team::bots::cmd_bots_memory,
+      crate::agent::team::bots::cmd_bots_save_memory,
+      crate::agent::team::bots::cmd_bots_routines,
+      crate::agent::team::bots::cmd_bots_save_routine,
+      crate::agent::team::bots::cmd_bots_delete_routine,
+      crate::agent::team::bots::cmd_bots_run_routine,
       crate::ai::chatgpt::cmd_chatgpt_sign_in,
       crate::ai::chatgpt::cmd_chatgpt_sign_out,
       crate::ai::chatgpt::cmd_chatgpt_manage_usage,
-      crate::agent::commands::cmd_activity_stop,
+      crate::agent::runtime::commands::cmd_activity_stop,
       crate::instant::stt::cmd_parakeet_download,
       crate::instant::stt::cmd_parakeet_remove,
       // Automation (scheduled agent tasks)
@@ -484,15 +557,24 @@ pub fn run() {
       crate::multiplayer::commands::cmd_multiplayer_chat_log,
       crate::multiplayer::commands::cmd_multiplayer_send_chat,
     ])
-    .setup(|app| {
+    .setup(move |app| {
       // Installed first thing in setup so a panic anywhere in the rest of
       // startup is still recorded. Chains to the previous hook, so this only
       // adds a crash file — it never suppresses the normal panic output.
-      crate::agent::telemetry::install_panic_hook(app.package_info().version.to_string());
+      crate::agent::system::telemetry::install_panic_hook(app.package_info().version.to_string());
+
+      // Unattended: the window the config creates is hidden before it can be
+      // seen, and nothing that draws over the desktop is started.
+      if headless() {
+        if let Some(main) = app.get_webview_window("main") {
+          let _ = main.hide();
+        }
+        log::info!("[headless] running without a visible window");
+      }
 
       // Memory upkeep while nothing else is running: re-embedding, session
-      // summaries, dedupe, forgetting (`agent::memory_sleep`).
-      crate::agent::memory_sleep::start(app.handle().clone());
+      // summaries, dedupe, forgetting (`agent::memory::sleep`).
+      crate::agent::memory::sleep::start(app.handle().clone());
 
       // Tray icon + close-to-background. Installed early so the close handler
       // is attached before the user can possibly reach the close button, and
@@ -502,7 +584,7 @@ pub fn run() {
       // request. (The notch comes up once the main window has loaded:
       // `cmd_notch_app_ready`.)
       tauri::async_runtime::spawn(async {
-        if crate::ai::laya::installed() && crate::ai::laya::enabled().await {
+        if crate::instant::ENABLED && crate::ai::laya::installed() && crate::ai::laya::enabled().await {
           crate::ai::laya::warm();
         }
       });
@@ -510,10 +592,12 @@ pub fn run() {
         let handle = app.handle().clone();
         tauri::async_runtime::spawn(async move {
           tokio::time::sleep(std::time::Duration::from_secs(20)).await;
-          crate::notch::app_ready(&handle);
+          if !headless() {
+            crate::notch::app_ready(&handle);
+          }
         });
       }
-      crate::agent::telemetry::track("app.start", serde_json::json!({
+      crate::agent::system::telemetry::track("app.start", serde_json::json!({
         "version": app.package_info().version.to_string(),
         "os": format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
       }));
@@ -527,7 +611,7 @@ pub fn run() {
       // `coding_agent::context_shaping`) has no owning session to get
       // cleaned up with, so it ages out on a timer here too, same reasoning.
       std::thread::spawn(|| {
-        let pruned = crate::agent::commands::prune_empty_sessions();
+        let pruned = crate::agent::runtime::commands::prune_empty_sessions();
         if pruned > 0 {
           log::info!("[sessions] pruned {pruned} empty session(s)");
         }
@@ -628,7 +712,7 @@ pub fn run() {
       // thread routes to the same `app_state` above (zero change for every
       // existing command that isn't thread-aware); secondary panes opened
       // via drag-to-dock get their own independent entry.
-      app.manage(crate::agent::commands::AgentRegistry::new(app_state));
+      app.manage(crate::agent::runtime::commands::AgentRegistry::new(app_state));
 
       // Account system: load whatever session the OS keychain has (if any)
       // before the window shows, so a restart doesn't force a re-login —
@@ -675,8 +759,8 @@ pub fn run() {
       // Automation store + background scheduler (emits `automation_fired`).
       app.manage(Arc::new(AutomationStore::new()));
       crate::automation::spawn_scheduler(app.handle().clone());
-      crate::agent::bots::spawn_scheduler(app.handle().clone());
-      crate::agent::contact::spawn_inbound_poller(app.handle().clone());
+      crate::agent::team::bots::spawn_scheduler(app.handle().clone());
+      crate::agent::team::contact::spawn_inbound_poller(app.handle().clone());
       crate::helium::start(app.handle().clone());
 
       // PTY-backed terminal sessions (one per open tab).
@@ -706,7 +790,7 @@ pub fn run() {
       let app_clone = app.handle().clone();
       tauri::async_runtime::spawn(async move {
         // Read settings to find llama endpoints with autoStart
-        let settings_path = crate::agent::paths::viv_agent_dir()
+        let settings_path = crate::agent::system::paths::viv_agent_dir()
           .ok()
           .map(|p| p.join("settings.json"));
         let endpoints = if let Some(path) = settings_path {
@@ -731,11 +815,11 @@ pub fn run() {
                     // `#[serde(default)]` uses everywhere else.
                     let engine = config
                       .get("engine")
-                      .and_then(|v| serde_json::from_value::<crate::agent::llama_manager::LocalEngine>(v.clone()).ok())
+                      .and_then(|v| serde_json::from_value::<crate::agent::models::llama_manager::LocalEngine>(v.clone()).ok())
                       .unwrap_or_default();
                     let tuning = config
                       .get("tuning")
-                      .and_then(|v| serde_json::from_value::<crate::agent::llama_manager::LlamaTuning>(v.clone()).ok())
+                      .and_then(|v| serde_json::from_value::<crate::agent::models::llama_manager::LlamaTuning>(v.clone()).ok())
                       .unwrap_or_default();
                     Some((
                       config.get("id")?.as_str()?.to_string(),
@@ -768,7 +852,7 @@ pub fn run() {
         // also get their process launched.
         for (id, name, model_path, port, ngl, ctx_size, auto_start, engine, tuning) in endpoints {
           let manager = app_clone.state::<Arc<LlamaManager>>();
-          manager.register(crate::agent::llama_manager::LlamaProcessConfig {
+          manager.register(crate::agent::models::llama_manager::LlamaProcessConfig {
             id: id.clone(),
             name: name.clone(),
             model_path: model_path.clone(),
@@ -792,8 +876,9 @@ pub fn run() {
       // Register Viv Instant's global wake chord (the user's, or the
       // default). The handler above routes it to `instant::window`.
       crate::instant::chord::register_at_startup(app.handle());
+      crate::instant::assist::register_at_startup(app.handle());
 
-      if cfg!(debug_assertions) {
+      if cfg!(debug_assertions) && !cli::is_run() {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
             .level(log::LevelFilter::Info)
@@ -819,7 +904,7 @@ pub fn run() {
       // Tauri exposes the monitor's full bounds but not its work area, so the
       // taskbar/dock is approximated by a margin rather than measured. Only ever
       // shrinks: a screen large enough for the configured size is left alone.
-      if let Some(main) = app.get_window("main") {
+      if let Some(main) = app.get_window("main").filter(|_| !headless()) {
         if let Ok(Some(monitor)) = main.current_monitor() {
           let scale = monitor.scale_factor();
           let screen = monitor.size().to_logical::<f64>(scale);
@@ -840,6 +925,13 @@ pub fn run() {
             }
           }
         }
+      }
+
+      // A command-line run starts its task as soon as the app is up, and
+      // exits the process when it is done.
+      if let Some(args) = cli_run.clone() {
+        let handle = app.handle().clone();
+        tauri::async_runtime::spawn(async move { cli::run(handle, args).await });
       }
 
       // The overlay windows (DIP, Viv Instant, pointer) aren't created here:
@@ -864,7 +956,7 @@ pub fn run() {
       if let tauri::RunEvent::Exit = event {
         crate::ai::laya::stop();
         tauri::async_runtime::block_on(async {
-          crate::agent::usage_store::flush_all().await;
+          crate::agent::models::usage_store::flush_all().await;
           if let Some(terminals) = app_handle.try_state::<Arc<crate::terminal::TerminalRegistry>>() {
             terminals.close_all();
           }

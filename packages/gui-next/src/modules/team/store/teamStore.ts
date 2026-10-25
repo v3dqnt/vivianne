@@ -1,3 +1,4 @@
+import type { FaceStyle } from './faceStore'
 import { create } from 'zustand'
 import { listen } from '@tauri-apps/api/event'
 import { call, hasTauri } from '../../../ipc'
@@ -15,6 +16,8 @@ export interface TeamAgent {
   allowedTools: string[] | null
   owns: string[]
   color: string | null
+  /** The robot head's outline, trim and LED colour. */
+  face?: FaceStyle | null
   created: string | null
   /** `user` or `master`. */
   proposedBy: string | null

@@ -7,3 +7,4 @@ mod session_store;
 mod supabase;
 
 pub use commands::{load_persisted_session, AccountState};
+pub mod vault;

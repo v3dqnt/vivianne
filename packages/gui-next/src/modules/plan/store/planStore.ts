@@ -86,6 +86,8 @@ interface PlanStoreState {
   init: () => Promise<void>
   refreshList: () => Promise<void>
   open: (id: string, version?: number) => Promise<void>
+  /** Point the panel at an agent's plans (`null`: back to the open project's). */
+  setScope: (next: { root: string; send: (text: string) => Promise<void> } | null) => Promise<void>
   addComment: (comment: PlanComment) => void
   removeComment: (index: number) => void
   requestChanges: () => Promise<void>
@@ -93,7 +95,11 @@ interface PlanStoreState {
   cancelExecution: () => Promise<void>
 }
 
-const root = () => useWorkspaceStore.getState().folders[0] ?? null
+/** Whose plans the panel shows. Normally the open project's; while an agent's
+ * conversation is open, that agent's folder, and approving answers the agent
+ * there instead of the main chat. */
+let scope: { root: string; send: (text: string) => Promise<void> } | null = null
+const root = () => scope?.root ?? useWorkspaceStore.getState().folders[0] ?? null
 
 /** The message that carries review comments back to the agent. */
 export function feedbackMessage(plan: Plan, comments: PlanComment[]): string {
@@ -149,6 +155,19 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
     set({ plans: r ? ((await call<PlanSummary[]>('cmd_plan_list', { root: r })) ?? []) : [] })
   },
 
+  setScope: async (next) => {
+    if ((scope?.root ?? null) === (next?.root ?? null)) {
+      scope = next
+      return
+    }
+    scope = next
+    set({ current: null, previous: null })
+    await get().refreshList()
+    // The newest plan of this scope, so the panel isn't left showing another thread's.
+    const latest = [...get().plans].sort((a, b) => b.updatedAt - a.updatedAt)[0]
+    if (latest) await get().open(latest.id)
+  },
+
   open: async (id, version) => {
     const r = root()
     if (!r) return
@@ -197,7 +216,10 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
     try {
       const message = await call<string>('cmd_plan_approve', { threadId: '', root: r, id: cur.plan.id, version: cur.plan.version })
       set({ planMode: false })
-      if (message) await useAgentStore.getState().sendMessage(message)
+      // An agent on its own carries the plan out itself; the team wording
+      // (assign_plan_steps, hiring) is for a project lead.
+      const forAgent = (m: string) => m.replace(/<\/plan_approved>[\s\S]*$/, '</plan_approved>\nThe user approved this plan. Carry it out yourself now, step by step, keeping your todo list current; then check the results and report with what you made.')
+      if (message) await (scope ? scope.send(forAgent(message)) : useAgentStore.getState().sendMessage(message))
     } catch (e) {
       set({ error: String(e) })
     } finally {

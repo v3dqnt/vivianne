@@ -6,8 +6,7 @@ import {
   SearchNormalLinear,
   DocumentTextLinear,
   CodeLinear,
-  ArrowDownLinear,
-  CheckLinear,
+  ChevronRightLinear,
   DangerLinear,
   ArchiveBookLinear,
   ClipboardTextLinear,
@@ -25,7 +24,7 @@ import { ImageBlock } from './ImageBlock'
 import { DiffView } from './DiffView'
 import { CodeBlock } from './CodeBlock'
 import { FileLink, filePathArg } from './FileLink'
-import { CHAT_HEADER_SX, CHAT_MAX_WIDTH, CHAT_RADIUS, CHAT_RADIUS_INNER, CHAT_SURFACE_SX, CHAT_TITLE_SX } from '../lib/chatStyle'
+import { CHAT_MAX_WIDTH, TOOL_BODY_SX, TOOL_ROW_SX } from '../lib/chatStyle'
 
 type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
 
@@ -229,28 +228,34 @@ export function ToolCallCard({
     // Open, a card takes the full width it's given: its output shouldn't be
     // squeezed to the width of its header.
     <Stack spacing={0.5} sx={compact ? { width: '100%' } : TOOL_BLOCK_SX}>
-    <Box
-      sx={{
-        ...CHAT_SURFACE_SX,
-        borderColor: isError ? 'error.main' : 'divider',
-        borderRadius: compact ? CHAT_RADIUS_INNER : CHAT_RADIUS,
-      }}
-    >
+    <Box sx={{ minWidth: 0 }}>
       <Box
+        role={hasBody ? 'button' : undefined}
+        tabIndex={hasBody ? 0 : undefined}
+        aria-expanded={hasBody ? open : undefined}
         onClick={() => hasBody && setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (hasBody && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault()
+            setOpen((v) => !v)
+          }
+        }}
         sx={{
-          ...CHAT_HEADER_SX,
-          ...(compact && { minHeight: 34, py: 0.5 }),
+          ...TOOL_ROW_SX,
+          color: isError ? 'error.main' : 'text.secondary',
           cursor: hasBody ? 'pointer' : 'default',
-          '&:hover': hasBody ? { bgcolor: 'action.hover' } : undefined,
+          ...(compact && { display: 'flex', mx: 0, px: 0, width: '100%' }),
+          '&:hover': hasBody ? { color: isError ? 'error.main' : 'text.primary' } : undefined,
         }}
       >
-        <Box sx={{ display: 'flex', color: 'text.secondary', flexShrink: 0 }}>
-          <Icon size={16} color="currentColor" />
-        </Box>
-        <Typography variant="caption" sx={CHAT_TITLE_SX} title={message.toolName}>
+        {!compact && (
+          <Box sx={{ display: 'flex', flexShrink: 0, opacity: 0.85 }}>
+            <Icon size={14} color="currentColor" />
+          </Box>
+        )}
+        <Box component="span" sx={{ flexShrink: 0, whiteSpace: 'nowrap' }} title={message.toolName}>
           {label}
-        </Typography>
+        </Box>
         {file ? (
           <FileLink path={file} />
         ) : (
@@ -265,28 +270,15 @@ export function ToolCallCard({
             </Typography>
           )
         )}
-        <Box sx={{ flex: 1 }} />
-        {pending ? (
-          <CircularProgress size={12} thickness={5} />
-        ) : isError ? (
-          <Box sx={{ display: 'flex', color: 'error.main' }}>
-            <DangerLinear size={15} color="currentColor" />
-          </Box>
-        ) : (
-          <Box sx={{ display: 'flex', color: 'success.main' }}>
-            <CheckLinear size={15} color="currentColor" />
+        {pending && <CircularProgress size={11} thickness={5} />}
+        {isError && (
+          <Box sx={{ display: 'flex', flexShrink: 0 }}>
+            <DangerLinear size={13} color="currentColor" />
           </Box>
         )}
         {hasBody && (
-          <Box
-            sx={{
-              display: 'flex',
-              color: 'text.secondary',
-              transform: open ? 'rotate(180deg)' : 'none',
-              transition: 'transform 0.15s',
-            }}
-          >
-            <ArrowDownLinear size={16} color="currentColor" />
+          <Box sx={{ display: 'flex', flexShrink: 0, opacity: 0.7, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>
+            <ChevronRightLinear size={12} color="currentColor" />
           </Box>
         )}
       </Box>
@@ -300,8 +292,7 @@ export function ToolCallCard({
             WebkitLineClamp: 2,
             WebkitBoxOrient: 'vertical',
             overflow: 'hidden',
-            px: 1.5,
-            pb: 0.75,
+            ...TOOL_BODY_SX,
             fontFamily: '"Geist Mono", ui-monospace, monospace',
             fontSize: '0.6875rem',
             lineHeight: 1.5,
@@ -319,17 +310,17 @@ export function ToolCallCard({
         // card is actually expanded.
         <Collapse in={open}>
           {open && (
-            <>
+            <Stack sx={{ ...TOOL_BODY_SX, gap: 0.75, py: 0.5 }}>
               {diffs.map((d, i) => (
                 <Box key={i}>
-                  <Box sx={{ display: 'flex', px: 1.5, pt: 1, borderTop: i === 0 ? 1 : 0, borderColor: 'divider' }}>
+                  <Box sx={{ display: 'flex', pb: 0.5 }}>
                     <FileLink path={d.path} />
                   </Box>
                   <DiffView before={d.before} after={d.after} />
                 </Box>
               ))}
               {output && <ToolOutput code={output} lang={outputLang} />}
-            </>
+            </Stack>
           )}
         </Collapse>
       )}
@@ -354,7 +345,7 @@ export function ToolCallCard({
 function ToolOutput({ code, lang }: { code: string; lang: string }) {
   const theme = useTheme()
   return (
-    <Box sx={{ borderTop: 1, borderColor: 'divider', bgcolor: alpha(theme.palette.text.primary, 0.02), px: 1.5, py: 1, color: 'text.secondary' }}>
+    <Box sx={{ borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.035), px: 1.25, py: 0.875, color: 'text.secondary', minWidth: 0 }}>
       <CodeBlock code={code} lang={lang} wrap bare dense collapsible />
     </Box>
   )
@@ -364,7 +355,7 @@ function ToolOutput({ code, lang }: { code: string; lang: string }) {
  * something rather than text to read. */
 function BodyLine({ children }: { children: React.ReactNode }) {
   return (
-    <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, pb: 1, pt: 0.25, minWidth: 0 }}>
+    <Stack direction="row" sx={{ ...TOOL_BODY_SX, alignItems: 'center', gap: 1, py: 0.5, minWidth: 0 }}>
       {children}
     </Stack>
   )

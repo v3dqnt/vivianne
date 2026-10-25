@@ -10,6 +10,15 @@ interface HeliumStatus {
   extensionPath: string | null
 }
 
+/** Mirrors `helium::InstalledBrowser`. */
+interface InstalledBrowser {
+  id: string
+  name: string
+  path: string
+  extensionsUrl: string
+  connected: boolean
+}
+
 /**
  * The user's own browser: whether the Vivianne extension is connected, and
  * how to install it (Load unpacked from the folder Vivianne keeps current).
@@ -17,6 +26,13 @@ interface HeliumStatus {
 export function BrowserSection() {
   const [status, setStatus] = useState<HeliumStatus | null>(null)
   const [copied, setCopied] = useState(false)
+  const [browsers, setBrowsers] = useState<InstalledBrowser[]>([])
+  const [opening, setOpening] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = () => void call<InstalledBrowser[]>('cmd_chromium_browsers').then((b) => setBrowsers(b ?? []))
+  // Re-read when a browser connects or drops, so "Connected" appears on its row.
+  useEffect(refresh, [status?.browsers?.join('|')])
 
   useEffect(() => {
     void call<HeliumStatus>('cmd_helium_status').then(setStatus)
@@ -57,6 +73,56 @@ export function BrowserSection() {
             : '· open your browser with the extension installed'}
         </Typography>
       </Stack>
+
+      {browsers.length > 0 && (
+        <Stack sx={{ gap: 1 }}>
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            Browsers on this computer
+          </Typography>
+          <Stack sx={{ border: 1, borderColor: 'divider', borderRadius: '12px', overflow: 'hidden' }}>
+            {browsers.map((b, i) => (
+              <Stack
+                key={b.id}
+                direction="row"
+                sx={{ alignItems: 'center', gap: 1.25, px: 1.5, py: 1, borderTop: i ? 1 : 0, borderColor: 'divider' }}
+              >
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, bgcolor: b.connected ? 'success.main' : 'text.disabled' }} />
+                <Typography variant="body2" sx={{ fontWeight: 600, flex: 1, minWidth: 0 }} noWrap>
+                  {b.name}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+                  {b.connected ? 'Connected' : 'Extension not installed'}
+                </Typography>
+                {!b.connected && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={opening === b.id}
+                    onClick={() => {
+                      setOpening(b.id)
+                      setError(null)
+                      call('cmd_open_browser_extensions', { id: b.id })
+                        .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+                        .finally(() => setOpening(null))
+                    }}
+                    sx={{ borderRadius: '8px', flexShrink: 0 }}
+                  >
+                    Set up
+                  </Button>
+                )}
+              </Stack>
+            ))}
+          </Stack>
+          {error && (
+            <Typography variant="caption" color="error.main">
+              {error}
+            </Typography>
+          )}
+          <Typography variant="caption" color="text.secondary">
+            “Set up” opens that browser at its extensions page. Then follow the steps below.
+          </Typography>
+        </Stack>
+      )}
 
       <Stack sx={{ gap: 1 }}>
         <Typography variant="body2" sx={{ fontWeight: 600 }}>

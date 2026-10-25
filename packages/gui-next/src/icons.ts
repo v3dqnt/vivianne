@@ -110,3 +110,16 @@ export const UserPlusLinear = icon(G.UserAdd01Icon)
 export const UnlockLinear = icon(G.SquareUnlock02Icon)
 export const UserOctagonLinear = icon(G.UserCircleIcon)
 export const MicrophoneLinear = icon(G.Mic01Icon)
+export const StarLinear = icon(G.StarIcon)
+/** The star, filled: a favourite. */
+export function StarBold(props: IconProps) {
+  return createElement(StarLinear, { ...props, fill: props.color ?? 'currentColor' })
+}
+export const ZoomInLinear = icon(G.ZoomInAreaIcon)
+export const ZoomOutLinear = icon(G.ZoomOutAreaIcon)
+export const ImageBrokenLinear = icon(G.ImageNotFound01Icon)
+export const DownloadLinear = icon(G.Download01Icon)
+export const ComputerLinear = icon(G.ComputerIcon)
+export const BrainLinear = icon(G.Brain02Icon)
+export const VolumeLinear = icon(G.VolumeHighIcon)
+export const VolumeOffLinear = icon(G.VolumeMute01Icon)

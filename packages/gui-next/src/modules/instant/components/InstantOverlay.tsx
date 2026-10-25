@@ -72,6 +72,46 @@ function statusFor(phase: string, hasSteps: boolean, route: Route | null): strin
  *   in the user's screen — and at the top of the display, that means other
  *   apps' title bars and tab strips.
  */
+/** The reply, shown word by word as it is spoken, scrolled to the newest
+ * words, never cut off. */
+function RevealedText({ text, revealed, error }: { text: string; revealed: number | null; error: boolean }) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const words = text.split(/(\s+)/)
+  let shown = text
+  if (revealed !== null) {
+    let seen = 0
+    let out = ''
+    for (const w of words) {
+      if (/\S/.test(w)) {
+        if (seen >= revealed) break
+        seen++
+      }
+      out += w
+    }
+    shown = out
+  }
+  useEffect(() => {
+    const el = ref.current
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }, [shown])
+  return (
+    <Box
+      ref={ref}
+      sx={{
+        color: error ? '#ff9b9b' : 'inherit',
+        maxHeight: 132,
+        overflowY: 'auto',
+        scrollbarWidth: 'none',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        '&::-webkit-scrollbar': { display: 'none' },
+      }}
+    >
+      {shown}
+    </Box>
+  )
+}
+
 export function InstantOverlay() {
   // Without this the window paints an opaque rectangle over the screen:
   // CssBaseline gives every window a solid body background, which is right for
@@ -102,15 +142,25 @@ export function InstantOverlay() {
   // sufficient: `onSpeechStart` aborts the utterance the moment the user
   // actually speaks, which clears this before their words are transcribed.
   const talkingRef = useRef(false)
+  // The window an "ask about this window" question is about, until it's sent.
+  const assistRef = useRef<string | null>(null)
   // The face's "speaking" state; the ref above is what the logic reads.
   const [speaking, setSpeaking] = useState(false)
+  // How many words of the reply have been spoken: the text appears in step
+  // with the voice. `null` once nothing is being revealed (show it all).
+  const [revealed, setRevealed] = useState<number | null>(null)
+  // When the last reply finished being said, for how long it stays up.
+  const spokeWordsRef = useRef(0)
 
-  const say = useCallback((text: string, signal?: AbortSignal) => {
+  const say = useCallback((text: string, signal?: AbortSignal, reveal = false) => {
     talkingRef.current = true
     setSpeaking(true)
-    return speak(text, { signal }).finally(() => {
+    spokeWordsRef.current = text.trim().split(/\s+/).length
+    setRevealed(reveal ? 0 : null)
+    return speak(text, { signal, onProgress: reveal ? (n) => setRevealed(n) : undefined }).finally(() => {
       talkingRef.current = false
       setSpeaking(false)
+      setRevealed(null)
     })
   }, [])
 
@@ -126,11 +176,13 @@ export function InstantOverlay() {
       if (talkingRef.current) return
 
       const s = store.getState()
+      const assist = assistRef.current
       // Held and released without a word (or a tap too short to hear).
-      if (!text) {
+      if (!text && !assist) {
         if (s.phase === 'listening' || s.phase === 'transcribing') s.fail("Didn't catch that — hold the keys while you speak.")
         return
       }
+      if (!text && s.phase !== 'listening' && s.phase !== 'transcribing') return
 
       // During a destructive step's countdown, speech is the affordance that
       // actually fits: the premise is that the user is looking at the app being
@@ -145,9 +197,15 @@ export function InstantOverlay() {
       // Barge-in that re-plans mid-execution is a much bigger design than this,
       // and silently starting a second run would be worse than ignoring it.
       if (s.phase === 'working') return
-      s.setTranscript(text)
+      // Said nothing about it: ask the obvious thing.
+      const said = text || 'What is this, and is anything wrong or worth fixing here?'
+      s.setTranscript(said)
       s.setPhase('working')
-      void call('cmd_instant_run', { instruction: text }).catch((e) => {
+      assistRef.current = null
+      const instruction = assist
+        ? `The user is looking at the window "${assist}". First take a screenshot of that window (the screenshot tool with window: true), then answer: ${said}`
+        : said
+      void call('cmd_instant_run', { instruction }).catch((e) => {
         store.getState().fail(e instanceof Error ? e.message : String(e))
       })
     },
@@ -167,7 +225,10 @@ export function InstantOverlay() {
     },
     onUtterance,
     onSpeechStart: () => {
-      // Barge-in: stop talking the moment the user does.
+      // The microphone hears the speakers: while talking, "speech" is almost
+      // always its own voice, and cutting itself off was what truncated long
+      // replies. Holding the chord again (`instant:activate`) still stops it.
+      if (talkingRef.current) return
       speechRef.current?.abort()
       stopSpeaking()
       talkingRef.current = false
@@ -186,7 +247,9 @@ export function InstantOverlay() {
     const subscribed: Array<Promise<void>> = []
     const track = (p: Promise<() => void>) => subscribed.push(p.then((off) => void offs.push(off)))
 
-    track(on<{ hold?: boolean } | null>('instant:activate', (payload) => {
+    track(on<{ hold?: boolean; assist?: string | null } | null>('instant:activate', (payload) => {
+      // "Ask about this window": the next thing said is about that window.
+      assistRef.current = payload?.assist ?? null
       speechRef.current?.abort()
       stopSpeaking()
       talkingRef.current = false
@@ -261,7 +324,7 @@ export function InstantOverlay() {
       store.getState().finish(text)
       const controller = new AbortController()
       speechRef.current = controller
-      void say(text, controller.signal)
+      void say(text, controller.signal, true)
     }))
 
     track(on<string>('instant:error', (message) => {
@@ -297,10 +360,13 @@ export function InstantOverlay() {
         timer = window.setTimeout(check, 500)
         return
       }
+      // Long answers stay up long enough to be read: ~3 words a second on
+      // top of a base, counted from when the voice stopped.
+      const reading = Math.min(20000, spokeWordsRef.current * 300)
       timer = window.setTimeout(() => {
         const now = store.getState().phase
         if ((now === 'done' || now === 'error') && !talkingRef.current) void call('cmd_instant_dismiss').catch(() => {})
-      }, phase === 'error' ? 6000 : 5000)
+      }, (phase === 'error' ? 6000 : 4000) + reading)
     }
     check()
     return () => window.clearTimeout(timer)
@@ -367,17 +433,7 @@ export function InstantOverlay() {
       </ButtonBase>
     </Box>
   ) : error || summary ? (
-    <Box
-      sx={{
-        color: error ? '#ff9b9b' : 'inherit',
-        display: '-webkit-box',
-        WebkitLineClamp: 3,
-        WebkitBoxOrient: 'vertical',
-        overflow: 'hidden',
-      }}
-    >
-      {error ?? summary}
-    </Box>
+    <RevealedText text={error ?? summary ?? ''} revealed={error ? null : revealed} error={!!error} />
   ) : null
 
   // Between commands: the always-on status notch.

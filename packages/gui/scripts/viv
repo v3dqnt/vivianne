@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+# viv: Vivianne's command line. Runs the app's own binary with your arguments.
+here="$(cd "$(dirname "$0")" && pwd)"
+for exe in "$here/../src-tauri/target/release/app" "$here/../src-tauri/target/debug/app" "$here/vivianne"; do
+  [ -x "$exe" ] && exec "$exe" "$@"
+done
+echo "viv: could not find the Vivianne binary next to this script" >&2
+exit 1

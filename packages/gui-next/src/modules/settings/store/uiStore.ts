@@ -6,7 +6,6 @@ export type SettingsSection =
   | 'reliability'
   | 'local'
   | 'mods'
-  | 'subagents'
   | 'mcp'
   | 'connections'
   | 'memory'
@@ -21,6 +20,7 @@ export type SettingsSection =
   | 'instant'
   | 'websearch'
   | 'browser'
+  | 'vault'
 
 interface SettingsUiState {
   open: boolean

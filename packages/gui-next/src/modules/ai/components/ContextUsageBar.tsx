@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Box, Popover, Stack, Tooltip, Typography, ButtonBase, IconButton, Snackbar, CircularProgress, alpha, useTheme } from '../../../ui'
-import { ArchiveLinear, ContextLinear } from '../../../icons'
+import { Box, Popover, Stack, Tooltip, Typography, ButtonBase, Snackbar, CircularProgress, alpha, useTheme } from '../../../ui'
+import { ArchiveLinear } from '../../../icons'
 import { useModelStore } from '../store/modelStore'
 import { useAgentStore } from '../store/agentStore'
 
@@ -72,6 +72,55 @@ function Stat({ label, value }: { label: string; value: string }) {
   )
 }
 
+/** The context window as a ring: a faint track, with each category's share
+ * of the window drawn as an arc in its own colour, in order from the top. */
+function ContextRing({
+  rows,
+  colors,
+  window,
+  accent,
+  size = 22,
+}: {
+  rows: { key: string; tokens: number }[]
+  colors: Record<string, string>
+  window: number
+  accent: string
+  size?: number
+}) {
+  const stroke = 3.5
+  const r = (size - stroke) / 2
+  const c = 2 * Math.PI * r
+  let used = 0
+  return (
+    <Box component="span" sx={{ display: 'inline-flex', flexShrink: 0, width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="currentColor" strokeOpacity={0.14} strokeWidth={stroke} />
+        {rows.map((row) => {
+          const len = Math.min(c - used, (row.tokens / window) * c)
+          const offset = -used
+          used += len
+          if (len <= 0) return null
+          return (
+            <circle
+              key={row.key}
+              cx={size / 2}
+              cy={size / 2}
+              r={r}
+              fill="none"
+              stroke={colors[row.key] ?? accent}
+              strokeWidth={stroke}
+              strokeDasharray={`${len} ${c - len}`}
+              strokeDashoffset={offset}
+              transform={`rotate(-90 ${size / 2} ${size / 2})`}
+              style={{ transition: 'stroke-dasharray 240ms ease, stroke-dashoffset 240ms ease' }}
+            />
+          )
+        })}
+      </svg>
+    </Box>
+  )
+}
+
 export function ContextUsageBar() {
   const theme = useTheme()
   const stats = useModelStore((s) => s.stats)
@@ -122,7 +171,7 @@ export function ContextUsageBar() {
 
   return (
     <>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 0.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center' }}>
         <Tooltip title={`Context ${Math.round(pct)}% full — click for the breakdown`}>
           <ButtonBase
             className="cq-context"
@@ -131,59 +180,25 @@ export function ContextUsageBar() {
             sx={{
               display: 'flex',
               alignItems: 'center',
-              gap: 1,
-              minWidth: 90,
-              borderRadius: 1,
-              px: 0.5,
-              py: 0.25,
+              gap: 0.75,
+              borderRadius: '8px',
+              px: 1,
+              py: 0.375,
               '&:hover': { bgcolor: 'action.hover' },
             }}
           >
-            {/* Stacked segments instead of one opaque fill: the shape itself
-                shows which category is eating the window. */}
-            {/* Compact: the context icon, tinted by how full the window is, and
-                the percentage — for a composer too narrow for the bar. Only
-                one form is shown, by the composer's container query. */}
-            <Box component="span" className="cq-compact" sx={{ alignItems: 'center', gap: 0.5, color: accent }}>
-              <ContextLinear size={13} color="currentColor" />
-              <Typography component="span" variant="caption" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.6875rem' }}>
-                {Math.round(pct)}%
-              </Typography>
-            </Box>
-            <Box
+            {/* A ring: its arcs are the same segments as the breakdown, each in
+                its own colour, so the shape shows which category is eating
+                the window. The percentage sits beside it. */}
+            <ContextRing rows={rows} colors={colors} window={window} accent={accent} />
+            <Typography
               className="cq-wide"
-              sx={{
-                flex: 1,
-                display: 'flex',
-                height: 4,
-                borderRadius: 2,
-                overflow: 'hidden',
-                bgcolor: 'action.hover',
-              }}
+              variant="caption"
+              sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.6875rem', color: accent, minWidth: 28, textAlign: 'left' }}
             >
-              {rows.map((r) => (
-                <Box key={r.key} sx={{ width: `${r.share}%`, bgcolor: colors[r.key], transition: 'width 240ms ease' }} />
-              ))}
-            </Box>
-            <Typography className="cq-wide" variant="caption" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.6875rem', color: accent }}>
               {Math.round(pct)}%
             </Typography>
           </ButtonBase>
-        </Tooltip>
-
-        <Tooltip title={isBusy ? 'Wait for the current turn to finish' : 'Compact context — fold older history into a summary'}>
-          {/* Span wrapper: a disabled button fires no events, so Tooltip
-              needs a non-disabled element to attach its listeners to. */}
-          <Box component="span" sx={{ display: 'flex' }}>
-            <IconButton
-              size="small"
-              onClick={() => void runCompact()}
-              disabled={compacting || isBusy || messageCount === 0}
-              sx={{ color: 'text.secondary', '&:hover': { color: 'text.primary' } }}
-            >
-              {compacting ? <CircularProgress size={13} /> : <ArchiveLinear size={14} color="currentColor" />}
-            </IconButton>
-          </Box>
         </Tooltip>
       </Box>
 

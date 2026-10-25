@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Box, ButtonBase, IconButton, Orb, Stack, Tooltip, Typography, alpha, useTheme } from '../../../ui'
 import { AddLinear, ChevronRightLinear, DocumentTextLinear } from '../../../icons'
-import { Avatar, colorOf } from './bits'
+import { Avatar, faceOf } from './bits'
 import { isWorking, type AgentRun, type ChildRun, type TeamAgent } from '../store/teamStore'
 
 /**
@@ -183,7 +183,7 @@ export function CompanyTree({
       head: (
         <ButtonBase onClick={() => onAgent(a.id)} sx={rowSx(theme)}>
           <Box sx={{ position: 'relative', flexShrink: 0, display: 'flex' }}>
-            <Avatar name={a.name} color={colorOf(a)} size={20} />
+            <Avatar {...faceOf(a)} size={20} />
           </Box>
           <Stack sx={{ minWidth: 0, flex: 1 }}>
             <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem', lineHeight: 1.3 }} noWrap>

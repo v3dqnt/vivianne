@@ -8,10 +8,12 @@ import { useMasterStore } from '../../sessions/store/masterStore'
 import { ListInput } from '../../sessions/onboarding/fields'
 import { SUBAGENT_COLORS, SUBAGENT_COLOR_HEX } from '../../settings/lib/subagentProfiles'
 import { useTeamStore, blankAgent, type TeamAgent } from '../store/teamStore'
-import { Avatar, Tag, SectionLabel, colorOf } from './bits'
+import { Avatar, LiveAvatar, Tag, SectionLabel, colorOf, faceOf } from './bits'
 import { AgentPage } from './AgentPage'
 import { BotPage } from './BotPage'
-import { ModelPicker } from './ModelPicker'
+import { FaceEditor } from './FaceEditor'
+import type { FaceStyle } from '../store/faceStore'
+import { ModelPicker } from '../../ai/components/ModelPicker'
 
 interface ToolInfo {
   name: string
@@ -237,7 +239,7 @@ function AgentRow({
   const [confirming, setConfirming] = useState(false)
   return (
     <Row onClick={onOpen}>
-      <Avatar name={agent.name} color={colorOf(agent)} />
+      <LiveAvatar root={root} agent={agent} />
       <Stack sx={{ minWidth: 0, flex: 1, gap: 0.25 }}>
         <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, minWidth: 0 }}>
           <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem' }} noWrap>
@@ -309,7 +311,7 @@ function ProposalCard({ root, agent, onReview }: { root: string; agent: TeamAgen
   return (
     <Stack sx={{ gap: 1, p: 1.25, borderRadius: '10px', border: 1, borderColor: (t) => alpha(t.palette.primary.main, 0.35), bgcolor: (t) => alpha(t.palette.primary.main, 0.05) }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
-        <Avatar name={agent.name} color={colorOf(agent)} />
+        <Avatar {...faceOf(agent)} />
         <Stack sx={{ minWidth: 0, flex: 1 }}>
           <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem' }} noWrap>
             {agent.name}
@@ -397,6 +399,7 @@ function AgentForm({
   const [name, setName] = useState(base.name)
   const [role, setRole] = useState(base.role)
   const [color, setColor] = useState<string>(base.color ?? SUBAGENT_COLORS[team.length % SUBAGENT_COLORS.length])
+  const [face, setFace] = useState<FaceStyle | null>(base.face ?? null)
   const [reportsTo, setReportsTo] = useState(base.reportsTo ?? 'master')
   const [model, setModel] = useState(base.model ?? null)
   const [owns, setOwns] = useState<string[]>(base.owns)
@@ -431,6 +434,7 @@ function AgentForm({
           name: name.trim(),
           role: role.trim(),
           color,
+          face,
           status,
           reportsTo: teamMode || reportsTo === 'master' ? null : reportsTo,
           model,
@@ -457,7 +461,7 @@ function AgentForm({
         </ButtonBase>
 
         <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
-          <Avatar name={name || '?'} color={colorOf({ color })} size={30} />
+          <Avatar name={name || '?'} color={colorOf({ color })} face={face} size={30} />
           <Stack>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>
               {agent ? (isProposal ? `Review proposed hire: ${agent.name}` : `Edit ${agent.name}`) : 'New agent'}
@@ -503,30 +507,21 @@ function AgentForm({
           )}
           <Box sx={{ flex: '1 1 180px' }}>
             <Field label="Model">
-              <ModelPicker value={model} onChange={setModel} fullWidth />
+              <ModelPicker mode="agent" variant="field" value={model} onChange={setModel} />
             </Field>
           </Box>
         </Stack>
 
-        <Field label="Colour">
-          <Stack direction="row" sx={{ gap: 0.75 }}>
-            {SUBAGENT_COLORS.map((c) => (
-              <ButtonBase
-                key={c}
-                aria-label={c}
-                onClick={() => setColor(c)}
-                sx={{
-                  width: 20,
-                  height: 20,
-                  borderRadius: '50%',
-                  bgcolor: SUBAGENT_COLOR_HEX[c],
-                  outline: color === c ? '2px solid' : 'none',
-                  outlineColor: 'text.primary',
-                  outlineOffset: 2,
-                }}
-              />
-            ))}
-          </Stack>
+        <Field label="Look">
+          <FaceEditor
+            name={name}
+            color={color}
+            face={face}
+            onChange={(next) => {
+              setColor(next.color)
+              setFace(next.face)
+            }}
+          />
         </Field>
 
         <Field label="Owned paths" hint="Folders or files it is responsible for, relative to the project. It edits inside these and reports anything outside them back to the master.">

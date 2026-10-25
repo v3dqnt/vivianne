@@ -1,8 +1,9 @@
 //! Mods: user-made UI and tools, with rules.
 //!
 //! A mod is a folder with a `mod.json` (see `manifest`) and plain web files.
-//! It can add dock panels, sidebar sections, chat components (renderers for
-//! a ```` ```fence ````), shell tools for the agent, and themes. The user's
+//! It can add dock panels (which also work stacked), Quick access tiles,
+//! sidebar sections, chat components (renderers for a ```` ```fence ````),
+//! shell tools for the agent, and themes. The user's
 //! mods live in `~/.viv/mods/<id>/`; a project's in `<project>/.viv/mods/<id>/`.
 //!
 //! The rules, each enforced here or in the frontend host:
@@ -39,19 +40,19 @@ pub use manifest::Manifest;
 
 /// The user's mods folder.
 pub fn user_dir() -> PathBuf {
-    crate::agent::paths::viv_home_path(&["mods"])
+    crate::agent::system::paths::viv_home_path(&["mods"])
 }
 
 fn project_dir(project: &Path) -> PathBuf {
-    crate::agent::paths::project_viv_path(project, &["mods"])
+    crate::agent::system::paths::project_viv_path(project, &["mods"])
 }
 
 fn state_path() -> PathBuf {
-    crate::agent::paths::viv_home_path(&["mods-state.json"])
+    crate::agent::system::paths::viv_home_path(&["mods-state.json"])
 }
 
 fn data_dir() -> PathBuf {
-    crate::agent::paths::viv_home_path(&["mod-data"])
+    crate::agent::system::paths::viv_home_path(&["mod-data"])
 }
 
 /// What the user decided about mods. Kept outside the mods folder, so a mod
@@ -223,7 +224,7 @@ fn scan_dir(dir: &Path, scope: Scope, state: &State, project_trusted: bool, rese
 pub fn list() -> Vec<ModInfo> {
     migrate::migrate_playbooks_once();
     let state = read_state();
-    let reserved = crate::agent::tool_schemas::reserved_tool_names();
+    let reserved = crate::agent::tools::schemas::reserved_tool_names();
     let mut mods = scan_dir(&user_dir(), Scope::User, &state, true, &reserved);
     if let Some(project) = active_project() {
         let trusted = state.trusted_projects.contains(&project.to_string_lossy().to_string());
@@ -262,7 +263,7 @@ pub fn running_tools() -> Vec<(ModInfo, manifest::ToolContribution)> {
 // ── Commands ──────────────────────────────────────────────────────────────
 
 fn tools_changed() {
-    crate::agent::tool_exec::invalidate_tool_defs_cache();
+    crate::agent::tools::exec::invalidate_tool_defs_cache();
     protocol::invalidate();
 }
 
@@ -329,7 +330,7 @@ pub struct NewFile {
 pub async fn cmd_mods_create(files: Vec<NewFile>) -> Result<String, String> {
     let manifest_file = files.iter().find(|f| f.path == "mod.json").ok_or("a mod needs a mod.json")?;
     let manifest: Manifest = serde_json::from_str(&manifest_file.content).map_err(|e| format!("mod.json isn't valid: {e}"))?;
-    manifest.validate(None, &crate::agent::tool_schemas::reserved_tool_names())?;
+    manifest.validate(None, &crate::agent::tools::schemas::reserved_tool_names())?;
     let dir = user_dir().join(&manifest.id);
     if dir.exists() {
         return Err(format!("a mod called \"{}\" already exists", manifest.id));
@@ -350,7 +351,7 @@ pub async fn cmd_mods_create(files: Vec<NewFile>) -> Result<String, String> {
         }
         std::fs::write(&p, &f.content).map_err(|e| format!("failed to write {}: {e}", f.path))?;
     }
-    manifest.validate(Some(&dir), &crate::agent::tool_schemas::reserved_tool_names()).inspect_err(|_| {
+    manifest.validate(Some(&dir), &crate::agent::tools::schemas::reserved_tool_names()).inspect_err(|_| {
         let _ = std::fs::remove_dir_all(&dir);
     })?;
     Ok(key_for(Scope::User, &manifest.id))

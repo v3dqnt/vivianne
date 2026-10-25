@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Stack, Typography, Button, InputBase, Select, MenuItem, Link } from '../../../ui'
+import { Stack, Typography, Button, InputBase, Select, MenuItem, Link, Alert } from '../../../ui'
 import { call } from '../../../ipc'
 
 /** Credential-store ids — must match `SearchApi::ids` in `tools_ext.rs`. */
@@ -21,6 +21,21 @@ export function WebSearchSection() {
   const [status, setStatus] = useState<Record<string, boolean>>({})
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
+  const [testing, setTesting] = useState(false)
+  const [test, setTest] = useState<{ engine: string; ms: number; count: number; first: { title: string; url: string } | null } | { error: string } | null>(null)
+
+  const runTest = async () => {
+    setTesting(true)
+    setTest(null)
+    try {
+      const r = await call<{ engine: string; ms: number; count: number; first: { title: string; url: string } | null }>('cmd_web_search_test', { query: 'NVIDIA Nemotron 3 open models' })
+      setTest(r ?? { error: 'No answer.' })
+    } catch (e) {
+      setTest({ error: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setTesting(false)
+    }
+  }
 
   const refresh = async () => {
     const s = await call<Record<string, unknown>>('cmd_get_settings')
@@ -100,6 +115,28 @@ export function WebSearchSection() {
       <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
         In use: {active}
       </Typography>
+
+      {/* One real query through the engine in use: proof the key works and
+          which engine answers. */}
+      <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
+        <Button size="small" variant="outlined" disabled={testing} onClick={() => void runTest()} sx={{ borderRadius: '8px', textTransform: 'none' }}>
+          {testing ? 'Searching…' : 'Test search'}
+        </Button>
+        {test && 'error' in test && (
+          <Alert severity="warning" sx={{ flex: 1 }}>
+            {test.error}
+          </Alert>
+        )}
+        {test && 'engine' in test && (
+          <Typography variant="caption" color="text.secondary" sx={{ flex: 1, minWidth: 0 }}>
+            <Typography component="span" variant="caption" sx={{ fontWeight: 600, color: 'success.main' }}>
+              {test.engine}
+            </Typography>{' '}
+            answered in {test.ms} ms with {test.count} result{test.count === 1 ? '' : 's'}
+            {test.first ? ` · ${test.first.title}` : ''}
+          </Typography>
+        )}
+      </Stack>
 
       {APIS.map((a) => (
         <Stack key={a.id} sx={{ gap: 0.75, p: 1.5, border: 1, borderColor: 'divider', borderRadius: '10px' }}>

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use super::state::{ChatEntry, ConnectionStatus, MultiplayerState};
-use crate::agent::types::AgentMessage;
+use crate::agent::runtime::types::AgentMessage;
 
 /// This machine's pairing code — share it with whoever you want to connect
 /// with; they paste it into `cmd_multiplayer_connect` on their end.
@@ -63,7 +63,7 @@ pub async fn cmd_multiplayer_send_chat(text: String, state: State<'_, Arc<Multip
 const TEST_PARTNER_PROFILE: &str = "test-partner";
 
 fn test_partner_home() -> Result<std::path::PathBuf, String> {
-    crate::agent::paths::profile_home(TEST_PARTNER_PROFILE).ok_or_else(|| "no home folder".to_string())
+    crate::agent::system::paths::profile_home(TEST_PARTNER_PROFILE).ok_or_else(|| "no home folder".to_string())
 }
 
 /// The test partner's pairing code — a second Vivianne on this computer,
@@ -72,7 +72,7 @@ fn test_partner_home() -> Result<std::path::PathBuf, String> {
 /// partner before it has ever run.
 #[tauri::command]
 pub async fn cmd_multiplayer_test_partner_id() -> Result<String, String> {
-    if crate::agent::paths::profile().as_deref() == Some(TEST_PARTNER_PROFILE) {
+    if crate::agent::system::paths::profile().as_deref() == Some(TEST_PARTNER_PROFILE) {
         return Err("This window already is the test partner.".to_string());
     }
     super::identity::id_for_profile_home(&test_partner_home()?)
@@ -91,7 +91,7 @@ pub async fn cmd_multiplayer_launch_test_partner(
     folder: String,
     state: State<'_, Arc<MultiplayerState>>,
 ) -> Result<(), String> {
-    if crate::agent::paths::profile().as_deref() == Some(TEST_PARTNER_PROFILE) {
+    if crate::agent::system::paths::profile().as_deref() == Some(TEST_PARTNER_PROFILE) {
         return Err("This window already is the test partner.".to_string());
     }
     let home = test_partner_home()?;
@@ -120,7 +120,7 @@ pub async fn cmd_multiplayer_launch_test_partner(
         // Sync goes over the connection, not by pushing into this folder.
         let _ = super::collab::git(&partner_folder, &["remote", "remove", "origin"]).await;
     }
-    crate::agent::projects::add_multiplayer_project_to(
+    crate::agent::sessions::projects::add_multiplayer_project_to(
         &home.join("agent").join("projects.json"),
         &name,
         &partner_folder.to_string_lossy(),
@@ -141,5 +141,5 @@ pub async fn cmd_multiplayer_launch_test_partner(
 /// UI can label a second instance.
 #[tauri::command]
 pub fn cmd_app_profile() -> Option<String> {
-    crate::agent::paths::profile()
+    crate::agent::system::paths::profile()
 }

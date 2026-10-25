@@ -106,7 +106,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: https://files.rcsb.org http://127.0.0.1:* http://localhost:*; img-src 'self' data: blob: asset: http://asset.localhost; media-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'wasm-unsafe-eval'; frame-src 'self' blob: http://127.0.0.1:* http://localhost:* vivmod: http://vivmod.localhost https://vivmod.localhost; object-src 'none'; base-uri 'self'; form-action 'self'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: https://files.rcsb.org http://127.0.0.1:* http://localhost:*; img-src 'self' data: blob: asset: http://asset.localhost https:; media-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'wasm-unsafe-eval'; frame-src 'self' blob: http://127.0.0.1:* http://localhost:* vivmod: http://vivmod.localhost https://vivmod.localhost; object-src 'none'; base-uri 'self'; form-action 'self'"
     },
     "macOSPrivateApi": true
   },

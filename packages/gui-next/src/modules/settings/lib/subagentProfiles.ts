@@ -11,19 +11,6 @@ export interface SubagentModelOverride {
   contextWindow: number
 }
 
-/** Mirrors `coding_agent::subagent_profiles::SubagentProfile`. */
-export interface SubagentProfile {
-  id: string
-  name: string
-  color: string | null
-  model: SubagentModelOverride | null
-  description: string
-  allowedTools: string[] | null
-  systemPrompt: string
-  injectAgentsMd: boolean
-  builtin: boolean
-}
-
 export const SUBAGENT_COLORS = ['amber', 'red', 'orange', 'green', 'teal', 'blue', 'purple', 'pink'] as const
 
 export const SUBAGENT_COLOR_HEX: Record<(typeof SUBAGENT_COLORS)[number], string> = {

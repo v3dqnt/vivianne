@@ -32,6 +32,13 @@
 //! - [`risk`] — the static classifier that gates destructive steps.
 //! - [`pointer`] — a click-through cursor it can aim at things while narrating.
 
+/// Viv Instant and the resting notch are switched off in this release: no wake
+/// or assist chord, no notch window, no tray entry, and Laya isn't warmed at
+/// launch. The code is all still here; set this to `true` to bring them back
+/// (and `INSTANT_ENABLED` in `gui-next/src/modules/instant/enabled.ts`).
+pub const ENABLED: bool = false;
+
+pub mod assist;
 pub mod chord;
 pub mod parakeet;
 pub mod pointer;

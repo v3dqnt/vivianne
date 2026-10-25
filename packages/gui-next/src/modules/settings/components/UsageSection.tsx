@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Stack, Typography, Box, Tooltip, ButtonBase } from '../../../ui'
 import { call } from '../../../ipc'
+import { UsageByModel } from './UsageByModel'
 
 export interface UsageDay {
   input: number
@@ -332,6 +333,8 @@ export function UsageSection() {
           </Typography>
         )}
       </Box>
+
+      <UsageByModel />
 
       {/* Insights */}
       <Box sx={{ p: 2, borderRadius: 1.2, border: 1, borderColor: 'divider' }}>

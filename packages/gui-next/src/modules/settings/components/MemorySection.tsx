@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react'
 import { Stack, Typography, Divider, Switch, Button, TextField, CircularProgress } from '../../../ui'
 import { ArchiveBookLinear, SearchNormalLinear, TrashLinear } from '../../../icons'
 import { useMemoryStore } from '../store/memoryStore'
+import { useSettingsUi } from '../store/uiStore'
+import { usePanelStore } from '../../dock/store/panelStore'
 import { LocalEmbedderRow } from './LocalEmbedderRow'
+import { CloudEmbedderRow } from './CloudEmbedderRow'
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -145,7 +148,34 @@ export function MemorySection() {
 
       <Divider sx={{ my: 1 }} />
 
+      <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5, py: 0.5 }}>
+        <Stack sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>
+            Everything it remembers
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            Read, correct or forget individual memories in the Memory panel.
+          </Typography>
+        </Stack>
+        <Button
+          size="small"
+          onClick={() => {
+            useSettingsUi.getState().closeSettings()
+            usePanelStore.getState().openRight('memory')
+          }}
+          sx={{ textTransform: 'none', flexShrink: 0 }}
+        >
+          Open Memory panel
+        </Button>
+      </Stack>
+
+      <Divider sx={{ my: 1 }} />
+
       <LocalEmbedderRow />
+
+      <Divider sx={{ my: 1 }} />
+
+      <CloudEmbedderRow />
 
       <Divider sx={{ my: 1 }} />
 

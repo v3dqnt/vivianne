@@ -88,7 +88,40 @@ chrome.tabs.onRemoved.addListener((id) => {
   attached.delete(id)
   if (lastTab === id) lastTab = null
 })
-chrome.debugger.onDetach.addListener((src) => attached.delete(src.tabId))
+chrome.debugger.onDetach.addListener((src) => {
+  attached.delete(src.tabId)
+})
+
+// The page's console, kept per tab from the moment the debugger attaches
+// (Runtime.enable also replays what the page already logged).
+const consoleLog = new Map()
+const MAX_CONSOLE = 300
+
+function remember(tabId, entry) {
+  const list = consoleLog.get(tabId) ?? []
+  list.push({ ...entry, at: Date.now() })
+  if (list.length > MAX_CONSOLE) list.shift()
+  consoleLog.set(tabId, list)
+}
+
+const showArg = (a) => {
+  if (a.value !== undefined) return typeof a.value === 'string' ? a.value : JSON.stringify(a.value)
+  return a.description ?? a.unserializableValue ?? a.type
+}
+
+chrome.debugger.onEvent.addListener((src, method, params) => {
+  const tabId = src.tabId
+  if (method === 'Runtime.consoleAPICalled') {
+    remember(tabId, { level: params.type === 'warning' ? 'warn' : params.type, text: (params.args ?? []).map(showArg).join(' ') })
+  } else if (method === 'Runtime.exceptionThrown') {
+    const d = params.exceptionDetails ?? {}
+    const where = d.url ? ` (${d.url}:${(d.lineNumber ?? 0) + 1})` : ''
+    remember(tabId, { level: 'error', text: `${d.exception?.description ?? d.text ?? 'Uncaught exception'}${where}` })
+  } else if (method === 'Log.entryAdded') {
+    const e = params.entry ?? {}
+    remember(tabId, { level: e.level === 'warning' ? 'warn' : e.level, text: `${e.text ?? ''}${e.url ? ` (${e.url})` : ''}`.trim() })
+  }
+})
 
 // ── Tabs ──────────────────────────────────────────────────────────────────
 
@@ -146,6 +179,9 @@ async function cdp(tabId, method, params = {}) {
   if (!attached.has(tabId)) {
     await chrome.debugger.attach({ tabId }, '1.3')
     attached.add(tabId)
+    // Start collecting the console; a page that refuses is still usable.
+    await chrome.debugger.sendCommand({ tabId }, 'Runtime.enable').catch(() => {})
+    await chrome.debugger.sendCommand({ tabId }, 'Log.enable').catch(() => {})
   }
   return chrome.debugger.sendCommand({ tabId }, method, params)
 }
@@ -235,7 +271,8 @@ function pageSnapshot(limit) {
     el.setAttribute('data-viv-ref', String(n))
     let line = `[${n}] ${role}`
     if (text) line += ` "${text}"`
-    if ('value' in el && el.value && role !== 'button' && el.tagName !== 'SELECT') line += ` = "${String(el.value).slice(0, 80)}"`
+    const secret = el.getAttribute('data-viv-secret') === '1' || (el.getAttribute('type') || '').toLowerCase() === 'password' || /cc-(number|csc|exp)|one-time-code/.test((el.getAttribute('autocomplete') || '').toLowerCase())
+    if ('value' in el && el.value && role !== 'button' && el.tagName !== 'SELECT') line += secret ? ' = "(hidden)"' : ` = "${String(el.value).slice(0, 80)}"`
     if (el.tagName === 'SELECT') line += ` = "${el.options[el.selectedIndex]?.text ?? ''}" options: ${[...el.options].slice(0, 12).map((o) => o.text).join(' | ')}`
     if (el.checked) line += ' checked'
     if (el.disabled) line += ' disabled'
@@ -245,6 +282,19 @@ function pageSnapshot(limit) {
   }
   const more = out.length >= limit ? `\n… more on the page; scroll and snapshot again, or use find.` : ''
   return `${document.title}\n${location.href}\nScrolled ${Math.round(scrollY)} of ${Math.max(0, document.documentElement.scrollHeight - innerHeight)}px\n\n${out.join('\n')}${more}`
+}
+
+function isSensitiveField() {
+  const el = document.activeElement
+  if (!el) return null
+  const type = (el.getAttribute('type') || '').toLowerCase()
+  const auto = (el.getAttribute('autocomplete') || '').toLowerCase()
+  const hay = [el.name, el.id, el.getAttribute('aria-label'), el.placeholder].filter(Boolean).join(' ').toLowerCase()
+  if (type === 'password' || /password|current-password|new-password/.test(auto)) return 'a password'
+  if (/one-time-code/.test(auto)) return 'a one-time code'
+  if (/cc-(number|csc|exp|name)/.test(auto) || /card.?number|credit.?card|cvv|cvc|security.?code|card.?holder/.test(hay)) return 'payment card details'
+  if (/\b(ssn|social.?security|iban|routing.?number|account.?number|passport|tax.?id|aadhaar|pan.?number)\b/.test(hay)) return 'an identity or bank number'
+  return null
 }
 
 function locate(ref) {
@@ -354,13 +404,30 @@ async function handle(method, p) {
         await cdp(tab.id, 'Input.dispatchMouseEvent', { type: 'mousePressed', ...click })
         await cdp(tab.id, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...click })
       }
+      // Passwords, card numbers, security codes and identity numbers are the
+      // user's to type. Checked on the field that has focus, not on what the
+      // caller says it is.
+      const sensitive = p.secretFill ? null : await inPage(tab.id, isSensitiveField)
+      if (sensitive) {
+        throw new Error(`That field takes ${sensitive}. Vivianne does not type it: ask the user to enter it themselves.`)
+      }
       if (p.clear) {
         await pressKey(tab.id, 'ctrl+a')
         await pressKey(tab.id, 'backspace')
       }
       await cdp(tab.id, 'Input.insertText', { text: String(p.text ?? '') })
+      if (p.secretFill) {
+        // The value is now in the page and must not be readable from it:
+        // dots on screen, and a marker so a snapshot never prints it.
+        await inPage(tab.id, () => {
+          const el = document.activeElement
+          if (!el) return
+          el.setAttribute('data-viv-secret', '1')
+          el.style.webkitTextSecurity = 'disc'
+        })
+      }
       if (p.submit) await pressKey(tab.id, 'enter')
-      return { typed: String(p.text ?? '').length }
+      return { typed: p.secretFill ? 0 : String(p.text ?? '').length }
     }
     case 'select': {
       const tab = await tabFor(p)
@@ -383,6 +450,34 @@ async function handle(method, p) {
       const tab = await tabFor(p)
       const shot = await cdp(tab.id, 'Page.captureScreenshot', { format: 'jpeg', quality: 70, fromSurface: true })
       return { image: shot.data, mediaType: 'image/jpeg', url: tab.url, title: tab.title }
+    }
+    case 'evaluate': {
+      const tab = await tabFor(p)
+      if (!p.expression) throw new Error('evaluate needs an expression')
+      const r = await cdp(tab.id, 'Runtime.evaluate', {
+        expression: String(p.expression),
+        awaitPromise: true,
+        returnByValue: true,
+        userGesture: true,
+        timeout: 15000,
+      })
+      if (r.exceptionDetails) {
+        const d = r.exceptionDetails
+        throw new Error(d.exception?.description ?? d.text ?? 'The expression threw')
+      }
+      const v = r.result ?? {}
+      const value = v.value !== undefined ? v.value : (v.description ?? v.unserializableValue ?? null)
+      return { type: v.subtype ?? v.type, value }
+    }
+    case 'read_console': {
+      const tab = await tabFor(p)
+      // Attaching starts collection and replays what the page already logged.
+      await cdp(tab.id, 'Runtime.enable').catch(() => {})
+      await new Promise((r) => setTimeout(r, 150))
+      const all = consoleLog.get(tab.id) ?? []
+      const messages = all.slice(-(p.limit ?? 100))
+      if (p.clear) consoleLog.delete(tab.id)
+      return { messages, total: all.length, url: tab.url }
     }
     case 'wait': {
       await new Promise((r) => setTimeout(r, Math.min(15000, p.ms ?? 1000)))

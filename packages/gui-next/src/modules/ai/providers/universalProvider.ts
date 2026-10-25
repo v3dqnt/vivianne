@@ -166,7 +166,17 @@ function buildRequestSetup(req: ProviderStreamRequest, apiKey: string, maxOutput
       // package does). `openai-compatible` is the SDK's own recommended
       // package for exactly this class of host (LM Studio is one of its
       // documented examples).
-      const openai = createOpenAICompatible({ name: req.provider, apiKey, baseURL: req.baseUrl.replace(/\/+$/, ''), headers: APP_HEADERS })
+      // `includeUsage` asks the stream to end with a usage chunk
+      // (`stream_options.include_usage`), as the Rust client always did. Without
+      // it most hosts send no token counts at all, which is also no cost: the
+      // usage and per-model views would read zero.
+      const openai = createOpenAICompatible({
+        name: req.provider,
+        apiKey,
+        baseURL: req.baseUrl.replace(/\/+$/, ''),
+        headers: APP_HEADERS,
+        includeUsage: true,
+      })
       const transformed = transformMessages(req.context.messages, {
         supportsImages: true,
         targetProvider: '',

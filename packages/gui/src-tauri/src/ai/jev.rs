@@ -62,7 +62,7 @@ fn forced_off() -> bool {
 /// ambient environment state, so a user who sets one in Settings is not
 /// silently overridden by a stale shell variable.
 pub async fn api_key() -> Option<String> {
-    let from_settings = crate::agent::tool_exec::read_settings_json()
+    let from_settings = crate::agent::tools::exec::read_settings_json()
         .await
         .get("jevApiKey")
         .and_then(|v| v.as_str())

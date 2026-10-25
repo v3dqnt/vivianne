@@ -1,7 +1,10 @@
+import { lazy, Suspense } from 'react'
+import { INSTANT_ENABLED } from '../../instant/enabled'
 import { Dialog, Box, Divider, Stack, Typography, IconButton, ButtonBase, Tooltip, useTheme } from '../../../ui'
 import {
   CloseCircleLinear,
   KeyLinear,
+  LockLinear,
   CpuLinear,
   FlashLinear,
   Link2Linear,
@@ -17,25 +20,25 @@ import {
   GlobalLinear,
   ShieldTickLinear,
 } from '../../../icons'
-import { ProvidersSection } from './ProvidersSection'
-import { LocalModelsSection } from './LocalModelsSection'
-import { ModsSection } from './ModsSection'
-import { BrowserSection } from './BrowserSection'
-import { SubagentsSection } from './SubagentsSection'
-import { ConnectionsSection } from './ConnectionsSection'
-import { MemorySection } from './MemorySection'
-import { DiagnosticsSection } from './DiagnosticsSection'
-import { UsageSection } from './UsageSection'
-import { SkillsSection } from './SkillsSection'
-import { AutomationsSection } from './AutomationsSection'
-import { ThemesSection } from './ThemesSection'
-import { LayoutSection } from './LayoutSection'
-import { ComponentsSection } from './ComponentsSection'
-import { UpdatesSection } from './UpdatesSection'
-import { InstantSection } from './InstantSection'
-import { ReliabilitySection } from './ReliabilitySection'
-import { WebSearchSection } from './WebSearchSection'
-import { AccountSection } from '../../account/components/AccountSection'
+const ProvidersSection = lazy(() => import('./ProvidersSection').then((m) => ({ default: m.ProvidersSection })))
+const LocalModelsSection = lazy(() => import('./LocalModelsSection').then((m) => ({ default: m.LocalModelsSection })))
+const ModsSection = lazy(() => import('./ModsSection').then((m) => ({ default: m.ModsSection })))
+const VaultSection = lazy(() => import('./VaultSection').then((m) => ({ default: m.VaultSection })))
+const BrowserSection = lazy(() => import('./BrowserSection').then((m) => ({ default: m.BrowserSection })))
+const ConnectionsSection = lazy(() => import('./ConnectionsSection').then((m) => ({ default: m.ConnectionsSection })))
+const MemorySection = lazy(() => import('./MemorySection').then((m) => ({ default: m.MemorySection })))
+const DiagnosticsSection = lazy(() => import('./DiagnosticsSection').then((m) => ({ default: m.DiagnosticsSection })))
+const UsageSection = lazy(() => import('./UsageSection').then((m) => ({ default: m.UsageSection })))
+const SkillsSection = lazy(() => import('./SkillsSection').then((m) => ({ default: m.SkillsSection })))
+const AutomationsSection = lazy(() => import('./AutomationsSection').then((m) => ({ default: m.AutomationsSection })))
+const ThemesSection = lazy(() => import('./ThemesSection').then((m) => ({ default: m.ThemesSection })))
+const LayoutSection = lazy(() => import('./LayoutSection').then((m) => ({ default: m.LayoutSection })))
+const ComponentsSection = lazy(() => import('./ComponentsSection').then((m) => ({ default: m.ComponentsSection })))
+const UpdatesSection = lazy(() => import('./UpdatesSection').then((m) => ({ default: m.UpdatesSection })))
+const InstantSection = lazy(() => import('./InstantSection').then((m) => ({ default: m.InstantSection })))
+const ReliabilitySection = lazy(() => import('./ReliabilitySection').then((m) => ({ default: m.ReliabilitySection })))
+const WebSearchSection = lazy(() => import('./WebSearchSection').then((m) => ({ default: m.WebSearchSection })))
+const AccountSection = lazy(() => import('../../account/components/AccountSection').then((m) => ({ default: m.AccountSection })))
 import { useSettingsUi, type SettingsSection } from '../store/uiStore'
 
 interface SectionDef {
@@ -69,13 +72,13 @@ const GROUPS: { label: string; items: SectionDef[] }[] = [
     label: 'Agent',
     items: [
       { id: 'mods', label: 'Mods', icon: FlashLinear },
-      { id: 'subagents', label: 'Subagents', icon: UserOctagonLinear },
       { id: 'connections', label: 'Connections', icon: Link2Linear },
       { id: 'websearch', label: 'Web & browser', icon: GlobalLinear },
       { id: 'memory', label: 'Memory', icon: ArchiveBookLinear },
+      { id: 'vault', label: 'Vault', icon: LockLinear },
       { id: 'skills', label: 'Skills', icon: MagicpenLinear },
-      { id: 'automations', label: 'Automations', icon: ClockLinear },
-      { id: 'instant', label: 'Viv Instant', icon: MicrophoneLinear },
+      { id: 'automations', label: 'Workflows', icon: ClockLinear },
+      ...(INSTANT_ENABLED ? [{ id: 'instant' as const, label: 'Viv Instant', icon: MicrophoneLinear }] : []),
     ],
   },
   {
@@ -203,6 +206,8 @@ export function SettingsDialog() {
                 the full width; every other section is a single settings
                 column, which reads better constrained. */}
             <Box sx={section === 'providers' ? { height: '100%' } : { maxWidth: 640 }}>
+              {/* Each section loads the first time it's opened. */}
+              <Suspense fallback={null}>
               {(section === 'account' || section === 'usage') && (
                 <Stack sx={{ gap: 4 }}>
                   <AccountSection />
@@ -221,10 +226,10 @@ export function SettingsDialog() {
               {section === 'reliability' && <ReliabilitySection />}
               {section === 'local' && <LocalModelsSection />}
               {section === 'mods' && <ModsSection />}
-              {section === 'subagents' && <SubagentsSection />}
               {/* Manual MCP servers live under Connections → Advanced; 'mcp' still opens it. */}
               {(section === 'connections' || section === 'mcp') && <ConnectionsSection />}
               {section === 'memory' && <MemorySection />}
+              {section === 'vault' && <VaultSection />}
               {section === 'diagnostics' && <DiagnosticsSection />}
               {section === 'skills' && <SkillsSection />}
               {section === 'automations' && <AutomationsSection />}
@@ -242,6 +247,7 @@ export function SettingsDialog() {
               {section === 'layout' && <LayoutSection />}
               {section === 'components' && <ComponentsSection />}
               {section === 'updates' && <UpdatesSection />}
+              </Suspense>
             </Box>
           </Box>
         </Stack>

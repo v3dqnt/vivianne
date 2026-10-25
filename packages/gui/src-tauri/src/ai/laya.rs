@@ -41,7 +41,7 @@ static INSTALLING: AtomicBool = AtomicBool::new(false);
 static STARTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn home() -> Result<PathBuf, String> {
-    Ok(crate::agent::paths::viv_home()?.join("laya"))
+    Ok(crate::agent::system::paths::viv_home()?.join("laya"))
 }
 
 fn venv() -> Result<PathBuf, String> {
@@ -61,7 +61,7 @@ pub fn installed() -> bool {
 /// Whether the user has it switched on (it is, once installed, unless they
 /// turned it off).
 pub async fn enabled() -> bool {
-    crate::agent::tool_exec::read_settings_json().await.get("layaEnabled").and_then(|v| v.as_bool()).unwrap_or(true)
+    crate::agent::tools::exec::read_settings_json().await.get("layaEnabled").and_then(|v| v.as_bool()).unwrap_or(true)
 }
 
 fn quiet(cmd: &mut std::process::Command) -> &mut std::process::Command {
@@ -213,11 +213,11 @@ pub async fn cmd_laya_status() -> Result<LayaStatus, String> {
 
 #[tauri::command]
 pub async fn cmd_laya_set_enabled(enabled: bool) -> Result<(), String> {
-    let mut settings = crate::agent::tool_exec::read_settings_json().await;
+    let mut settings = crate::agent::tools::exec::read_settings_json().await;
     if let Some(obj) = settings.as_object_mut() {
         obj.insert("layaEnabled".into(), serde_json::Value::Bool(enabled));
     }
-    crate::agent::commands::cmd_save_settings(settings).await?;
+    crate::agent::runtime::commands::cmd_save_settings(settings).await?;
     if enabled {
         warm();
     } else {

@@ -13,7 +13,7 @@ pub fn default_chord() -> &'static str {
 }
 
 fn path() -> std::path::PathBuf {
-    crate::agent::paths::viv_home_path(&["instant-chord.json"])
+    crate::agent::system::paths::viv_home_path(&["instant-chord.json"])
 }
 
 /// The chord registered now.
@@ -72,6 +72,9 @@ pub fn error() -> Option<String> {
 
 /// Register the saved chord at startup.
 pub fn register_at_startup(app: &tauri::AppHandle) {
+    if !super::ENABLED {
+        return;
+    }
     let chord = saved();
     match parse(&chord).and_then(|s| app.global_shortcut().register(s).map_err(|e| e.to_string())) {
         Ok(()) => {

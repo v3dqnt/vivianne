@@ -1,7 +1,8 @@
-//! Orchestration tools — subagent lifecycle, user interaction, plan mode.
+//! Orchestration tools — subagent lifecycle and user interaction. Plan mode
+//! is the main agent's (`agent::team::plans`); these tools share its loop.
 //!
 //! Ports the model-facing surface of grok-build's task/task_output/wait_tasks/
-//! kill_task/ask_user_question/enter_plan_mode/exit_plan_mode tools onto
+//! kill_task/ask_user_question tools onto
 //! Vivianne's simpler in-process `Tool` trait. The channel/coordinator
 //! architecture that grok wraps around these is replaced by an in-process
 //! `SubagentRegistry` — same tool contract, dramatically less machinery, no
@@ -15,7 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::tool_exec::{Tool, ToolResult};
-use crate::agent::types::AgentMessage;
+use crate::agent::runtime::types::AgentMessage;
 
 // ── Subagent registry ───────────────────────────────────────────────────────
 
@@ -61,7 +62,7 @@ pub struct SubagentHandle {
     /// lifetime as the rest of this registry (no disk persistence).
     pub messages: Mutex<Vec<AgentMessage>>,
     /// The running loop's steering queue and flag, set once it starts, so a
-    /// user comment can redirect a live run (`agent::runs`).
+    /// user comment can redirect a live run (`agent::team::runs`).
     pub steering: Option<(Arc<tokio::sync::RwLock<Vec<AgentMessage>>>, Arc<std::sync::atomic::AtomicBool>)>,
     /// The running loop's abort flag, set once it starts, so cancelling the
     /// subagent stops it (see `cancel_subagent`).

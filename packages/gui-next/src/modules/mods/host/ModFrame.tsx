@@ -14,7 +14,7 @@ export function modUrl(key: string, entry: string): string {
 }
 
 /** The theme as mod pages receive it. */
-function useModTheme() {
+export function useModTheme() {
   const s = useThemeStore()
   const opts = themeOptions(s)
   const paletteId = activePaletteId(s)

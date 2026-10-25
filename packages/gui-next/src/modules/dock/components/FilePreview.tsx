@@ -107,8 +107,11 @@ export function FileContent({
   bare = false,
   full = false,
   fresh = false,
+  dense = false,
 }: {
   path: string
+  /** Small, quiet code that folds when long: the tool-card look. */
+  dense?: boolean
   wrap?: boolean
   bare?: boolean
   /** Filling a panel: no height caps, and Markdown, HTML and CSV are shown
@@ -286,7 +289,7 @@ export function FileContent({
   }
   return (
     <Box sx={{ minWidth: 0, '& > *': { minWidth: 0 } }}>
-      <CodeBlock code={data.content} lang={langFromPath(path)} wrap={wrap} bare={bare} />
+      <CodeBlock code={data.content} lang={langFromPath(path)} wrap={wrap} bare={bare} dense={dense} />
       {data.truncated && meta(`Truncated — showing the first ${MAX_HIGHLIGHT_CHARS.toLocaleString()} characters`)}
     </Box>
   )

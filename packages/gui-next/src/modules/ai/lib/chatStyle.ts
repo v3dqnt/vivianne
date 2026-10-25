@@ -44,3 +44,38 @@ export const CHAT_TITLE_SX = { fontWeight: 600, fontSize: CHAT_FONT.title, flexS
 
 /** A card's secondary text (counts, targets, timings). */
 export const CHAT_META_SX = { fontSize: CHAT_FONT.meta } as const
+
+/**
+ * A tool call as a line of text, not a card: the accent colour marks it as
+ * something you can open, a soft tint shows on hover. No border, no box.
+ */
+export const TOOL_ROW_SX = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 0.75,
+  maxWidth: '100%',
+  minWidth: 0,
+  px: 0.75,
+  mx: -0.75,
+  py: 0.375,
+  borderRadius: '7px',
+  color: 'text.secondary',
+  fontSize: CHAT_FONT.title,
+  fontWeight: 400,
+  userSelect: 'none',
+  transition: 'background-color 0.12s',
+} as const
+
+/** What a single tool row opens onto: indented under it, tied by a rail. */
+export const TOOL_BODY_SX = { ml: 1, pl: 1.5, mt: 0.25, borderLeft: 2, borderColor: 'divider' } as const
+
+/** A group's steps when opened: one rounded list, a hairline between rows. */
+export const TOOL_LIST_SX = {
+  mt: 0.5,
+  border: 1,
+  borderColor: 'divider',
+  borderRadius: '12px',
+  overflow: 'hidden',
+  '& > *': { px: 1.25, py: 0.5 },
+  '& > * + *': { borderTop: 1, borderColor: 'divider' },
+} as const

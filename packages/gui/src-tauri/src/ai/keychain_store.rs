@@ -6,7 +6,7 @@
 //! clean swap — no callers change.
 //!
 //! `keyring`'s API is synchronous/blocking, so every operation runs inside
-//! `spawn_blocking` (same pattern `agent::memory_store` already uses for
+//! `spawn_blocking` (same pattern `agent::memory::store` already uses for
 //! rusqlite, which is blocking for the same reason).
 
 use async_trait::async_trait;

@@ -12,6 +12,10 @@ import { Workspace } from './modules/workspace/Workspace'
 import { useSidebarStore } from './modules/sessions/store/sidebarStore'
 import { installShortcuts, registerShortcuts } from './lib/shortcuts'
 import { appShortcuts } from './modules/settings/lib/appShortcuts'
+import { startWorkflowRunner } from './modules/automation/workflowRunner'
+import { startAutoReadAloud } from './modules/ai/lib/readAloud'
+import { WorkflowConfirm } from './modules/automation/WorkflowConfirm'
+import { Quickstart } from './modules/hackathon/Quickstart'
 import { useLayoutPrefs } from './modules/settings/store/layoutPrefsStore'
 import { useSavedLayouts } from './modules/workspace/layout'
 
@@ -27,6 +31,9 @@ function App() {
     registerShortcuts(appShortcuts())
   }, [savedLayouts])
   useEffect(() => installShortcuts(), [])
+  // Scheduled and folder-triggered workflows run their steps in a thread of their own.
+  useEffect(() => startWorkflowRunner(), [])
+  useEffect(() => startAutoReadAloud(), [])
 
   const sidebar = !sidebarCollapsed && <Sidebar />
 
@@ -52,6 +59,8 @@ function App() {
 
       <SettingsDialog />
       <ModsRuntime />
+      <WorkflowConfirm />
+      <Quickstart />
       <OptionalComponentsModal />
       <UpdateSurfaces />
     </Stack>

@@ -9,6 +9,7 @@ import { hasTauri } from './ipc'
 import { invoke } from '@tauri-apps/api/core'
 import { initProviderDispatcher } from './modules/ai/providers/dispatcher'
 import { initNotchDelegate } from './modules/instant/lib/notchDelegate'
+import { initNotificationReply } from './modules/ai/lib/notificationReply'
 import { initDiagramCheck } from './modules/ai/lib/diagramCheck'
 import App from './App.tsx'
 import './tailwind.css'
@@ -33,6 +34,8 @@ if (hasTauri() && getCurrentWindow().label === 'main') {
   void initProviderDispatcher()
   // Work said to the notch, handed to a project's agent here.
   initNotchDelegate()
+  // What's typed into a notification's reply box, sent to the chat.
+  initNotificationReply()
   // The agent's check_diagram tool, answered with the same code the chat draws with.
   initDiagramCheck()
   // Only now is it safe to create the notch's window (see `cmd_notch_app_ready`).

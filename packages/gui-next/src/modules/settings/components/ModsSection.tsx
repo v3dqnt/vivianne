@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Stack, Typography, Divider, Switch, Button, IconButton, CircularProgress } from '../../../ui'
-import { FlashLinear, TrashLinear, CodeLinear } from '../../../icons'
+import { FlashLinear, TrashLinear, CodeLinear, ArrowDownLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { useSettingsUi } from '../store/uiStore'
 import { useAgentStore } from '../../ai/store/agentStore'
 import { CodeBlock } from '../../ai/components/CodeBlock'
-import { SuperchargeSubsection } from './SuperchargeSubsection'
 import { GuidesSubsection } from './GuidesSubsection'
 import { ModsManager } from '../../mods/components/ModsManager'
 
@@ -26,6 +25,7 @@ function ToolsSubsection() {
   const [disabled, setDisabled] = useState<string[]>([])
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const [open, setOpen] = useState(false)
 
   useEffect(() => {
     void Promise.all([
@@ -65,13 +65,35 @@ function ToolsSubsection() {
 
   return (
     <Stack sx={{ gap: 0.5 }}>
-      <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-        Built-in tools
-      </Typography>
-      <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>
-        Disabled tools are hidden from the agent entirely — it won't see them in its toolset, and it can't call them.
-      </Typography>
-      {!loaded ? (
+      <Stack
+        direction="row"
+        role="button"
+        aria-expanded={open}
+        tabIndex={0}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), setOpen((o) => !o))}
+        sx={{ alignItems: 'center', gap: 0.75, cursor: 'pointer', borderRadius: 1.5, mx: -0.5, px: 0.5, py: 0.25, '&:hover': { bgcolor: 'action.hover' } }}
+      >
+        <ArrowDownLinear
+          size={14}
+          color="currentColor"
+          style={{ flexShrink: 0, transition: 'transform 120ms', transform: open ? 'none' : 'rotate(-90deg)' }}
+        />
+        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+          Built-in tools
+        </Typography>
+        {loaded && (
+          <Typography variant="caption" color="text.secondary">
+            {tools.length - disabled.filter((d) => tools.some((t) => t.name === d)).length} of {tools.length} on
+          </Typography>
+        )}
+      </Stack>
+      {open && (
+        <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>
+          Disabled tools are hidden from the agent entirely — it won't see them in its toolset, and it can't call them.
+        </Typography>
+      )}
+      {!open ? null : !loaded ? (
         <Typography variant="caption" color="text.secondary" sx={{ py: 1 }}>
           Loading…
         </Typography>
@@ -115,56 +137,6 @@ function ToolsSubsection() {
             ))}
           </Stack>
         ))
-      )}
-    </Stack>
-  )
-}
-
-/** Dedicated toggle for `run_script` (Programmatic Tool Calling). It lives
- * in its own setting rather than the per-tool switches above; on unless the
- * user has switched it off, matching the backend's default. */
-function ExperimentalSubsection() {
-  const [enabled, setEnabled] = useState(true)
-  const [settings, setSettings] = useState<Record<string, unknown> | null>(null)
-  const [loaded, setLoaded] = useState(false)
-
-  useEffect(() => {
-    void call<Record<string, unknown> & { enableProgrammaticToolCalling?: boolean }>('cmd_get_settings').then((s) => {
-      if (s) {
-        setSettings(s)
-        setEnabled(s.enableProgrammaticToolCalling !== false)
-      }
-      setLoaded(true)
-    })
-  }, [])
-
-  const toggle = async (on: boolean) => {
-    setEnabled(on)
-    await call('cmd_save_settings', { settings: { ...(settings ?? {}), enableProgrammaticToolCalling: on } })
-  }
-
-  return (
-    <Stack sx={{ gap: 0.5 }}>
-      <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-        Scripting
-      </Typography>
-      {loaded && (
-        <Stack
-          direction="row"
-          sx={{ alignItems: 'center', gap: 1.5, py: 0.75, px: 1, borderRadius: 2, '&:hover': { bgcolor: 'action.hover' } }}
-        >
-          <FlashLinear size={15} color="currentColor" style={{ flexShrink: 0 }} />
-          <Stack sx={{ flex: 1, minWidth: 0 }}>
-            <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
-              Programmatic tool calling
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              Lets the agent write a short script (run_script) that calls any of its tools — built-in, MCP or
-              playbook — in one turn instead of one round-trip each. Every call still goes through the usual approvals.
-            </Typography>
-          </Stack>
-          <Switch size="small" checked={enabled} onChange={(e) => void toggle(e.target.checked)} />
-        </Stack>
       )}
     </Stack>
   )
@@ -302,15 +274,11 @@ export function ModsSection() {
     <Stack sx={{ gap: 2.5 }}>
       <ModsManager />
       <Divider />
-      <SuperchargeSubsection />
-      <Divider />
       <GuidesSubsection />
       <Divider />
       <ToolsSubsection />
       <Divider />
       <CustomToolsSubsection />
-      <Divider />
-      <ExperimentalSubsection />
     </Stack>
   )
 }

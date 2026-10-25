@@ -1,9 +1,13 @@
 import { memo, useState } from 'react'
-import { Box, Paper, Typography, Stack, Alert, IconButton, Tooltip } from '../../../ui'
-import { UndoLinear, CopyLinear, EditLinear, TickCircleLinear } from '../../../icons'
+import { Box, Typography, Stack, Alert, IconButton, Tooltip, alpha, type Theme } from '../../../ui'
+import { UndoLinear, CopyLinear, EditLinear, TickCircleLinear, VolumeLinear, VolumeOffLinear } from '../../../icons'
+import { toggleRead, useReading } from '../lib/readAloud'
 import type { AgentMessage } from '../lib/types'
 import { contentToText, contentToThinking, contentImages } from '../lib/types'
 import { Markdown } from './Markdown'
+import { ReportMarkdown } from './ReportMarkdown'
+import { FileLink } from './FileLink'
+import { splitFilePaths } from '../lib/filePaths'
 import { ToolCallCard } from './ToolCallCard'
 import { TeamRunCard } from '../../team/components/TeamRunCard'
 import { ReasoningBlock } from './ReasoningBlock'
@@ -46,6 +50,7 @@ function MessageBubbleImpl({
 }) {
   const [hovered, setHovered] = useState(false)
   const [copied, setCopied] = useState(false)
+  const reading = useReading((s) => index !== undefined && s.id === index)
 
   if (message.type === 'toolResult' && message.toolName === 'team_run') {
     const details = message.details as { teamRun?: string } | null
@@ -123,33 +128,28 @@ function MessageBubbleImpl({
         </Typography>
       )}
       {(text.length > 0 || isEmptyStreamingAssistant) && (
-        <Paper
-          elevation={0}
-          sx={{
-            maxWidth: CHAT_MAX_WIDTH,
-            minWidth: 0,
-            px: 1.75,
-            py: 1,
-            // The same box as the cards around it; your own messages are
-            // filled instead, so who said what reads at a glance.
-            border: 1,
-            borderColor: isUser ? 'transparent' : 'divider',
-            bgcolor: isUser ? 'primary.main' : 'background.paper',
-            color: isUser ? 'primary.contrastText' : 'text.primary',
-            borderRadius: CHAT_RADIUS,
-            fontSize: CHAT_FONT.text,
-          }}
+        <Box
+          sx={
+            // Yours in a filled bubble; Vivianne's as plain text across the
+            // column, so who said what reads at a glance.
+            isUser
+              ? { maxWidth: CHAT_MAX_WIDTH, minWidth: 0, px: 1.75, py: 1.125, border: 0, bgcolor: (t: Theme) => alpha(t.palette.text.primary, t.palette.mode === 'dark' ? 0.09 : 0.06), color: 'text.primary', borderRadius: '18px', fontSize: CHAT_FONT.text }
+              : { width: '100%', minWidth: 0, px: 0.25, py: 0.25, border: 0, bgcolor: 'transparent', color: 'text.primary', borderRadius: 0, fontSize: CHAT_FONT.text }
+          }
         >
           {isEmptyStreamingAssistant ? (
             <ThinkingIndicator />
           ) : isUser ? (
             <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontSize: CHAT_FONT.text, lineHeight: 1.6 }}>
-              {text}
+              {splitFilePaths(text).map((p, i) =>
+                typeof p === 'string' ? p : <FileLink key={i} path={p.path} label={p.path} prose />,
+              )}
             </Typography>
           ) : (
-            <Markdown text={text} />
+            // A reply that reads like a report becomes a card once it is complete.
+            streaming ? <Markdown text={text} /> : <ReportMarkdown text={text} />
           )}
-        </Paper>
+        </Box>
       )}
       {showActions && (
         <Stack
@@ -181,6 +181,18 @@ function MessageBubbleImpl({
                 {copied ? <TickCircleLinear size={12} color="currentColor" /> : <CopyLinear size={12} color="currentColor" />}
               </IconButton>
             </Tooltip>
+            {!isUser && index !== undefined && (
+              <Tooltip title={reading ? 'Stop reading' : 'Read aloud'}>
+                <IconButton
+                  size="small"
+                  aria-label={reading ? 'Stop reading' : 'Read aloud'}
+                  onClick={() => void toggleRead(index, text)}
+                  sx={{ width: 22, height: 22, color: reading ? 'primary.main' : 'inherit' }}
+                >
+                  {reading ? <VolumeOffLinear size={12} color="currentColor" /> : <VolumeLinear size={12} color="currentColor" />}
+                </IconButton>
+              </Tooltip>
+            )}
             {isUser && onEdit && index !== undefined && (
               <Tooltip title="Edit and resend — removes everything after this">
                 <IconButton

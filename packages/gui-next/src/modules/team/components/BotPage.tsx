@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react'
-import { Box, Button, ButtonBase, IconButton, InputBase, Stack, Switch, TextField, Tooltip, Typography, alpha, useTheme } from '../../../ui'
+import { useEffect, useMemo, useState } from 'react'
+import { Box, Button, ButtonBase, IconButton, InputBase, Orb, Stack, Switch, TextField, Tooltip, Typography, alpha, useTheme } from '../../../ui'
 import { ArrowLeftLinear, EditLinear, TrashLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { useTeamStore, type TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey, type BotSettings, type Level, type Routine } from '../store/botsStore'
-import { Avatar, SectionLabel, colorOf } from './bits'
-import { ModelPicker } from './ModelPicker'
+import { LiveAvatar, SectionLabel, colorOf } from './bits'
+import { IDLE_LINES, STATE_LABEL, useBotFace } from './AgentFace'
+import { ModelPicker } from '../../ai/components/ModelPicker'
 import { ContactTab } from './ContactTab'
 
 type Tab = 'routines' | 'contact' | 'rules' | 'memory'
@@ -156,6 +157,10 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
 
   const state = st?.state ?? (settings?.paused ? 'paused' : 'idle')
   const color = colorOf(agent)
+  const face = useBotFace(root, agent.id)
+  const idleLine = useMemo(() => IDLE_LINES[Math.floor(Math.random() * IDLE_LINES.length)], [])
+  const caption =
+    state === 'working' && face !== 'listening' ? (st?.activity ?? STATE_LABEL[face]) : face === 'idle' ? idleLine : STATE_LABEL[face]
 
   return (
     <Stack sx={{ height: '100%', minHeight: 0 }}>
@@ -164,8 +169,19 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
           <ArrowLeftLinear size={13} color="currentColor" />
           Team
         </ButtonBase>
-        <Stack direction="row" sx={{ alignItems: 'flex-start', gap: 1.25 }}>
-          <Avatar name={agent.name} color={color} size={38} />
+        <Stack
+          direction="row"
+          sx={{
+            alignItems: 'center',
+            gap: 1.75,
+            p: 1.5,
+            borderRadius: '18px',
+            border: 1,
+            borderColor: alpha(color, 0.28),
+            background: `linear-gradient(135deg, ${alpha(color, 0.16)} 0%, ${alpha(color, 0.04)} 100%)`,
+          }}
+        >
+          <LiveAvatar root={root} agent={agent} size={64} />
           <Stack sx={{ flex: 1, minWidth: 0, gap: 0.25 }}>
             <Stack direction="row" sx={{ alignItems: 'baseline', gap: 0.75 }}>
               <Typography variant="body2" sx={{ fontWeight: 700 }}>
@@ -178,17 +194,17 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
             <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.45 }}>
               {agent.role || 'No job described yet'}
             </Typography>
-            <Stack direction="row" sx={{ gap: 0.5, alignItems: 'center', mt: 0.25 }}>
-              <Box
-                sx={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: '50%',
-                  bgcolor: state === 'working' ? 'success.main' : state === 'paused' ? 'text.disabled' : 'text.secondary',
-                }}
-              />
-              <Typography variant="caption" color="text.secondary" noWrap>
-                {state === 'working' ? (st?.activity ?? 'Working') : state === 'paused' ? 'Paused' : 'Idle'}
+            <Stack
+              direction="row"
+              sx={{ gap: 0.75, alignItems: 'center', mt: 0.5, alignSelf: 'flex-start', maxWidth: '100%', px: 1, height: 22, borderRadius: '999px', bgcolor: alpha(color, 0.16) }}
+            >
+              {state === 'working' ? (
+                <Orb state="working" px={12} label="Working" />
+              ) : (
+                <Box sx={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, bgcolor: state === 'paused' ? 'text.disabled' : 'success.main' }} />
+              )}
+              <Typography variant="caption" sx={{ fontWeight: 600 }} noWrap>
+                {caption}
               </Typography>
             </Stack>
           </Stack>
@@ -203,7 +219,7 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
             Model
           </Typography>
           {/* Takes effect from its next turn; one in progress keeps its model. */}
-          <ModelPicker value={agent.model} onChange={(model) => void saveAgent(root, { ...agent, model }, agent.id)} />
+          <ModelPicker mode="agent" variant="field" value={agent.model} onChange={(model) => void saveAgent(root, { ...agent, model }, agent.id)} />
         </Stack>
         <Stack direction="row" sx={{ gap: 0.75, flexWrap: 'wrap' }}>
           <Button size="small" variant="contained" onClick={() => setChannel(root, agent.id)} sx={{ borderRadius: '8px' }}>

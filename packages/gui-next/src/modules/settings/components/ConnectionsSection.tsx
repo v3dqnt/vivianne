@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Box, Button, ButtonBase, CircularProgress, Collapse, Dialog, InputBase, Link, Stack, TextField, Typography } from '../../../ui'
+import { Box, Button, ButtonBase, CircularProgress, Collapse, Dialog, InputBase, Link, Stack, TextField, Typography, Alert } from '../../../ui'
 import { ArrowDownLinear, LockLinear, SearchNormalLinear, TickCircleLinear } from '../../../icons'
 import { appIcon, useConnections, type ConnectionApp } from '../store/connectionsStore'
 import { McpSection } from './McpSection'
@@ -92,9 +92,9 @@ function AppTile({ app, onSetup }: { app: ConnectionApp; onSetup: (app: Connecti
         {app.description}
       </Typography>
       {error && (
-        <Typography variant="caption" color="error.main" sx={{ lineHeight: 1.4 }}>
+        <Alert severity="error">
           {error}
-        </Typography>
+        </Alert>
       )}
       <Stack direction="row" sx={{ gap: 0.75, alignItems: 'center' }}>
         {app.connected ? (
@@ -200,9 +200,9 @@ function SetupDialog({ app, onClose }: { app: ConnectionApp | null; onClose: () 
             />
           ))}
           {error && (
-            <Typography variant="caption" color="error.main">
+            <Alert severity="error">
               {error}
-            </Typography>
+            </Alert>
           )}
           <Stack direction="row" sx={{ gap: 1, alignItems: 'center' }}>
             <Button type="submit" variant="contained" disableElevation disabled={!ready || busy} startIcon={busy ? <CircularProgress size={14} /> : undefined}>

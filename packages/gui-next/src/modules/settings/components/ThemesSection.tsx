@@ -1,10 +1,14 @@
-import { useState, type ReactNode } from 'react'
-import { Stack, Typography, Divider, Box, ButtonBase, Button, Slider, ToggleButtonGroup, ToggleButton, IconButton, Tooltip, Alert } from '../../../ui'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Stack, Typography, Divider, Box, ButtonBase, Button, Slider, ToggleButtonGroup, ToggleButton, IconButton, Tooltip, Alert, Switch } from '../../../ui'
 import { AddLinear, EditLinear, TrashLinear, ExportLinear, ImportLinear, CloseLinear } from '../../../icons'
 import { call, hasTauri } from '../../../ipc'
 import { allPalettes, FONTS, onColor, type FontChoice, type PaletteDef } from '../../../theme'
 import { useThemeStore, type ChatWidth, type Density, type ModePref } from '../store/themeStore'
 import { ThemeBuilder } from './ThemeBuilder'
+import { FaceEditor } from '../../team/components/FaceEditor'
+import { useFacePrefs } from '../../team/store/faceStore'
+import { useReadAloudPref } from '../../ai/lib/readAloud'
+import { SUBAGENT_COLOR_HEX } from '../lib/subagentProfiles'
 
 const ACCENTS = ['#4a9eff', '#7c5cff', '#d97757', '#e5484d', '#f5a524', '#30a46c', '#12a594', '#e93d82']
 
@@ -288,6 +292,8 @@ export function ThemesSection() {
           onChange={(chatWidth) => s.update({ chatWidth })}
         />
       </Row>
+      <VisualsRow />
+      <ReadAloudRow />
 
       <Divider />
 
@@ -318,6 +324,9 @@ export function ThemesSection() {
         </>
       )}
 
+      <Divider />
+      <RobotHeads />
+
       {error && <Alert severity="error">{error}</Alert>}
 
       <Box>
@@ -328,5 +337,83 @@ export function ThemesSection() {
 
       {builder && <ThemeBuilder base={builder.base} editing={builder.editing} onClose={() => setBuilder(null)} />}
     </Stack>
+  )
+}
+
+/** Every agent's robot head: size, when they move, and Vivianne's own. */
+function RobotHeads() {
+  const f = useFacePrefs()
+  return (
+    <Stack sx={{ gap: 0.5 }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+        Robot heads
+      </Typography>
+      <Row label="Size" hint="Every agent's head, everywhere">
+        <Box sx={{ width: 180 }}>
+          <Slider value={f.scale} min={0.85} max={1.25} step={0.05} aria-label="Head size" onChange={(_e, v) => f.update({ scale: v as number })} />
+        </Box>
+      </Row>
+      <Row label="Movement" hint="Busy: heads move only while their agent works">
+        <Segmented
+          value={f.motion}
+          options={[
+            ['busy', 'When busy'],
+            ['always', 'Always'],
+            ['never', 'Never'],
+          ]}
+          onChange={(motion) => f.update({ motion })}
+        />
+      </Row>
+      <Typography variant="body2" sx={{ fontWeight: 500, mt: 1, mb: 0.5 }}>
+        Vivianne
+      </Typography>
+      <FaceEditor
+        name="Vivianne"
+        color={f.viv.color ?? '#5b5b66'}
+        face={f.viv}
+        onChange={({ color, face }) => f.update({ viv: { ...(face ?? {}), color: color.startsWith('#') ? color : SUBAGENT_COLOR_HEX[color as keyof typeof SUBAGENT_COLOR_HEX] } })}
+      />
+    </Stack>
+  )
+}
+
+/** How much live UI (calculators, charts, mini-apps) Vivianne puts in her
+ * replies. Read by the backend into her instructions each turn. */
+function VisualsRow() {
+  const [v, setV] = useState<'fewer' | 'auto' | 'more'>('auto')
+  useEffect(() => {
+    void call<Record<string, unknown>>('cmd_get_settings').then((st) => {
+      const x = st?.chatVisuals
+      if (x === 'fewer' || x === 'more') setV(x)
+    })
+  }, [])
+  const set = async (next: 'fewer' | 'auto' | 'more') => {
+    setV(next)
+    const st = (await call<Record<string, unknown>>('cmd_get_settings')) ?? {}
+    await call('cmd_save_settings', { settings: { ...st, chatVisuals: next } })
+  }
+  return (
+    <Row label="Visuals in answers" hint="Charts, calculators and small interactive apps inside replies">
+      <Segmented
+        value={v}
+        options={[
+          ['fewer', 'Fewer'],
+          ['auto', 'Auto'],
+          ['more', 'More'],
+        ]}
+        onChange={(n) => void set(n)}
+      />
+    </Row>
+  )
+}
+
+/** Whether a reply to a spoken prompt is read out when it's done. */
+function ReadAloudRow() {
+  const on = useReadAloudPref((s) => s.whenDictated)
+  const set = useReadAloudPref((s) => s.set)
+  return (
+    <Row label="Read replies aloud after I dictate" hint="Speak the answer when the prompt was spoken with the mic. Every reply also has its own read button">
+      <Switch size="small" checked={on} onChange={(e) => set(e.target.checked)} />
+    </Row>
   )
 }

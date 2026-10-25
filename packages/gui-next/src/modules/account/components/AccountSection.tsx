@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Stack, Typography, TextField, Button, CircularProgress, Divider, Box } from '../../../ui'
+import { Stack, Typography, TextField, Button, CircularProgress, Divider, Box, Alert } from '../../../ui'
 import { UserOctagonLinear, Link2Linear } from '../../../icons'
 import { useAccountStore } from '../store/accountStore'
 
@@ -85,9 +85,9 @@ function SignedIn() {
           </Typography>
         )}
         {error && (
-          <Typography variant="caption" color="error.main">
+          <Alert severity="error">
             {error}
-          </Typography>
+          </Alert>
         )}
       </Stack>
 
@@ -145,9 +145,9 @@ function SignedOut() {
         </Typography>
       )}
       {error && (
-        <Typography variant="caption" color="error.main">
+        <Alert severity="error">
           {error}
-        </Typography>
+        </Alert>
       )}
     </Stack>
   )

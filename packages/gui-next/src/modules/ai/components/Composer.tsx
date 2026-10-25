@@ -1,26 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState, memo, type KeyboardEvent } from 'react'
-import { Box, Paper, Stack, TextField, IconButton, Typography, alpha, useTheme } from '../../../ui'
-import { SendLinear, CloseCircleLinear, DocumentTextLinear, StopLinear, SparkleLinear } from '../../../icons'
+import { useEffect, useMemo, useRef, useState, memo, type KeyboardEvent } from 'react'
+import { Box, Stack } from '../../../ui'
 import { useAgentStore } from '../store/agentStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useDaysStore } from '../../sessions/store/daysStore'
-import { call } from '../../../ipc'
-import type { ImageAttachment, FileAttachment } from '../lib/types'
-import { ModelSelector as ModelSelectorImpl } from './ModelSelector'
+import { call, on } from '../../../ipc'
+import type { FileAttachment } from '../lib/types'
+import { ModelPicker } from './ModelPicker'
+import { ChatComposer, type ChatComposerHandle, type ComposerAttachments } from './ChatComposer'
 import { ThinkingLevelControl as ThinkingLevelControlImpl } from './ThinkingLevelControl'
-import { PermissionModePill as PermissionModePillImpl } from './PermissionModePill'
-import { AttachFileButton as AttachFileButtonImpl } from './AttachFileButton'
+import { ModePill as ModePillImpl } from './ModePill'
 import { ContextUsageBar as ContextUsageBarImpl } from './ContextUsageBar'
 import { StreamStatusLine as StreamStatusLineImpl } from './StreamStatusLine'
 import { RunStatusBar as RunStatusBarImpl } from './RunStatusBar'
 import { LimitsPill as LimitsPillImpl } from './LimitsPill'
-import { PlanPill as PlanPillImpl } from '../../plan/components/PlanPill'
 import { usePlanStore } from '../../plan/store/planStore'
 import { SubagentPanel as SubagentPanelImpl } from './SubagentPanel'
 import { ComputerUseBanner as ComputerUseBannerImpl } from './ComputerUseBanner'
 import { QueuePanel as QueuePanelImpl } from './QueuePanel'
 import { UnifiedMentionMenu, type MentionItem, type MentionableFile, type MentionableSkill } from './MentionMenu'
-import { buildAttachments, filesFromDataTransfer } from '../lib/attachments'
 import { getSkillMentionQuery, applySkillMention, applyFileMention } from '../../../lib/mentions'
 
 // Every one of these is a zero-prop sibling that subscribes to its own store
@@ -28,15 +25,15 @@ import { getSkillMentionQuery, applySkillMention, applyFileMention } from '../..
 // every token (isBusy), which used to drag all of them along. Wrapping at the
 // import site lets each bail out of those renders; context/store updates
 // still get through.
-const ModelSelector = memo(ModelSelectorImpl)
+const ChatModelPicker = memo(function ChatModelPicker() {
+  return <ModelPicker mode="chat" />
+})
 const ThinkingLevelControl = memo(ThinkingLevelControlImpl)
-const PermissionModePill = memo(PermissionModePillImpl)
-const AttachFileButton = memo(AttachFileButtonImpl)
+const ModePill = memo(ModePillImpl)
 const ContextUsageBar = memo(ContextUsageBarImpl)
 const StreamStatusLine = memo(StreamStatusLineImpl)
 const RunStatusBar = memo(RunStatusBarImpl)
 const LimitsPill = memo(LimitsPillImpl)
-const PlanPill = memo(PlanPillImpl)
 const SubagentPanel = memo(SubagentPanelImpl)
 const ComputerUseBanner = memo(ComputerUseBannerImpl)
 const QueuePanel = memo(QueuePanelImpl)
@@ -103,6 +100,9 @@ function basename(p: string): string {
 /** The composer's narrow layout: controls collapse to their icons. */
 const NARROW = {
     '& .cq-label, & .cq-wide': { display: 'none' },
+    // The model's name shortens rather than going: it is the one control
+    // whose text says what is selected.
+    '& .cq-model': { maxWidth: 110 },
     '& .cq-compact': { display: 'inline-flex' },
     '& .cq-context': { minWidth: 0 },
     // A lone icon inside a MUI Button still carries the margin meant to
@@ -128,12 +128,13 @@ function useNarrowFallback(ref: React.RefObject<HTMLElement | null>, maxWidth: n
   }, [ref, maxWidth])
 }
 
+/** The workspace's files for @-mentions, kept across chats and remounts.
+ * ponytail: a time window; a watcher-driven index if trees get huge. */
+let fileTreeCache: { key: string; files: MentionableFile[]; at: number } | null = null
+const FILE_TREE_TTL_MS = 30_000
+
 export function Composer() {
-  const theme = useTheme()
   const [text, setText] = useState('')
-  const [pending, setPending] = useState<ImageAttachment[]>([])
-  const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([])
-  const [dragging, setDragging] = useState(false)
   const isBusy = useAgentStore((s) => s.isBusy)
   const stopping = useAgentStore((s) => s.stopping)
   const planMode = usePlanStore((s) => s.planMode)
@@ -143,6 +144,7 @@ export function Composer() {
   const workspaceFolders = useWorkspaceStore((s) => s.folders)
   const draft = useAgentStore((s) => s.draft)
   const setDraft = useAgentStore((s) => s.setDraft)
+  const box = useRef<ChatComposerHandle | null>(null)
 
   // One-shot: "edit this message" hands the original text over through the
   // store, and the composer takes ownership of it here and clears the
@@ -152,21 +154,31 @@ export function Composer() {
     if (!draft) return
     setText(draft)
     setDraft('')
-    inputRef.current?.focus()
+    box.current?.focus()
   }, [draft, setDraft])
 
   // Opening the project lead from the sidebar puts the cursor here.
   useEffect(() => {
-    const focus = () => inputRef.current?.focus()
+    const focus = () => box.current?.focus()
     window.addEventListener('viv:focus-composer', focus)
     return () => window.removeEventListener('viv:focus-composer', focus)
+  }, [])
+
+  // Files dropped on the notch land here as paths.
+  useEffect(() => {
+    const off = on<string[]>('viv:attach-paths', (paths) => {
+      if (!paths?.length) return
+      const names = paths.map((p) => `"${p}"`).join(', ')
+      setText((v) => `${v ? v + '\n' : ''}About ${names}: `)
+      box.current?.focus()
+    })
+    return () => void off.then((f) => f())
   }, [])
 
   // ── @ mentions (skills + workspace files) ──
   const [skills, setSkills] = useState<MentionableSkill[]>([])
   const [fileMatches, setFileMatches] = useState<MentionableFile[]>([])
   const [mentionIndex, setMentionIndex] = useState(0)
-  const inputRef = useRef<HTMLInputElement>(null)
 
   // Fetch skills once on mount — the default `~/.viv/skills` dir is always
   // scanned by cmd_list_skills regardless of the extra-paths argument.
@@ -178,22 +190,18 @@ export function Composer() {
 
   const mentionQuery = getSkillMentionQuery(text)
   const mentionActive = mentionQuery !== null
-  const fileTreeCache = useRef<{ key: string; files: MentionableFile[] } | null>(null)
+  // File names are needed whenever the prompt might name one (to mark and to
+  // complete them), not only inside an @ mention: loaded once the box has
+  // something typed, then reused.
+  const wantsFiles = mentionActive || text.trim().length > 0
 
-  // Fetches the (unfiltered) tree once per workspace root, not per
-  // keystroke — `cmd_list_dir_tree` takes no query param, so the actual
-  // per-character filtering in `mentionItems` below was being fed a fresh,
-  // identical, unfiltered walk of up to 800 entries on every character typed
-  // after `@`. Depending on `mentionActive` (only flips on entering/leaving
-  // a mention) instead of `mentionQuery` (changes every keystroke) plus a
-  // per-root cache means the IPC call fires at most once per workspace.
+  // The (unfiltered) tree, fetched once per set of workspace folders when a
+  // mention starts — not per keystroke.
   useEffect(() => {
-    if (!mentionActive || workspaceFolders.length === 0) return
-    // Every workspace folder, not just the primary one — a folder added
-    // alongside the first was previously unmentionable entirely.
+    if (!wantsFiles || workspaceFolders.length === 0) return
     const key = workspaceFolders.join('\0')
-    if (fileTreeCache.current?.key === key) {
-      setFileMatches(fileTreeCache.current.files)
+    if (fileTreeCache?.key === key && Date.now() - fileTreeCache.at < FILE_TREE_TTL_MS) {
+      setFileMatches(fileTreeCache.files)
       return
     }
     let cancelled = false
@@ -202,8 +210,7 @@ export function Composer() {
       workspaceFolders.map((root) =>
         call<TreeFileNode[]>('cmd_list_dir_tree', { root, maxDepth: TREE_MAX_DEPTH, maxEntries: TREE_MAX_ENTRIES })
           .then((tree) => ({ root, tree }))
-          // One unreadable folder (permissions, unplugged drive) shouldn't
-          // take the other folders' files down with it.
+          // One unreadable folder shouldn't take the others' files down.
           .catch(() => ({ root, tree: null })),
       ),
     ).then((results) => {
@@ -213,14 +220,20 @@ export function Composer() {
         if (!tree) continue
         flattenTree(tree, '', multi ? basename(root) : '', multi, flat)
       }
-      fileTreeCache.current = { key, files: flat }
+      fileTreeCache = { key, files: flat, at: Date.now() }
       setFileMatches(flat)
     })
     return () => {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mentionActive, workspaceFolders])
+  }, [wantsFiles, workspaceFolders])
+
+  // What the prompt can name: files, by name and by path.
+  const knownFiles = useMemo(
+    () => fileMatches.filter((f) => !f.isDir).map((f) => ({ name: f.name, path: f.insertPath })),
+    [fileMatches],
+  )
 
   const mentionItems: MentionItem[] = useMemo(() => {
     if (mentionQuery === null) return []
@@ -231,8 +244,6 @@ export function Composer() {
       .map((skill) => ({ kind: 'skill', skill }))
     const fileItems: MentionItem[] = fileMatches
       .filter((f) => f.relPath.toLowerCase().includes(q) || f.name.toLowerCase().includes(q))
-      // The menu scrolls, so this only caps how much is rendered at once —
-      // 8 was low enough that a common query buried the file you wanted.
       .slice(0, 50)
       .map((file) => ({ kind: 'file', file }))
     return [...skillItems, ...fileItems]
@@ -246,128 +257,48 @@ export function Composer() {
 
   const applyMention = (item: MentionItem) => {
     setText((v) => (item.kind === 'skill' ? applySkillMention(v, item.skill.name) : applyFileMention(v, item.file.insertPath)))
-    inputRef.current?.focus()
+    box.current?.focus()
   }
 
-  const submit = () => {
-    const hasAnything = text.trim() || pending.length > 0 || pendingFiles.length > 0
-    if (!hasAnything) return
-    const toSend = text + formatFilesForPrompt(pendingFiles)
-    const images = pending
-    setText('')
-    setPending([])
-    setPendingFiles([])
-    // `sendMessage` routes to the steering queue when busy — one code path
-    // for both idle-send and send-while-busy, so the send button always
-    // matches the Enter behavior (queue) instead of silently doing nothing.
-    //
-    // `ensureToday` first: a conversation left open past midnight rolls over
-    // to the new day on its next message, rather than appending to
-    // yesterday's. It is a no-op the rest of the time.
+  // `sendMessage` queues when busy: one path for idle-send and send-while-
+  // busy. `ensureToday` first, so a chat left open past midnight rolls over.
+  const submit = (typed: string, a: ComposerAttachments) => {
+    const toSend = typed + formatFilesForPrompt(a.files)
     void useDaysStore
       .getState()
       .ensureToday()
-      .finally(() => void sendMessage(toSend, images))
+      .finally(() => void sendMessage(toSend, a.images))
   }
 
-  const doSteer = () => {
-    if (!text.trim()) return
-    const toSend = text + formatFilesForPrompt(pendingFiles)
-    setText('')
-    setPending([])
-    setPendingFiles([])
-    void steer(toSend)
-  }
-
-  // Stable identities so the memoized AttachFileButton actually bails on
-  // keystroke re-renders instead of seeing new props every time.
-  const handleAddImages = useCallback((imgs: ImageAttachment[]) => setPending((p) => [...p, ...imgs]), [])
-  const handleAddFiles = useCallback((files: FileAttachment[]) => setPendingFiles((p) => [...p, ...files]), [])
-
-  /** Shared by paste and drop so every entry point accepts the same types.
-   * Images become vision attachments; anything else becomes a file
-   * attachment, with binaries described rather than decoded into mojibake
-   * (see `buildAttachments`). */
-  const ingestFiles = useCallback(async (files: File[]) => {
-    if (files.length === 0) return
-    const { images, files: docs } = await buildAttachments(files)
-    if (images.length) setPending((p) => [...p, ...images])
-    if (docs.length) setPendingFiles((p) => [...p, ...docs])
-  }, [])
-
-  const onPaste = useCallback(
-    (e: React.ClipboardEvent) => {
-      const files = filesFromDataTransfer(e.clipboardData)
-      if (files.length === 0) return
-      // Only when there ARE files — otherwise this would swallow ordinary
-      // text pastes into the composer.
+  const onMentionKey = (e: KeyboardEvent) => {
+    if (!mentionOpen) return false
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
-      void ingestFiles(files)
-    },
-    [ingestFiles],
-  )
-
-  const onDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault()
-      setDragging(false)
-      void ingestFiles(filesFromDataTransfer(e.dataTransfer))
-    },
-    [ingestFiles],
-  )
-
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (mentionOpen) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        setMentionIndex((i) => (i + 1) % mentionItems.length)
-        return
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        setMentionIndex((i) => (i - 1 + mentionItems.length) % mentionItems.length)
-        return
-      }
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault()
-        applyMention(mentionItems[mentionIndex])
-        return
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        setText((v) => v.replace(/@[A-Za-z0-9_./\\-]*$/, ''))
-        return
-      }
+      const n = mentionItems.length
+      setMentionIndex((i) => (e.key === 'ArrowDown' ? (i + 1) % n : (i - 1 + n) % n))
+      return true
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault()
-      submit()
+      applyMention(mentionItems[mentionIndex])
+      return true
     }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      setText((v) => v.replace(/@[A-Za-z0-9_./\\-]*$/, ''))
+      return true
+    }
+    return false
   }
 
   const rootRef = useRef<HTMLDivElement | null>(null)
   useNarrowFallback(rootRef, 560)
 
   return (
-    // The gap on all sides (not just top) plus each panel's own radius/shadow
-    // is what reads as "floating" rather than a bar glued to the window edge.
-    // maxWidth/mx match MessageList's transcript cap so the composer's edges
-    // line up with the message column above it instead of stretching wider.
+    // Floats with a gap on every side, capped to the transcript's width so
+    // its edges line up with the messages above.
     <Box
       ref={rootRef}
-      onPaste={onPaste}
-      onDrop={onDrop}
-      onDragOver={(e) => {
-        // Both preventDefaults are required for a drop target: without them
-        // the browser navigates to the dropped file instead of firing onDrop.
-        e.preventDefault()
-        if (!dragging) setDragging(true)
-      }}
-      onDragLeave={(e) => {
-        // Fires for every child too, so ignore the ones where the pointer is
-        // still inside the composer.
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false)
-      }}
       sx={{
         flexShrink: 0,
         pb: 2,
@@ -376,193 +307,49 @@ export function Composer() {
         maxWidth: 880,
         mx: 'auto',
         width: '100%',
-        // The composer measures ITSELF, not the window. The chat is a panel now
-        // and can be docked anywhere from a full column to a narrow sidebar,
-        // so the window's width says nothing about how much room it has.
+        // The composer measures itself, not the window: the chat is a panel
+        // that can be docked anywhere from a full column to a sidebar.
         containerType: 'inline-size',
         containerName: 'composer',
         px: 2,
-        // Compact-only pieces are hidden until the container query below
-        // swaps them in.
         '& .cq-compact': { display: 'none' },
-        // Narrow: controls collapse to their icons. Nothing is removed — the
-        // full value is in each control's tooltip and accessible label, and a
-        // click opens the same menu as before.
         '@container composer (max-width: 560px)': NARROW,
-        // Older WebKit (macOS 10.15's) has no container queries; see `useNarrowFallback`.
         '&[data-narrow="true"]': NARROW,
       }}
     >
-      {dragging && (
-        <Box
-          sx={{
-            position: 'absolute',
-            inset: 8,
-            zIndex: 10,
-            borderRadius: '12px',
-            border: '2px dashed',
-            borderColor: 'primary.main',
-            bgcolor: 'action.hover',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            pointerEvents: 'none',
-            fontSize: '0.8125rem',
-            color: 'primary.main',
-            fontWeight: 600,
-          }}
-        >
-          Drop files to attach
-        </Box>
-      )}
       <Stack sx={{ gap: 0.5 }}>
-        {/* The workspace and branch chips moved to the sidebar, beside the
-            project they belong to. Only the computer-use notice stays here —
-            it is about the run in progress, which is this box's business. */}
         <ComputerUseBanner />
-
         <SubagentPanel />
         <StreamStatusLine />
-
-        {/* Inline, in normal flow — no longer a floating popover. */}
         <QueuePanel />
-
-        {/* Mention menu still needs its own anchor to float over the input. */}
-        <Box sx={{ position: 'relative' }}>
-          {/* Docked on the composer's top edge — part of the box, not a card above it. */}
-          <RunStatusBar />
-          {mentionOpen && <UnifiedMentionMenu items={mentionItems} activeIndex={mentionIndex} onSelect={applyMention} onHover={setMentionIndex} />}
-
-          <Paper
-            elevation={0}
-            sx={{
-              // Terax's composer: a card on the pane — card fill, a hairline,
-              // 18px corners. Focus shows the ring colour and its soft halo.
-              borderRadius: '18px',
-              overflow: 'hidden',
-              bgcolor: 'background.card',
-              border: 1,
-              borderColor: 'divider',
-              boxShadow: 'none',
-              transition: 'border-color 0.16s ease, box-shadow 0.16s ease',
-              '&:focus-within': { borderColor: theme.palette.tokens.ring, boxShadow: `0 0 0 3px ${alpha(theme.palette.tokens.ring, 0.2)}` },
-            }}
-          >
-            {(pending.length > 0 || pendingFiles.length > 0) && (
-              <Stack direction="row" spacing={1} sx={{ px: 2, pt: 1.5, flexWrap: 'wrap' }}>
-                {pending.map((img, i) => (
-                  <Box key={i} sx={{ position: 'relative' }}>
-                    <Box
-                      component="img"
-                      src={`data:${img.media_type};base64,${img.base64}`}
-                      sx={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 2, border: 1, borderColor: 'divider' }}
-                    />
-                    <IconButton
-                      size="small"
-                      onClick={() => setPending((p) => p.filter((_, j) => j !== i))}
-                      sx={{ position: 'absolute', top: -8, right: -8, bgcolor: 'background.paper', p: 0.25, '&:hover': { bgcolor: 'background.paper' } }}
-                    >
-                      <CloseCircleLinear size={16} color="currentColor" />
-                    </IconButton>
-                  </Box>
-                ))}
-                {pendingFiles.map((f, i) => (
-                  <Stack
-                    key={i}
-                    direction="row"
-                    sx={{
-                      alignItems: 'center',
-                      gap: 0.5,
-                      pl: 1,
-                      pr: 0.5,
-                      py: 0.5,
-                      borderRadius: 2,
-                      border: 1,
-                      borderColor: 'divider',
-                      bgcolor: 'action.hover',
-                      maxWidth: 200,
-                    }}
-                  >
-                    <DocumentTextLinear size={14} color="currentColor" />
-                    <Typography variant="caption" noWrap title={f.name} sx={{ minWidth: 0 }}>
-                      {f.name}
-                    </Typography>
-                    <IconButton size="small" onClick={() => setPendingFiles((p) => p.filter((_, j) => j !== i))} sx={{ p: 0.25 }}>
-                      <CloseCircleLinear size={14} color="currentColor" />
-                    </IconButton>
-                  </Stack>
-                ))}
-              </Stack>
-            )}
-
-            <TextField
-              inputRef={inputRef}
-              fullWidth
-              multiline
-              minRows={1}
-              maxRows={8}
-              placeholder={isBusy ? 'Agent is working — send to queue, or steer to redirect now...' : planMode ? 'Describe what you want built — the agent will research it and propose a plan' : 'Do anything'}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={onKeyDown}
-              variant="standard"
-              slotProps={{ input: { disableUnderline: true } }}
-              sx={{ px: 1.5, pt: 1.25, pb: 0.75, '& .ui-InputBase-root': { fontSize: '0.8125rem', lineHeight: 1.65 } }}
-            />
-
-            <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, px: 1, pb: 0.75 }}>
-              <AttachFileButton
-                onAddImages={handleAddImages}
-                onAddFiles={handleAddFiles}
-              />
-              <PermissionModePill />
-              <PlanPill />
+        <ChatComposer
+          ref={box}
+          value={text}
+          onChange={setText}
+          onSubmit={submit}
+          onSteer={(typed, a) => void steer(typed + formatFilesForPrompt(a.files))}
+          busy={isBusy}
+          stopping={stopping}
+          onStop={() => void abort()}
+          onKeyDownFirst={onMentionKey}
+          knownFiles={knownFiles}
+          placeholder={isBusy ? 'Agent is working — send to queue, or steer to redirect now...' : planMode ? 'Describe what you want built — the agent will research it and propose a plan' : 'Do anything'}
+          overlay={mentionOpen && <UnifiedMentionMenu items={mentionItems} activeIndex={mentionIndex} onSelect={applyMention} onHover={setMentionIndex} />}
+          top={<RunStatusBar />}
+          left={
+            <>
+              <ModePill />
               <LimitsPill />
-
-              <Box sx={{ flex: 1 }} />
-
+            </>
+          }
+          right={
+            <>
               <ContextUsageBar />
               <ThinkingLevelControl />
-              <ModelSelector />
-
-              {/* One button covers send/steer/abort — idle sends (or queues,
-                  via the same submit()), busy-with-empty-input stops the
-                  run, busy-with-text-typed redirects it. Typing while busy
-                  is already the signal that means "steer," so that's the
-                  default action for that state rather than a separate
-                  button alongside abort. */}
-              <IconButton
-                onClick={() => {
-                  if (!isBusy) submit()
-                  else if (text.trim()) doSteer()
-                  else void abort()
-                }}
-                disabled={(!isBusy && !text.trim() && pending.length === 0 && pendingFiles.length === 0) || (stopping && !text.trim())}
-                title={!isBusy ? 'Send' : text.trim() ? 'Steer — interrupt the current task and redirect it with this message' : stopping ? 'Stopping…' : 'Stop — end the current task'}
-                sx={{
-                  bgcolor: !isBusy ? 'action.selected' : text.trim() ? 'primary.main' : 'error.main',
-                  color: !isBusy ? 'text.primary' : text.trim() ? 'primary.contrastText' : 'error.contrastText',
-                  width: 28,
-                  height: 28,
-                  borderRadius: '8px',
-                  flexShrink: 0,
-                  transition: 'background-color 0.1s ease, transform 0.1s ease',
-                  '&:hover': { bgcolor: !isBusy ? 'primary.main' : text.trim() ? 'primary.dark' : 'error.dark', color: !isBusy ? 'primary.contrastText' : undefined },
-                  '&:active': { transform: 'scale(0.92)' },
-                  '&:disabled, &[aria-disabled="true"]': { bgcolor: 'action.disabledBackground', color: 'text.disabled' },
-                }}
-              >
-                {isBusy && !text.trim() ? (
-                  <StopLinear size={15} color="currentColor" />
-                ) : isBusy ? (
-                  <SparkleLinear size={15} color="currentColor" />
-                ) : (
-                  <SendLinear size={15} color="currentColor" />
-                )}
-              </IconButton>
-            </Stack>
-          </Paper>
-        </Box>
+              <ChatModelPicker />
+            </>
+          }
+        />
       </Stack>
     </Box>
   )

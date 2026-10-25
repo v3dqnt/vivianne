@@ -80,7 +80,7 @@ pub struct CustomToolDef {
 }
 
 pub fn tools_dir() -> Result<PathBuf, String> {
-    let dir = crate::agent::paths::viv_home()?.join("tools");
+    let dir = crate::agent::system::paths::viv_home()?.join("tools");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't create the tools folder: {e}"))?;
     Ok(dir)
 }
@@ -101,7 +101,7 @@ fn check_name(name: &str) -> Result<(), String> {
     if name.starts_with("mcp__") {
         return Err("Names starting with mcp__ belong to MCP servers.".into());
     }
-    if crate::agent::tool_schemas::reserved_tool_names().contains(name) || BUILTIN_NAMES.contains(&name) {
+    if crate::agent::tools::schemas::reserved_tool_names().contains(name) || BUILTIN_NAMES.contains(&name) {
         return Err(format!("'{name}' is already a built-in tool. Pick a name that says what yours does differently."));
     }
     if crate::mods::tools::names().contains(name) {
@@ -131,7 +131,7 @@ fn write_def(dir: &Path, def: &CustomToolDef) -> Result<(), String> {
 pub fn load_custom_tools() -> Vec<CustomToolDef> {
     let Ok(dir) = tools_dir() else { return Vec::new() };
     let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
-    let reserved = crate::agent::tool_schemas::reserved_tool_names();
+    let reserved = crate::agent::tools::schemas::reserved_tool_names();
     let mut defs: Vec<CustomToolDef> = entries
         .flatten()
         .filter(|e| e.path().is_dir() && !e.file_name().to_string_lossy().starts_with('.'))
@@ -368,7 +368,7 @@ impl Tool for CreateToolTool {
         if let Err(e) = std::fs::rename(&staging, &dest) {
             return err(format!("Couldn't save the tool: {e}"));
         }
-        crate::agent::tool_exec::invalidate_tool_defs_cache();
+        crate::agent::tools::exec::invalidate_tool_defs_cache();
 
         let count = load_custom_tools().len();
         let mut text = format!(
@@ -396,7 +396,7 @@ pub fn retire(name: &str) -> Result<(), String> {
     std::fs::create_dir_all(&retired).map_err(|e| e.to_string())?;
     let target = retired.join(format!("{name}-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S")));
     std::fs::rename(&dir, &target).map_err(|e| format!("Couldn't retire '{name}': {e}"))?;
-    crate::agent::tool_exec::invalidate_tool_defs_cache();
+    crate::agent::tools::exec::invalidate_tool_defs_cache();
     Ok(())
 }
 

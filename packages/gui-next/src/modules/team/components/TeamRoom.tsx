@@ -1,12 +1,14 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import type { AgentMessage } from '../../ai/lib/types'
+import { usePlanStore } from '../../plan/store/planStore'
 import { Button, ButtonBase, Stack, Tooltip, Typography } from '../../../ui'
 import { call } from '../../../ipc'
-import { ModelPicker } from './ModelPicker'
+import { ModelPicker } from '../../ai/components/ModelPicker'
 import { useTeamStore, type TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey, type BotStatus } from '../store/botsStore'
 import { usePanelStore } from '../../dock/store/panelStore'
 import { useBotFace } from './AgentFace'
-import { Avatar, colorOf } from './bits'
+import { Avatar, faceOf } from './bits'
 import { BotChat } from './BotChat'
 
 const EMPTY_AGENTS: TeamAgent[] = []
@@ -24,7 +26,7 @@ export function BotChip({ root, agent, onOpen }: { root: string; agent: TeamAgen
   return (
     <Tooltip title={tip}>
       <ButtonBase onClick={onOpen} sx={{ position: 'relative', borderRadius: '50%' }}>
-        <Avatar name={agent.name} color={colorOf(agent)} size={34} state={face} />
+        <Avatar {...faceOf(agent)} size={34} state={face} animate />
       </ButtonBase>
     </Tooltip>
   )
@@ -58,6 +60,29 @@ function DirectMessage({ root, bot, team }: { root: string; bot: TeamAgent; team
   }, [root, bot.id, loadDm, loadStatus])
 
   const state = st?.state ?? 'idle'
+  // Its plans, not the open thread's, while this conversation is showing.
+  useEffect(() => {
+    void usePlanStore.getState().setScope({ root, send: (t) => sendDm(root, bot.id, t) })
+    return () => void usePlanStore.getState().setScope(null)
+  }, [root, bot.id, sendDm])
+  // The bot's full working transcript (every tool call and its result), read
+  // again whenever a turn ends or a new message lands.
+  const [transcript, setTranscript] = useState<AgentMessage[] | null>(null)
+  const [reloads, setReloads] = useState(0)
+  useEffect(() => {
+    let live = true
+    void call<AgentMessage[]>('cmd_bots_thread', { root, botId: bot.id })
+      .then((t) => live && setTranscript(t ?? []))
+      .catch(() => live && setTranscript([]))
+    return () => {
+      live = false
+    }
+  }, [root, bot.id, messages.length, state, reloads])
+  const revertTo = async (index: number) => {
+    await call('cmd_bots_revert', { root, botId: bot.id, index })
+    setReloads((n) => n + 1)
+  }
+
   return (
     <Stack sx={{ flex: 1, minHeight: 0 }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1.25, px: 2, py: 1, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
@@ -98,16 +123,18 @@ function DirectMessage({ root, bot, team }: { root: string; bot: TeamAgent; team
         root={root}
         channel={bot.id}
         messages={messages}
+        transcript={transcript}
+        onRevertTo={state === 'working' ? undefined : revertTo}
         team={team}
         approvals={approvals}
         onSend={(t, att) => sendDm(root, bot.id, t, att)}
         attachments
-        toolbar={<ModelPicker compact value={bot.model} onChange={(model) => void save(root, { ...bot, model }, bot.id)} />}
+        toolbar={<ModelPicker mode="agent" value={bot.model} onChange={(model) => void save(root, { ...bot, model }, bot.id)} />}
         allowEveryone={false}
         placeholder={`Message ${bot.name}`}
         empty={
           <Stack sx={{ alignItems: 'center', textAlign: 'center', gap: 1, py: 8, color: 'text.secondary' }}>
-            <Avatar name={bot.name} color={colorOf(bot)} size={72} animate />
+            <Avatar {...faceOf(bot)} size={72} animate />
             <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary' }}>
               {bot.name}
             </Typography>
@@ -171,7 +198,7 @@ function Room({ root, team }: { root: string; team: TeamAgent[] }) {
           <Stack sx={{ alignItems: 'center', textAlign: 'center', gap: 1, py: 8, color: 'text.secondary' }}>
             <Stack direction="row" sx={{ gap: 0.5 }}>
               {team.slice(0, 5).map((a) => (
-                <Avatar key={a.id} name={a.name} color={colorOf(a)} size={34} />
+                <Avatar key={a.id} {...faceOf(a)} size={34} />
               ))}
             </Stack>
             <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary' }}>

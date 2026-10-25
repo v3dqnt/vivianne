@@ -64,7 +64,7 @@ fn now_ms() -> u64 {
 }
 
 fn account_path() -> Result<PathBuf, String> {
-    let dir = crate::agent::paths::viv_home()?.join("chatgpt");
+    let dir = crate::agent::system::paths::viv_home()?.join("chatgpt");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
     Ok(dir.join("account.json"))
 }
@@ -85,11 +85,7 @@ fn load_account() -> Account {
 /// Written whole to a temporary file and renamed into place, so a crash
 /// mid-write can't leave a half-file that loses the issued client id.
 fn save_account(account: &Account) -> Result<(), String> {
-    let path = account_path()?;
-    let tmp = path.with_extension("json.tmp");
-    let json = serde_json::to_string_pretty(account).map_err(|e| e.to_string())?;
-    std::fs::write(&tmp, json).map_err(|e| format!("Couldn't save the ChatGPT account: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("Couldn't save the ChatGPT account: {e}"))
+    crate::agent::system::paths::write_json_atomic(&account_path()?, account).map_err(|e| format!("Couldn't save the ChatGPT account: {e}"))
 }
 
 fn random_url_safe(bytes: usize) -> String {
@@ -353,7 +349,7 @@ pub async fn sign_in(app: &tauri::AppHandle) -> Result<ChatGptStatus, String> {
     account.updated_at = now_ms();
     save_account(&account)?;
     store_tokens(&*crate::ai::auth::wait_for_state(app).await, &tokens, None).await?;
-    crate::agent::tool_exec::invalidate_tool_defs_cache();
+    crate::agent::tools::exec::invalidate_tool_defs_cache();
     Ok(status(app).await)
 }
 

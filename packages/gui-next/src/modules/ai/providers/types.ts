@@ -80,6 +80,12 @@ export interface StreamTokenEvent {
   done: boolean
   message: AssistantMessage | null
   isThinking: boolean
+  /** A tool call the model just finished writing, sent before the reply ends
+   * so Rust can start it early (`agent::tools::speculation`). */
+  toolCall?: { name: string; arguments: unknown }
+  /** A piece of a streaming `run_script` call's argument JSON, for starting
+   * the calls inside the script before it's finished. */
+  toolInput?: { id: string; delta: string }
 }
 
 /** Emitted by Rust, consumed by the TS dispatcher — everything needed to make the actual provider call. */

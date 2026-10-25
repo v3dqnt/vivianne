@@ -138,6 +138,8 @@ export async function runSdkStream(opts: {
   let reasoningAcc = ''
   let reasoningSignature: string | null = null
   const toolCalls: ToolCall[] = []
+  /** Ids of the run_script calls streaming in this reply. */
+  const scripts = new Set<string>()
   let sawFinish = false
 
   // Labeled so the terminal chunks below can leave the loop from inside the
@@ -162,6 +164,20 @@ export async function runSdkStream(opts: {
         opts.emitToken({ streamId: opts.streamId, delta, done: false, message: null, isThinking: true })
         break
       }
+      // A run_script program streams in pieces; Rust starts the reads it
+      // can see in it before the script is finished.
+      case 'tool-input-start': {
+        if (part.toolName === 'run_script') scripts.add(String(part.id ?? ''))
+        break
+      }
+      case 'tool-input-delta': {
+        const id = String(part.id ?? '')
+        if (scripts.has(id)) {
+          const toolInput = { id, delta: String(part.delta ?? '') }
+          opts.emitToken({ streamId: opts.streamId, delta: '', done: false, message: null, isThinking: false, toolInput })
+        }
+        break
+      }
       case 'tool-call': {
         toolCalls.push({
           id: String(part.toolCallId ?? ''),
@@ -170,6 +186,9 @@ export async function runSdkStream(opts: {
           thoughtSignature: null,
         })
         output.stopReason = 'toolUse'
+        // Complete now, though the reply may go on: Rust can start it.
+        const toolCall = { name: String(part.toolName ?? ''), arguments: part.input }
+        opts.emitToken({ streamId: opts.streamId, delta: '', done: false, message: null, isThinking: false, toolCall })
         break
       }
       case 'finish': {

@@ -1,9 +1,10 @@
+import { previewText } from '../../ai/lib/previewText'
 import { useEffect } from 'react'
 import { Box, ButtonBase, IconButton, Orb, Stack, Tooltip, Typography, alpha, useTheme } from '../../../ui'
 import { AddLinear, AgentsLinear } from '../../../icons'
 import type { TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey, type BotMessage } from '../store/botsStore'
-import { Avatar, colorOf } from './bits'
+import { LiveAvatar } from './bits'
 
 
 const SECTION_LABEL_SX = { fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.6875rem' } as const
@@ -11,7 +12,7 @@ const SECTION_LABEL_SX = { fontWeight: 600, letterSpacing: 0.4, textTransform: '
 function preview(m: BotMessage | undefined, team: TeamAgent[]): string | null {
   if (!m) return null
   const who = m.from === 'user' ? 'You' : m.from === 'system' ? '' : (team.find((a) => a.id === m.from)?.name ?? m.from)
-  const text = m.text.replace(/\s+/g, ' ').trim()
+  const text = previewText(m.text)
   return who ? `${who}: ${text}` : text
 }
 
@@ -156,7 +157,7 @@ export function TeamConversations({ root, team, onManage }: { root: string; team
               onClick={() => setChannel(root, a.id)}
               icon={
                 <Box sx={{ position: 'relative', flexShrink: 0 }}>
-                  <Avatar name={a.name} color={colorOf(a)} size={26} />
+                  <LiveAvatar root={root} agent={a} size={26} animate />
                   {state === 'working' && !waiting ? (
                     <Box sx={{ position: 'absolute', right: -4, bottom: -4, display: 'flex', borderRadius: '50%', bgcolor: 'background.paper', p: '1px' }}>
                       <Orb state="working" px={13} />

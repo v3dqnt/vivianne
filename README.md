@@ -38,7 +38,6 @@ Vivianne is a native desktop app (Tauri 2, Rust and React). You talk to it in a 
 **Your computer and your browser**
 - **Computer control (DIP).** Uses Windows UI Automation to read and operate apps directly (fast, reliable, and with real keystrokes), with pixel control as a fallback. A notch at the top of the screen shows what it's doing, with a Stop button.
 - **Your own browser.** The [Vivianne browser extension](packages/helium-extension) lets Vivianne use the browser you're signed in to (Chrome, Edge, Brave, Arc, Opera, Vivaldi, Helium or any other Chromium browser), in tabs it groups as "Vivianne".
-- **Viv Instant.** Hold `Ctrl+Shift+Space` anywhere, say what you want, let go. Speech recognition runs on your machine (Parakeet or Whisper).
 
 **Files, everywhere**
 - File names in the chat open in the Preview panel, which shows code, images, video, audio, 3D models, Markdown, HTML, CSV, PDFs and Office documents (editable).
@@ -48,11 +47,35 @@ Vivianne is a native desktop app (Tauri 2, Rust and React). You talk to it in a 
 - **Your ChatGPT plan** (Plus or Pro) through Sign in with ChatGPT, instead of an API key.
 - **Local models** through llama.cpp, managed from Settings.
 
+## NVIDIA Nemotron and Nebius
+
+This edition runs on NVIDIA Nemotron models served by **Nebius Token Factory**. Token Factory is one OpenAI-compatible endpoint (`https://api.tokenfactory.nebius.com/v1`) for chat, embeddings and model discovery, so the large and small Nemotron models share one key, and every call's tokens and price land in the same usage view.
+
+| Job | Model or service | Code |
+|-----|------------------|------|
+| Chat, planning, hard steps | Nemotron Ultra (or Super) on Token Factory | `ai/provider_registry.rs` (the `nebius` provider), `ai/model_discovery.rs` |
+| Background work: titles, summaries, memory upkeep, easy steps | Nemotron Nano on Token Factory | `agent/models/routing.rs` |
+| Cost-aware routing (`viv-auto`, beta) | Sends each task to Nano, Super or Ultra and shows what it saved against the big model | `agent/models/routing.rs`; Settings → Providers |
+| Memory embeddings | Token Factory embeddings, or an NVIDIA Nemotron embed model | `ai/embedding.rs`; Settings → Memory |
+| Heavy compute | Nebius AI Serverless Jobs through the `nebius_job` tool: fine-tuning, benchmarks, batch runs on a Nebius GPU. Every submit and cancel asks you first, and a time limit is always set | `models/nebius.rs` |
+| Cost | Tokens and cost per model, per day | `agent/models/usage_store.rs`; Settings → Usage by model |
+| Skills | An NVIDIA and Nebius skills hub: scanned, pinned to a commit, reviewed before install | Settings → Skills |
+
+Paths are under `packages/gui/src-tauri/src`. More detail in [HACKATHON.md](HACKATHON.md).
+
 ## Install
 
 Download the installer from [Releases](https://github.com/v3dqnt/vivianne/releases), then add a provider in **Settings → Providers** (an API key, or **Continue with ChatGPT**).
 
-Optional pieces live in **Settings → Components**: the browser engine for web tools, Docker for sandboxed code, and the Parakeet speech model for Viv Instant.
+Optional pieces live in **Settings → Components**: the browser engine for web tools, and Docker for sandboxed code.
+
+### Set up with Nebius and Nemotron
+
+1. Create an API key in [Nebius Token Factory](https://tokenfactory.nebius.com).
+2. Paste it into the first-run card (the title-bar badge reopens it), or into **Settings → Providers → Nebius**. Vivianne lists the models on your account, picks Nemotron Ultra for chat and Nemotron Nano for background work, and turns routing on.
+3. Optional: choose the routing tiers in **Settings → Providers → Cost-aware routing**, and the cloud embedder in **Settings → Memory**.
+4. Optional, for `nebius_job`: install the [Nebius CLI](https://docs.nebius.com/cli) and sign in with `nebius profile create`. Vivianne uses the CLI's own login and never stores a Nebius credential.
+5. Optional: add a Tavily key in Settings for web search with sources under each reply.
 
 ### Browser extension
 
@@ -82,7 +105,7 @@ cd packages/gui-next && npx tsc -p tsconfig.app.json --noEmit
 
 | Path | What's there |
 |------|--------------|
-| `packages/gui/src-tauri` | The backend (Rust): the agent loop, tools, providers, memory, teams, computer control, Viv Instant |
+| `packages/gui/src-tauri` | The backend (Rust): the agent loop, tools, providers, memory, teams, computer control |
 | `packages/gui-next` | The app's interface (React, Radix-based UI kit) |
 | `packages/helium-extension` | The browser extension, for any Chromium browser |
 | `packages/gesture-control` | A standalone tray app that turns webcam hand gestures into mouse and keyboard input |

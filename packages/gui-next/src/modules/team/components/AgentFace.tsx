@@ -2,6 +2,7 @@ import { lazy, Suspense, useMemo } from 'react'
 import { Box, alpha } from '../../../ui'
 import { AgentMark } from '../../../ui/brand/AgentMark'
 import type { RobotHeadShape, RobotHeadState } from 'robot-heads'
+import { useFacePrefs, type FaceStyle } from '../store/faceStore'
 import { useBotsStore, type BotStatus, type BotStep, type LiveRun, type PendingApproval } from '../store/botsStore'
 
 /** An agent's face: a robot head (robot-heads, MIT) in the agent's colour,
@@ -14,7 +15,7 @@ export type FaceState = RobotHeadState
 const SHAPES: RobotHeadShape[] = ['rectangle', 'square', 'circle', 'hexagon']
 
 /** A stable 0–1 number from a string. */
-function hash01(s: string): number {
+export function hash01(s: string): number {
   let h = 2166136261
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619)
   return ((h >>> 0) % 10_000) / 10_000
@@ -38,6 +39,7 @@ export function AgentFace({
   state = 'idle',
   animate,
   interactive = false,
+  face,
 }: {
   name: string
   color: string
@@ -46,9 +48,14 @@ export function AgentFace({
   /** Move even when idle (a profile's big head). Default: only when busy. */
   animate?: boolean
   interactive?: boolean
+  /** The agent's chosen outline, trim and LED colour. */
+  face?: FaceStyle | null
 }) {
   const seed = useMemo(() => hash01(name), [name])
-  const live = animate ?? state !== 'idle'
+  const scale = useFacePrefs((s) => s.scale)
+  const motion = useFacePrefs((s) => s.motion)
+  size = Math.round(size * scale)
+  const live = motion === 'never' ? false : motion === 'always' ? true : (animate ?? state !== 'idle')
   const fallback = (
     <Box sx={{ width: size, height: size, borderRadius: '50%', display: 'grid', placeItems: 'center', bgcolor: alpha(color, 0.14), flexShrink: 0 }}>
       <AgentMark color={color} size={Math.round(size * 0.78)} title={name} />
@@ -57,10 +64,12 @@ export function AgentFace({
   return (
     <Suspense fallback={fallback}>
       <RobotHead
-        shape={shapeFor(name)}
+        shape={face?.shape ?? shapeFor(name)}
         state={state}
         size={size}
         color={color}
+        trimColor={face?.trim}
+        screenColor={face?.screen}
         seed={seed}
         paused={!live}
         interactive={interactive}
@@ -78,7 +87,7 @@ export function AgentFace({
 
 /** Tools whose work is looking things up: the face searches. */
 const SEARCH_TOOLS = new Set([
-  'web_search', 'web_fetch', 'web_preview', 'read', 'grep', 'glob', 'ls', 'recall', 'guide', 'helium',
+  'web_search', 'web_fetch', 'web_preview', 'read', 'grep', 'glob', 'ls', 'recall', 'guide', 'helium', 'user_browser_driver',
   'browser_snapshot', 'browser_navigate', 'inspect_document', 'list_tools', 'semantic_search',
 ])
 
@@ -99,6 +108,21 @@ export function faceState(
   if (SEARCH_TOOLS.has(current.tool) || current.tool.startsWith('browser_') || current.tool.startsWith('mcp__')) return 'searching'
   return 'working'
 }
+
+/** What each face state means, in the agent's own voice. Idle has a few
+ * lines so a resting agent doesn't read as a frozen one; pick one per mount. */
+export const STATE_LABEL: Record<FaceState, string> = {
+  idle: 'Ready when you are',
+  thinking: 'Thinking it over',
+  searching: 'Looking things up',
+  listening: 'Waiting on you',
+  speaking: 'Talking',
+  working: 'On it',
+  happy: 'Done, and pleased',
+  error: 'Something went wrong',
+  sleeping: 'Paused, napping',
+}
+export const IDLE_LINES = ['Ready when you are', 'Standing by', 'Idle, but listening', 'Waiting for the next thing']
 
 /** An agent's live face state, from the bots store. */
 export function useBotFace(root: string | null | undefined, botId: string): FaceState {

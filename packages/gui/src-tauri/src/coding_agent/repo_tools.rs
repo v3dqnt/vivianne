@@ -50,7 +50,7 @@ fn parse_repo_reference(input: &str) -> Result<(String, String), String> {
 }
 
 fn cache_root() -> PathBuf {
-    crate::agent::paths::viv_home_path(&["repo-cache"])
+    crate::agent::system::paths::viv_home_path(&["repo-cache"])
 }
 
 fn cache_path_for(label: &str) -> PathBuf {

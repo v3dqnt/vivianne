@@ -3,6 +3,7 @@ import { Stack, Typography, Divider, Box, Button, TextField, Select, MenuItem, S
 import { TrashLinear, UndoLinear } from '../../../icons'
 import { call, hasTauri } from '../../../ipc'
 import { isMac } from '../../../lib/platform'
+import { INSTANT_ENABLED } from '../../instant/enabled'
 import {
   PRESET_LABELS,
   applyPreset,
@@ -184,6 +185,34 @@ function InstantChordRow() {
   return (
     <>
       <Row label="Viv Instant" hint="Hold anywhere on your computer to talk to Vivianne. Works even when the app is in the background.">
+        <KeyRecorder value={shown} onChange={(k) => void save(k)} placeholder="Default" />
+      </Row>
+      {error && <Alert severity="warning">{error}</Alert>}
+      <AssistChordRow />
+    </>
+  )
+}
+
+/** The keys that start Viv Instant already knowing which window you're in. */
+function AssistChordRow() {
+  const [chord, setChord] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    if (hasTauri()) void call<string>('cmd_instant_assist_chord').then((c) => setChord(c ?? null))
+  }, [])
+  const shown = chord?.replace(/\b(Ctrl|Cmd)\b/, isMac ? 'Mod' : 'Ctrl').replace(/^Ctrl/, isMac ? 'Ctrl' : 'Mod') ?? null
+  const save = async (combo: string) => {
+    setError(null)
+    try {
+      await call('cmd_instant_set_assist_chord', { chord: combo ? toChord(combo) : '' })
+      setChord((await call<string>('cmd_instant_assist_chord')) ?? null)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+  return (
+    <>
+      <Row label="Ask about this window" hint="Hold while you're in any app and ask about what's on screen, e.g. “why is this failing?”. Say nothing and it tells you what it sees.">
         <KeyRecorder value={shown} onChange={(k) => void save(k)} placeholder="Default" />
       </Row>
       {error && <Alert severity="warning">{error}</Alert>}
@@ -383,7 +412,7 @@ export function LayoutSection() {
         Click a shortcut and press the new keys. In a terminal or the code editor, only shortcuts with Shift or Alt reach the app,
         so their own keys keep working.
       </Typography>
-      {hasTauri() && <InstantChordRow />}
+      {INSTANT_ENABLED && hasTauri() && <InstantChordRow />}
       {groups.map(([group, actions]) => (
         <Stack key={group} sx={{ gap: 0.25 }}>
           <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4, mt: 0.5 }}>
@@ -395,7 +424,7 @@ export function LayoutSection() {
         </Stack>
       ))}
 
-      {hasTauri() && (
+      {INSTANT_ENABLED && hasTauri() && (
         <>
           <Divider />
           <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>

@@ -16,7 +16,7 @@ import { WorkspaceSelector } from '../../ai/components/WorkspaceSelector'
 import { BranchIndicator } from '../../ai/components/BranchIndicator'
 import { OnboardingDialog } from './OnboardingDialog'
 import { useTeamStore, isWorking, type TeamAgent, type AgentRun } from '../../team/store/teamStore'
-import { Avatar, colorOf } from '../../team/components/bits'
+import { Avatar, faceOf } from '../../team/components/bits'
 import { openPanel } from '../../workspace/layout'
 import { TeamConversations } from '../../team/components/TeamConversations'
 import { CompanyTree } from '../../team/components/CompanyTree'
@@ -693,7 +693,7 @@ function TeamRow({ agent, runs, onClick }: { agent: TeamAgent; runs: AgentRun[] 
       }}
     >
       <Box sx={{ position: 'relative', flexShrink: 0 }}>
-        <Avatar name={agent.name} color={colorOf(agent)} size={24} state={working ? 'working' : 'idle'} />
+        <Avatar {...faceOf(agent)} size={24} state={working ? 'working' : 'idle'} />
       </Box>
       <Stack sx={{ minWidth: 0, flex: 1 }}>
         <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }} noWrap>

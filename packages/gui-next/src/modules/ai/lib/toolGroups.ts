@@ -95,6 +95,7 @@ const FAMILY: Record<string, Family> = {
   powershell: 'run',
   run_script: 'run',
   sandbox_execute: 'run',
+  terminal: 'run',
   terminal_open: 'run',
   terminal_send: 'run',
   math: 'run',

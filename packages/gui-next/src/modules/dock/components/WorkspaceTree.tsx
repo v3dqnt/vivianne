@@ -12,6 +12,7 @@ import {
 import { call } from '../../../ipc'
 import { useActiveWorkspace } from '../useActiveWorkspace'
 import { FileContent } from './FilePreview'
+import { FileCard } from './FileCard'
 import { useWorkspace } from '../../workspace/layout'
 import { usePanelStore } from '../store/panelStore'
 import { isDocument } from '../../office/lib/docs'
@@ -295,27 +296,9 @@ export function WorkspaceTree() {
               read-only view of the same file fighting the one you are
               actually editing. */}
           {!isDir && isOpen && !ideLayout && (
-            <Box
-              sx={{
-                // Seamless, not a card: no fill, no radius, no dark code
-                // surface of its own. The only chrome is a hairline rail
-                // aligned to this row's indent, which ties the contents to
-                // the file they belong to without boxing them.
-                ml: `${8 + depth * 14 + 7}px`,
-                mr: 0.75,
-                mb: 0.75,
-                pl: 1.25,
-                borderLeft: 1,
-                borderColor: 'divider',
-                maxHeight: 320,
-                overflow: 'auto',
-                // The tree's own row rhythm is 12px; matching it here keeps
-                // the preview reading as part of the list rather than an
-                // embedded viewer with its own typography.
-                '& pre, & code': { fontSize: '0.71875rem !important', lineHeight: 1.55 },
-              }}
-            >
-              <FileContent path={node.path} bare />
+            // The read tool's card: the same look for a file wherever it's previewed.
+            <Box sx={{ ml: `${8 + depth * 14 + 7}px`, mr: 0.75, mt: 0.25, mb: 0.75 }}>
+              <FileCard path={node.path} onExpand={() => setFullscreen(node.path)} />
             </Box>
           )}
           {isDir && isOpen && node.children && renderNodes(node.children, depth + 1)}

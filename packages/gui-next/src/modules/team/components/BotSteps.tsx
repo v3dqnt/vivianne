@@ -99,7 +99,7 @@ export function LiveRunCard({ agent, steps }: { agent: TeamAgent; steps: BotStep
   return (
     <Stack direction="row" sx={{ gap: 1.25, mt: 1.5, alignItems: 'flex-start' }}>
       <Box sx={{ width: 28, flexShrink: 0 }}>
-        <Avatar name={agent.name} color={color} size={28} state={face} />
+        <Avatar name={agent.name} color={color} face={agent.face} size={28} state={face} />
       </Box>
       <Stack sx={{ minWidth: 0, flex: 1 }}>
         <Stack direction="row" sx={{ alignItems: 'baseline', gap: 0.75 }}>

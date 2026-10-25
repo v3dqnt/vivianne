@@ -1,12 +1,12 @@
 import { useState, type ReactNode } from 'react'
 import { Box, CircularProgress, Collapse, Stack, Typography } from '../../../ui'
-import { ArrowDownLinear, LayerLinear } from '../../../icons'
+import { ArrowDownLinear } from '../../../icons'
 import type { AgentMessage } from '../lib/types'
 import { summarizeTools } from '../lib/toolGroups'
-import { argSummary, declarationFor, iconFor, toolImages, TOOL_BLOCK_SX } from './ToolCallCard'
+import { argSummary, declarationFor, toolImages, TOOL_BLOCK_SX } from './ToolCallCard'
 import { ImageBlock } from './ImageBlock'
 import { FileLink, filePathArg } from './FileLink'
-import { CHAT_HEADER_SX, CHAT_META_SX, CHAT_SURFACE_SX, CHAT_TITLE_SX } from '../lib/chatStyle'
+import { CHAT_META_SX, TOOL_LIST_SX, TOOL_ROW_SX } from '../lib/chatStyle'
 
 type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
 
@@ -26,12 +26,10 @@ export function ToolGroup({ tools, children }: { tools: ToolResultMessage[]; chi
   const failed = tools.filter((t) => t.isError === true).length
   const images = tools.flatMap(toolImages)
 
-  let Icon = LayerLinear
   let label: string
   let target: string | null = null
   let file: string | null = null
   if (running) {
-    Icon = iconFor(running.toolName)
     ;[label, target] = declarationFor(running.toolName, true, argSummary(running.arguments))
     file = target !== null ? filePathArg(running.arguments) : null
   } else {
@@ -39,10 +37,8 @@ export function ToolGroup({ tools, children }: { tools: ToolResultMessage[]; chi
   }
 
   return (
-    <Stack spacing={0.75} sx={TOOL_BLOCK_SX}>
-      <Box
-        sx={CHAT_SURFACE_SX}
-      >
+    <Stack spacing={0.5} sx={TOOL_BLOCK_SX}>
+      <Box>
         <Box
           role="button"
           tabIndex={0}
@@ -55,58 +51,37 @@ export function ToolGroup({ tools, children }: { tools: ToolResultMessage[]; chi
             }
           }}
           sx={{
-            ...CHAT_HEADER_SX,
+            ...TOOL_ROW_SX,
             cursor: 'pointer',
-            '&:hover': { bgcolor: 'action.hover' },
+            '&:hover': { color: 'text.primary' },
           }}
         >
-          <Box sx={{ display: 'flex', color: 'text.secondary', flexShrink: 0 }}>
-            <Icon size={16} color="currentColor" />
-          </Box>
-          <Typography variant="caption" sx={CHAT_TITLE_SX}>
+          <Box component="span" sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
             {label}
-          </Typography>
+          </Box>
           {file ? (
             <FileLink path={file} />
-          ) : target && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              noWrap
-              sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', minWidth: 0 }}
-            >
-              {target}
-            </Typography>
+          ) : (
+            target && (
+              <Typography noWrap sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem', color: 'text.secondary', minWidth: 0 }}>
+                {target}
+              </Typography>
+            )
           )}
-          <Box sx={{ flex: 1 }} />
           {failed > 0 && (
-            <Typography variant="caption" color="error.main" sx={{ ...CHAT_META_SX, flexShrink: 0 }}>
-              {failed} failed
-            </Typography>
+            <Box component="span" sx={{ ...CHAT_META_SX, color: 'error.main', flexShrink: 0 }}>
+              · {failed} failed
+            </Box>
           )}
-          <Typography variant="caption" color="text.disabled" sx={{ ...CHAT_META_SX, flexShrink: 0 }}>
-            {tools.length} steps
-          </Typography>
-          {running && <CircularProgress size={12} thickness={5} />}
-          <Box
-            sx={{
-              display: 'flex',
-              color: 'text.secondary',
-              transform: open ? 'rotate(180deg)' : 'none',
-              transition: 'transform 0.15s',
-            }}
-          >
-            <ArrowDownLinear size={16} color="currentColor" />
+          {running && <CircularProgress size={11} thickness={5} />}
+          <Box sx={{ display: 'flex', flexShrink: 0, opacity: 0.8, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
+            <ArrowDownLinear size={12} color="currentColor" />
           </Box>
         </Box>
         <Collapse in={open}>
-          {/* Mounted only while open: a long group's cards (and their diffs)
+          {/* Mounted only while open: a long group's steps (and their diffs)
               shouldn't render behind a closed heading. */}
-          {open && (
-            <Stack spacing={0.75} sx={{ p: 1, borderTop: 1, borderColor: 'divider' }}>
-              {children}
-            </Stack>
-          )}
+          {open && <Box sx={TOOL_LIST_SX}>{children}</Box>}
         </Collapse>
       </Box>
       {images.length > 0 && (

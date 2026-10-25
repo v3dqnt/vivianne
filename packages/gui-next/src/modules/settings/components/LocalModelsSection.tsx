@@ -1,8 +1,10 @@
+import { DiscoverModels } from './DiscoverModels'
 import { useEffect, useState } from 'react'
-import { Stack, Typography, Divider, Button, IconButton, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Select, MenuItem, InputLabel, FormControl, FormControlLabel, Checkbox, Collapse, Box } from '../../../ui'
+import { Stack, Typography, Divider, Button, IconButton, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Select, MenuItem, InputLabel, FormControl, FormControlLabel, Checkbox, Collapse, Box, ToggleButton, ToggleButtonGroup } from '../../../ui'
 import { ImportLinear, PlayCircleLinear, StopCircleLinear, TrashLinear, CpuLinear, SettingLinear } from '../../../icons'
 import { useLlamaStore, DEFAULT_CTX_SIZE, DEFAULT_NGL } from '../store/llamaStore'
-import { statusLabel, isRunning, isBusyStatus, engineLabel, type LlamaEndpoint, type LocalEngine } from '../lib/llama'
+import { statusLabel, isRunning, isBusyStatus, engineLabel, type GgufInfo, type LlamaEndpoint, type LocalEngine } from '../lib/llama'
+import { call } from '../../../ipc'
 
 function fileName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() || path
@@ -43,6 +45,9 @@ function EndpointDialog({
   const [sleepIdleSeconds, setSleepIdleSeconds] = useState('')
   const [mlock, setMlock] = useState(false)
   const [extraArgs, setExtraArgs] = useState('')
+  // The newer knobs, as text, keyed by their tuning field. Blank is unset.
+  const [more, setMore] = useState<Record<string, string>>({})
+  const [info, setInfo] = useState<GgufInfo | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -60,6 +65,14 @@ function EndpointDialog({
     setSleepIdleSeconds(t?.sleepIdleSeconds != null ? String(t.sleepIdleSeconds) : '')
     setMlock(t?.mlock ?? false)
     setExtraArgs(t?.extraArgs ?? '')
+    setMore(
+      Object.fromEntries(
+        MORE.map((f) => {
+          const v = (t as Record<string, unknown> | undefined)?.[f.key]
+          return [f.key, v == null ? '' : String(v)]
+        }),
+      ),
+    )
     // Open the section when this endpoint already has something set, so a
     // non-default tuning is never hidden behind a collapsed header.
     setShowAdvanced(
@@ -73,10 +86,23 @@ function EndpointDialog({
           t.cacheRamMib != null ||
           t.sleepIdleSeconds ||
           t.mlock ||
-          t.extraArgs)
+          t.extraArgs ||
+          MORE.some((f) => (t as Record<string, unknown>)[f.key] != null))
       ),
     )
   }, [open, endpoint, defaultName])
+
+  // What the weights are, read from the file's own header.
+  const file = endpoint?.modelPath ?? modelPath
+  useEffect(() => {
+    setInfo(null)
+    if (!open || !file) return
+    let alive = true
+    void call<GgufInfo>('cmd_gguf_info', { path: file }).then((i) => alive && setInfo(i)).catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [open, file])
 
   const running = endpoint ? isRunning(endpoint.status) : false
 
@@ -99,6 +125,15 @@ function EndpointDialog({
         sleepIdleSeconds: num(sleepIdleSeconds),
         mlock,
         extraArgs: str(extraArgs),
+        ...Object.fromEntries(
+          MORE.map((f) => {
+            const raw = (more[f.key] ?? '').trim()
+            if (raw === '') return [f.key, null]
+            if (f.kind === 'number') return [f.key, Number.isFinite(Number(raw)) ? Number(raw) : null]
+            if (f.kind === 'bool') return [f.key, raw === 'true']
+            return [f.key, raw]
+          }),
+        ),
       }
       if (endpoint) {
         await updateEndpoint(endpoint.id, { name: name.trim() || endpoint.name, ctxSize, ngl, engine, tuning })
@@ -134,6 +169,27 @@ function EndpointDialog({
                 : 'The established default. Requires `llama-server` on your PATH.'}
             </Typography>
           </FormControl>
+          {info && (
+            <Stack sx={{ gap: 0.25, px: 1.25, py: 1, borderRadius: '10px', bgcolor: 'action.hover' }}>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                {[info.format ?? 'Unknown format', info.architecture, info.sizeLabel].filter(Boolean).join(' · ')}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {[
+                  info.contextLength ? `trained for ${info.contextLength.toLocaleString()} tokens` : null,
+                  info.expertCount ? `${info.expertCount} experts` : null,
+                  info.fileBytes ? `${(info.fileBytes / 1073741824).toFixed(1)} GB` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </Typography>
+              {info.formatNote && (
+                <Typography variant="caption" color="text.secondary">
+                  {info.formatNote}
+                </Typography>
+              )}
+            </Stack>
+          )}
           <TextField
             label="Context size (tokens)"
             size="small"
@@ -244,6 +300,41 @@ function EndpointDialog({
                     control={<Checkbox size="small" checked={mlock} onChange={(e) => setMlock(e.target.checked)} />}
                     label={<Typography variant="body2">Lock weights in RAM (--mlock)</Typography>}
                   />
+                  {GROUPS.map((g) => (
+                    <Stack key={g.title} spacing={1.5}>
+                      <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary', pt: 0.5 }}>
+                        {g.title}
+                      </Typography>
+                      {MORE.filter((f) => f.group === g.title).map((f) =>
+                        f.kind === 'choice' || f.kind === 'bool' ? (
+                          <FormControl key={f.key} size="small" fullWidth>
+                            <InputLabel id={`more-${f.key}`}>{f.label}</InputLabel>
+                            <Select labelId={`more-${f.key}`} label={f.label} value={more[f.key] ?? ''} onChange={(e) => setMore((m) => ({ ...m, [f.key]: String(e.target.value) }))}>
+                              {(f.options ?? []).map((o) => (
+                                <MenuItem key={o.value} value={o.value}>
+                                  {o.label}
+                                </MenuItem>
+                              ))}
+                            </Select>
+                            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+                              {f.help}
+                            </Typography>
+                          </FormControl>
+                        ) : (
+                          <TextField
+                            key={f.key}
+                            label={f.label}
+                            size="small"
+                            type={f.kind === 'number' ? 'number' : 'text'}
+                            value={more[f.key] ?? ''}
+                            onChange={(e) => setMore((m) => ({ ...m, [f.key]: e.target.value }))}
+                            placeholder={f.placeholder}
+                            helperText={f.help}
+                          />
+                        ),
+                      )}
+                    </Stack>
+                  ))}
                   <TextField
                     label="Extra flags"
                     size="small"
@@ -323,11 +414,48 @@ function EndpointRow({ endpoint, onEdit }: { endpoint: LlamaEndpoint; onEdit: ()
   )
 }
 
+
+
+type MoreKind = 'number' | 'text' | 'choice' | 'bool'
+interface MoreField {
+  key: string
+  group: string
+  label: string
+  kind: MoreKind
+  placeholder?: string
+  help: string
+  options?: { value: string; label: string }[]
+}
+const GROUPS = [{ title: 'Placement' }, { title: 'Throughput' }, { title: 'Sampling defaults' }, { title: 'The model' }]
+/** The newer llama-server knobs. Blank means unset, so the engine decides. */
+const MORE: MoreField[] = [
+  { key: 'nCpuMoe', group: 'Placement', label: 'Experts kept on CPU (layers)', kind: 'number', placeholder: 'auto', help: 'For big mixture-of-experts models: keep the expert weights of the first N layers in system RAM so attention and the rest fit on the GPU. Slower than full offload, but it lets a model that would not load run at all.' },
+  { key: 'tensorSplit', group: 'Placement', label: 'Split across GPUs', kind: 'text', placeholder: '3,1', help: 'Proportions per GPU, comma separated. Only matters with more than one GPU.' },
+  { key: 'mainGpu', group: 'Placement', label: 'Main GPU', kind: 'number', placeholder: '0', help: 'Which GPU holds the small tensors and scratch space.' },
+  { key: 'mmap', group: 'Placement', label: 'Load method', kind: 'bool', help: 'Memory-mapping starts fast and shares pages with the OS. Reading the whole file into RAM avoids page faults on a slow disk.', options: [{ value: '', label: 'Memory-map the file (default)' }, { value: 'false', label: 'Read it into RAM (--no-mmap)' }] },
+  { key: 'batchSize', group: 'Throughput', label: 'Batch size', kind: 'number', placeholder: '2048', help: 'Tokens processed per step while reading a prompt. Larger reads long prompts faster and uses more memory.' },
+  { key: 'ubatchSize', group: 'Throughput', label: 'Micro-batch size', kind: 'number', placeholder: '512', help: 'The physical batch inside a step. Lower it if you run out of VRAM while reading a prompt.' },
+  { key: 'parallel', group: 'Throughput', label: 'Parallel slots', kind: 'number', placeholder: 'auto', help: 'Requests served at once. Each slot gets an equal share of the context, so more slots means less context each.' },
+  { key: 'threadsBatch', group: 'Throughput', label: 'Prompt threads', kind: 'number', placeholder: 'same as CPU threads', help: 'CPU threads used while reading the prompt, when different from generation.' },
+  { key: 'flashAttn', group: 'Throughput', label: 'Flash attention', kind: 'choice', help: 'Needed for a quantised KV cache. Leave on unless a GPU backend misbehaves with it.', options: [{ value: '', label: 'Default (on with a quantised cache)' }, { value: 'on', label: 'On' }, { value: 'auto', label: 'Auto' }, { value: 'off', label: 'Off' }] },
+  { key: 'temperature', group: 'Sampling defaults', label: 'Temperature', kind: 'number', placeholder: 'model default', help: 'Used when a request does not set its own. Lower is steadier, higher is more varied.' },
+  { key: 'topP', group: 'Sampling defaults', label: 'Top-p', kind: 'number', placeholder: 'model default', help: 'Keep only the most likely tokens up to this total probability.' },
+  { key: 'topK', group: 'Sampling defaults', label: 'Top-k', kind: 'number', placeholder: 'model default', help: 'Consider only the k most likely tokens.' },
+  { key: 'minP', group: 'Sampling defaults', label: 'Min-p', kind: 'number', placeholder: 'model default', help: 'Drop tokens less than this fraction as likely as the best one.' },
+  { key: 'repeatPenalty', group: 'Sampling defaults', label: 'Repeat penalty', kind: 'number', placeholder: '1.0', help: 'Above 1 discourages repeating recent tokens.' },
+  { key: 'alias', group: 'The model', label: 'Name the server reports', kind: 'text', placeholder: 'file name', help: 'The model name clients see.' },
+  { key: 'chatTemplate', group: 'The model', label: 'Chat template', kind: 'text', placeholder: 'from the file', help: 'A built-in llama.cpp template name (for example chatml), to override a file with a missing or wrong one.' },
+  { key: 'mmproj', group: 'The model', label: 'Vision projector (mmproj)', kind: 'text', placeholder: 'C:\\models\\mmproj.gguf', help: 'The projector file that lets a multimodal model read images.' },
+  { key: 'lora', group: 'The model', label: 'LoRA adapter', kind: 'text', placeholder: 'C:\\models\\adapter.gguf', help: 'A fine-tune applied on top of the weights.' },
+  { key: 'ropeScale', group: 'The model', label: 'RoPE scale', kind: 'number', placeholder: '1', help: 'Stretches the context window past what the model was trained for. Quality drops the further you stretch.' },
+]
+
 export function LocalModelsSection() {
   const endpoints = useLlamaStore((s) => s.endpoints)
   const refresh = useLlamaStore((s) => s.refresh)
   const pickGgufFile = useLlamaStore((s) => s.pickGgufFile)
   const [dialog, setDialog] = useState<{ endpoint: LlamaEndpoint | null; modelPath: string | null } | null>(null)
+  const [tab, setTab] = useState<'installed' | 'discover'>(() => (endpoints.length ? 'installed' : 'discover'))
 
   useEffect(() => {
     void refresh()
@@ -354,17 +482,31 @@ export function LocalModelsSection() {
           Add GGUF model
         </Button>
       </Stack>
-      <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>
-        Runs a local server process against a GGUF file on disk — llama.cpp (github.com/ggml-org/llama.cpp) or mistral.rs
-        (github.com/EricLBuehler/mistral.rs), picked per model. Requires the matching binary on your PATH.
-      </Typography>
-      <Divider sx={{ mb: 0.5 }} />
-      {endpoints.length === 0 ? (
-        <Typography variant="caption" color="text.secondary" sx={{ py: 1 }}>
-          No local models added yet.
-        </Typography>
+      <ToggleButtonGroup size="small" exclusive value={tab} onChange={(_: unknown, v: 'installed' | 'discover' | null) => v && setTab(v)} sx={{ alignSelf: 'flex-start', mb: 1 }}>
+        <ToggleButton value="installed" sx={{ textTransform: 'none', px: 1.5 }}>
+          Installed{endpoints.length ? ` · ${endpoints.length}` : ''}
+        </ToggleButton>
+        <ToggleButton value="discover" sx={{ textTransform: 'none', px: 1.5 }}>
+          Get models
+        </ToggleButton>
+      </ToggleButtonGroup>
+      {tab === 'discover' ? (
+        <DiscoverModels />
       ) : (
-        endpoints.map((e) => <EndpointRow key={e.id} endpoint={e} onEdit={() => setDialog({ endpoint: e, modelPath: null })} />)
+        <>
+          <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>
+            Each model runs in its own local server (llama.cpp or mistral.rs) on this computer. Get one from “Get models”, or add a GGUF you
+            already have.
+          </Typography>
+          <Divider sx={{ mb: 0.5 }} />
+          {endpoints.length === 0 ? (
+            <Typography variant="caption" color="text.secondary" sx={{ py: 1 }}>
+              No local models yet. “Get models” suggests ones that run well here.
+            </Typography>
+          ) : (
+            endpoints.map((e) => <EndpointRow key={e.id} endpoint={e} onEdit={() => setDialog({ endpoint: e, modelPath: null })} />)
+          )}
+        </>
       )}
       <EndpointDialog
         open={dialog !== null}

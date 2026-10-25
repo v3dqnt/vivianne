@@ -95,7 +95,7 @@ export function PairProjectDialog({ open, onClose }: { open: boolean; onClose: (
     }
   }
 
-  const useTestPartner = async () => {
+  const startTestPartner = async () => {
     setError(null)
     try {
       const id = await call<string>('cmd_multiplayer_test_partner_id')
@@ -183,7 +183,7 @@ export function PairProjectDialog({ open, onClose }: { open: boolean; onClose: (
                   }
                   slotProps={{ input: { sx: { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem' } } }}
                 />
-                <ButtonBase onClick={() => void useTestPartner()} sx={{ alignSelf: 'flex-start', fontSize: '0.75rem', color: 'text.secondary', borderRadius: '6px', px: 0.5, '&:hover': { color: 'text.primary' } }}>
+                <ButtonBase onClick={() => void startTestPartner()} sx={{ alignSelf: 'flex-start', fontSize: '0.75rem', color: 'text.secondary', borderRadius: '6px', px: 0.5, '&:hover': { color: 'text.primary' } }}>
                   No one to pair with yet? Try it with a test partner on this computer
                 </ButtonBase>
               </>

@@ -47,6 +47,33 @@ use uiautomation::{UIAutomation, UIElement};
 use super::tool_exec::ToolResult;
 use super::win;
 
+/// An id as models send it: a number, a numeric string ("3", "[3]", "#3") or
+/// a whole float. Anything else is `None`, so the caller's message applies.
+pub(crate) fn arg_id(args: &serde_json::Value, keys: &[&str]) -> Option<usize> {
+    for k in keys {
+        match args.get(*k) {
+            Some(serde_json::Value::Number(n)) => {
+                if let Some(u) = n.as_u64() {
+                    return Some(u as usize);
+                }
+                if let Some(f) = n.as_f64() {
+                    if f >= 0.0 && f.fract() == 0.0 {
+                        return Some(f as usize);
+                    }
+                }
+            }
+            Some(serde_json::Value::String(t)) => {
+                let t = t.trim().trim_matches(|c| c == '[' || c == ']' || c == '#');
+                if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
+                    return t.parse().ok();
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn err(msg: impl Into<String>) -> ToolResult {
     ToolResult { content: format!("Error: {}", msg.into()), is_error: true, details: None }
 }
@@ -309,8 +336,8 @@ fn snapshot(ctx: &mut Ctx, window: isize) -> Result<Snapshot, String> {
 /// Which window a snapshot reads: the one named, else the agent's target,
 /// else the app in front — but never Vivianne's own window by accident.
 fn resolve_window(args: &serde_json::Value) -> Result<isize, String> {
-    if let Some(id) = args.get("id").and_then(|v| v.as_u64()) {
-        return window_by_id(id as usize);
+    if let Some(id) = arg_id(args, &["id", "window", "window_id"]) {
+        return window_by_id(id);
     }
     if let Some(t) = win::target() {
         return Ok(t);
@@ -346,11 +373,18 @@ pub(crate) async fn execute_dip_snapshot_tool(app: &tauri::AppHandle, args: &ser
             None,
         );
     }
+    let interactive = snap.lines.iter().filter(|l| !l.contains("Pane") && !l.contains("Text \"") && !l.contains("ScrollBar")).count();
     let mut text = format!(
         "'{}' — {} element(s), read in {ms} ms. Act on one with interact{{id, element_action}}; ids last until the next snapshot or find.\n",
         snap.title,
         snap.lines.len()
     );
+    if interactive <= 3 {
+        text.push_str(&format!(
+            "Note: this window exposes very little of its UI to the system (it likely draws its own controls). Use screenshot, then act by coordinates relative to its rectangle {:?}; keyboard shortcuts usually still work.\n",
+            snap.rect
+        ));
+    }
     text.push_str(&snap.lines.join("\n"));
     if snap.truncated {
         text.push_str(&format!("\n… more elements not listed (over {MAX_LISTED}). Use find{{query}} to locate a specific one."));
@@ -399,7 +433,49 @@ fn clickable_point(f: &Found) -> (i32, i32) {
     f.element.get_clickable_point().ok().flatten().map(|p| (p.get_x(), p.get_y())).unwrap_or(f.center)
 }
 
+/// What a cheap look at the window says right now: which window is in front,
+/// its title, what has focus (and its text), and the acted-on element's own
+/// state. Two of these differing is evidence an action did something.
+fn observe(ctx: &Ctx, window: isize, id: usize) -> String {
+    let mut s = format!("fg={};title={};", win::foreground(), win::title(window));
+    if let Ok(el) = ctx.automation.get_focused_element() {
+        let name = el.get_name().unwrap_or_default();
+        let value = el.get_pattern::<UIValuePattern>().ok().and_then(|p| p.get_value().ok()).unwrap_or_default();
+        s.push_str(&format!("focus={}|{:?}|{};", name, el.get_control_type().ok(), clip(&value, 120)));
+    }
+    if let Some(f) = ctx.elements.get(id) {
+        s.push_str(&format!("rect={:?};", f.element.get_bounding_rectangle().ok().map(|r| (r.get_left(), r.get_top(), r.get_right(), r.get_bottom()))));
+        if let Ok(p) = f.element.get_pattern::<UITogglePattern>() {
+            s.push_str(&format!("toggle={:?};", p.get_toggle_state().ok()));
+        }
+        if let Ok(p) = f.element.get_pattern::<UISelectionItemPattern>() {
+            s.push_str(&format!("selected={:?};", p.is_selected().ok()));
+        }
+        if let Ok(p) = f.element.get_pattern::<UIExpandCollapsePattern>() {
+            s.push_str(&format!("expand={:?};", p.get_state().ok()));
+        }
+        if let Ok(p) = f.element.get_pattern::<UIValuePattern>() {
+            s.push_str(&format!("value={:?};", p.get_value().ok().map(|v| clip(&v, 120))));
+        }
+    }
+    s
+}
+
+/// `interact_raw`, then a look at whether anything changed.
 fn interact(ctx: &mut Ctx, id: usize, action: &str, value: Option<String>) -> Result<(String, (i32, i32)), String> {
+    let window = ctx.window;
+    let before = observe(ctx, window, id);
+    let (mut msg, at) = interact_raw(ctx, id, action, value)?;
+    // Apps repaint a beat after the call returns.
+    std::thread::sleep(Duration::from_millis(250));
+    let after = observe(ctx, window, id);
+    if before == after && !matches!(action, "scroll_into_view") {
+        msg.push_str(" Nothing visibly changed: if you expected something to, try another way (a different element, a keyboard shortcut, or a screenshot).");
+    }
+    Ok((msg, at))
+}
+
+fn interact_raw(ctx: &mut Ctx, id: usize, action: &str, value: Option<String>) -> Result<(String, (i32, i32)), String> {
     let window = ctx.window;
     let f = ctx.elements.get(id).ok_or_else(|| format!("no element [{id}] — call snapshot (or find) again"))?;
     // A stale element (the UI changed) fails here rather than acting on
@@ -421,11 +497,15 @@ fn interact(ctx: &mut Ctx, id: usize, action: &str, value: Option<String>) -> Re
             physical_click(window, at, win::MouseButton::Right, 1)?;
             format!("Right-clicked {label}.")
         }
-        "invoke" => {
-            let p = f.element.get_pattern::<UIInvokePattern>().map_err(|_| format!("{label} can't be invoked — use click"))?;
-            p.invoke().map_err(|e| e.to_string())?;
-            format!("Invoked {label}.")
-        }
+        "invoke" => match f.element.get_pattern::<UIInvokePattern>().ok().and_then(|p| p.invoke().ok()) {
+            Some(()) => format!("Invoked {label}."),
+            // No Invoke pattern, or it refused: the control is still a thing
+            // on screen. Do what a person would.
+            None => {
+                physical_click(window, at, win::MouseButton::Left, 1)?;
+                format!("Clicked {label} (it has no invoke action).")
+            }
+        },
         "focus" => {
             win::force_foreground(window)?;
             f.element.set_focus().map_err(|e| format!("couldn't focus {label}: {e}"))?;
@@ -490,8 +570,8 @@ fn interact(ctx: &mut Ctx, id: usize, action: &str, value: Option<String>) -> Re
 }
 
 pub(crate) async fn execute_dip_interact_tool(app: &tauri::AppHandle, args: &serde_json::Value) -> ToolResult {
-    let Some(id) = args.get("id").and_then(|v| v.as_u64()).map(|v| v as usize) else {
-        return err("'id' is required (an element id from the last snapshot or find).");
+    let Some(id) = arg_id(args, &["id", "element", "ref"]) else {
+        return err("'id' is required: the number of an element from the last snapshot or find (as a number, e.g. 12).");
     };
     let action = args.get("element_action").and_then(|v| v.as_str()).unwrap_or("click").to_string();
     let value = args.get("value").or_else(|| args.get("text")).and_then(|v| v.as_str()).map(str::to_string);
@@ -532,7 +612,7 @@ pub(crate) async fn focused_text() -> Option<String> {
 }
 
 pub(crate) async fn execute_dip_read_text_tool(args: &serde_json::Value) -> ToolResult {
-    let id = args.get("id").and_then(|v| v.as_u64()).map(|v| v as usize);
+    let id = arg_id(args, &["id", "element", "ref"]);
     let result = on_worker(move |ctx| -> Result<String, String> {
         let element = match id {
             Some(i) => ctx.elements.get(i).map(|f| f.element.clone()).ok_or_else(|| format!("no element [{i}] — snapshot again"))?,
@@ -654,10 +734,10 @@ pub(crate) async fn execute_dip_list_windows_tool() -> ToolResult {
 }
 
 pub(crate) async fn execute_dip_focus_window_tool(args: &serde_json::Value) -> ToolResult {
-    let Some(id) = args.get("id").and_then(|v| v.as_u64()) else {
-        return err("'id' is required (a window id from list_windows).");
+    let Some(id) = arg_id(args, &["id", "window", "window_id"]) else {
+        return err("'id' is required: a window's number from the last list_windows (as a number, e.g. 3).");
     };
-    let h = match window_by_id(id as usize) {
+    let h = match window_by_id(id) {
         Ok(h) => h,
         Err(e) => return err(e),
     };
@@ -676,13 +756,13 @@ pub(crate) async fn execute_dip_focus_window_tool(args: &serde_json::Value) -> T
 }
 
 pub(crate) async fn execute_dip_window_action_tool(args: &serde_json::Value) -> ToolResult {
-    let Some(id) = args.get("id").and_then(|v| v.as_u64()) else {
-        return err("'id' is required (a window id from list_windows).");
+    let Some(id) = arg_id(args, &["id", "window", "window_id"]) else {
+        return err("'id' is required: a window's number from the last list_windows (as a number, e.g. 3).");
     };
     let Some(state) = args.get("window_state").and_then(|v| v.as_str()) else {
         return err("'window_state' is required (minimize, maximize, restore, or close).");
     };
-    let h = match window_by_id(id as usize) {
+    let h = match window_by_id(id) {
         Ok(h) => h,
         Err(e) => return err(e),
     };
@@ -745,6 +825,26 @@ pub(crate) async fn execute_dip_launch_app_tool(args: &serde_json::Value) -> Too
 /// Live checks against a real app. They drive the desktop (open Notepad,
 /// type, close it), so they are ignored by default:
 /// `cargo test --lib dip::live -- --ignored --test-threads=1`
+#[cfg(test)]
+mod arg_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn ids_arrive_in_every_shape_models_use() {
+        assert_eq!(arg_id(&json!({ "id": 3 }), &["id"]), Some(3));
+        assert_eq!(arg_id(&json!({ "id": "0" }), &["id"]), Some(0));
+        assert_eq!(arg_id(&json!({ "id": "[12]" }), &["id"]), Some(12));
+        assert_eq!(arg_id(&json!({ "id": "#7" }), &["id"]), Some(7));
+        assert_eq!(arg_id(&json!({ "id": 5.0 }), &["id"]), Some(5));
+        assert_eq!(arg_id(&json!({ "element": "4" }), &["id", "element"]), Some(4));
+        assert_eq!(arg_id(&json!({ "id": "the save button" }), &["id"]), None);
+        assert_eq!(arg_id(&json!({ "id": -1 }), &["id"]), None);
+        assert_eq!(arg_id(&json!({ "id": 2.5 }), &["id"]), None);
+        assert_eq!(arg_id(&json!({}), &["id"]), None);
+    }
+}
+
 #[cfg(test)]
 mod live {
     use super::*;

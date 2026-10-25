@@ -143,6 +143,7 @@ const PRECONNECT_ORIGINS: Record<string, string> = {
   cerebras: 'https://api.cerebras.ai',
   nvidia: 'https://integrate.api.nvidia.com',
   'nvidia-nim': 'https://integrate.api.nvidia.com',
+  nebius: 'https://api.tokenfactory.nebius.com',
   huggingface: 'https://router.huggingface.co',
   google: 'https://generativelanguage.googleapis.com',
   mistral: 'https://api.mistral.ai',
