@@ -1134,11 +1134,11 @@ pub async fn cmd_github(cwd: String, path: String, method: Option<String>, body:
     if raw.unwrap_or(false) {
         let (status, text) = gh.call(method, &path, body.as_ref(), "application/vnd.github+json").await?;
         if !(200..300).contains(&status) {
-            return Err(format!("GitHub returned {status}"));
+            return Err(format!("GitHub returned {status} for {path}"));
         }
         return Ok(Value::String(text));
     }
-    gh.json(method, &path, body.as_ref()).await
+    gh.json(method, &path, body.as_ref()).await.map_err(|e| format!("{e} ({path})"))
 }
 
 /// The repository the Git view talks to, or why there is none.

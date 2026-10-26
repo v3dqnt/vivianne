@@ -69,6 +69,14 @@ export const useGitStore = create<GitStoreState>((set) => ({
   },
 
   checkoutBranch: async (root, branch) => {
+    // In a dev build on the app's own repository, the running app is built
+    // from this checkout: switching rebuilds it from the other branch.
+    if (await call<boolean>('cmd_is_own_source', { path: root })) {
+      const ok = window.confirm(
+        `This folder is the app's own source. Switching to "${branch}" rebuilds the running app from that branch's code, and it restarts. Switch anyway?`,
+      )
+      if (!ok) return
+    }
     await call('cmd_git_checkout_branch', { path: root, branch })
     await Promise.all([useGitStore.getState().refresh(root), useWorkspaceStore.getState().refresh()])
   },

@@ -2548,6 +2548,20 @@ pub async fn cmd_git_branches(path: String) -> Result<Vec<GitBranch>, String> {
 /// read-only commands above, a failure here (uncommitted changes that would
 /// be overwritten, unknown branch) is real and surfaced verbatim — the
 /// caller needs git's actual message, not a silently empty result.
+/// Whether a folder holds this app's own source, in a dev build: switching
+/// its branch rebuilds the running app from that branch.
+#[tauri::command]
+pub fn cmd_is_own_source(path: String) -> bool {
+    if !cfg!(debug_assertions) {
+        return false;
+    }
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("..");
+    match (std::fs::canonicalize(&repo), std::fs::canonicalize(&path)) {
+        (Ok(repo), Ok(path)) => path.starts_with(&repo) || repo.starts_with(&path),
+        _ => false,
+    }
+}
+
 #[tauri::command]
 pub async fn cmd_git_checkout_branch(path: String, branch: String) -> Result<(), String> {
     let output = tokio::process::Command::new("git")
