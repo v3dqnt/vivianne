@@ -105,14 +105,15 @@ export function SettingsDialog() {
     <Dialog
       open={open}
       onClose={closeSettings}
-      maxWidth="md"
+      maxWidth="lg"
       fullWidth
       slotProps={{
         // Solid, not glass: Settings is read closely, and text over a blurred
         // window behind it is harder to read than text on a plain surface.
         paper: {
           sx: {
-            height: 660,
+            // Big enough for a section to show its whole form without scrolling.
+            height: 'min(820px, 88vh)',
             overflow: 'hidden',
             backgroundImage: 'none',
             bgcolor: 'background.paper',
@@ -127,7 +128,7 @@ export function SettingsDialog() {
       <Stack direction="row" sx={{ height: '100%', minHeight: 0 }}>
         <Stack
           sx={{
-            width: 220,
+            width: 232,
             flexShrink: 0,
             borderRight: 1,
             borderColor: 'divider',
@@ -205,7 +206,7 @@ export function SettingsDialog() {
             {/* Providers is a master-detail layout (list + form) that wants
                 the full width; every other section is a single settings
                 column, which reads better constrained. */}
-            <Box sx={section === 'providers' ? { height: '100%' } : { maxWidth: 640 }}>
+            <Box sx={section === 'providers' ? { height: '100%' } : { maxWidth: 860 }}>
               {/* Each section loads the first time it's opened. */}
               <Suspense fallback={null}>
               {(section === 'account' || section === 'usage') && (

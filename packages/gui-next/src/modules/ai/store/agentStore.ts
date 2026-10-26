@@ -530,7 +530,7 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
           case 'panel_focus_requested': {
             if (!isOnScreen(threadId)) break
             const p = event.payload
-            const RIGHT_PANEL_KINDS: RightPanelKind[] = ['review', 'files', 'preview', 'tasks', 'plan']
+            const RIGHT_PANEL_KINDS: RightPanelKind[] = ['files', 'preview', 'plan']
             if (p.panel.startsWith('mod:')) {
               // A mod's panel, `mod:<key>/<panel id>` — set_panel's backend
               // side already confirmed it's running. With no panel id, the

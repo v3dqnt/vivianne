@@ -67,6 +67,11 @@ export const PANELS: Record<PanelKind, PanelDef> = {
   stack: { title: 'Panels', icon: LayerLinear, renderer: 'onlyWhenVisible', singleton: true, closable: true },
 }
 
+/** Panels taken out of the app: dropped from a saved layout when it loads.
+ * Git review lives in the Git view now; Background tasks and Memory had no
+ * use left. */
+export const RETIRED: ReadonlySet<string> = new Set(['review', 'tasks', 'memory'])
+
 /** The panels offered in "add panel" menus, in menu order. Chat is left out:
  * it always exists and can't be closed, so there is never a second one to add.
  * The editor is left out because it was removed from the app; its component
@@ -77,10 +82,7 @@ export const ADDABLE: Exclude<PanelKind, 'chat' | 'stack' | 'custom' | 'ide' | '
   'agents',
   'plan',
   'timeline',
-  'memory',
   'preview',
   'terminal',
-  'review',
-  'tasks',
   'multiplayer',
 ]

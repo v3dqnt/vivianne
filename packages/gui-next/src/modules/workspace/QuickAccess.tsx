@@ -43,10 +43,7 @@ const APP_TILES: { kind: Exclude<PanelKind, 'chat' | 'stack' | 'custom' | 'ide' 
   { kind: 'agents', description: 'Your team and what it is doing' },
   { kind: 'plan', description: 'The plan being written' },
   { kind: 'preview', description: 'The page or document' },
-  { kind: 'review', description: 'Changes, ready to review' },
-  { kind: 'tasks', description: 'What is running behind the scenes' },
   { kind: 'timeline', description: 'What happened, in order' },
-  { kind: 'memory', description: 'What Vivianne remembers' },
   { kind: 'multiplayer', description: 'Work with others' },
 ]
 

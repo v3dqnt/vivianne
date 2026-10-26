@@ -24,7 +24,7 @@ import { create } from 'zustand'
 import type { DockviewApi, DockviewGroupPanel, IDockviewPanel } from 'dockview-react'
 import { loadPersisted, savePersisted } from '../../lib/persist'
 import { useModsStore, findModPanel } from '../mods/store/modsStore'
-import { PANELS, type PanelKind } from './registry'
+import { PANELS, type PanelKind, RETIRED } from './registry'
 
 export type Zone = 'right' | 'bottom'
 export type Preset = 'default' | 'full' | 'focus' | 'coding' | 'research'
@@ -85,6 +85,11 @@ export function setStartupLayout(startup: string) {
   useSavedLayouts.setState({ startup })
 }
 
+/** Close the panels a saved layout still names that the app no longer has. */
+function dropRetired(dv: DockviewApi) {
+  for (const p of [...dv.panels]) if (RETIRED.has(p.id)) p.api.close()
+}
+
 /** Restore a saved layout (a panel it names that no longer exists is
  * dropped by dockview; the chat always comes back). */
 export function applySavedLayout(id: string): boolean {
@@ -96,6 +101,7 @@ export function applySavedLayout(id: string): boolean {
     console.warn('[workspace] saved layout could not be applied:', e)
     return false
   }
+  dropRetired(api)
   ensureZones()
   if (!find('chat')) api.addPanel(panelOptions('chat', undefined, 'chat'))
   keepEmptyZonesOpen()
@@ -506,7 +512,7 @@ export function applyPreset(preset: Preset) {
     api.addPanel({ ...panelOptions('files', undefined, 'files'), position: { referenceGroup: right }, inactive: true })
   } else if (preset === 'coding' && right) {
     api.addPanel({ ...panelOptions('files', undefined, 'files'), position: { referenceGroup: right } })
-    api.addPanel({ ...panelOptions('review', undefined, 'review'), position: { referenceGroup: right }, inactive: true })
+    api.addPanel({ ...panelOptions('preview', undefined, 'preview'), position: { referenceGroup: right }, inactive: true })
   } else if (preset !== 'focus' && right) {
     api.addPanel({ ...panelOptions('files', undefined, 'files'), position: { referenceGroup: right } })
     api.addPanel({ ...panelOptions('preview', undefined, 'preview'), position: { referenceGroup: right }, inactive: true })
@@ -640,6 +646,7 @@ export function attach(dockview: DockviewApi) {
   if (saved) {
     try {
       dockview.fromJSON(saved as Parameters<DockviewApi['fromJSON']>[0])
+      dropRetired(dockview)
       restored = dockview.panels.length > 0
     } catch (e) {
       // A saved layout can name a panel that no longer exists — a custom

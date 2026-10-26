@@ -61,7 +61,7 @@ function saveDocs(openDocs: string[], activeDoc: string | null) {
 
 /** The side panels `set_panel` can open — what "close the right panel" closes
  * when the agent doesn't name one. */
-const AGENT_SIDE_PANELS: DockViewKind[] = ['review', 'files', 'preview', 'tasks']
+const AGENT_SIDE_PANELS: DockViewKind[] = ['files', 'preview']
 
 export const usePanelStore = create<PanelStoreState>((set, get) => ({
   ...loadPersisted<{ openDocs: string[]; activeDoc: string | null }>(DOCS_KEY, { openDocs: [], activeDoc: null }),
