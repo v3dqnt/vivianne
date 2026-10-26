@@ -211,7 +211,7 @@ pub fn bot_roots() -> Vec<String> {
     let mut roots: Vec<String> = general_root().into_iter().collect();
     for project in crate::agent::sessions::projects::list_all() {
         let Some(root) = project.path.clone().filter(|p| !p.trim().is_empty()) else { continue };
-        if crate::agent::sessions::projects::mode_for_workspace(&root).as_deref() == Some("team") && !roots.contains(&root) {
+        if crate::agent::sessions::projects::is_tree(&root) && !roots.contains(&root) {
             roots.push(root);
         }
     }

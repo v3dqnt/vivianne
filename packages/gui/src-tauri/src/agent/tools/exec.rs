@@ -578,7 +578,7 @@ impl Gate<'_> {
         use crate::agent::team::Handover;
         if self.depth > 0 {
             Handover::Report
-        } else if crate::agent::sessions::projects::mode_for_workspace(self.cwd).as_deref() == Some("team") {
+        } else if crate::agent::sessions::projects::is_tree(self.cwd) && !crate::agent::sessions::projects::has_master(self.cwd) {
             Handover::Assign
         } else {
             Handover::Delegate

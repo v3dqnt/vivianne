@@ -1,15 +1,12 @@
 import { previewText } from '../../ai/lib/previewText'
-import { useEffect } from 'react'
-import { Box, ButtonBase, IconButton, Orb, Stack, Tooltip, Typography, alpha, useTheme } from '../../../ui'
-import { AddLinear, AgentsLinear } from '../../../icons'
+import { Box, ButtonBase, Stack, Typography, alpha, useTheme } from '../../../ui'
 import type { TeamAgent } from '../store/teamStore'
-import { useBotsStore, botKey, type BotMessage } from '../store/botsStore'
-import { LiveAvatar } from './bits'
+import type { BotMessage } from '../store/botsStore'
 
 
-const SECTION_LABEL_SX = { fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.6875rem' } as const
+export const SECTION_LABEL_SX = { fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.6875rem' } as const
 
-function preview(m: BotMessage | undefined, team: TeamAgent[]): string | null {
+export function preview(m: BotMessage | undefined, team: TeamAgent[]): string | null {
   if (!m) return null
   const who = m.from === 'user' ? 'You' : m.from === 'system' ? '' : (team.find((a) => a.id === m.from)?.name ?? m.from)
   const text = previewText(m.text)
@@ -39,7 +36,8 @@ function Unread({ n }: { n: number }) {
   )
 }
 
-function Row({
+/** One conversation in the sidebar: a circle or a DM. */
+export function ChannelRow({
   active,
   onClick,
   icon,
@@ -86,120 +84,5 @@ function Row({
       </Stack>
       <Unread n={unread} />
     </ButtonBase>
-  )
-}
-
-/**
- * An agent team's conversations, in the sidebar: the team chat, and a
- * direct message with each teammate. Picking one opens it in the chat
- * panel; each shows its latest message, unread count, and who is working.
- */
-export function TeamConversations({ root, team, onManage }: { root: string; team: TeamAgent[]; onManage: () => void }) {
-  const room = useBotsStore((s) => s.room[root])
-  const dm = useBotsStore((s) => s.dm)
-  const status = useBotsStore((s) => s.status)
-  const unread = useBotsStore((s) => s.unread)
-  const channel = useBotsStore((s) => s.channel[root] ?? 'room')
-  const approvals = useBotsStore((s) => s.approvals)
-  const { setChannel, loadRoom, loadDm, loadStatus } = useBotsStore.getState()
-
-  useEffect(() => {
-    void loadRoom(root)
-    void loadStatus(root)
-    for (const a of team) void loadDm(root, a.id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [root, team.map((a) => a.id).join(',')])
-
-  const working = team.filter((a) => status[botKey(root, a.id)]?.state === 'working')
-  const roomLast = room?.[room.length - 1]
-
-  return (
-    <Stack sx={{ px: 1.5, gap: 1.5 }}>
-      <Stack sx={{ gap: 0.25 }}>
-        <Typography variant="caption" color="text.secondary" sx={{ ...SECTION_LABEL_SX, px: 0.5, pb: 0.5 }}>
-          Team chat
-        </Typography>
-        <Row
-          active={channel === 'room'}
-          onClick={() => setChannel(root, 'room')}
-          icon={
-            <Box sx={{ width: 26, height: 26, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: 'action.hover', color: 'text.secondary', flexShrink: 0 }}>
-              <AgentsLinear size={15} color="currentColor" />
-            </Box>
-          }
-          title="Everyone"
-          subtitle={working.length ? `${working.map((a) => a.name).join(', ')} working…` : (preview(roomLast, team) ?? 'Say what you need')}
-          subtitleTone={working.length ? 'success.main' : undefined}
-          unread={unread[botKey(root, 'room')] ?? 0}
-        />
-      </Stack>
-
-      <Stack sx={{ gap: 0.25 }}>
-        <Stack direction="row" sx={{ alignItems: 'center', px: 0.5, pb: 0.5 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ ...SECTION_LABEL_SX, flex: 1 }}>
-            Direct messages{team.length ? ` · ${team.length}` : ''}
-          </Typography>
-          <Tooltip title="Add or manage teammates">
-            <IconButton size="small" aria-label="Manage teammates" onClick={onManage}>
-              <AddLinear size={13} color="currentColor" />
-            </IconButton>
-          </Tooltip>
-        </Stack>
-        {team.map((a) => {
-          const st = status[botKey(root, a.id)]
-          const msgs = dm[botKey(root, a.id)]
-          const waiting = approvals.some((p) => p.root === root && p.botId === a.id)
-          const state = st?.state ?? 'idle'
-          return (
-            <Row
-              key={a.id}
-              active={channel === a.id}
-              onClick={() => setChannel(root, a.id)}
-              icon={
-                <Box sx={{ position: 'relative', flexShrink: 0 }}>
-                  <LiveAvatar root={root} agent={a} size={26} animate />
-                  {state === 'working' && !waiting ? (
-                    <Box sx={{ position: 'absolute', right: -4, bottom: -4, display: 'flex', borderRadius: '50%', bgcolor: 'background.paper', p: '1px' }}>
-                      <Orb state="working" px={13} />
-                    </Box>
-                  ) : (
-                    <Box
-                      sx={{
-                        position: 'absolute',
-                        right: -1,
-                        bottom: -1,
-                        width: 9,
-                        height: 9,
-                        borderRadius: '50%',
-                        border: 2,
-                        borderColor: 'background.paper',
-                        bgcolor: waiting ? 'warning.main' : state === 'paused' ? 'text.disabled' : 'transparent',
-                      }}
-                    />
-                  )}
-                </Box>
-              }
-              title={a.name}
-              subtitle={
-                waiting
-                  ? 'Waiting for your approval'
-                  : state === 'working'
-                    ? (st?.activity ?? 'Working…')
-                    : state === 'paused'
-                      ? 'Paused'
-                      : (preview(msgs?.[msgs.length - 1], team) ?? a.role ?? '')
-              }
-              subtitleTone={waiting ? 'warning.main' : state === 'working' ? 'success.main' : undefined}
-              unread={unread[botKey(root, a.id)] ?? 0}
-            />
-          )
-        })}
-        {team.length === 0 && (
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 1, py: 0.5, lineHeight: 1.45 }}>
-            No teammates yet. Add them with + — each gets its own job, model and tools, and they work on your tasks together.
-          </Typography>
-        )}
-      </Stack>
-    </Stack>
   )
 }

@@ -13,6 +13,7 @@ import { ChatView } from '../ai/components/ChatView'
 import { useProjectsStore, modeOf, GENERAL_PROJECT_ID } from '../sessions/store/projectsStore'
 import { useGeneralAgents } from '../team/store/generalAgentsStore'
 import { useBotsStore } from '../team/store/botsStore'
+import { LEAD_CHANNEL } from '../team/components/TreeTeam'
 import { useModsStore, modPanels } from '../mods/store/modsStore'
 import { ADDABLE, PANELS, type PanelKind } from './registry'
 import { openPanel, saveStack, stackZone, unstackZone, zoneOf, ZONE_LABELS, type StackItem } from './layout'
@@ -67,6 +68,7 @@ function Chat() {
   const isGeneral = useProjectsStore((s) => s.activeProjectId === GENERAL_PROJECT_ID)
   const generalRoot = useGeneralAgents((s) => s.root)
   const generalChannel = useBotsStore((s) => (generalRoot ? s.channel[generalRoot] : undefined))
+  const treeChannel = useBotsStore((s) => (project?.path ? s.channel[project.path] : undefined))
   if (!hasTauri()) {
     return (
       <Fill>
@@ -87,8 +89,9 @@ function Chat() {
       </Fill>
     )
   }
-  // An agent team's conversation is its room: the user and every teammate.
-  if (project?.path && modeOf(project) === 'team') {
+  // A tree shows the circle or DM picked in the sidebar, or its master
+  // lead's conversation.
+  if (project?.path && modeOf(project) === 'tree' && treeChannel !== LEAD_CHANNEL) {
     return (
       <Fill>
         <TeamRoom key={project.path} root={project.path} />

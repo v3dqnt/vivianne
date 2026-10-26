@@ -241,7 +241,7 @@ export function OnboardingDialog({
       // fails, and nothing half-made is left in the project list.
       await call('cmd_create_master', { root, name: masterName.trim(), charter, instructions })
       if (!project) {
-        await createProject(a.name.trim(), root, null, 'company')
+        await createProject(a.name.trim(), root, null, 'tree')
       } else if (useProjectsStore.getState().activeProjectId !== project.id) {
         useProjectsStore.getState().setActiveProject(project.id)
       }

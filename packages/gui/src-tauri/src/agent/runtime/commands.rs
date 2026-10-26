@@ -269,7 +269,7 @@ pub async fn run_turn(
         }
         // A team project: the conversation coordinates the user's agents.
         if let Some(root) = agent.state.primary_workspace_folder().await.filter(|_| turn.main) {
-            if crate::agent::sessions::projects::mode_for_workspace(&root).as_deref() == Some("team") {
+            if crate::agent::sessions::projects::is_tree(&root) && !crate::agent::sessions::projects::has_master(&root) {
                 if let Some(d) = crate::agent::team::run::coordinator_directive(&root) {
                     prompt.push_str("
 

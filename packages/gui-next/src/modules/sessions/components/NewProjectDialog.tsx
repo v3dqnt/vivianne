@@ -21,16 +21,10 @@ const MODES: Array<{ id: ProjectMode; title: string; body: string; best: string 
     best: 'Best for separate questions and quick jobs.',
   },
   {
-    id: 'company',
-    title: 'Company',
-    body: 'A master agent runs the project from a charter, hires specialists and hands them work.',
-    best: 'Best for one long piece of work you want managed.',
-  },
-  {
-    id: 'team',
-    title: 'Agent team',
-    body: 'You build the agents — each with its own prompt, model and tools. Give the team a task and they work on it together, messaging each other.',
-    best: 'Best for tasks that benefit from several expert views at once.',
+    id: 'tree',
+    title: 'Tree',
+    body: 'A team of bots, each with its own role, model, tools and memory. Promote one to lead and it hires specialists and hands out the work, or lead the team yourself.',
+    best: 'Best for long work that several experts share.',
   },
 ]
 
@@ -49,7 +43,7 @@ function ModeArt({ mode }: { mode: ProjectMode }) {
       </Stack>
     )
   }
-  if (mode === 'company') {
+  if (mode === 'tree') {
     return (
       <Stack sx={{ alignItems: 'center', gap: 0.5 }}>
         <AgentMark color={SUBAGENT_COLOR_HEX.blue} size={26} />
@@ -61,13 +55,7 @@ function ModeArt({ mode }: { mode: ProjectMode }) {
       </Stack>
     )
   }
-  return (
-    <Stack direction="row" sx={{ gap: 0.75, alignItems: 'center' }}>
-      {(['purple', 'teal', 'red'] as const).map((c) => (
-        <AgentMark key={c} color={SUBAGENT_COLOR_HEX[c]} size={24} />
-      ))}
-    </Stack>
-  )
+  return null
 }
 
 function lastSegment(path: string): string {
@@ -128,7 +116,7 @@ export function NewProjectDialog({ open, onClose, onMultiplayer }: { open: boole
           : existing.trim()
       if (!root) throw new Error('No project folder.')
       await create(name.trim(), root, null, mode)
-      if (mode === 'team') {
+      if (mode === 'tree') {
         const team = teams.find((t) => t.id === starter)
         for (const a of team?.agents ?? []) {
           await saveAgent(root, { ...blankAgent(), name: a.name, role: a.role, color: a.color, instructions: a.instructions, proposedBy: 'user' }, null)
@@ -190,7 +178,7 @@ export function NewProjectDialog({ open, onClose, onMultiplayer }: { open: boole
               {MODES.map((m) => (
                 <ButtonBase
                   key={m.id}
-                  onClick={() => (m.id === 'company' ? setInterview(true) : setMode(m.id))}
+                  onClick={() => setMode(m.id)}
                   sx={{
                     flex: 1,
                     flexDirection: 'column',
@@ -263,7 +251,7 @@ export function NewProjectDialog({ open, onClose, onMultiplayer }: { open: boole
                   </Button>
                 </Stack>
               </Question>
-              {mode === 'team' && (
+              {mode === 'tree' && (
                 <>
                   <Question label="What kind of work is it?" hint="Picks a starter team to match. Optional.">
                     <Choices options={KINDS} value={kind} onChange={setKind} allowOther={false} />

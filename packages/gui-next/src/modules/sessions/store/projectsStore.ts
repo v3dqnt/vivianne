@@ -20,15 +20,16 @@ export interface Project {
   multiplayer: MultiplayerProjectInfo | null
   /** How work is organised (`projects::Project::mode`). Absent on projects
    * made before the choice existed; those work as `company`. */
-  mode?: ProjectMode | null
+  mode?: ProjectMode | 'company' | 'team' | null
 }
 
-/** Threads: separate chats. Company: a master that hires and delegates.
- * Team: agents the user builds, working a task in parallel and talking. */
-export type ProjectMode = 'threads' | 'company' | 'team'
+/** Threads: separate chats you run. Tree: a team of bots with roles, a
+ * lead (a promoted bot, or you), circles and DMs. Projects made as a
+ * Company or an Agent team are trees. */
+export type ProjectMode = 'threads' | 'tree'
 
 export function modeOf(project: Pick<Project, 'mode'> | null | undefined): ProjectMode {
-  return project?.mode ?? 'company'
+  return project?.mode === 'threads' ? 'threads' : 'tree'
 }
 
 /** Accent colors for the sidebar project rail. */

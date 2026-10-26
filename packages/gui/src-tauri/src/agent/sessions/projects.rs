@@ -40,7 +40,21 @@ pub struct Project {
     pub mode: Option<String>,
 }
 
-pub const PROJECT_MODES: &[&str] = &["threads", "company", "team"];
+/// `tree` is how new projects are made; `company` and `team` are what it
+/// was before the two merged, and read as a tree.
+pub const PROJECT_MODES: &[&str] = &["threads", "tree", "company", "team"];
+
+/// Whether a project works as a tree (bots with roles, circles, a lead)
+/// rather than threads. Projects made before modes are trees.
+pub fn is_tree(root: &str) -> bool {
+    mode_for_workspace(root).as_deref() != Some("threads")
+}
+
+/// Whether a tree's lead is the project conversation's master (a project
+/// made as a company); otherwise the user, or a promoted bot, leads.
+pub fn has_master(root: &str) -> bool {
+    std::path::Path::new(root).join(".viv").join("charter.md").is_file()
+}
 
 /// The mode of the project whose folder is `root`.
 pub fn mode_for_workspace(root: &str) -> Option<String> {
@@ -111,7 +125,7 @@ pub async fn cmd_create_project(name: String, path: Option<String>, color: Optio
     }
     if let Some(m) = &mode {
         if !PROJECT_MODES.contains(&m.as_str()) {
-            return Err(format!("Unknown project mode '{m}' — threads, company or team"));
+            return Err(format!("Unknown project mode '{m}' — threads or tree"));
         }
     }
     let mut data = load()?;

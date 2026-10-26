@@ -11,6 +11,8 @@ export interface TeamAgent {
   role: string
   status: 'active' | 'proposed'
   reportsTo: string | null
+  /** Promoted to lead its branch of the tree. */
+  lead?: boolean
   model: SubagentModelOverride | null
   /** `null` = full tool access. */
   allowedTools: string[] | null

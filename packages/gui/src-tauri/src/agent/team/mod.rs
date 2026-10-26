@@ -214,6 +214,8 @@ struct TeamFrontmatter {
     role: Option<String>,
     status: Option<String>,
     reports_to: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    lead: bool,
     model: Option<SubagentModelOverride>,
     allowed_tools: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -273,6 +275,10 @@ pub struct TeamAgent {
     /// Another agent's id, or `master`.
     #[serde(default)]
     pub reports_to: Option<String>,
+    /// Promoted to lead its branch of the tree: it proposes hires into it
+    /// and assigns its work. With no lead in a project, the user leads.
+    #[serde(default)]
+    pub lead: bool,
     #[serde(default)]
     pub model: Option<SubagentModelOverride>,
     /// `None` = full tool access.
@@ -350,6 +356,7 @@ fn read_agent(path: &Path) -> Option<TeamAgent> {
             _ => STATUS_ACTIVE.to_string(),
         },
         reports_to: fm.reports_to.filter(|s| !s.trim().is_empty()),
+        lead: fm.lead,
         model: fm.model,
         allowed_tools: fm.allowed_tools,
         owns: fm.owns,
@@ -503,6 +510,7 @@ pub fn save(root: &Path, agent: &TeamAgent, original_id: Option<&str>) -> Result
         role: Some(agent.role.trim().to_string()).filter(|s| !s.is_empty()),
         status: Some(status.to_string()),
         reports_to: agent.reports_to.as_deref().map(str::trim).filter(|s| !s.is_empty() && *s != id).map(String::from),
+        lead: agent.lead,
         model: agent.model.clone(),
         allowed_tools: agent.allowed_tools.as_deref().map(clean),
         owns: clean(&agent.owns),
@@ -688,6 +696,7 @@ pub async fn execute_hire_tool(args: &serde_json::Value, root: Option<String>, a
         role,
         status: STATUS_PROPOSED.to_string(),
         reports_to: Some(text("reports_to")).filter(|s| !s.is_empty()),
+        lead: false,
         model: None,
         allowed_tools: list_arg("allowed_tools").filter(|t| !t.is_empty()),
         owns: list_arg("owns").unwrap_or_default(),
@@ -730,6 +739,7 @@ mod tests {
             role: "Builds the UI".to_string(),
             status: STATUS_ACTIVE.to_string(),
             reports_to: None,
+            lead: false,
             model: None,
             allowed_tools: Some(vec!["read".into(), "edit".into()]),
             owns: vec!["src/ui/".into(), " ".into()],

@@ -38,7 +38,9 @@ export function AgentsPanel() {
   const root = isGeneral ? generalRoot : (project?.path ?? null)
   // A team project has no master: the agents are peers the user built. So
   // are General's: each one works on its own.
-  const teamMode = isGeneral || modeOf(project) === 'team'
+  const teamMode = true
+  // In a tree every agent has a place in the org chart; General's are peers.
+  const inTree = !isGeneral && modeOf(project) === 'tree'
   const agents = useTeamStore((s) => (root ? (s.byRoot[root] ?? EMPTY) : EMPTY))
   const loaded = useTeamStore((s) => (root ? root in s.byRoot : false))
   const load = useTeamStore((s) => s.load)
@@ -79,6 +81,8 @@ export function AgentsPanel() {
         team={agents}
         masterName={master?.name ?? 'Master'}
         teamMode={teamMode}
+        tree={inTree}
+        hasMaster={!!master}
         onClose={() => setEditing(null)}
       />
     )
@@ -383,6 +387,8 @@ function AgentForm({
   team,
   masterName,
   teamMode = false,
+  tree = false,
+  hasMaster = false,
   onClose,
 }: {
   root: string
@@ -390,6 +396,8 @@ function AgentForm({
   team: TeamAgent[]
   masterName: string
   teamMode?: boolean
+  tree?: boolean
+  hasMaster?: boolean
   onClose: () => void
 }) {
   const save = useTeamStore((s) => s.save)
@@ -436,7 +444,7 @@ function AgentForm({
           color,
           face,
           status,
-          reportsTo: teamMode || reportsTo === 'master' ? null : reportsTo,
+          reportsTo: reportsTo === 'master' ? null : reportsTo,
           model,
           allowedTools: toolMode === 'all' ? null : Array.from(tools),
           owns,
@@ -489,12 +497,12 @@ function AgentForm({
         </Field>
 
         <Stack direction="row" sx={{ gap: 1.5, flexWrap: 'wrap' }}>
-          {!teamMode && (
+          {tree && (
           <Box sx={{ flex: '1 1 180px' }}>
             <Field label="Reports to">
               <Select size="small" value={reportsTo} onChange={(e) => setReportsTo(e.target.value)} sx={selectSx}>
                 <MenuItem value="master" sx={{ fontSize: '0.8125rem' }}>
-                  {masterName} (master)
+                  {hasMaster ? `${masterName} (lead)` : 'You (top of the tree)'}
                 </MenuItem>
                 {managers.map((m) => (
                   <MenuItem key={m.id} value={m.id} sx={{ fontSize: '0.8125rem' }}>

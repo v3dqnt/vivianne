@@ -15,11 +15,9 @@ import { CharterDialog } from './CharterDialog'
 import { WorkspaceSelector } from '../../ai/components/WorkspaceSelector'
 import { BranchIndicator } from '../../ai/components/BranchIndicator'
 import { OnboardingDialog } from './OnboardingDialog'
-import { useTeamStore, isWorking, type TeamAgent, type AgentRun } from '../../team/store/teamStore'
-import { Avatar, faceOf } from '../../team/components/bits'
+import { useTeamStore } from '../../team/store/teamStore'
 import { openPanel } from '../../workspace/layout'
-import { TeamConversations } from '../../team/components/TeamConversations'
-import { CompanyTree } from '../../team/components/CompanyTree'
+import { TreeTeam } from '../../team/components/TreeTeam'
 import { GeneralAgents } from '../../team/components/GeneralAgents'
 import { useGeneralAgents } from '../../team/store/generalAgentsStore'
 import { useBotsStore } from '../../team/store/botsStore'
@@ -104,12 +102,9 @@ export function Sidebar() {
   const archive = useDaysStore((s) => s.archive)
   const viewing = useDaysStore((s) => s.viewing)
   const view = useDaysStore((s) => s.view)
-  const backToToday = useDaysStore((s) => s.backToToday)
   const refreshArchive = useDaysStore((s) => s.refreshArchive)
 
   const [archiveOpen, setArchiveOpen] = useState(false)
-  const liveMessages = useAgentStore((s) => s.messages)
-  const earlier = useDaysStore((s) => s.earlier)
 
   useEffect(() => {
     void refreshProjects()
@@ -131,7 +126,6 @@ export function Sidebar() {
   }, [root, loadTeam])
   const pendingHires = team?.filter((a) => a.status === 'proposed').length ?? 0
   const activeTeam = useMemo(() => team?.filter((a) => a.status === 'active') ?? [], [team])
-  const runs = useTeamStore((s) => s.runs)
   const focusAgent = useTeamStore((s) => s.focus)
   const openAgent = (id: string | null) => {
     if (!root) return
@@ -156,18 +150,6 @@ export function Sidebar() {
     return mine
   }, [archive, sessionProjectMap, activeProjectId, isGeneral])
 
-  // The last thing the user asked, as the conversation row's preview.
-  const lastAsked = useMemo(() => {
-    for (const list of [liveMessages, earlier]) {
-      for (let i = list.length - 1; i >= 0; i--) {
-        const m = list[i]
-        if (m.type !== 'user') continue
-        const text = contentToText(m.content).trim()
-        if (text && !isAppText(text)) return text
-      }
-    }
-    return ''
-  }, [liveMessages, earlier])
 
   const exportCurrent = () => {
     const title = viewing ? viewing.label : `${activeProject?.name ?? 'General'} — conversation`
@@ -190,10 +172,6 @@ export function Sidebar() {
     )
   }
 
-  const onToday = !viewing
-  // A company project with its lead: the lead, its employees and their
-  // subagents, as one tree.
-  const companyTree = mode === 'company'
 
   return (
     <Stack component="nav" sx={SIDEBAR_CARD_SX}>
@@ -229,45 +207,6 @@ export function Sidebar() {
         <BranchIndicator />
       </Stack>
 
-      {activeProject?.path && mode === 'company' && master !== undefined && (
-        <Box sx={{ px: 1.5, pb: 1.25, flexShrink: 0 }}>
-          {master ? null : (
-            // Every project made before onboarding existed lands here. Offered,
-            // not forced: a project can go on without a master, as a plain chat.
-            <Stack
-              sx={{
-                gap: 0.75,
-                p: 1.25,
-                borderRadius: '10px',
-                border: 1,
-                borderColor: 'divider',
-                borderStyle: 'dashed',
-              }}
-            >
-              <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.45 }}>
-                No master agent yet. Describe this project once and it works from that brief every day.
-              </Typography>
-              <ButtonBase
-                onClick={() => setBriefOpen(true)}
-                sx={{
-                  alignSelf: 'flex-start',
-                  px: 1.25,
-                  py: 0.5,
-                  borderRadius: '8px',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  color: 'primary.main',
-                  bgcolor: alpha(theme.palette.primary.main, 0.1),
-                  '&:hover': { bgcolor: alpha(theme.palette.primary.main, 0.18) },
-                }}
-              >
-                Brief a master agent
-              </ButtonBase>
-            </Stack>
-          )}
-        </Box>
-      )}
-
       {threaded ? (
         <>
           {isGeneral && <GeneralAgents labelSx={SECTION_LABEL_SX} />}
@@ -275,115 +214,21 @@ export function Sidebar() {
         </>
       ) : (
       <>
-      {companyTree && master && root && activeProject ? (
-        <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 1.5, pb: 1 }}>
-          <Stack direction="row" sx={{ alignItems: 'center', px: 0.5, pb: 0.5 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ ...SECTION_LABEL_SX, flex: 1 }}>
-              Company{activeTeam.length ? ` · ${activeTeam.length}` : ''}
-            </Typography>
-            <Tooltip title={viewing ? 'Copy this thread as markdown' : 'Copy the whole conversation as markdown'}>
-              <IconButton size="small" aria-label="Copy as markdown" onClick={exportCurrent}>
-                <ExportLinear size={13} color="currentColor" />
-              </IconButton>
-            </Tooltip>
-          </Stack>
-          <CompanyTree
-            leadName={master.name}
-            leadColor={projectColor(activeProject)}
-            leadActive={onToday}
+      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pb: 1 }}>
+        {root && activeProject && (
+          <TreeTeam
+            root={root}
             team={activeTeam}
-            runs={(id) => runs[`${root}::${id}`]}
+            master={master ? { name: master.name, color: projectColor(activeProject) } : null}
             pendingHires={pendingHires}
-            onLead={() => {
-              backToToday()
-              // Straight to typing: say the goal, the lead routes it.
-              window.dispatchEvent(new Event('viv:focus-composer'))
-            }}
+            onHire={() => openAgent(null)}
             onCharter={() => {
               // The master may have edited the charter since it was loaded.
               void loadMaster(root)
               setCharterOpen(true)
             }}
-            onAgent={openAgent}
-            onManage={() => openAgent(null)}
           />
-        </Box>
-      ) : (
-      <>
-      {!(mode === 'team' && root) && (
-      <Box sx={{ px: 1.5, pb: 1.25, flexShrink: 0 }}>
-        <Stack direction="row" sx={{ alignItems: 'center', px: 0.5, pb: 0.5 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ ...SECTION_LABEL_SX, flex: 1 }}>
-            Conversation
-          </Typography>
-          <Tooltip title={viewing ? 'Copy this thread as markdown' : 'Copy the whole conversation as markdown'}>
-            <IconButton size="small" aria-label="Copy as markdown" onClick={exportCurrent}>
-              <ExportLinear size={13} color="currentColor" />
-            </IconButton>
-          </Tooltip>
-        </Stack>
-        <DayRow
-          primary
-          active={onToday}
-          label={mode === 'team' ? 'With your team' : master ? `With ${master.name}` : 'Vivianne'}
-          preview={lastAsked || 'Nothing asked yet'}
-          onClick={backToToday}
-        />
-      </Box>
-      )}
-
-      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pb: 1 }}>
-        {/* An agent team talks in a group chat and in DMs with each teammate. */}
-        {root && mode === 'team' ? (
-          <TeamConversations root={root} team={activeTeam} onManage={() => openAgent(null)} />
-        ) : root && (
-          <Box sx={{ px: 1.5 }}>
-            <Stack direction="row" sx={{ alignItems: 'center', px: 0.5, pb: 0.5 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ ...SECTION_LABEL_SX, flex: 1 }}>
-                Team{activeTeam.length ? ` · ${activeTeam.length}` : ''}
-              </Typography>
-              <Tooltip title="Create or manage agents">
-                <IconButton size="small" aria-label="Manage agents" onClick={() => openAgent(null)}>
-                  <AddLinear size={13} color="currentColor" />
-                </IconButton>
-              </Tooltip>
-            </Stack>
-            <Stack sx={{ gap: 0.25 }}>
-              {pendingHires > 0 && (
-                <ButtonBase
-                  onClick={() => openAgent(null)}
-                  sx={{
-                    justifyContent: 'flex-start',
-                    gap: 1,
-                    px: 1,
-                    py: 0.625,
-                    borderRadius: '8px',
-                    bgcolor: alpha(theme.palette.primary.main, 0.1),
-                    color: 'primary.main',
-                    '&:hover': { bgcolor: alpha(theme.palette.primary.main, 0.16) },
-                  }}
-                >
-                  <Typography variant="caption" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>
-                    {pendingHires} proposed hire{pendingHires === 1 ? '' : 's'} to review
-                  </Typography>
-                </ButtonBase>
-              )}
-              {activeTeam.map((a) => (
-                <TeamRow key={a.id} agent={a} runs={runs[`${root}::${a.id}`]} onClick={() => openAgent(a.id)} />
-              ))}
-              {activeTeam.length === 0 && pendingHires === 0 && (
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 1, py: 0.5, lineHeight: 1.45 }}>
-                  {mode === 'team'
-                    ? 'No agents yet. Build your team with + — each gets its own prompt, model and tools, and they work on your tasks together.'
-                    : master
-                      ? `No agents yet. ${master.name} proposes them as the work needs, or add one with +.`
-                      : 'No agents yet. Add one with +, or brief a master agent to build the team.'}
-                </Typography>
-              )}
-            </Stack>
-          </Box>
         )}
-
       </Box>
       </>
       )}
@@ -435,8 +280,6 @@ export function Sidebar() {
             </Box>
           </Collapse>
         </Box>
-      )}
-      </>
       )}
 
       {master && <CharterDialog master={master} open={charterOpen} onClose={() => setCharterOpen(false)} />}
@@ -670,42 +513,6 @@ function GroupedByMonth<T>({
 }
 
 /** One specialist in the sidebar: who it is and whether it is working now. */
-function TeamRow({ agent, runs, onClick }: { agent: TeamAgent; runs: AgentRun[] | undefined; onClick: () => void }) {
-  const theme = useTheme()
-  const working = isWorking(runs)
-  const current = runs?.find((r) => r.status === 'running')
-  return (
-    <ButtonBase
-      onClick={onClick}
-      sx={{
-        display: 'flex',
-        justifyContent: 'flex-start',
-        alignItems: 'center',
-        gap: 1,
-        width: '100%',
-        textAlign: 'left',
-        px: 1,
-        py: 0.625,
-        borderRadius: '8px',
-        '&:hover': { bgcolor: 'action.hover' },
-        '&:focus-visible': { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: 1 },
-      }}
-    >
-      <Box sx={{ position: 'relative', flexShrink: 0 }}>
-        <Avatar {...faceOf(agent)} size={24} state={working ? 'working' : 'idle'} />
-      </Box>
-      <Stack sx={{ minWidth: 0, flex: 1 }}>
-        <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }} noWrap>
-          {agent.name}
-        </Typography>
-        <Typography variant="caption" color={working ? 'primary.main' : 'text.secondary'} sx={{ fontSize: '0.6875rem' }} noWrap>
-          {working ? current?.description || 'Working…' : agent.role || 'Idle'}
-        </Typography>
-      </Stack>
-    </ButtonBase>
-  )
-}
-
 /** A dot on a thread running in the background: working, or waiting on you. */
 function ThreadStatus({ sessionId }: { sessionId: string }) {
   const holder = holderOf(sessionId)

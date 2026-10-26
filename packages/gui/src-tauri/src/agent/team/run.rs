@@ -771,6 +771,7 @@ mod tests {
             role: String::new(),
             status: "active".into(),
             reports_to: None,
+            lead: false,
             model: None,
             allowed_tools: None,
             owns: vec![],
