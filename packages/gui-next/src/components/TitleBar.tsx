@@ -8,6 +8,7 @@ import { PRESET_LABELS, ZONE_LABELS, applyPreset, resetLayout, toggleZone, useWo
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
 import { PairChip } from '../modules/multiplayer/components/PairChip'
 import { EditionBadge } from '../modules/hackathon/EditionBadge'
+import { useAppView } from '../modules/git/components/GitView'
 
 const TRAFFIC_LIGHT_SIZE = 12
 
@@ -271,14 +272,45 @@ export function TitleBar() {
         <SidebarToggle />
       </Box>
 
-      <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500 }}>
-          Vivianne
-        </Typography>
+      <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, pointerEvents: 'none' }}>
+        <ViewSwitch />
         <EditionBadge />
       </Box>
 
       <TitleBarActions />
+    </Box>
+  )
+}
+
+/** Chat and its panels, or the project's repository. */
+function ViewSwitch() {
+  const view = useAppView((s) => s.view)
+  return (
+    <Box role="tablist" aria-label="View" sx={{ display: 'flex', gap: 0.25, p: '2px', borderRadius: '8px', bgcolor: 'action.hover', pointerEvents: 'auto' }}>
+      {(['chat', 'git'] as const).map((v) => (
+        <Box
+          key={v}
+          component="button"
+          role="tab"
+          aria-selected={view === v}
+          onClick={() => useAppView.setState({ view: v })}
+          sx={{
+            border: 0,
+            cursor: 'pointer',
+            px: 1.25,
+            py: '2px',
+            borderRadius: '6px',
+            fontSize: '0.75rem',
+            fontWeight: view === v ? 600 : 500,
+            fontFamily: 'inherit',
+            color: view === v ? 'text.primary' : 'text.secondary',
+            bgcolor: view === v ? 'background.paper' : 'transparent',
+            '&:hover': { color: 'text.primary' },
+          }}
+        >
+          {v === 'chat' ? 'Chat' : 'Git'}
+        </Box>
+      ))}
     </Box>
   )
 }

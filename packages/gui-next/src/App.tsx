@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { ModsRuntime } from './modules/mods/components/ModsRuntime'
-import { Stack } from './ui'
+import { Box, Stack } from './ui'
 import { TitleBar } from './components/TitleBar'
 import { ProjectRail } from './modules/sessions/components/ProjectRail'
 import { Sidebar } from './modules/sessions/components/Sidebar'
@@ -9,6 +9,7 @@ import { OptionalComponentsModal } from './modules/settings/components/OptionalC
 import { UpdateSurfaces } from './modules/updates/components/UpdateSurfaces'
 import { LayoutErrorBoundary } from './components/LayoutErrorBoundary'
 import { Workspace } from './modules/workspace/Workspace'
+import { GitView, useAppView } from './modules/git/components/GitView'
 import { useSidebarStore } from './modules/sessions/store/sidebarStore'
 import { installShortcuts, registerShortcuts } from './lib/shortcuts'
 import { appShortcuts } from './modules/settings/lib/appShortcuts'
@@ -24,6 +25,7 @@ function App() {
   const sidebarSide = useLayoutPrefs((s) => s.sidebarSide)
   const showRail = useLayoutPrefs((s) => s.showRail)
   const savedLayouts = useSavedLayouts((s) => s.saved)
+  const view = useAppView((s) => s.view)
 
   // Every app shortcut, rebindable in Settings → Layout & shortcuts. Saved
   // layouts are actions too, so the list is rebuilt when they change.
@@ -52,7 +54,12 @@ function App() {
         {/* Chat, editor, files, preview, terminals — all panels, arranged
             however the user drags them. See `modules/workspace`. */}
         <LayoutErrorBoundary>
-          <Workspace />
+          {/* Kept mounted under the Git view, so the chat's panels and their
+              state are as they were when you come back. */}
+          <Box sx={{ display: view === 'chat' ? 'contents' : 'none' }}>
+            <Workspace />
+          </Box>
+          {view === 'git' && <GitView />}
         </LayoutErrorBoundary>
         {sidebarSide === 'right' && sidebar}
       </Stack>

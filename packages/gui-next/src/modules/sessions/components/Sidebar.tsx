@@ -8,12 +8,10 @@ import { useAgentStore, agentStoreFor } from '../../ai/store/agentStore'
 import { contentToText, type AgentMessage } from '../../ai/lib/types'
 import { isAppText } from '../../ai/components/HandoffDivider'
 import { surfaceCard } from '../../../theme'
-import { pathSeparator } from '../../../lib/platform'
 import type { SessionInfo } from '../lib/types'
 import { useMasterStore } from '../store/masterStore'
 import { CharterDialog } from './CharterDialog'
 import { WorkspaceSelector } from '../../ai/components/WorkspaceSelector'
-import { BranchIndicator } from '../../ai/components/BranchIndicator'
 import { OnboardingDialog } from './OnboardingDialog'
 import { useTeamStore } from '../../team/store/teamStore'
 import { openPanel } from '../../workspace/layout'
@@ -23,18 +21,6 @@ import { useGeneralAgents } from '../../team/store/generalAgentsStore'
 import { useBotsStore } from '../../team/store/botsStore'
 
 export const SIDEBAR_WIDTH = 260
-
-/** Last two path segments, e.g. `Project Versa\viv-main-gui-exp`.
- *
- * A full Windows path overflows the sidebar and gets clipped from the RIGHT,
- * which removes the only part that identifies the folder. The tail is what
- * the reader needs; the whole path stays available on hover. */
-function shortPath(path: string | null | undefined): string {
-  if (!path) return 'No folder set'
-  const parts = path.split(/[\\/]/).filter(Boolean)
-  if (parts.length <= 2) return path
-  return parts.slice(-2).join(pathSeparator)
-}
 
 function dateOf(day: string): Date {
   const [y, m, d] = day.split('-').map(Number)
@@ -189,23 +175,13 @@ export function Sidebar() {
             {activeProject?.name ?? 'General'}
           </Typography>
         </Stack>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          noWrap
-          title={activeProject?.path ?? undefined}
-          sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.6875rem' }}
-        >
-          {isGeneral ? 'Not tied to a project' : shortPath(activeProject?.path)}
-        </Typography>
+        {/* The folder the agent works in; git and GitHub are in the title
+            bar's Git view. */}
+        <Box sx={{ ml: -0.75 }}>
+          <WorkspaceSelector />
+        </Box>
       </Stack>
 
-      {/* Where the agent works and on which branch — properties of the
-          project, so they live with the project rather than in the composer. */}
-      <Stack direction="row" sx={{ px: 1.25, pb: 1.25, gap: 0.5, flexWrap: 'wrap', flexShrink: 0 }}>
-        <WorkspaceSelector />
-        <BranchIndicator />
-      </Stack>
 
       {threaded ? (
         <>
