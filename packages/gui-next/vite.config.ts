@@ -1,7 +1,8 @@
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import react, { reactCompilerPreset } from '@vitejs/plugin-react'
+import babel from '@rolldown/plugin-babel'
 import tailwindcss from '@tailwindcss/vite'
 
 // Radix keeps some state at module level: the stack of open layers (which
@@ -24,7 +25,9 @@ const radixAliases = RADIX_SINGLETONS.map((name) => ({
 // server's fixed port — so the port must not drift, and the browser must not
 // pop open on start since the real window is the Tauri one.
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  // The React Compiler memoizes components and hooks at build time, so a
+  // store update re-renders only what reads the changed values.
+  plugins: [react(), babel({ presets: [reactCompilerPreset()] }), tailwindcss()],
   resolve: {
     // This is a workspace monorepo, so React exists at several versions at
     // once (root hoists one for `packages/gui`, this package installed its

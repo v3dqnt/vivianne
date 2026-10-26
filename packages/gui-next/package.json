@@ -69,11 +69,15 @@
     "zustand": "4.5.7"
   },
   "devDependencies": {
+    "@babel/core": "8.0.9",
     "@hugeicons/core-free-icons": "4.3.5",
+    "@rolldown/plugin-babel": "0.2.4",
+    "@types/babel__core": "7.20.5",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.4",
+    "babel-plugin-react-compiler": "1.0.0",
     "oxlint": "^1.75.0",
     "typescript": "~6.0.2",
     "vite": "^8.2.0"
