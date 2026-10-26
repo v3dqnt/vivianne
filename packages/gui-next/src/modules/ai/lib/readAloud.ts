@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import { loadPersisted, savePersisted } from '../../../lib/persist'
 import { speak, stopSpeaking } from '../../instant/lib/instantTts'
-import { useAgentStore } from '../store/agentStore'
+import { onTurnEnd } from '../store/agentStore'
+import { activeThreadId } from '../store/activeThread'
 import { contentToText } from './types'
 import { toSpeakable } from './speakable'
 
@@ -49,15 +50,13 @@ export function noteSent(): void {
 
 /** When a turn started by a spoken prompt ends, read the answer. */
 export function startAutoReadAloud(): () => void {
-  let wasBusy = false
-  return useAgentStore.subscribe((s) => {
-    if (wasBusy && !s.isBusy && armed) {
+  return onTurnEnd((threadId, s) => {
+    if (armed && threadId === activeThreadId()) {
       armed = false
       if (useReadAloudPref.getState().whenDictated) {
         const last = [...s.messages].reverse().find((m) => m.type === 'assistant' && contentToText(m.content).trim())
         if (last && last.type === 'assistant') void speak(toSpeakable(contentToText(last.content)))
       }
     }
-    wasBusy = s.isBusy
   })
 }

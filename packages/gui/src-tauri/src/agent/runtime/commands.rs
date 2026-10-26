@@ -86,20 +86,14 @@ impl AgentRegistry {
         match thread_id {
             None | Some("") => self.primary.clone(),
             Some(id) => {
-                let mut map = self.extra.lock().await;
-                if let Some(state) = map.get(id) {
+                if let Some(state) = self.extra.lock().await.get(id) {
                     return state.clone();
                 }
-                // A new thread starts where the primary is: its model,
-                // thinking level and folders. Callers with their own (a bot,
-                // Viv Instant, `viv run`) set theirs after.
-                let state = Arc::new(AppState::default());
-                let (from, to) = (&self.primary.agent_state, &state.agent_state);
-                to.set_model(from.model().await).await;
-                to.set_thinking_level(from.thinking_level().await).await;
-                to.set_workspace(from.workspace_folders().await, from.access_mode().await).await;
-                map.insert(id.to_string(), state.clone());
-                state
+                // A new thread starts where the primary is. Callers with their
+                // own settings (a bot, Viv Instant, `viv run`) set them after.
+                let fresh = Arc::new(AppState::default());
+                fresh.agent_state.inherit_from(&self.primary.agent_state).await;
+                self.extra.lock().await.entry(id.to_string()).or_insert(fresh).clone()
             }
         }
     }

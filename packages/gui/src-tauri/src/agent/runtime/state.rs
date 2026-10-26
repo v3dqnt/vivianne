@@ -431,6 +431,22 @@ impl AgentState {
         self.inner.write().await.error_message = message;
     }
 
+    /// Start where `parent` is: its model, thinking level, folders and
+    /// compaction settings. A new thread, Viv Instant.
+    pub async fn inherit_from(&self, parent: &AgentState) {
+        let (model, thinking, folders, access, compaction) = {
+            let p = parent.inner.read().await;
+            let compaction = (p.compaction_enabled, p.reserve_tokens, p.keep_recent_tokens, p.llm_summary_enabled, p.image_keep_last_n);
+            (p.model.clone(), p.thinking_level.clone(), p.workspace_folders.clone(), p.access_mode.clone(), compaction)
+        };
+        let mut me = self.inner.write().await;
+        me.model = model;
+        me.thinking_level = thinking;
+        me.workspace_folders = folders;
+        me.access_mode = access;
+        (me.compaction_enabled, me.reserve_tokens, me.keep_recent_tokens, me.llm_summary_enabled, me.image_keep_last_n) = compaction;
+    }
+
     pub async fn set_compaction_config(&self, enabled: bool, reserve_tokens: u32, keep_recent_tokens: u32, llm_summary_enabled: bool, image_keep_last_n: u32) {
         let mut inner = self.inner.write().await;
         inner.compaction_enabled = enabled;

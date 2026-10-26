@@ -1,17 +1,10 @@
-/** Which thread is on screen (`''` is the primary). Its own module so the
- * model and workspace stores can read it without importing the agent store. */
-let active = ''
-const switched = new Set<() => void>()
+import { create } from 'zustand'
 
-export const activeThreadId = () => active
+/** The backend's primary thread (`AgentRegistry::resolve` treats '' as it). */
+export const PRIMARY_THREAD_ID = ''
 
-export function onThreadSwitch(f: () => void): () => void {
-  switched.add(f)
-  return () => void switched.delete(f)
-}
+/** Which thread is on screen. Its own module so the model and workspace
+ * stores can read it without importing the agent store. */
+export const useActiveThread = create(() => ({ threadId: PRIMARY_THREAD_ID }))
 
-export function switchThread(threadId: string) {
-  if (threadId === active) return
-  active = threadId
-  switched.forEach((f) => f())
-}
+export const activeThreadId = () => useActiveThread.getState().threadId

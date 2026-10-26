@@ -416,11 +416,9 @@ macro_rules! tool {
         AgentTool {
             names: &[$($name),+],
             run: {
+                #[allow(unused_variables)]
                 fn run<'a>($cx: &'a ToolCtx<'a>) -> futures::future::BoxFuture<'a, AgentToolResult> {
-                    Box::pin(async move {
-                        let _ = $cx;
-                        $body
-                    })
+                    Box::pin(async move { $body })
                 }
                 run
             },
@@ -459,23 +457,16 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
     tool!("browser_evaluate" => |cx| execute_browser_evaluate_tool(cx.args).await),
     tool!("browser_read_console" => |cx| execute_browser_read_console_tool().await),
     tool!("browser_read_network" => |cx| execute_browser_read_network_tool().await),
-    tool!("browser_start" => |cx| match crate::browser_sessions::start_and_report().await {
-        Ok(msg) => text_result(msg),
-        Err(e) => text_result(format!("Error: {e}")),
-    }),
-    tool!("browser_session_status" => |cx| match crate::browser_sessions::session_status().await {
-        Ok(v) => text_result(serde_json::to_string_pretty(&v).unwrap_or_default()),
-        Err(e) => text_result(format!("Error: {e}")),
+    tool!("browser_start" => |cx| result_text(crate::browser_sessions::start_and_report().await)),
+    tool!("browser_session_status" => |cx| {
+        result_text(crate::browser_sessions::session_status().await.map(|v| serde_json::to_string_pretty(&v).unwrap_or_default()))
     }),
     tool!("browser_import_cookies" => |cx| {
         let file = cx.args.get("file").and_then(|v| v.as_str()).unwrap_or("");
         if file.is_empty() {
-            text_result("Error: 'file' is required.".to_string())
+            text_result("Error: 'file' is required.")
         } else {
-            match crate::browser_sessions::import_cookies(file).await {
-                Ok(msg) => text_result(msg),
-                Err(e) => text_result(format!("Error: {e}")),
-            }
+            result_text(crate::browser_sessions::import_cookies(file).await)
         }
     }),
     tool!("math" => |cx| crate::agent::tools::math::execute(cx.args, cx.state.primary_workspace_folder().await, cx.vision).await),
@@ -516,8 +507,7 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
     tool!("check_diagram" => |cx| crate::agent::tools::diagram_check::execute(cx.args, cx.app).await),
     tool!("guide" => |cx| {
         let path = cx.args.get("path").and_then(|p| p.as_str()).unwrap_or("");
-        let text = crate::agent::tools::guides::read(path).await.unwrap_or_else(|e| e);
-        AgentToolResult { content: vec![MessageContent::Text { text }], details: serde_json::Value::Null, terminate: None }
+        text_result(crate::agent::tools::guides::read(path).await.unwrap_or_else(|e| e))
     }),
     // A bot's own address and number (`agent::team::contact`).
     tool!("email", "phone" => |cx| {
@@ -526,10 +516,7 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
             Some(p) => crate::agent::team::contact::phone_tool(&p.root, &p.bot_id, cx.args).await,
             None => Err("Only an agent with its own email or phone can use this.".to_string()),
         };
-        match text {
-            Ok(t) => text_result(t),
-            Err(e) => text_result(format!("Error: {e}")),
-        }
+        result_text(text)
     }),
     // The tool is named `dip`; `computer` is accepted as a silent alias, since
     // "computer" with these action names (screenshot, left_click, type, key)
@@ -557,9 +544,8 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
 #[derive(Debug, PartialEq)]
 pub(crate) enum Verdict {
     Run,
-    /// Ask the user first. `always`: even in bypass mode (a bot's own rule,
-    /// a secret, real money).
-    Ask { why: Option<String>, always: bool },
+    /// Ask the user first.
+    Ask { why: Option<String> },
     /// Answer the model with this text instead of running the call.
     Refuse(String),
 }
@@ -578,13 +564,27 @@ pub(crate) struct Gate<'a> {
     pub cwd: &'a str,
     /// The paths this agent owns in a team (empty: it owns nothing in particular).
     pub owned: &'a [String],
-    pub handover: crate::agent::team::Handover,
+    /// How deep in delegation this agent is: a subagent reports, it can't hand on.
+    pub depth: usize,
     pub bot: Option<&'a crate::agent::team::bots::BotPolicy>,
     /// Tools the agent wrote itself: Python with the reach of `bash`.
     pub custom: &'a std::collections::HashSet<String>,
 }
 
 impl Gate<'_> {
+    /// Where work in someone else's area goes: a subagent reports it, a team
+    /// coordinator assigns it, a company lead delegates it.
+    fn handover(&self) -> crate::agent::team::Handover {
+        use crate::agent::team::Handover;
+        if self.depth > 0 {
+            Handover::Report
+        } else if crate::agent::sessions::projects::mode_for_workspace(self.cwd).as_deref() == Some("team") {
+            Handover::Assign
+        } else {
+            Handover::Delegate
+        }
+    }
+
     /// The rules, in order. Refusals first (plan mode, tools withheld this
     /// turn, paths another teammate owns), then whether to ask: tools that act
     /// ask, so does a path outside the workspace; a bot's own rules decide
@@ -608,10 +608,14 @@ impl Gate<'_> {
         }
         // A specialist writes only inside the paths it owns, and nobody else
         // writes inside them. `bash` isn't checked (no shell parsing).
-        for p in crate::agent::team::written_paths(name, &tc.arguments) {
-            let target = crate::agent::tools::builtin::resolve_path(self.cwd, &p);
-            if let Some(text) = crate::agent::team::write_refusal(self.cwd, self.owned, &target, &p, self.handover) {
-                return Verdict::Refuse(text);
+        let written = crate::agent::team::written_paths(name, &tc.arguments);
+        if !written.is_empty() {
+            let handover = self.handover();
+            for p in written {
+                let target = crate::agent::tools::builtin::resolve_path(self.cwd, &p);
+                if let Some(text) = crate::agent::team::write_refusal(self.cwd, self.owned, &target, &p, handover) {
+                    return Verdict::Refuse(text);
+                }
             }
         }
 
@@ -642,10 +646,11 @@ impl Gate<'_> {
             ask = true;
             always = true;
         }
+        // Bypass answers the rest, not a bot's own rule, a secret or money.
         if !ask || (self.bypass && !always) {
             Verdict::Run
         } else {
-            Verdict::Ask { why, always }
+            Verdict::Ask { why }
         }
     }
 }
@@ -667,10 +672,11 @@ async fn describe_sensitive(tc: &AgentToolCall) -> Option<String> {
     if !always_asks(tc) {
         return None;
     }
-    Some(match tc.name.as_str() {
-        "vault" => crate::vault::describe_fill(&tc.arguments).await,
-        _ => crate::nebius::describe(&tc.arguments).await,
-    })
+    match tc.name.as_str() {
+        "vault" => Some(crate::vault::describe_fill(&tc.arguments).await),
+        "nebius_job" => Some(crate::nebius::describe(&tc.arguments).await),
+        _ => None,
+    }
 }
 
 /// Ask the user about a call and wait for the answer (15 minutes at most, so
@@ -940,13 +946,6 @@ pub async fn execute_tool_calls(
 
     // Every rule that can stop or hold a call, read once for the batch.
     let owned = state.owned_paths().await;
-    let handover = if context.delegate_depth > 0 {
-        crate::agent::team::Handover::Report
-    } else if crate::agent::sessions::projects::mode_for_workspace(&cwd).as_deref() == Some("team") {
-        crate::agent::team::Handover::Assign
-    } else {
-        crate::agent::team::Handover::Delegate
-    };
     let gate = Gate {
         plan_mode: state.plan_mode().await,
         bypass: bypass_mode,
@@ -956,7 +955,7 @@ pub async fn execute_tool_calls(
         workspace: &workspace_folders,
         cwd: &cwd,
         owned: &owned,
-        handover,
+        depth: context.delegate_depth,
         bot: bot_policy.as_ref(),
         custom: &custom_names,
     };
@@ -987,9 +986,12 @@ pub async fn execute_tool_calls(
 
         // What a team member changed is recorded from the calls, so the
         // coordinator needn't take its report's word for it.
-        if let Some((run, member)) = state.team_member().await {
-            for p in crate::agent::team::written_paths(&tool_call.name, &tool_call.arguments) {
-                crate::agent::team::run::note_written(&run, &member, &p);
+        let written = crate::agent::team::written_paths(&tool_call.name, &tool_call.arguments);
+        if !written.is_empty() {
+            if let Some((run, member)) = state.team_member().await {
+                for p in &written {
+                    crate::agent::team::run::note_written(&run, &member, p);
+                }
             }
         }
 
@@ -2147,6 +2149,11 @@ fn text_result(text: impl Into<String>) -> AgentToolResult {
     AgentToolResult { content: vec![MessageContent::Text { text: text.into() }], details: serde_json::Value::Null, terminate: None }
 }
 
+/// A tool's text, or its failure as `Error: …` (what `looks_like_error` reads).
+fn result_text(r: Result<String, String>) -> AgentToolResult {
+    text_result(r.unwrap_or_else(|e| format!("Error: {e}")))
+}
+
 /// The model has no inherent notion of "now" — this is how it grounds
 /// relative schedules ("every morning at 9", "in an hour") in an actual
 /// wall-clock time before computing a cron expression for create_automation.
@@ -3212,7 +3219,6 @@ mod gate_tests {
     use super::{Gate, Verdict};
     use crate::agent::runtime::types::AgentToolCall;
     use crate::agent::team::bots::{BotPolicy, BotRules, Origin};
-    use crate::agent::team::Handover;
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -3262,7 +3268,7 @@ mod gate_tests {
             workspace: &workspace,
             cwd: &root,
             owned: &a.owned,
-            handover: Handover::Report,
+            depth: 1,
             bot: a.bot.as_ref(),
             custom: &a.custom,
         }
@@ -3294,7 +3300,7 @@ mod gate_tests {
     fn bypass_runs_what_would_ask_but_not_secrets_or_money() {
         let a = Agent { bypass: true, ..chat() };
         assert!(runs(&decide(&a, &call("bash", json!({"command": "ls"})))));
-        assert_eq!(decide(&a, &call("vault", json!({"action": "fill"}))), Verdict::Ask { why: None, always: true });
+        assert_eq!(decide(&a, &call("vault", json!({"action": "fill"}))), Verdict::Ask { why: None });
         assert!(runs(&decide(&a, &call("vault", json!({"action": "list"})))));
         assert!(asks(&decide(&a, &call("nebius_job", json!({"action": "submit", "image": "x"})))));
         assert!(asks(&decide(&a, &call("nebius_job", json!({"action": "cancel", "id": "j"})))));
@@ -3305,7 +3311,7 @@ mod gate_tests {
     fn a_path_outside_the_workspace_asks_and_says_why() {
         let outside = std::env::temp_dir().join("viv-gate-elsewhere").join("x.txt");
         let v = decide(&chat(), &call("read", json!({"path": outside.to_string_lossy()})));
-        assert!(matches!(&v, Verdict::Ask { why: Some(w), always: false } if w.contains("outside your workspace")), "{v:?}");
+        assert!(matches!(&v, Verdict::Ask { why: Some(w) } if w.contains("outside your workspace")), "{v:?}");
     }
 
     #[test]
@@ -3340,7 +3346,7 @@ mod gate_tests {
         // Default rules: web runs alone, commands ask, files only if requested.
         let a = Agent { bypass: true, ..bot(Origin::User, "summarise the news") };
         assert!(runs(&decide(&a, &call("web_search", json!({"query": "x"})))));
-        assert!(matches!(decide(&a, &call("bash", json!({"command": "ls"}))), Verdict::Ask { always: true, .. }));
+        assert!(asks(&decide(&a, &call("bash", json!({"command": "ls"})))), "a bot's own rule asks even in bypass");
         assert!(asks(&decide(&a, &call("write", json!({"path": "a.txt"})))));
         let asked = bot(Origin::User, "write the report to a file");
         assert!(runs(&decide(&asked, &call("write", json!({"path": "a.txt"})))));

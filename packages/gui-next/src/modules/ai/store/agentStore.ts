@@ -1,4 +1,3 @@
-import { useSyncExternalStore } from 'react'
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { call, on } from '../../../ipc'
 import type { AgentEvent, AgentMessage, ImageAttachment, MessageContent, QuestionSpec, RunLedger } from '../lib/types'
@@ -10,9 +9,9 @@ import { usePanelStore, type RightPanelKind } from '../../dock/store/panelStore'
 import { useModsStore } from '../../mods/store/modsStore'
 import { notifyFileChanged, resolveAgentPath } from '../../ide/lib/fileChangeBus'
 import { useWorkspaceStore } from './workspaceStore'
-import { activeThreadId, onThreadSwitch, switchThread } from './activeThread'
+import { activeThreadId, useActiveThread, PRIMARY_THREAD_ID } from './activeThread'
 
-export { activeThreadId }
+export { PRIMARY_THREAD_ID }
 
 /** Wall-clock start of the current streaming assistant message — set on
  * `message_start`, consumed on `message_end` to compute tokens/sec. Plain
@@ -174,7 +173,6 @@ interface AgentStoreState {
  * in `agent/runtime/commands.rs`; `''` = the primary). The app around the
  * chat (panels, the browser preview, the model bar) follows the thread on
  * screen. */
-export const PRIMARY_THREAD_ID = ''
 
 /** Whether a thread is the one on screen, which is the one whose events may
  * open panels and refresh the model bar. */
@@ -253,8 +251,7 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
       if (get().initialized) return
       set({ initialized: true })
 
-      await on<ThreadScopedEvent>('agent_event', ({ threadId: eventThreadId, event }) => {
-        if (eventThreadId !== threadId) return
+      await listen(threadId, (event) => {
         // `retryStatus` is explicitly transient — clear it on anything except
         // another retry tick, so a resolved retry doesn't linger forever.
         if (event.type !== 'retry_status') {
@@ -720,6 +717,23 @@ type AgentStore = UseBoundStore<StoreApi<AgentStoreState>>
 
 const stores = new Map<string, AgentStore>()
 
+/** One `agent_event` listener for every thread, handing each event to its
+ * thread's store. */
+const handlers = new Map<string, (event: AgentEvent) => void>()
+let listening: Promise<unknown> | null = null
+function listen(threadId: string, handle: (event: AgentEvent) => void): Promise<unknown> {
+  handlers.set(threadId, handle)
+  listening ??= on<ThreadScopedEvent>('agent_event', ({ threadId, event }) => handlers.get(threadId)?.(event))
+  return listening
+}
+
+/** Called when a turn ends on any thread (busy, then not). */
+const turnEnded = new Set<(threadId: string, s: AgentStoreState) => void>()
+export function onTurnEnd(f: (threadId: string, s: AgentStoreState) => void): () => void {
+  turnEnded.add(f)
+  return () => void turnEnded.delete(f)
+}
+
 /** One thread's store, made (and listening for its events) the first time
  * it is asked for. */
 export function agentStoreFor(threadId: string): AgentStore {
@@ -727,6 +741,9 @@ export function agentStoreFor(threadId: string): AgentStore {
   if (!store) {
     store = createAgentStore(threadId)
     stores.set(threadId, store)
+    store.subscribe((s, prev) => {
+      if (prev.isBusy && !s.isBusy) turnEnded.forEach((f) => f(threadId, s))
+    })
     // The primary's `init` runs at startup, from the app.
     if (threadId !== PRIMARY_THREAD_ID) void store.getState().init()
   }
@@ -736,11 +753,13 @@ export function agentStoreFor(threadId: string): AgentStore {
 /** Put a thread on screen. Others keep running where they are. */
 export function setActiveThread(threadId: string) {
   agentStoreFor(threadId)
-  switchThread(threadId)
+  useActiveThread.setState({ threadId })
 }
 
+function useActiveAgentStore(): AgentStoreState
+function useActiveAgentStore<T>(selector: (s: AgentStoreState) => T): T
 function useActiveAgentStore<T>(selector?: (s: AgentStoreState) => T) {
-  const threadId = useSyncExternalStore(onThreadSwitch, activeThreadId)
+  const threadId = useActiveThread((s) => s.threadId)
   return agentStoreFor(threadId)(selector as (s: AgentStoreState) => T)
 }
 
@@ -748,20 +767,21 @@ function useActiveAgentStore<T>(selector?: (s: AgentStoreState) => T) {
  * a hook and through `getState`/`setState`/`subscribe`. */
 export const useAgentStore = Object.assign(useActiveAgentStore, {
   getState: () => agentStoreFor(activeThreadId()).getState(),
-  getInitialState: () => agentStoreFor(activeThreadId()).getInitialState(),
   setState: ((...args: Parameters<AgentStore['setState']>) => agentStoreFor(activeThreadId()).setState(...args)) as AgentStore['setState'],
+  /** Follows the thread on screen; a switch reports the new thread's state
+   * as unchanged. For "a turn ended" use `onTurnEnd`. */
   subscribe: (listener: (s: AgentStoreState, prev: AgentStoreState) => void) => {
-    let unsub = agentStoreFor(activeThreadId()).subscribe(listener)
-    const off = onThreadSwitch(() => {
+    let store = agentStoreFor(activeThreadId())
+    let unsub = store.subscribe(listener)
+    const off = useActiveThread.subscribe(() => {
       unsub()
-      unsub = agentStoreFor(activeThreadId()).subscribe(listener)
-      const now = agentStoreFor(activeThreadId()).getState()
-      listener(now, now)
+      store = agentStoreFor(activeThreadId())
+      unsub = store.subscribe(listener)
+      listener(store.getState(), store.getState())
     })
     return () => {
       unsub()
       off()
     }
   },
-  destroy: () => {},
-}) as unknown as AgentStore
+})

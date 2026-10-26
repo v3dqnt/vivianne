@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Box, Stack, Typography, IconButton, InputBase, ButtonBase, Tooltip, Collapse, alpha, useTheme } from '../../../ui'
+import { Box, Stack, Typography, IconButton, InputBase, ButtonBase, Tooltip, Collapse, Orb, alpha, useTheme } from '../../../ui'
 import { ExportLinear, AddLinear, TrashLinear } from '../../../icons'
 import { useProjectsStore, projectColor, modeOf, GENERAL_PROJECT_ID } from '../store/projectsStore'
 import { SidebarMods } from '../../mods/components/SidebarMods'
@@ -717,12 +717,12 @@ function ThreadStatusDot({ threadId }: { threadId: string }) {
   const busy = store((s) => s.isBusy)
   const waiting = store((s) => !!(s.pendingPermission || s.pendingQuestion || s.pendingConfirmation))
   if (!busy && !waiting) return null
+  const label = waiting ? 'Waiting on you' : 'Working'
   return (
-    <Tooltip title={waiting ? 'Waiting on you' : 'Working'}>
-      <Box
-        aria-label={waiting ? 'Waiting on you' : 'Working'}
-        sx={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, ml: -3, mr: 3, bgcolor: waiting ? 'warning.main' : 'primary.main' }}
-      />
+    <Tooltip title={label}>
+      <Box sx={{ display: 'flex', flexShrink: 0, ml: -3.5, mr: 3 }}>
+        <Orb state={waiting ? 'listening' : 'working'} px={14} label={label} />
+      </Box>
     </Tooltip>
   )
 }

@@ -3,7 +3,7 @@ import { create } from 'zustand'
 import { Box, Stack, Typography, Button, IconButton, Tooltip, ButtonBase, alpha, useTheme } from '../../../ui'
 import { MaximizeLinear, UndoLinear, RedoLinear } from '../../../icons'
 import { useWorkspaceStore } from '../store/workspaceStore'
-import { useAgentStore } from '../store/agentStore'
+import { onTurnEnd } from '../store/agentStore'
 import {
   displayPath,
   loadChanges,
@@ -31,11 +31,7 @@ const useReviewVersion = create<{ v: number; bump: () => void }>((set) => ({
   bump: () => set((s) => ({ v: s.v + 1 })),
 }))
 
-let wasBusy = false
-useAgentStore.subscribe((s) => {
-  if (wasBusy && !s.isBusy) useReviewVersion.getState().bump()
-  wasBusy = s.isBusy
-})
+onTurnEnd(() => useReviewVersion.getState().bump())
 
 /**
  * What one assignment changed, shown under its last message.

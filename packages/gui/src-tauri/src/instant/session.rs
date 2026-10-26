@@ -331,8 +331,7 @@ pub async fn cmd_instant_run(
 
     // Inherit whatever model the user has selected for chat — one model picker,
     // not two.
-    state.agent_state.set_model(primary.agent_state.model().await).await;
-    state.agent_state.set_thinking_level(primary.agent_state.thinking_level().await).await;
+    state.agent_state.inherit_from(&primary.agent_state).await;
     // A project question is answered from inside that project.
     let folders = match &route.project {
         Some(p) if route.kind == Kind::Project => p.path.clone().map(|path| vec![path]).unwrap_or_default(),
