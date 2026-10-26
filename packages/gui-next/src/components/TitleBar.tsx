@@ -7,7 +7,6 @@ import { useSidebarStore } from '../modules/sessions/store/sidebarStore'
 import { PRESET_LABELS, ZONE_LABELS, applyPreset, resetLayout, toggleZone, useWorkspace, type Preset, type Zone } from '../modules/workspace/layout'
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
 import { PairChip } from '../modules/multiplayer/components/PairChip'
-import { EditionBadge } from '../modules/hackathon/EditionBadge'
 import { useAppView } from '../modules/git/components/GitView'
 
 const TRAFFIC_LIGHT_SIZE = 12
@@ -274,7 +273,6 @@ export function TitleBar() {
 
       <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, pointerEvents: 'none' }}>
         <ViewSwitch />
-        <EditionBadge />
       </Box>
 
       <TitleBarActions />
