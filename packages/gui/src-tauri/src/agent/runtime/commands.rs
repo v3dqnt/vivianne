@@ -2576,6 +2576,82 @@ pub async fn cmd_git_checkout_branch(path: String, branch: String) -> Result<(),
     Ok(())
 }
 
+/// Run git in `dir`; its stdout, or its stderr as the error.
+async fn git_in(dir: &str, args: &[&str]) -> Result<String, String> {
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.args(args).current_dir(dir);
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd.output().await.map_err(|e| format!("failed to run git: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        Err(if err.is_empty() { format!("git {} failed", args.join(" ")) } else { err })
+    }
+}
+
+/// The worktree that has `branch` checked out, if any (`git worktree list`).
+async fn worktree_of(dir: &str, branch: &str) -> Option<String> {
+    let list = git_in(dir, &["worktree", "list", "--porcelain"]).await.ok()?;
+    let want = format!("branch refs/heads/{branch}");
+    let mut current: Option<&str> = None;
+    for line in list.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current = Some(path);
+        } else if line == want {
+            return current.map(|p| p.replace('/', std::path::MAIN_SEPARATOR_STR));
+        }
+    }
+    None
+}
+
+/// Check out a branch, or a pull request's head (`pr`), and say which folder
+/// it is checked out in.
+///
+/// - A branch already checked out in some worktree is left there: that
+///   folder is the answer, nothing switches.
+/// - A branch only on `origin` is fetched and tracked; a pull request is
+///   fetched from `pull/<n>/head`, so one from a fork works too.
+/// - `worktree`: check out into a new folder beside the repository
+///   (`<repo>-<branch>`) instead of switching this one. The app's own
+///   source in a dev build always goes this way: switching it would rebuild
+///   the running app from the other branch.
+#[tauri::command]
+pub async fn cmd_git_checkout(path: String, branch: String, pr: Option<u64>, worktree: Option<bool>) -> Result<String, String> {
+    let branch = branch.trim().to_string();
+    if branch.is_empty() || branch.starts_with('-') {
+        return Err("No branch to check out.".into());
+    }
+    let top = git_in(&path, &["rev-parse", "--show-toplevel"]).await?;
+    if let Some(dir) = worktree_of(&path, &branch).await {
+        return Ok(dir);
+    }
+    let local = git_in(&path, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).await.is_ok();
+    if let Some(n) = pr {
+        // The PR's head, under the branch's own name (updated if it exists).
+        git_in(&path, &["fetch", "origin", &format!("+pull/{n}/head:refs/heads/{branch}")]).await?;
+    } else if !local {
+        git_in(&path, &["fetch", "origin", &branch]).await.map_err(|_| format!("There's no branch '{branch}' here or on origin."))?;
+        git_in(&path, &["branch", "--track", &branch, &format!("origin/{branch}")]).await?;
+    }
+    let own = cmd_is_own_source(path.clone());
+    if worktree.unwrap_or(false) || own {
+        let top_path = std::path::Path::new(&top);
+        let name = top_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "repo".into());
+        let safe: String = branch.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '-' }).collect();
+        let dir = top_path.parent().unwrap_or(top_path).join(format!("{name}-{safe}"));
+        let dir_s = dir.to_string_lossy().to_string();
+        git_in(&path, &["worktree", "add", &dir_s, &branch]).await?;
+        return Ok(dir_s.replace('/', std::path::MAIN_SEPARATOR_STR));
+    }
+    git_in(&path, &["checkout", &branch]).await?;
+    Ok(path)
+}
+
 /// Create a new branch off the current HEAD and switch to it (`git checkout -b`).
 #[tauri::command]
 pub async fn cmd_git_create_branch(path: String, name: String) -> Result<(), String> {
@@ -3019,5 +3095,41 @@ mod registry_tests {
         a.abort_flag.store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(!b.abort_flag.load(std::sync::atomic::Ordering::SeqCst));
         assert!(!primary.abort_flag.load(std::sync::atomic::Ordering::SeqCst));
+    }
+}
+
+#[cfg(test)]
+mod git_checkout_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn checkout_switches_here_opens_worktrees_and_reuses_them() {
+        let base = std::env::temp_dir().join(format!("viv-co-{}", now_ms()));
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let r = repo.to_string_lossy().to_string();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "one"],
+            vec!["branch", "feature"],
+            vec!["branch", "other"],
+        ] {
+            git_in(&r, &args).await.unwrap();
+        }
+        // In place: this folder now has the branch.
+        assert_eq!(cmd_git_checkout(r.clone(), "feature".into(), None, None).await.unwrap(), r);
+        assert_eq!(git_in(&r, &["branch", "--show-current"]).await.unwrap(), "feature");
+        // Into a worktree beside it: this folder doesn't move.
+        let wt = cmd_git_checkout(r.clone(), "other".into(), None, Some(true)).await.unwrap();
+        assert!(wt.ends_with("repo-other"), "{wt}");
+        assert_eq!(git_in(&wt, &["branch", "--show-current"]).await.unwrap(), "other");
+        assert_eq!(git_in(&r, &["branch", "--show-current"]).await.unwrap(), "feature");
+        // Already checked out somewhere: that folder, nothing switches.
+        let again = cmd_git_checkout(r.clone(), "other".into(), None, None).await.unwrap();
+        assert_eq!(std::fs::canonicalize(&again).unwrap(), std::fs::canonicalize(&wt).unwrap());
+        assert_eq!(git_in(&r, &["branch", "--show-current"]).await.unwrap(), "feature");
+        // Nothing by that name anywhere.
+        assert!(cmd_git_checkout(r.clone(), "nope".into(), None, None).await.is_err());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

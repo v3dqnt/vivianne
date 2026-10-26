@@ -36,7 +36,9 @@ interface GitStoreState {
   refresh: (root: string) => Promise<void>
   /** Switch to an existing branch. Throws with git's own message on failure
    * (e.g. uncommitted changes in the way) — callers show it, they don't swallow it. */
-  checkoutBranch: (root: string, branch: string) => Promise<void>
+  /** `pr`: a pull request's number, its head fetched from GitHub. Returns
+   * the folder the branch is checked out in. */
+  checkoutBranch: (root: string, branch: string, pr?: number) => Promise<string>
   createBranch: (root: string, name: string) => Promise<void>
 }
 
@@ -68,17 +70,24 @@ export const useGitStore = create<GitStoreState>((set) => ({
     }
   },
 
-  checkoutBranch: async (root, branch) => {
-    // In a dev build on the app's own repository, the running app is built
-    // from this checkout: switching rebuilds it from the other branch.
-    if (await call<boolean>('cmd_is_own_source', { path: root })) {
-      const ok = window.confirm(
-        `This folder is the app's own source. Switching to "${branch}" rebuilds the running app from that branch's code, and it restarts. Switch anyway?`,
-      )
-      if (!ok) return
-    }
-    await call('cmd_git_checkout_branch', { path: root, branch })
+  checkoutBranch: async (root, branch, pr) => {
+    // Lands where it can without disturbing anything: in place, in the
+    // worktree that already has it, or (for the app's own source in a dev
+    // build) in a new worktree beside it.
+    const dir = (await call<string>('cmd_git_checkout', { path: root, branch, pr: pr ?? null, worktree: null })) ?? root
     await Promise.all([useGitStore.getState().refresh(root), useWorkspaceStore.getState().refresh()])
+    if (dir !== root) {
+      const { ask } = await import('@tauri-apps/plugin-dialog')
+      const open = await ask(`${branch} is checked out in its own folder, so this one stays as it is:
+
+${dir}`, {
+        title: 'Checked out in a worktree',
+        okLabel: 'Show folder',
+        cancelLabel: 'OK',
+      })
+      if (open) await call('cmd_open_external', { path: dir, target: 'explorer' })
+    }
+    return dir
   },
 
   createBranch: async (root, name) => {

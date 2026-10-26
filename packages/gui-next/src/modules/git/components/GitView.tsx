@@ -128,8 +128,8 @@ export function GitView() {
         {tab === 'prs' && (
           <PullRequests
             root={root}
-            onCheckout={async (branch) => {
-              if (root) await checkout(root, branch)
+            onCheckout={async (branch, pr) => {
+              if (root) await checkout(root, branch, pr)
             }}
           />
         )}

@@ -512,6 +512,7 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::tools::code::github::cmd_github,
       crate::agent::tools::code::github::cmd_github_repo,
       crate::agent::runtime::commands::cmd_is_own_source,
+      crate::agent::runtime::commands::cmd_git_checkout,
       crate::agent::team::bots::cmd_bots_revert,
       crate::agent::team::bots::cmd_bots_dm_send,
       crate::agent::team::bots::cmd_bots_status,

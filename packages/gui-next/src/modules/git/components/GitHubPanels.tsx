@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Box, Button, ButtonBase, Chip, CircularProgress, InputBase, Link, Stack, Typography, alpha, useTheme } from '../../../ui'
-import { CloseCircleLinear, ClockLinear, StopCircleLinear, TickCircleLinear } from '../../../icons'
+import { Box, Button, ButtonBase, Chip, CircularProgress, IconButton, InputBase, Link, Stack, Tooltip, Typography, alpha, useTheme } from '../../../ui'
+import { ArrowRightLinear, CloseCircleLinear, ClockLinear, ExportLinear, StopCircleLinear, TickCircleLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { Markdown } from '../../ai/components/Markdown'
+import { resolvePath } from '../../ai/components/FileLink'
+import { useWorkspaceStore } from '../../ai/store/workspaceStore'
+import { usePanelStore } from '../../dock/store/panelStore'
+import { useAppView } from './GitView'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- GitHub's REST shapes, read as they come. */
 type J = any
@@ -216,7 +220,7 @@ function Act({ label, run, color, confirm }: { label: string; run: () => Promise
 
 // ── Pull requests ─────────────────────────────────────────────────────────
 
-export function PullRequests({ root, onCheckout }: { root: string | null; onCheckout: (branch: string) => Promise<void> }) {
+export function PullRequests({ root, onCheckout }: { root: string | null; onCheckout: (branch: string, pr: number) => Promise<void> }) {
   const gh = useGh(root)
   const [state, setState] = useState<'open' | 'closed'>('open')
   const [picked, setPicked] = useState<number | null>(null)
@@ -253,7 +257,7 @@ function PrMark({ pr }: { pr: J }) {
   return <Box sx={{ width: 10, height: 10, mt: '3px', borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
 }
 
-function PullRequest({ gh, number, onCheckout, onChanged }: { gh: ReturnType<typeof useGh>; number: number; onCheckout: (b: string) => Promise<void>; onChanged: () => void }) {
+function PullRequest({ gh, number, onCheckout, onChanged }: { gh: ReturnType<typeof useGh>; number: number; onCheckout: (b: string, pr: number) => Promise<void>; onChanged: () => void }) {
   const pr = useLoad(() => gh(`/repos/{repo}/pulls/${number}`), [gh, number])
   const files = useLoad(() => gh<J[]>(`/repos/{repo}/pulls/${number}/files?per_page=100`), [gh, number])
   const sha = pr.data?.head?.sha as string | undefined
@@ -283,7 +287,7 @@ function PullRequest({ gh, number, onCheckout, onChanged }: { gh: ReturnType<typ
         }
         actions={
           <>
-            <Act label="Check out" run={() => onCheckout(p.head?.ref)} />
+            <Act label="Check out" run={() => onCheckout(p.head?.ref, p.number)} />
             {open && (
               <Act
                 label="Squash and merge"
@@ -341,13 +345,7 @@ function PullRequest({ gh, number, onCheckout, onChanged }: { gh: ReturnType<typ
         )}
         <Section title={`Files changed${files.data ? ` · ${files.data.length}` : ''}`}>
           {files.data?.map((f) => (
-            <Stack key={f.filename} direction="row" sx={{ gap: 1, py: 0.25, alignItems: 'center' }}>
-              <Typography variant="body2" sx={{ fontSize: '0.78125rem', fontFamily: '"Geist Mono", ui-monospace, monospace', flex: 1, minWidth: 0 }} noWrap title={f.filename}>
-                {f.filename}
-              </Typography>
-              <Typography variant="caption" sx={{ color: 'success.main' }}>+{f.additions}</Typography>
-              <Typography variant="caption" sx={{ color: 'error.main' }}>−{f.deletions}</Typography>
-            </Stack>
+            <PrFile key={f.filename} file={f} />
           ))}
         </Section>
         <Section title="Comment">
@@ -358,6 +356,68 @@ function PullRequest({ gh, number, onCheckout, onChanged }: { gh: ReturnType<typ
         </Section>
       </Stack>
     </Stack>
+  )
+}
+
+/** A changed file of a pull request: click it for its diff; the arrow opens
+ * it in Preview (as it is in this checkout). */
+function PrFile({ file }: { file: J }) {
+  const [open, setOpen] = useState(false)
+  const root = useWorkspaceStore((s) => s.folders[0] ?? null)
+  const show = () => {
+    usePanelStore.getState().openDocument(resolvePath(file.filename, root))
+    useAppView.setState({ view: 'chat' })
+  }
+  const lines: string[] = (file.patch ?? '').split('\n')
+  return (
+    <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+      <Stack direction="row" sx={{ gap: 1, alignItems: 'center', '&:hover .pr-open': { opacity: 1 } }}>
+        <ButtonBase onClick={() => setOpen((v) => !v)} aria-expanded={open} sx={{ flex: 1, minWidth: 0, justifyContent: 'flex-start', gap: 1, py: 0.5, borderRadius: '6px', '&:hover': { color: 'primary.main' } }}>
+          <Box sx={{ display: 'flex', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 150ms', color: 'text.secondary' }}>
+            <ArrowRightLinear size={11} color="currentColor" />
+          </Box>
+          <Typography variant="body2" sx={{ fontSize: '0.78125rem', fontFamily: '"Geist Mono", ui-monospace, monospace', flex: 1, minWidth: 0, textAlign: 'left' }} noWrap title={file.filename}>
+            {file.filename}
+          </Typography>
+          {file.status !== 'modified' && (
+            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65625rem' }}>
+              {file.status}
+            </Typography>
+          )}
+          <Typography variant="caption" sx={{ color: 'success.main' }}>+{file.additions}</Typography>
+          <Typography variant="caption" sx={{ color: 'error.main' }}>−{file.deletions}</Typography>
+        </ButtonBase>
+        <Tooltip title="Open in Preview">
+          <IconButton size="small" className="pr-open" aria-label={`Open ${file.filename}`} onClick={show} sx={{ opacity: 0, transition: 'opacity 0.12s' }}>
+            <ExportLinear size={12} color="currentColor" />
+          </IconButton>
+        </Tooltip>
+      </Stack>
+      {open && (
+        <Box
+          component="pre"
+          className="select-text"
+          sx={{ m: 0, mb: 1, py: 0.75, overflowX: 'auto', borderRadius: '8px', border: 1, borderColor: 'divider', fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.71875rem', lineHeight: 1.5 }}
+        >
+          {file.patch
+            ? lines.map((l, i) => (
+                <Box
+                  key={i}
+                  component="div"
+                  sx={{
+                    px: 1,
+                    whiteSpace: 'pre',
+                    color: l.startsWith('@@') ? 'text.secondary' : undefined,
+                    bgcolor: l.startsWith('+') ? 'rgba(46,160,67,0.15)' : l.startsWith('-') ? 'rgba(248,81,73,0.15)' : undefined,
+                  }}
+                >
+                  {l || ' '}
+                </Box>
+              ))
+            : <Box sx={{ px: 1, color: 'text.secondary' }}>No text diff (binary, or too large for GitHub to show).</Box>}
+        </Box>
+      )}
+    </Box>
   )
 }
 
