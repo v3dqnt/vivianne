@@ -10,6 +10,7 @@ import { UpdateSurfaces } from './modules/updates/components/UpdateSurfaces'
 import { LayoutErrorBoundary } from './components/LayoutErrorBoundary'
 import { Workspace } from './modules/workspace/Workspace'
 import { GitView, useAppView } from './modules/git/components/GitView'
+import { startGitStatus } from './modules/git/store/gitStatusStore'
 import { useSidebarStore } from './modules/sessions/store/sidebarStore'
 import { installShortcuts, registerShortcuts } from './lib/shortcuts'
 import { appShortcuts } from './modules/settings/lib/appShortcuts'
@@ -36,6 +37,8 @@ function App() {
   // Scheduled and folder-triggered workflows run their steps in a thread of their own.
   useEffect(() => startWorkflowRunner(), [])
   useEffect(() => startAutoReadAloud(), [])
+  // The repository's state, for the sidebar, the Git tab and the agent.
+  useEffect(() => startGitStatus(), [])
 
   const sidebar = !sidebarCollapsed && <Sidebar />
 

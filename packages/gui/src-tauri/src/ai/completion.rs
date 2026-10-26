@@ -312,6 +312,16 @@ pub fn extract_json_array(raw: &str) -> Option<serde_json::Value> {
     serde_json::from_str::<serde_json::Value>(&cleaned[start..=end]).ok().filter(|v| v.is_array())
 }
 
+/// The first JSON object in a model's reply, fenced or not.
+pub fn extract_json_object(raw: &str) -> Option<serde_json::Value> {
+    let start = raw.find('{')?;
+    let end = raw.rfind('}')?;
+    if end < start {
+        return None;
+    }
+    serde_json::from_str::<serde_json::Value>(&raw[start..=end]).ok().filter(|v| v.is_object())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

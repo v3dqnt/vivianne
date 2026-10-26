@@ -201,6 +201,12 @@ pub(crate) async fn assemble_capability_blocks(
         .goal()
         .await
         .map(|goal| format!("\n\n<vivianne_goal phase=\"{:?}\">\n{}\n</vivianne_goal>", goal.phase, goal.objective));
+    // Where the repository stands, so the agent branches, commits and opens
+    // pull requests the way developers do. Last with the goal: it changes.
+    let git_block = match state.primary_workspace_folder().await {
+        Some(root) => crate::agent::changes::git::prompt_block(&root).await,
+        None => None,
+    };
 
     // Skills are strictly opt-in: only what the user explicitly `@mentions`
     // is loaded, and nothing touches disk when the message has no mention at
@@ -277,6 +283,9 @@ pub(crate) async fn assemble_capability_blocks(
     // workspace, project instructions, charter and core memory first.
     if let Some(goal) = goal_block {
         prompt.push_str(&goal);
+    }
+    if let Some(git) = git_block {
+        prompt.push_str(&git);
     }
     if let Some(skills) = skills_block {
         prompt.push_str(&skills);

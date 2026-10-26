@@ -12,6 +12,7 @@ import type { SessionInfo } from '../lib/types'
 import { useMasterStore } from '../store/masterStore'
 import { CharterDialog } from './CharterDialog'
 import { WorkspaceSelector } from '../../ai/components/WorkspaceSelector'
+import { GitStatusChip } from '../../git/components/GitActions'
 import { OnboardingDialog } from './OnboardingDialog'
 import { useTeamStore } from '../../team/store/teamStore'
 import { openPanel } from '../../workspace/layout'
@@ -177,9 +178,10 @@ export function Sidebar() {
         </Stack>
         {/* The folder the agent works in; git and GitHub are in the title
             bar's Git view. */}
-        <Box sx={{ ml: -0.75 }}>
+        <Stack direction="row" sx={{ ml: -0.75, alignItems: 'center', gap: 0.25, flexWrap: 'wrap' }}>
           <WorkspaceSelector />
-        </Box>
+          <GitStatusChip />
+        </Stack>
       </Stack>
 
 

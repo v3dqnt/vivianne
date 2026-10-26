@@ -8,6 +8,7 @@ import { PRESET_LABELS, ZONE_LABELS, applyPreset, resetLayout, toggleZone, useWo
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
 import { PairChip } from '../modules/multiplayer/components/PairChip'
 import { useAppView } from '../modules/git/components/GitView'
+import { useGitStatus, attention } from '../modules/git/store/gitStatusStore'
 
 const TRAFFIC_LIGHT_SIZE = 12
 
@@ -283,6 +284,9 @@ export function TitleBar() {
 /** Chat and its panels, or the project's repository. */
 function ViewSwitch() {
   const view = useAppView((s) => s.view)
+  // What the repository needs: failing checks or conflicts, or work not yet
+  // committed or pushed.
+  const flag = useGitStatus((s) => attention(s.summary, s.pr))
   return (
     <Box role="tablist" aria-label="View" sx={{ display: 'flex', gap: 0.25, p: '2px', borderRadius: '8px', bgcolor: 'action.hover', pointerEvents: 'auto' }}>
       {(['chat', 'git'] as const).map((v) => (
@@ -307,6 +311,9 @@ function ViewSwitch() {
           }}
         >
           {v === 'chat' ? 'Chat' : 'Git'}
+          {v === 'git' && flag && (
+            <Box component="span" aria-label={flag === 'red' ? 'Needs attention' : 'Uncommitted or unpushed work'} sx={{ display: 'inline-block', width: 6, height: 6, ml: 0.5, mb: '1px', borderRadius: '50%', bgcolor: flag === 'red' ? 'error.main' : 'warning.main' }} />
+          )}
         </Box>
       ))}
     </Box>

@@ -8,6 +8,8 @@ import { BranchIndicator } from '../../ai/components/BranchIndicator'
 import { useGitStore } from '../store/gitStore'
 import { ReviewPanel } from './ReviewPanel'
 import { Actions, Issues, PullRequests, Releases } from './GitHubPanels'
+import { GitQuickActions, PrChip } from './GitActions'
+import { useGitStatus, changedCount } from '../store/gitStatusStore'
 
 /** What the main area shows, picked in the title bar: the chat and its
  * panels, or the repository. */
@@ -48,6 +50,14 @@ export function GitView() {
   const refresh = useGitStore((s) => s.refresh)
   const checkout = useGitStore((s) => s.checkoutBranch)
   const [tab, setTab] = useState<Tab>('changes')
+  const pr = useGitStatus((s) => s.pr)
+  const openPrs = useGitStatus((s) => s.openPrs)
+  const openIssues = useGitStatus((s) => s.openIssues)
+  const failingRuns = useGitStatus((s) => s.failingRuns)
+  const changes = useGitStatus((s) => (s.summary ? changedCount(s.summary) : 0))
+  // What waits on each tab: changes to commit, open pull requests and
+  // issues, workflows whose latest run on this branch failed.
+  const count = (t: Tab) => (t === 'changes' ? changes : t === 'prs' ? (openPrs ?? 0) : t === 'issues' ? (openIssues ?? 0) : t === 'actions' ? (failingRuns ?? 0) : 0)
   // A refresh remounts the open tab, so it loads again.
   const [epoch, setEpoch] = useState(0)
 
@@ -69,7 +79,9 @@ export function GitView() {
         <Typography variant="caption" color="text.secondary">
           {local} branch{local === 1 ? '' : 'es'}
         </Typography>
+        {pr && <PrChip pr={pr} />}
         <Box sx={{ flex: 1 }} />
+        <GitQuickActions />
         {remote?.githubUrl ? (
           <Link href={remote.githubUrl} target="_blank" rel="noreferrer" underline="hover" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, fontSize: '0.75rem', color: 'text.secondary' }}>
             <GithubLinear size={14} color="currentColor" />
@@ -119,6 +131,11 @@ export function GitView() {
             }}
           >
             {label}
+            {count(id) > 0 && (
+              <Box component="span" sx={{ ml: 0.625, px: 0.5, borderRadius: '8px', fontSize: '0.65625rem', fontWeight: 700, bgcolor: id === 'actions' ? 'error.main' : 'action.selected', color: id === 'actions' ? 'error.contrastText' : 'text.secondary' }}>
+                {count(id)}
+              </Box>
+            )}
           </ButtonBase>
         ))}
       </Stack>

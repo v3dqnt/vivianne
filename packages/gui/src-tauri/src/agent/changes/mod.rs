@@ -2,4 +2,5 @@
 //! the change review at the end of each assignment.
 
 pub mod checkpoints;
+pub mod git;
 pub mod review;
