@@ -549,6 +549,182 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
     }),
 ];
 
+// ============================================================================
+// The gate: whether a call runs, is asked about, or is refused
+// ============================================================================
+
+/// What the gate says about one call.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Verdict {
+    Run,
+    /// Ask the user first. `always`: even in bypass mode (a bot's own rule,
+    /// a secret, real money).
+    Ask { why: Option<String>, always: bool },
+    /// Answer the model with this text instead of running the call.
+    Refuse(String),
+}
+
+/// Everything the rules depend on, read once per batch from the agent.
+pub(crate) struct Gate<'a> {
+    pub plan_mode: bool,
+    /// Settings' bypass mode, or an unattended session (Viv Instant).
+    pub bypass: bool,
+    /// Every tool withheld this turn (`compute_restrictions`).
+    pub disabled: &'a [String],
+    /// The part of `disabled` the user turned off in Settings, to name the cause.
+    pub settings_disabled: &'a [String],
+    pub mode_label: &'a str,
+    pub workspace: &'a [String],
+    pub cwd: &'a str,
+    /// The paths this agent owns in a team (empty: it owns nothing in particular).
+    pub owned: &'a [String],
+    pub handover: crate::agent::team::Handover,
+    pub bot: Option<&'a crate::agent::team::bots::BotPolicy>,
+    /// Tools the agent wrote itself: Python with the reach of `bash`.
+    pub custom: &'a std::collections::HashSet<String>,
+}
+
+impl Gate<'_> {
+    /// The rules, in order. Refusals first (plan mode, tools withheld this
+    /// turn, paths another teammate owns), then whether to ask: tools that act
+    /// ask, so does a path outside the workspace; a bot's own rules decide
+    /// above both; a secret or a paid job asks every time; bypass mode
+    /// answers the rest.
+    pub fn decide(&self, tc: &AgentToolCall) -> Verdict {
+        use crate::agent::team::bots::Decision;
+        let name = tc.name.as_str();
+        if self.plan_mode && !crate::agent::tools::traits::plan_allowed(name) {
+            return Verdict::Refuse(format!(
+                "'{name}' isn't available in plan mode — nothing may be changed until the user approves a plan. Research with the read-only tools you have, then call submit_plan."
+            ));
+        }
+        if self.disabled.iter().any(|d| d == name) {
+            let reason = if self.settings_disabled.iter().any(|d| d == name) {
+                "disabled in Settings → Tools".to_string()
+            } else {
+                format!("restricted by the current '{}' mode", self.mode_label)
+            };
+            return Verdict::Refuse(format!("The '{name}' tool is {reason} and cannot be used right now."));
+        }
+        // A specialist writes only inside the paths it owns, and nobody else
+        // writes inside them. `bash` isn't checked (no shell parsing).
+        for p in crate::agent::team::written_paths(name, &tc.arguments) {
+            let target = crate::agent::tools::builtin::resolve_path(self.cwd, &p);
+            if let Some(text) = crate::agent::team::write_refusal(self.cwd, self.owned, &target, &p, self.handover) {
+                return Verdict::Refuse(text);
+            }
+        }
+
+        let mut ask = needs_gate(tc) || self.custom.contains(name);
+        let mut why = None;
+        if PATH_SCOPED_TOOLS.contains(&name) && !self.workspace.is_empty() {
+            if let Some(p) = tc.arguments.get("path").and_then(|v| v.as_str()) {
+                let resolved = crate::agent::tools::builtin::resolve_path(self.cwd, p);
+                if !path_in_workspace(&resolved, self.workspace) {
+                    ask = true;
+                    why = Some(format!("wants to access '{}', which is outside your workspace folders", resolved.display()));
+                }
+            }
+        }
+        let mut always = false;
+        if let Some(policy) = self.bot {
+            match crate::agent::team::bots::decide_call(policy, name, &tc.arguments) {
+                Decision::Run => ask = false,
+                Decision::Ask(w) => {
+                    ask = true;
+                    always = true;
+                    why.get_or_insert(w);
+                }
+                Decision::Refuse(w) => return Verdict::Refuse(format!("Error: {w}")),
+            }
+        }
+        if always_asks(tc) {
+            ask = true;
+            always = true;
+        }
+        if !ask || (self.bypass && !always) {
+            Verdict::Run
+        } else {
+            Verdict::Ask { why, always }
+        }
+    }
+}
+
+/// Asked about every time, whatever bypass mode or a bot's rules say: filling
+/// a secret from the vault, and starting or stopping a rented GPU.
+fn always_asks(tc: &AgentToolCall) -> bool {
+    let action = tc.arguments.get("action").and_then(|a| a.as_str());
+    match tc.name.as_str() {
+        "vault" => action == Some("fill"),
+        "nebius_job" => matches!(action, Some("submit" | "cancel")),
+        _ => false,
+    }
+}
+
+/// What the approval prompt says for an `always_asks` call: the secret's site,
+/// or the machine, time limit and cost.
+async fn describe_sensitive(tc: &AgentToolCall) -> Option<String> {
+    if !always_asks(tc) {
+        return None;
+    }
+    Some(match tc.name.as_str() {
+        "vault" => crate::vault::describe_fill(&tc.arguments).await,
+        _ => crate::nebius::describe(&tc.arguments).await,
+    })
+}
+
+/// Ask the user about a call and wait for the answer (15 minutes at most, so
+/// a closed window can't hang the turn). `false` when refused or unanswered.
+async fn ask_permission(emit: &EventSender, tc: &AgentToolCall, reason: Option<String>) -> bool {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let (tx, rx) = oneshot::channel();
+    if let Ok(mut pending) = PENDING_PERMISSIONS.lock() {
+        pending.insert(request_id.clone(), tx);
+    }
+    emit.emit(AgentEvent::PermissionAsked {
+        request_id: request_id.clone(),
+        tool_call_id: tc.id.clone(),
+        tool_name: tc.name.clone(),
+        args: tc.arguments.clone(),
+        reason,
+    });
+    let approved = match tokio::time::timeout(std::time::Duration::from_secs(900), rx).await {
+        Ok(Ok(approved)) => approved,
+        _ => {
+            if let Ok(mut pending) = PENDING_PERMISSIONS.lock() {
+                pending.remove(&request_id);
+            }
+            false
+        }
+    };
+    emit.emit(AgentEvent::PermissionResolved { request_id, approved });
+    approved
+}
+
+/// Whether a result reads as a failure (how tools report one).
+fn looks_like_error(r: &AgentToolResult) -> bool {
+    r.content.iter().any(|c| matches!(c, MessageContent::Text { text } if text.starts_with("Error") || text.starts_with("FileNotFound")))
+}
+
+/// Tell the UI a call is done and return what it leaves in the transcript.
+fn finish_call(emit: &EventSender, tc: AgentToolCall, result: AgentToolResult, is_error: bool) -> AgentMessage {
+    emit.emit(AgentEvent::ToolExecutionEnd {
+        tool_call_id: tc.id.clone(),
+        tool_name: tc.name.clone(),
+        result: result.clone(),
+        is_error,
+    });
+    AgentMessage::ToolResult {
+        tool_call_id: tc.id,
+        tool_name: tc.name,
+        content: result.content,
+        details: Some(result.details),
+        is_error: Some(is_error),
+        timestamp: now_ms(),
+        arguments: Some(tc.arguments),
+    }
+}
+
 /// Execute a list of tool calls sequentially or in parallel based on their
 /// execution modes.
 pub async fn execute_tool_calls(
@@ -715,28 +891,8 @@ pub async fn execute_tool_calls(
         // with the hook's own reason, which is what lets the model correct
         // course instead of retrying the same blocked call.
         if let Some(reason) = hook_denials.get(&tc.id).cloned() {
-            let denied = AgentToolResult {
-                content: vec![MessageContent::Text {
-                    text: format!("Error: '{}' was blocked by a hook. {reason}", tc.name),
-                }],
-                details: serde_json::Value::Null,
-                terminate: None,
-            };
-            emit.emit(AgentEvent::ToolExecutionEnd {
-                tool_call_id: tc.id.clone(),
-                tool_name: tc.name.clone(),
-                result: denied.clone(),
-                is_error: true,
-            });
-            slots[idx] = Some(AgentMessage::ToolResult {
-                tool_call_id: tc.id,
-                tool_name: tc.name,
-                content: denied.content,
-                details: Some(denied.details),
-                is_error: Some(true),
-                timestamp: now_ms(),
-                arguments: Some(tc.arguments),
-            });
+            let text = format!("Error: '{}' was blocked by a hook. {reason}", tc.name);
+            slots[idx] = Some(finish_call(emit, tc, text_result(text), true));
             continue;
         }
         if is_fast_path_eligible(&tc) {
@@ -776,31 +932,34 @@ pub async fn execute_tool_calls(
         });
         let batch_results = futures::future::join_all(batch_futures).await;
 
-        for ((idx, tc), tool_result) in fast_path.iter().zip(batch_results) {
-            let is_error = tool_result.content.iter().any(|c| {
-                if let MessageContent::Text { text } = c {
-                    text.starts_with("Error") || text.starts_with("FileNotFound")
-                } else {
-                    false
-                }
-            });
-            emit.emit(AgentEvent::ToolExecutionEnd {
-                tool_call_id: tc.id.clone(),
-                tool_name: tc.name.clone(),
-                result: tool_result.clone(),
-                is_error,
-            });
-            slots[*idx] = Some(AgentMessage::ToolResult {
-                tool_call_id: tc.id.clone(),
-                tool_name: tc.name.clone(),
-                content: tool_result.content,
-                details: Some(tool_result.details),
-                is_error: Some(is_error),
-                timestamp: now_ms(),
-                arguments: Some(tc.arguments.clone()),
-            });
+        for ((idx, tc), tool_result) in fast_path.into_iter().zip(batch_results) {
+            let is_error = looks_like_error(&tool_result);
+            slots[idx] = Some(finish_call(emit, tc, tool_result, is_error));
         }
     }
+
+    // Every rule that can stop or hold a call, read once for the batch.
+    let owned = state.owned_paths().await;
+    let handover = if context.delegate_depth > 0 {
+        crate::agent::team::Handover::Report
+    } else if crate::agent::sessions::projects::mode_for_workspace(&cwd).as_deref() == Some("team") {
+        crate::agent::team::Handover::Assign
+    } else {
+        crate::agent::team::Handover::Delegate
+    };
+    let gate = Gate {
+        plan_mode: state.plan_mode().await,
+        bypass: bypass_mode,
+        disabled: &disabled_tools,
+        settings_disabled: &settings_disabled_tools,
+        mode_label: persona_mode.label(),
+        workspace: &workspace_folders,
+        cwd: &cwd,
+        owned: &owned,
+        handover,
+        bot: bot_policy.as_ref(),
+        custom: &custom_names,
+    };
 
     for (slot_idx, tool_call) in sequential {
         super::speculation::note_call(&tool_call.name);
@@ -810,233 +969,33 @@ pub async fn execute_tool_calls(
             args: tool_call.arguments.clone(),
         });
 
-        if state.plan_mode().await && !crate::agent::tools::traits::plan_allowed(&tool_call.name) {
-            let denied_result = AgentToolResult {
-                content: vec![MessageContent::Text {
-                    text: format!(
-                        "'{}' isn't available in plan mode — nothing may be changed until the user approves a plan. Research with the read-only tools you have, then call submit_plan.",
-                        tool_call.name
-                    ),
-                }],
-                details: serde_json::Value::Null,
-                terminate: None,
-            };
-            emit.emit(AgentEvent::ToolExecutionEnd {
-                tool_call_id: tool_call.id.clone(),
-                tool_name: tool_call.name.clone(),
-                result: denied_result.clone(),
-                is_error: true,
-            });
-            slots[slot_idx] = Some(AgentMessage::ToolResult {
-                tool_call_id: tool_call.id,
-                tool_name: tool_call.name,
-                content: denied_result.content,
-                details: Some(denied_result.details),
-                is_error: Some(true),
-                timestamp: now_ms(),
-                arguments: Some(tool_call.arguments),
-            });
-            continue;
-        }
-
-        // Gate side-effecting tools behind user approval unless bypass mode is
-        // on, plus a second, independent trigger: a path-scoped tool
-        // targeting somewhere outside every workspace folder. Both funnel
-        // into the same approval wait so a tool that's gated for both
-        // reasons (e.g. `write` outside the workspace) only prompts once —
-        // the workspace reason wins when both apply, since it's the more
-        // specific/useful thing to tell the user.
-        let mut approval_reason: Option<String> = None;
-        let mut needs_approval = needs_gate(&tool_call) || custom_names.contains(&tool_call.name);
-        if PATH_SCOPED_TOOLS.contains(&tool_call.name.as_str()) && !workspace_folders.is_empty() {
-            if let Some(path_arg) = tool_call.arguments.get("path").and_then(|v| v.as_str()) {
-                let resolved = crate::agent::tools::builtin::resolve_path(&cwd, path_arg);
-                if !path_in_workspace(&resolved, &workspace_folders) {
-                    needs_approval = true;
-                    approval_reason = Some(format!("wants to access '{}', which is outside your workspace folders", resolved.display()));
-                }
-            }
-        }
-
-        // A specialist writes only inside the paths it owns, and nobody else
-        // writes inside them: the lead hands that work to its owner. `bash`
-        // isn't checked (ponytail: no shell parsing; add a worktree per
-        // member if that leak matters).
-        let written = crate::agent::team::written_paths(&tool_call.name, &tool_call.arguments);
-        if !written.is_empty() {
-            let owned = state.owned_paths().await;
-            let handover = if context.delegate_depth > 0 {
-                crate::agent::team::Handover::Report
-            } else if crate::agent::sessions::projects::mode_for_workspace(&cwd).as_deref() == Some("team") {
-                crate::agent::team::Handover::Assign
-            } else {
-                crate::agent::team::Handover::Delegate
-            };
-            let refusal = written.iter().find_map(|p| {
-                crate::agent::team::write_refusal(&cwd, &owned, &crate::agent::tools::builtin::resolve_path(&cwd, p), p, handover)
-            });
-            if let Some(text) = refusal {
-                let refused = AgentToolResult {
-                    content: vec![MessageContent::Text { text }],
-                    details: serde_json::Value::Null,
-                    terminate: None,
-                };
-                emit.emit(AgentEvent::ToolExecutionEnd {
-                    tool_call_id: tool_call.id.clone(),
-                    tool_name: tool_call.name.clone(),
-                    result: refused.clone(),
-                    is_error: true,
-                });
-                slots[slot_idx] = Some(AgentMessage::ToolResult {
-                    tool_call_id: tool_call.id,
-                    tool_name: tool_call.name,
-                    content: refused.content,
-                    details: Some(refused.details),
-                    is_error: Some(true),
-                    timestamp: now_ms(),
-                    arguments: Some(tool_call.arguments),
-                });
+        match gate.decide(&tool_call) {
+            Verdict::Run => {}
+            Verdict::Refuse(text) => {
+                slots[slot_idx] = Some(finish_call(emit, tool_call, text_result(text), true));
                 continue;
             }
-            // What a team member changed is recorded from the calls, so the
-            // coordinator needn't take its report's word for it.
-            if let Some((run, member)) = state.team_member().await {
-                for p in &written {
-                    crate::agent::team::run::note_written(&run, &member, p);
-                }
-            }
-        }
-
-        // A bot's own rules decide, above the global setting: what it may do
-        // alone, what it asks for, and what it hands to the user.
-        let mut force_ask = false;
-        if let Some(policy) = &bot_policy {
-            match crate::agent::team::bots::decide_call(policy, &tool_call.name, &tool_call.arguments) {
-                crate::agent::team::bots::Decision::Run => needs_approval = false,
-                crate::agent::team::bots::Decision::Ask(why) => {
-                    needs_approval = true;
-                    force_ask = true;
-                    approval_reason.get_or_insert(why);
-                }
-                crate::agent::team::bots::Decision::Refuse(why) => {
-                    let refused = AgentToolResult {
-                        content: vec![MessageContent::Text { text: format!("Error: {why}") }],
-                        details: serde_json::Value::Null,
-                        terminate: None,
-                    };
-                    emit.emit(AgentEvent::ToolExecutionEnd {
-                        tool_call_id: tool_call.id.clone(),
-                        tool_name: tool_call.name.clone(),
-                        result: refused.clone(),
-                        is_error: true,
-                    });
-                    slots[slot_idx] = Some(AgentMessage::ToolResult {
-                        tool_call_id: tool_call.id,
-                        tool_name: tool_call.name,
-                        content: refused.content,
-                        details: Some(refused.details),
-                        is_error: Some(true),
-                        timestamp: now_ms(),
-                        arguments: Some(tool_call.arguments),
-                    });
+            Verdict::Ask { why, .. } => {
+                let why = describe_sensitive(&tool_call).await.or(why);
+                if !ask_permission(emit, &tool_call, why).await {
+                    let text = format!("Error: Permission denied by user for tool '{}'.", tool_call.name);
+                    slots[slot_idx] = Some(finish_call(emit, tool_call, text_result(text), true));
                     continue;
                 }
             }
         }
 
-        // The vault is asked about every time it is used to fill, whatever
-        // bypass mode or a bot's rules say: a secret is never typed on
-        // standing permission.
-        if tool_call.name == "vault" && tool_call.arguments.get("action").and_then(|a| a.as_str()) == Some("fill") {
-            needs_approval = true;
-            force_ask = true;
-            approval_reason = Some(crate::vault::describe_fill(&tool_call.arguments).await);
-        }
-
-        // A rented GPU is real money: starting or stopping one is asked about
-        // every time, with the machine, the time limit and the cost.
-        if tool_call.name == "nebius_job"
-            && matches!(tool_call.arguments.get("action").and_then(|a| a.as_str()), Some("submit") | Some("cancel"))
-        {
-            needs_approval = true;
-            force_ask = true;
-            approval_reason = Some(crate::nebius::describe(&tool_call.arguments).await);
-        }
-
-        if (force_ask || !bypass_mode) && needs_approval {
-            let request_id = uuid::Uuid::new_v4().to_string();
-            let (tx, rx) = oneshot::channel();
-            if let Ok(mut pending) = PENDING_PERMISSIONS.lock() {
-                pending.insert(request_id.clone(), tx);
-            }
-            emit.emit(AgentEvent::PermissionAsked {
-                request_id: request_id.clone(),
-                tool_call_id: tool_call.id.clone(),
-                tool_name: tool_call.name.clone(),
-                args: tool_call.arguments.clone(),
-                reason: approval_reason,
-            });
-
-            // Bounded wait so a closed/crashed frontend can't hang the turn forever.
-            let approved = match tokio::time::timeout(std::time::Duration::from_secs(900), rx).await {
-                Ok(Ok(approved)) => approved,
-                _ => {
-                    if let Ok(mut pending) = PENDING_PERMISSIONS.lock() {
-                        pending.remove(&request_id);
-                    }
-                    false
-                }
-            };
-            emit.emit(AgentEvent::PermissionResolved { request_id, approved });
-
-            if !approved {
-                let denied_result = AgentToolResult {
-                    content: vec![MessageContent::Text {
-                        text: format!("Error: Permission denied by user for tool '{}'.", tool_call.name),
-                    }],
-                    details: serde_json::Value::Null,
-                    terminate: None,
-                };
-                emit.emit(AgentEvent::ToolExecutionEnd {
-                    tool_call_id: tool_call.id.clone(),
-                    tool_name: tool_call.name.clone(),
-                    result: denied_result.clone(),
-                    is_error: true,
-                });
-                slots[slot_idx] = Some(AgentMessage::ToolResult {
-                    tool_call_id: tool_call.id,
-                    tool_name: tool_call.name,
-                    content: denied_result.content,
-                    details: Some(denied_result.details),
-                    is_error: Some(true),
-                    timestamp: now_ms(),
-                    arguments: Some(tool_call.arguments),
-                });
-                continue;
+        // What a team member changed is recorded from the calls, so the
+        // coordinator needn't take its report's word for it.
+        if let Some((run, member)) = state.team_member().await {
+            for p in crate::agent::team::written_paths(&tool_call.name, &tool_call.arguments) {
+                crate::agent::team::run::note_written(&run, &member, &p);
             }
         }
 
-        // Checked once, up front, for every tool — not repeated as an
-        // `&& !disabled_tools.contains(..)` clause on individual branches.
-        // That per-branch form silently didn't apply to any branch whose
-        // author forgot it, so a tool disabled in Settings (or withheld by
-        // persona mode, or absent from a subagent's allowlist) still ran.
-        let tool_result = if disabled_tools.contains(&tool_call.name) {
-            let reason = if settings_disabled_tools.contains(&tool_call.name) {
-                "disabled in Settings → Tools".to_string()
-            } else {
-                format!("restricted by the current '{}' mode", persona_mode.label())
-            };
-            AgentToolResult {
-                content: vec![MessageContent::Text {
-                    text: format!("The '{}' tool is {} and cannot be used right now.", tool_call.name, reason),
-                }],
-                details: serde_json::Value::Null,
-                terminate: None,
-            }
         // Tools that need the agent (`AGENT_TOOLS`), then the ones that need
         // only their arguments (the `Tool` registry), then MCP servers.
-        } else if let Some(tool) = AGENT_TOOLS.iter().find(|t| t.names.contains(&tool_call.name.as_str())) {
+        let tool_result = if let Some(tool) = AGENT_TOOLS.iter().find(|t| t.names.contains(&tool_call.name.as_str())) {
             let cx = ToolCtx {
                 call_id: &tool_call.id,
                 name: &tool_call.name,
@@ -1083,32 +1042,8 @@ pub async fn execute_tool_calls(
 
         // Again after: a read speculated while this ran saw it half-done.
         super::speculation::note_call(&tool_call.name);
-        let is_error = tool_result.content.iter().any(|c| {
-            if let MessageContent::Text { text } = c {
-                text.starts_with("Error") || text.starts_with("FileNotFound")
-            } else {
-                false
-            }
-        });
-
-        emit.emit(AgentEvent::ToolExecutionEnd {
-            tool_call_id: tool_call.id.clone(),
-            tool_name: tool_call.name.clone(),
-            result: tool_result.clone(),
-            is_error,
-        });
-
-        let tool_result_message = AgentMessage::ToolResult {
-            tool_call_id: tool_call.id,
-            tool_name: tool_call.name,
-            content: tool_result.content,
-            details: Some(tool_result.details),
-            is_error: Some(is_error),
-            timestamp: now_ms(),
-            arguments: Some(tool_call.arguments),
-        };
-
-        slots[slot_idx] = Some(tool_result_message);
+        let is_error = looks_like_error(&tool_result);
+        slots[slot_idx] = Some(finish_call(emit, tool_call, tool_result, is_error));
     }
 
     let mut results: Vec<AgentMessage> = slots
@@ -3261,3 +3196,169 @@ mod schema_registry_consistency_tests {
     }
 }
 
+
+/// What the gate decides for each kind of agent and each kind of call. The
+/// guardrails live in `Gate::decide`; this table is their contract, so a
+/// change to a rule shows up here as a changed row.
+#[cfg(test)]
+mod gate_tests {
+    use super::{Gate, Verdict};
+    use crate::agent::runtime::types::AgentToolCall;
+    use crate::agent::team::bots::{BotPolicy, BotRules, Origin};
+    use crate::agent::team::Handover;
+    use serde_json::json;
+    use std::collections::HashSet;
+
+    fn call(name: &str, args: serde_json::Value) -> AgentToolCall {
+        AgentToolCall { id: "c1".into(), name: name.into(), arguments: args }
+    }
+
+    fn root() -> String {
+        std::env::temp_dir().join("viv-gate-ws").to_string_lossy().into_owned()
+    }
+
+    struct Agent {
+        plan_mode: bool,
+        bypass: bool,
+        disabled: Vec<String>,
+        settings_disabled: Vec<String>,
+        owned: Vec<String>,
+        bot: Option<BotPolicy>,
+        custom: HashSet<String>,
+    }
+
+    fn chat() -> Agent {
+        Agent { plan_mode: false, bypass: false, disabled: vec![], settings_disabled: vec![], owned: vec![], bot: None, custom: HashSet::new() }
+    }
+
+    fn bot(origin: Origin, request: &str) -> Agent {
+        let policy = BotPolicy {
+            bot_name: "Goa".into(),
+            rules: BotRules::default(),
+            origin,
+            request: request.into(),
+            root: root(),
+            bot_id: "goa".into(),
+        };
+        Agent { bot: Some(policy), ..chat() }
+    }
+
+    fn decide(a: &Agent, tc: &AgentToolCall) -> Verdict {
+        let root = root();
+        let workspace = vec![root.clone()];
+        Gate {
+            plan_mode: a.plan_mode,
+            bypass: a.bypass,
+            disabled: &a.disabled,
+            settings_disabled: &a.settings_disabled,
+            mode_label: "Ask",
+            workspace: &workspace,
+            cwd: &root,
+            owned: &a.owned,
+            handover: Handover::Report,
+            bot: a.bot.as_ref(),
+            custom: &a.custom,
+        }
+        .decide(tc)
+    }
+
+    fn runs(v: &Verdict) -> bool {
+        *v == Verdict::Run
+    }
+    fn asks(v: &Verdict) -> bool {
+        matches!(v, Verdict::Ask { .. })
+    }
+    fn refused(v: &Verdict, needle: &str) -> bool {
+        matches!(v, Verdict::Refuse(t) if t.contains(needle))
+    }
+
+    #[test]
+    fn the_main_chat_asks_before_acting_and_reads_freely() {
+        let a = chat();
+        assert!(runs(&decide(&a, &call("read", json!({"path": "a.txt"})))));
+        assert!(runs(&decide(&a, &call("grep", json!({"pattern": "x"})))));
+        assert!(asks(&decide(&a, &call("bash", json!({"command": "ls"})))));
+        assert!(asks(&decide(&a, &call("write", json!({"path": "a.txt", "content": ""})))));
+        assert!(runs(&decide(&a, &call("terminal", json!({"action": "read"})))));
+        assert!(asks(&decide(&a, &call("terminal", json!({"action": "send"})))));
+    }
+
+    #[test]
+    fn bypass_runs_what_would_ask_but_not_secrets_or_money() {
+        let a = Agent { bypass: true, ..chat() };
+        assert!(runs(&decide(&a, &call("bash", json!({"command": "ls"})))));
+        assert_eq!(decide(&a, &call("vault", json!({"action": "fill"}))), Verdict::Ask { why: None, always: true });
+        assert!(runs(&decide(&a, &call("vault", json!({"action": "list"})))));
+        assert!(asks(&decide(&a, &call("nebius_job", json!({"action": "submit", "image": "x"})))));
+        assert!(asks(&decide(&a, &call("nebius_job", json!({"action": "cancel", "id": "j"})))));
+        assert!(runs(&decide(&a, &call("nebius_job", json!({"action": "logs", "id": "j"})))));
+    }
+
+    #[test]
+    fn a_path_outside_the_workspace_asks_and_says_why() {
+        let outside = std::env::temp_dir().join("viv-gate-elsewhere").join("x.txt");
+        let v = decide(&chat(), &call("read", json!({"path": outside.to_string_lossy()})));
+        assert!(matches!(&v, Verdict::Ask { why: Some(w), always: false } if w.contains("outside your workspace")), "{v:?}");
+    }
+
+    #[test]
+    fn plan_mode_refuses_changes_and_allows_research() {
+        let a = Agent { plan_mode: true, ..chat() };
+        assert!(refused(&decide(&a, &call("write", json!({"path": "a.txt"}))), "plan mode"));
+        assert!(refused(&decide(&a, &call("bash", json!({"command": "ls"}))), "plan mode"));
+        assert!(runs(&decide(&a, &call("read", json!({"path": "a.txt"})))));
+        assert!(runs(&decide(&a, &call("submit_plan", json!({})))));
+        // A subagent spawned in plan mode inherits it: it may research, not act.
+        assert!(runs(&decide(&a, &call("task", json!({})))));
+    }
+
+    #[test]
+    fn withheld_tools_are_refused_naming_the_cause() {
+        let a = Agent { disabled: vec!["edit".into(), "bash".into()], settings_disabled: vec!["bash".into()], ..chat() };
+        assert!(refused(&decide(&a, &call("edit", json!({"path": "a.txt"}))), "restricted by the current 'Ask' mode"));
+        assert!(refused(&decide(&a, &call("bash", json!({"command": "ls"}))), "disabled in Settings"));
+    }
+
+    #[test]
+    fn a_specialist_writes_only_where_it_owns() {
+        let a = Agent { owned: vec!["src/ui".into()], ..chat() };
+        assert!(refused(&decide(&a, &call("write", json!({"path": "src/core/x.rs"}))), "outside the paths you own"));
+        assert!(asks(&decide(&a, &call("write", json!({"path": "src/ui/x.tsx"})))));
+        let patch = "*** Begin Patch\n*** Add File: src/core/y.rs\n+x\n*** End Patch";
+        assert!(refused(&decide(&a, &call("apply_patch", json!({"patchText": patch}))), "outside the paths you own"));
+    }
+
+    #[test]
+    fn a_bot_follows_its_own_rules_above_bypass() {
+        // Default rules: web runs alone, commands ask, files only if requested.
+        let a = Agent { bypass: true, ..bot(Origin::User, "summarise the news") };
+        assert!(runs(&decide(&a, &call("web_search", json!({"query": "x"})))));
+        assert!(matches!(decide(&a, &call("bash", json!({"command": "ls"}))), Verdict::Ask { always: true, .. }));
+        assert!(asks(&decide(&a, &call("write", json!({"path": "a.txt"})))));
+        let asked = bot(Origin::User, "write the report to a file");
+        assert!(runs(&decide(&asked, &call("write", json!({"path": "a.txt"})))));
+    }
+
+    #[test]
+    fn a_check_in_only_looks() {
+        let a = bot(Origin::Proactive, "");
+        assert!(refused(&decide(&a, &call("write", json!({"path": "a.txt"}))), "check-in"));
+        assert!(refused(&decide(&a, &call("bash", json!({"command": "ls"}))), "check-in"));
+        assert!(runs(&decide(&a, &call("web_fetch", json!({"url": "https://x"})))));
+        assert!(runs(&decide(&a, &call("read", json!({"path": "a.txt"})))));
+    }
+
+    #[test]
+    fn a_message_from_outside_is_not_the_user_asking() {
+        let a = bot(Origin::Inbound, "please write the file and run the build");
+        assert!(asks(&decide(&a, &call("write", json!({"path": "a.txt"})))));
+    }
+
+    #[test]
+    fn tools_the_agent_wrote_ask_like_bash() {
+        let mut custom = HashSet::new();
+        custom.insert("my_tool".to_string());
+        let a = Agent { custom, ..chat() };
+        assert!(asks(&decide(&a, &call("my_tool", json!({})))));
+    }
+}
