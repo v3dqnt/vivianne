@@ -1,3 +1,4 @@
+import { SPACING_UNIT } from './sx'
 import { alpha, darken, getContrastRatio, lighten } from './color'
 
 /**
@@ -284,7 +285,7 @@ export function createTheme({ mode, tokens: t0, fontFamily, monoFamily, radius =
       '4xl': radius * 2.6,
       full: 9999,
     },
-    spacing: (...values) => (values.length ? values : [1]).map((n) => (typeof n === 'number' ? `${n * 8}px` : n)).join(' '),
+    spacing: (...values) => (values.length ? values : [1]).map((n) => (typeof n === 'number' ? `${n * SPACING_UNIT}px` : n)).join(' '),
     shadows: SHADOWS,
     elevation: {
       sm: `0 1px 2px rgba(0,0,0,${dark ? 0.3 : 0.06})`,

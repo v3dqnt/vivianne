@@ -226,8 +226,8 @@ export function TitleBar() {
       data-tauri-drag-region=""
       sx={{
         position: 'relative',
-        // Terax's header: 40px.
-        height: 40,
+        // Tight: it holds the window controls, the view switch and a few icons.
+        height: 36,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',

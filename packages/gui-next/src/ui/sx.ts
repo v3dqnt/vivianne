@@ -104,8 +104,12 @@ export function paletteColor(theme: Theme, value: SxValue): SxValue {
   return value
 }
 
+/** The spacing unit: `p: 2` is two of these. 7px, a step under the usual 8,
+ * keeps every gap in proportion while the app sits tighter. */
+export const SPACING_UNIT = 7
+
 function spacing(value: SxValue): SxValue {
-  return typeof value === 'number' ? `${value * 8}px` : value
+  return typeof value === 'number' ? `${value * SPACING_UNIT}px` : value
 }
 
 /** One property after theme mapping. Returns style entries to merge. */
