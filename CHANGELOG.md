@@ -2,8 +2,6 @@
 
 All notable changes to Vivianne are documented here.
 
-## [Unreleased]
-
 ## [1.9.0] — 2026-10-25
 
 ### Changed
