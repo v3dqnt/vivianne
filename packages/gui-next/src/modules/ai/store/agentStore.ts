@@ -1,4 +1,4 @@
-import { create, type StoreApi, type UseBoundStore } from 'zustand'
+import { create, useStore, type StoreApi, type UseBoundStore } from 'zustand'
 import { call, on } from '../../../ipc'
 import type { AgentEvent, AgentMessage, ImageAttachment, MessageContent, QuestionSpec, RunLedger } from '../lib/types'
 import { useModelStore } from './modelStore'
@@ -781,7 +781,9 @@ function useActiveAgentStore(): AgentStoreState
 function useActiveAgentStore<T>(selector: (s: AgentStoreState) => T): T
 function useActiveAgentStore<T>(selector?: (s: AgentStoreState) => T) {
   const threadId = useActiveThread((s) => s.threadId)
-  return agentStoreFor(threadId)(selector as (s: AgentStoreState) => T)
+  // `useStore`, not calling the store: the React Compiler only keeps calls
+  // named use* as hooks, and caching this one would skip a hook.
+  return useStore(agentStoreFor(threadId), (selector ?? ((s: AgentStoreState) => s)) as (s: AgentStoreState) => T)
 }
 
 /** The conversation on screen: the store of whichever thread is active, as

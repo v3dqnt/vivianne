@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useStore } from 'zustand'
 import { Box, Stack, Typography, IconButton, InputBase, ButtonBase, Tooltip, Collapse, Orb, alpha, useTheme } from '../../../ui'
 import { ExportLinear, AddLinear, TrashLinear } from '../../../icons'
 import { useProjectsStore, projectColor, modeOf, GENERAL_PROJECT_ID } from '../store/projectsStore'
@@ -499,8 +500,8 @@ function ThreadStatus({ sessionId }: { sessionId: string }) {
 
 function ThreadStatusDot({ threadId }: { threadId: string }) {
   const store = agentStoreFor(threadId)
-  const busy = store((s) => s.isBusy)
-  const waiting = store((s) => !!(s.pendingPermission || s.pendingQuestion || s.pendingConfirmation))
+  const busy = useStore(store, (s) => s.isBusy)
+  const waiting = useStore(store, (s) => !!(s.pendingPermission || s.pendingQuestion || s.pendingConfirmation))
   if (!busy && !waiting) return null
   const label = waiting ? 'Waiting on you' : 'Working'
   return (
