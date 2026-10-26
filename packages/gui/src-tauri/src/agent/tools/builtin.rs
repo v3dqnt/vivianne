@@ -48,9 +48,8 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         Box::new(GrepTool::new(cwd.clone())),
         Box::new(CodeSearchTool::new(cwd.clone())),
         // `computer` is NOT registered here — it needs `&tauri::AppHandle`
-        // (structured mode drives the highlight overlay) and goes through
-        // the dispatch-chain pattern in `agent/tool_exec.rs` instead, same
-        // reasoning as `run_script`/PTC. See `agent::tools::desktop::computer`.
+        // (structured mode drives the highlight overlay), so it is in
+        // `exec::AGENT_TOOLS` instead, like `run_script`/PTC.
         Box::new(crate::agent::tools::files::apply_patch::ApplyPatchTool::new(cwd.clone())),
         Box::new(crate::agent::tools::files::documents::CreateDocumentTool::new(cwd.clone())),
         Box::new(crate::agent::tools::files::documents::InspectDocumentTool::new(cwd.clone())),
@@ -70,9 +69,8 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         Box::new(TodoWriteTool::new()),
         Box::new(DiagnosticsTool::new(cwd.clone())),
         // ── Grok-parity: subagent orchestration ────────────────────────────
-        // No `task` entry here: the live loop (`agent/tool_exec.rs`)
-        // special-cases "task" and dispatches it directly via
-        // `execute_task_tool` before this registry is ever consulted, so a
+        // No `task` entry here: it is in `exec::AGENT_TOOLS`, which the loop
+        // consults before this registry, so a
         // `TaskTool` entry under the same name would only ever be shadowed
         // dead weight (it was — see git history, removed together).
         //
@@ -86,7 +84,7 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         // wired-up clarifying-question tool (its GUI event had no listener,
         // so calling it would hang the turn forever waiting on a reply that
         // could never arrive) that fully duplicated the live, richer
-        // `question` tool already dispatched in `agent/tool_exec.rs`
+        // `question` tool in `exec::AGENT_TOOLS`
         // (`execute_question_tool`, real GUI round-trip). Deleted rather
         // than wired up, since a working one already exists.
         Box::new(crate::agent::runtime::subagents::TaskOutputTool::new()),

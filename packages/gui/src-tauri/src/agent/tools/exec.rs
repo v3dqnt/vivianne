@@ -383,6 +383,172 @@ fn tool_result_to_agent_result(res: crate::agent::tools::builtin::ToolResult, vi
     AgentToolResult { content, details, terminate: None }
 }
 
+// ============================================================================
+// The tools that need the agent: one table
+// ============================================================================
+
+/// What a tool that needs more than its arguments is given: the call, the
+/// agent it runs in, and the app.
+pub(crate) struct ToolCtx<'a> {
+    pub call_id: &'a str,
+    pub name: &'a str,
+    pub args: &'a serde_json::Value,
+    pub state: &'a AgentState,
+    pub app: &'a tauri::AppHandle,
+    pub emit: &'a EventSender,
+    /// How deep in delegation this agent is (0 = the conversation itself).
+    pub depth: usize,
+    /// Whether the model can see images, so screenshots go back as images.
+    pub vision: bool,
+    /// Tools withheld from this agent, for `list_tools`.
+    pub disabled: &'a [String],
+}
+
+/// One tool, under every name it answers to.
+pub(crate) struct AgentTool {
+    pub names: &'static [&'static str],
+    pub run: for<'a> fn(&'a ToolCtx<'a>) -> futures::future::BoxFuture<'a, AgentToolResult>,
+}
+
+/// An `AgentTool` from its names and the body that runs it (`cx` is the call).
+macro_rules! tool {
+    ($($name:expr),+ => |$cx:ident| $body:expr) => {
+        AgentTool {
+            names: &[$($name),+],
+            run: {
+                fn run<'a>($cx: &'a ToolCtx<'a>) -> futures::future::BoxFuture<'a, AgentToolResult> {
+                    Box::pin(async move {
+                        let _ = $cx;
+                        $body
+                    })
+                }
+                run
+            },
+        }
+    };
+}
+
+/// Every tool that needs the agent's state, the app or the event stream.
+/// Tools that need only their arguments and the working folder are the
+/// `Tool` registry in `agent::tools::builtin`; MCP tools come last. Adding a
+/// tool here is all its dispatch needs: the consistency tests read this table.
+pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
+    tool!("remember", "recall" => |cx| execute_memory_tool(cx.name, cx.args, cx.state, cx.app).await),
+    tool!("read_skill" => |cx| execute_read_skill_tool(cx.args).await),
+    tool!("question" => |cx| match cx.args.get("confirm").and_then(|v| v.as_str()) {
+        Some(message) => {
+            let mut args = cx.args.clone();
+            args["message"] = serde_json::json!(message);
+            execute_confirm_action_tool(cx.call_id, &args, cx.emit).await
+        }
+        None => execute_question_tool(cx.call_id, cx.args, cx.emit).await,
+    }),
+    tool!("team_run" => |cx| crate::agent::team::run::execute_team_run(cx.args, cx.depth, cx.state, cx.app).await),
+    tool!("message_agent" => |cx| crate::agent::team::run::execute_message_agent(cx.args, cx.state, cx.app).await),
+    tool!("team_post" => |cx| crate::agent::team::run::execute_team_post(cx.args, cx.state, cx.app).await),
+    tool!("team_read" => |cx| crate::agent::team::run::execute_team_read(cx.state).await),
+    tool!("submit_plan" => |cx| crate::agent::team::plans::execute_submit_plan(cx.args, cx.state.primary_workspace_folder().await, cx.app).await),
+    tool!("assign_plan_steps" => |cx| crate::agent::team::plans::execute_assign_plan_steps(cx.args, cx.depth, cx.state, cx.app).await),
+    tool!("present_snippet" => |cx| execute_present_snippet_tool(cx.args)),
+    tool!("web_preview" => |cx| execute_web_preview_tool(cx.args, cx.emit, cx.app).await),
+    tool!("browser_snapshot" => |cx| execute_browser_snapshot_tool(cx.args, cx.emit, cx.app).await),
+    tool!("browser_click" => |cx| execute_browser_click_tool(cx.args, cx.emit, cx.app).await),
+    tool!("browser_type" => |cx| execute_browser_type_tool(cx.args, cx.emit, cx.app).await),
+    tool!("browser_press_key" => |cx| execute_browser_press_key_tool(cx.args, cx.emit, cx.app).await),
+    tool!("browser_scroll" => |cx| execute_browser_scroll_tool(cx.args, cx.emit, cx.app).await),
+    tool!("browser_evaluate" => |cx| execute_browser_evaluate_tool(cx.args).await),
+    tool!("browser_read_console" => |cx| execute_browser_read_console_tool().await),
+    tool!("browser_read_network" => |cx| execute_browser_read_network_tool().await),
+    tool!("browser_start" => |cx| match crate::browser_sessions::start_and_report().await {
+        Ok(msg) => text_result(msg),
+        Err(e) => text_result(format!("Error: {e}")),
+    }),
+    tool!("browser_session_status" => |cx| match crate::browser_sessions::session_status().await {
+        Ok(v) => text_result(serde_json::to_string_pretty(&v).unwrap_or_default()),
+        Err(e) => text_result(format!("Error: {e}")),
+    }),
+    tool!("browser_import_cookies" => |cx| {
+        let file = cx.args.get("file").and_then(|v| v.as_str()).unwrap_or("");
+        if file.is_empty() {
+            text_result("Error: 'file' is required.".to_string())
+        } else {
+            match crate::browser_sessions::import_cookies(file).await {
+                Ok(msg) => text_result(msg),
+                Err(e) => text_result(format!("Error: {e}")),
+            }
+        }
+    }),
+    tool!("math" => |cx| crate::agent::tools::math::execute(cx.args, cx.state.primary_workspace_folder().await, cx.vision).await),
+    tool!("task" => |cx| execute_task_tool(cx.args, cx.depth, cx.state, cx.app).await),
+    tool!("list_subagent_profiles" => |cx| execute_list_subagent_profiles_tool(cx.state.primary_workspace_folder().await).await),
+    tool!("hire_agent" => |cx| text_result(crate::agent::team::execute_hire_tool(cx.args, cx.state.primary_workspace_folder().await, cx.app).await)),
+    tool!("generate_image" => |cx| execute_generate_image_tool(cx.args, cx.app).await),
+    tool!("connect_mcp_server" => |cx| execute_connect_mcp_server_tool(cx.args).await),
+    tool!("get_current_time" => |cx| execute_get_current_time_tool().await),
+    tool!("list_tools" => |cx| execute_list_tools_tool(cx.disabled).await),
+    tool!(crate::agent::tools::profile::LOAD_TOOLS => |cx| {
+        let available = available_tool_names(cx.state).await;
+        let (text, is_error) = crate::agent::tools::profile::execute_load_tools(cx.args, &available);
+        text_result(if is_error { format!("Error: {text}") } else { text })
+    }),
+    tool!("set_panel" => |cx| execute_set_panel_tool(cx.args, cx.emit)),
+    tool!("get_goal" => |cx| execute_get_goal_tool(cx.state).await),
+    tool!("create_goal" => |cx| execute_create_goal_tool(cx.args, cx.state).await),
+    tool!("update_goal" => |cx| execute_update_goal_tool(cx.args, cx.state).await),
+    tool!("terminal" => |cx| match cx.args.get("action").and_then(|a| a.as_str()).unwrap_or("") {
+        "open" => execute_terminal_open_tool(cx.args, cx.app).await,
+        "send" => execute_terminal_send_tool(cx.args, cx.app).await,
+        "read" => execute_terminal_read_tool(cx.args, cx.app).await,
+        "interrupt" => execute_terminal_signal_tool(cx.args, cx.app).await,
+        "close" => execute_terminal_close_tool(cx.args, cx.app).await,
+        "list" => execute_terminal_list_tool(cx.app).await,
+        other => text_result(format!("Error: unknown terminal action '{other}' — use open, send, read, interrupt, close or list.")),
+    }),
+    tool!("create_automation" => |cx| execute_create_automation_tool(cx.args, cx.app).await),
+    tool!("list_automations" => |cx| execute_list_automations_tool(cx.app).await),
+    tool!("delete_automation" => |cx| execute_delete_automation_tool(cx.args, cx.app).await),
+    tool!("set_automation_enabled" => |cx| execute_set_automation_enabled_tool(cx.args, cx.app).await),
+    tool!("sandbox_execute" => |cx| execute_sandbox_tool(cx.args).await),
+    tool!("run_script" => |cx| crate::agent::tools::ptc::execute_ptc_tool(cx.args, cx.depth, cx.state, cx.emit, cx.app, cx.call_id).await),
+    tool!("vault" => |cx| tool_result_to_agent_result(crate::vault::execute_tool(cx.args).await, cx.vision)),
+    tool!("nebius_job" => |cx| tool_result_to_agent_result(crate::nebius::execute_tool(cx.args).await, cx.vision)),
+    tool!("user_browser_driver" => |cx| tool_result_to_agent_result(crate::helium::execute_tool(cx.args).await, cx.vision)),
+    tool!("check_diagram" => |cx| crate::agent::tools::diagram_check::execute(cx.args, cx.app).await),
+    tool!("guide" => |cx| {
+        let path = cx.args.get("path").and_then(|p| p.as_str()).unwrap_or("");
+        let text = crate::agent::tools::guides::read(path).await.unwrap_or_else(|e| e);
+        AgentToolResult { content: vec![MessageContent::Text { text }], details: serde_json::Value::Null, terminate: None }
+    }),
+    // A bot's own address and number (`agent::team::contact`).
+    tool!("email", "phone" => |cx| {
+        let text = match cx.state.bot_policy().await {
+            Some(p) if cx.name == "email" => crate::agent::team::contact::email_tool(&p.root, &p.bot_id, cx.args).await,
+            Some(p) => crate::agent::team::contact::phone_tool(&p.root, &p.bot_id, cx.args).await,
+            None => Err("Only an agent with its own email or phone can use this.".to_string()),
+        };
+        match text {
+            Ok(t) => text_result(t),
+            Err(e) => text_result(format!("Error: {e}")),
+        }
+    }),
+    // The tool is named `dip`; `computer` is accepted as a silent alias, since
+    // "computer" with these action names (screenshot, left_click, type, key)
+    // is a strong prior for most models. Pixel mode plus, on Windows,
+    // structured UI Automation — see `desktop::computer::execute_computer_tool`.
+    tool!("dip", "computer" => |cx| {
+        // The activity notch, for the main agent (Viv Instant has its own).
+        let notch = !cx.state.auto_approve().await;
+        if notch {
+            crate::activity::begin_action(cx.app, cx.args);
+        }
+        let result = crate::agent::tools::desktop::computer::execute_computer_tool(cx.args, cx.app).await;
+        if notch {
+            crate::activity::end_action(cx.app);
+        }
+        tool_result_to_agent_result(result, cx.vision)
+    }),
+];
+
 /// Execute a list of tool calls sequentially or in parallel based on their
 /// execution modes.
 pub async fn execute_tool_calls(
@@ -868,175 +1034,21 @@ pub async fn execute_tool_calls(
                 details: serde_json::Value::Null,
                 terminate: None,
             }
-        // From here down: tools needing `&AgentState`, `&AppHandle`, or
-        // `emit` — the `Tool` trait's `execute(&self, args, cwd)` has no way
-        // to carry any of those, so these are matched by name instead of
-        // going through the `create_coding_tools()` registry below. A tool
-        // that only needs `args`/`cwd` belongs in that registry, not here —
-        // see `schema_registry_consistency_tests::DISPATCH_CHAIN_TOOLS` for
-        // the full list this chain has to match.
-        } else if tool_call.name == "remember" || tool_call.name == "recall" {
-            execute_memory_tool(&tool_call.name, &tool_call.arguments, state, app).await
-        } else if tool_call.name == "read_skill" {
-            execute_read_skill_tool(&tool_call.arguments).await
-        } else if tool_call.name == "question" {
-            match tool_call.arguments.get("confirm").and_then(|v| v.as_str()) {
-                Some(message) => {
-                    let mut args = tool_call.arguments.clone();
-                    args["message"] = serde_json::json!(message);
-                    execute_confirm_action_tool(&tool_call.id, &args, emit).await
-                }
-                None => execute_question_tool(&tool_call.id, &tool_call.arguments, emit).await,
-            }
-        } else if tool_call.name == "team_run" {
-            crate::agent::team::run::execute_team_run(&tool_call.arguments, context.delegate_depth, state, app).await
-        } else if tool_call.name == "message_agent" {
-            crate::agent::team::run::execute_message_agent(&tool_call.arguments, state, app).await
-        } else if tool_call.name == "team_post" {
-            crate::agent::team::run::execute_team_post(&tool_call.arguments, state, app).await
-        } else if tool_call.name == "team_read" {
-            crate::agent::team::run::execute_team_read(state).await
-        } else if tool_call.name == "submit_plan" {
-            crate::agent::team::plans::execute_submit_plan(&tool_call.arguments, state.primary_workspace_folder().await, app).await
-        } else if tool_call.name == "assign_plan_steps" {
-            crate::agent::team::plans::execute_assign_plan_steps(&tool_call.arguments, context.delegate_depth, state, app).await
-        } else if tool_call.name == "present_snippet" {
-            execute_present_snippet_tool(&tool_call.arguments)
-        } else if tool_call.name == "web_preview" {
-            execute_web_preview_tool(&tool_call.arguments, emit, app).await
-        } else if tool_call.name == "browser_snapshot" {
-            execute_browser_snapshot_tool(&tool_call.arguments, emit, app).await
-        } else if tool_call.name == "browser_click" {
-            execute_browser_click_tool(&tool_call.arguments, emit, app).await
-        } else if tool_call.name == "browser_type" {
-            execute_browser_type_tool(&tool_call.arguments, emit, app).await
-        } else if tool_call.name == "browser_press_key" {
-            execute_browser_press_key_tool(&tool_call.arguments, emit, app).await
-        } else if tool_call.name == "browser_scroll" {
-            execute_browser_scroll_tool(&tool_call.arguments, emit, app).await
-        } else if tool_call.name == "browser_evaluate" {
-            execute_browser_evaluate_tool(&tool_call.arguments).await
-        } else if tool_call.name == "browser_read_console" {
-            execute_browser_read_console_tool().await
-        } else if tool_call.name == "browser_read_network" {
-            execute_browser_read_network_tool().await
-        } else if tool_call.name == "browser_start" {
-            match crate::browser_sessions::start_and_report().await {
-                Ok(msg) => text_result(msg),
-                Err(e) => text_result(format!("Error: {e}")),
-            }
-        } else if tool_call.name == "browser_session_status" {
-            match crate::browser_sessions::session_status().await {
-                Ok(v) => text_result(serde_json::to_string_pretty(&v).unwrap_or_default()),
-                Err(e) => text_result(format!("Error: {e}")),
-            }
-        } else if tool_call.name == "browser_import_cookies" {
-            let file = tool_call.arguments.get("file").and_then(|v| v.as_str()).unwrap_or("");
-            if file.is_empty() {
-                text_result("Error: 'file' is required.".to_string())
-            } else {
-                match crate::browser_sessions::import_cookies(file).await {
-                    Ok(msg) => text_result(msg),
-                    Err(e) => text_result(format!("Error: {e}")),
-                }
-            }
-        } else if tool_call.name == "math" {
-            crate::agent::tools::math::execute(&tool_call.arguments, state.primary_workspace_folder().await, vision_capable).await
-        } else if tool_call.name == "task" {
-            execute_task_tool(&tool_call.arguments, context.delegate_depth, state, app).await
-        } else if tool_call.name == "list_subagent_profiles" {
-            execute_list_subagent_profiles_tool(state.primary_workspace_folder().await).await
-        } else if tool_call.name == "hire_agent" {
-            text_result(crate::agent::team::execute_hire_tool(&tool_call.arguments, state.primary_workspace_folder().await, app).await)
-        } else if tool_call.name == "generate_image" {
-            execute_generate_image_tool(&tool_call.arguments, app).await
-        } else if tool_call.name == "connect_mcp_server" {
-            execute_connect_mcp_server_tool(&tool_call.arguments).await
-        } else if tool_call.name == "get_current_time" {
-            execute_get_current_time_tool().await
-        } else if tool_call.name == "list_tools" {
-            execute_list_tools_tool(&disabled_tools).await
-        } else if tool_call.name == crate::agent::tools::profile::LOAD_TOOLS {
-            let available = available_tool_names(state).await;
-            let (text, is_error) = crate::agent::tools::profile::execute_load_tools(&tool_call.arguments, &available);
-            text_result(if is_error { format!("Error: {text}") } else { text })
-        } else if tool_call.name == "set_panel" {
-            execute_set_panel_tool(&tool_call.arguments, emit)
-        } else if tool_call.name == "get_goal" {
-            execute_get_goal_tool(state).await
-        } else if tool_call.name == "create_goal" {
-            execute_create_goal_tool(&tool_call.arguments, state).await
-        } else if tool_call.name == "update_goal" {
-            execute_update_goal_tool(&tool_call.arguments, state).await
-        } else if tool_call.name == "terminal" {
-            let args = &tool_call.arguments;
-            match args.get("action").and_then(|a| a.as_str()).unwrap_or("") {
-                "open" => execute_terminal_open_tool(args, app).await,
-                "send" => execute_terminal_send_tool(args, app).await,
-                "read" => execute_terminal_read_tool(args, app).await,
-                "interrupt" => execute_terminal_signal_tool(args, app).await,
-                "close" => execute_terminal_close_tool(args, app).await,
-                "list" => execute_terminal_list_tool(app).await,
-                other => text_result(format!("Error: unknown terminal action '{other}' — use open, send, read, interrupt, close or list.")),
-            }
-        } else if tool_call.name == "create_automation" {
-            execute_create_automation_tool(&tool_call.arguments, app).await
-        } else if tool_call.name == "list_automations" {
-            execute_list_automations_tool(app).await
-        } else if tool_call.name == "delete_automation" {
-            execute_delete_automation_tool(&tool_call.arguments, app).await
-        } else if tool_call.name == "set_automation_enabled" {
-            execute_set_automation_enabled_tool(&tool_call.arguments, app).await
-        } else if tool_call.name == "sandbox_execute" {
-            execute_sandbox_tool(&tool_call.arguments).await
-        } else if tool_call.name == "run_script" {
-            crate::agent::tools::ptc::execute_ptc_tool(&tool_call.arguments, context.delegate_depth, state, emit, app, &tool_call.id).await
-        } else if tool_call.name == "vault" {
-            tool_result_to_agent_result(crate::vault::execute_tool(&tool_call.arguments).await, vision_capable)
-        } else if tool_call.name == "nebius_job" {
-            tool_result_to_agent_result(crate::nebius::execute_tool(&tool_call.arguments).await, vision_capable)
-        } else if tool_call.name == "user_browser_driver" {
-            tool_result_to_agent_result(crate::helium::execute_tool(&tool_call.arguments).await, vision_capable)
-        } else if tool_call.name == "check_diagram" {
-            crate::agent::tools::diagram_check::execute(&tool_call.arguments, app).await
-        } else if tool_call.name == "guide" {
-            let path = tool_call.arguments.get("path").and_then(|p| p.as_str()).unwrap_or("");
-            let text = crate::agent::tools::guides::read(path).await.unwrap_or_else(|e| e);
-            AgentToolResult { content: vec![MessageContent::Text { text }], details: serde_json::Value::Null, terminate: None }
-        } else if tool_call.name == "email" || tool_call.name == "phone" {
-            // A bot's own address and number (`agent::team::contact`).
-            let text = match state.bot_policy().await {
-                Some(p) if tool_call.name == "email" => crate::agent::team::contact::email_tool(&p.root, &p.bot_id, &tool_call.arguments).await,
-                Some(p) => crate::agent::team::contact::phone_tool(&p.root, &p.bot_id, &tool_call.arguments).await,
-                None => Err("Only an agent with its own email or phone can use this.".to_string()),
+        // Tools that need the agent (`AGENT_TOOLS`), then the ones that need
+        // only their arguments (the `Tool` registry), then MCP servers.
+        } else if let Some(tool) = AGENT_TOOLS.iter().find(|t| t.names.contains(&tool_call.name.as_str())) {
+            let cx = ToolCtx {
+                call_id: &tool_call.id,
+                name: &tool_call.name,
+                args: &tool_call.arguments,
+                state,
+                app,
+                emit,
+                depth: context.delegate_depth,
+                vision: vision_capable,
+                disabled: &disabled_tools,
             };
-            match text {
-                Ok(t) => AgentToolResult { content: vec![MessageContent::Text { text: t }], details: serde_json::Value::Null, terminate: None },
-                Err(e) => AgentToolResult { content: vec![MessageContent::Text { text: format!("Error: {e}") }], details: serde_json::Value::Null, terminate: None },
-            }
-        } else if tool_call.name == "dip" || tool_call.name == "computer" {
-            // The tool is named `dip`; `computer` is accepted as a silent
-            // alias. Both the schema and the capability map advertise `dip`
-            // only, but "computer" with these exact action names (screenshot,
-            // left_click, type, key, ...) is a strong prior for most models,
-            // so a model that reaches for it by that name gets the same tool
-            // instead of an "unknown tool" error it has to recover from.
-            //
-            // Merged pixel-mode + (Windows-only) structured-mode tool — see
-            // `agent::tools::desktop::computer::execute_computer_tool`. Needs
-            // `&tauri::AppHandle` (structured mode drives the highlight
-            // overlay), so it's dispatched here rather than through the
-            // plain `Tool` trait registry below.
-            // The activity notch, for the main agent (Viv Instant has its own).
-            let notch = !state.auto_approve().await;
-            if notch {
-                crate::activity::begin_action(app, &tool_call.arguments);
-            }
-            let result = crate::agent::tools::desktop::computer::execute_computer_tool(&tool_call.arguments, app).await;
-            if notch {
-                crate::activity::end_action(app);
-            }
-            tool_result_to_agent_result(result, vision_capable)
+            (tool.run)(&cx).await
         } else if let Some(tool) = tools.iter().find(|t| t.name() == tool_call.name) {
             let res = tool.execute(&tool_call.arguments, ".").await;
             tool_result_to_agent_result(res, vision_capable)
@@ -3222,24 +3234,7 @@ mod schema_registry_consistency_tests {
     /// The other direction from `every_constructed_tool_has_a_schema_entry`:
     /// every schema entry needs a handler somewhere, or a schema-visible tool
     /// silently dead-ends at "Tool not found" the first time the model tries
-    /// it — a wrong turn burned discovering it, not a compile error. Several
-    /// tools (goal, terminal, memory, ...) need `&AgentState`/`&AppHandle`/
-    /// `emit`, which the `Tool` trait's `execute(&self, args, cwd)` can't
-    /// carry, so they're handled as `else if tool_call.name == "..."`
-    /// branches in `execute_tool_calls` instead of the trait registry — this
-    /// list has to be kept in sync with that chain by hand, since nothing
-    /// generates it from the real `if`/`else if` conditions.
-    const DISPATCH_CHAIN_TOOLS: &[&str] = &[
-        "remember", "recall", "read_skill", "question", "submit_plan", "assign_plan_steps", "team_run", "message_agent", "team_post", "team_read",
-        "present_snippet", "web_preview", "browser_snapshot", "browser_click", "browser_type",
-        "browser_press_key", "browser_scroll", "browser_evaluate", "browser_read_console",
-        "browser_read_network", "browser_start", "browser_session_status", "browser_import_cookies", "task", "list_subagent_profiles", "hire_agent", "generate_image", "connect_mcp_server",
-        "get_current_time", "list_tools", "load_tools", "set_panel", "get_goal", "create_goal", "update_goal",
-        "terminal",
-        "terminal_list", "create_automation", "list_automations", "delete_automation",
-        "set_automation_enabled", "sandbox_execute", "run_script", "math", "dip", "computer", "user_browser_driver", "vault", "nebius_job", "email", "phone", "guide", "check_diagram",
-    ];
-
+    /// it. Handlers are the `Tool` registry, `AGENT_TOOLS`, and playbooks.
     #[test]
     fn every_schema_entry_is_dispatchable() {
         let playbook_names: std::collections::HashSet<String> =
@@ -3250,17 +3245,18 @@ mod schema_registry_consistency_tests {
                 .map(|t| t.name().to_string())
                 .collect();
 
+        let agent_tools: std::collections::HashSet<&str> = super::AGENT_TOOLS.iter().flat_map(|t| t.names.iter().copied()).collect();
         let undispatchable: Vec<String> = static_tool_definitions()
             .iter()
             .filter_map(|def| def.get("name").and_then(|v| v.as_str()).map(String::from))
             .filter(|name| {
-                !constructed.contains(name) && !DISPATCH_CHAIN_TOOLS.contains(&name.as_str()) && !playbook_names.contains(name)
+                !constructed.contains(name) && !agent_tools.contains(name.as_str()) && !playbook_names.contains(name)
             })
             .collect();
         assert!(
             undispatchable.is_empty(),
             "these tools have a schema entry but no handler in create_coding_tools() or the \
-             execute_tool_calls dispatch chain, so calling them dead-ends at 'Tool not found': {undispatchable:?}"
+             AGENT_TOOLS table, so calling them dead-ends at 'Tool not found': {undispatchable:?}"
         );
     }
 }

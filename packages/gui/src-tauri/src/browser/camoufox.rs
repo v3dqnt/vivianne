@@ -51,7 +51,7 @@ static CURRENT_TAB: Mutex<Option<String>> = Mutex::const_new(None);
 static CURRENT_URL: Mutex<Option<String>> = Mutex::const_new(None);
 
 /// The URL of the currently active tab, if any (set by the last successful
-/// `navigate`). Read by the interaction tools in `agent/tool_exec.rs` so
+/// `navigate`). Read by the interaction tools in `agent::tools::exec` so
 /// their panel-refresh events have a URL to report.
 pub async fn current_url() -> Option<String> {
     CURRENT_URL.lock().await.clone()
@@ -765,7 +765,7 @@ pub async fn scroll(direction: &str, amount: i64) -> Result<NavigateResult, Stri
 /// Evaluate arbitrary JS in the page context and return its result. The only
 /// way to read console output or network/performance timing — there's no
 /// dedicated route for either, so `browser_read_console`/`browser_read_network`
-/// (in `agent/tool_exec.rs`) are built on top of this.
+/// (in `agent::tools::exec`) are built on top of this.
 pub async fn evaluate(expression: &str) -> Result<Value, String> {
     with_recovery(|tab| evaluate_in(tab, expression)).await
 }
