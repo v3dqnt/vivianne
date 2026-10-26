@@ -488,6 +488,53 @@ fn room_path(root: &Path) -> PathBuf {
     bots_dir(root).join("room.jsonl")
 }
 
+/// The Everyone group's channel: the room every bot is in.
+pub const ROOM: &str = "room";
+const GROUP_PREFIX: &str = "group:";
+
+/// A group chat between the user and some of the bots (`groups.json`).
+/// Everyone, the room, is not stored: it is every bot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Group {
+    #[serde(default)]
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub members: Vec<String>,
+}
+
+fn groups_path(root: &Path) -> PathBuf {
+    bots_dir(root).join("groups.json")
+}
+
+fn load_groups(root: &Path) -> Vec<Group> {
+    read_json(&groups_path(root))
+}
+
+/// Where a channel's messages are kept: the room, a group, or a DM.
+fn channel_path(root: &Path, channel: &str) -> PathBuf {
+    match channel.strip_prefix(GROUP_PREFIX) {
+        _ if channel == ROOM => room_path(root),
+        Some(id) => bots_dir(root).join(format!("group-{id}.jsonl")),
+        None => dm_path(root, channel),
+    }
+}
+
+/// The bots in a group: everyone for the room, else its members.
+fn members_of(root: &Path, channel: &str, team: &[TeamAgent]) -> Vec<TeamAgent> {
+    let Some(id) = channel.strip_prefix(GROUP_PREFIX) else { return team.to_vec() };
+    let members = load_groups(root).into_iter().find(|g| g.id == id).map(|g| g.members).unwrap_or_default();
+    team.iter().filter(|a| members.contains(&a.id)).cloned().collect()
+}
+
+fn group_name(root: &Path, channel: &str) -> String {
+    match channel.strip_prefix(GROUP_PREFIX) {
+        Some(id) => load_groups(root).into_iter().find(|g| g.id == id).map(|g| g.name).unwrap_or_else(|| id.to_string()),
+        None => "the room".into(),
+    }
+}
+
 fn dm_path(root: &Path, id: &str) -> PathBuf {
     bot_dir(root, id).join("dm.jsonl")
 }
@@ -619,11 +666,18 @@ fn emit_message(app: &tauri::AppHandle, root: &str, channel: &str, msg: &ChatMes
 
 // ── Running a bot ────────────────────────────────────────────────────────
 
-/// Where a run's reply goes: the room, or the bot's DM.
+/// Where a run's reply goes: a group (`room` is Everyone, else
+/// `group:<id>`), or the bot's DM.
 #[derive(Debug, Clone, PartialEq)]
 enum Target {
-    Room { hops: u32 },
+    Group { channel: String, hops: u32 },
     Dm,
+}
+
+impl Target {
+    fn everyone(hops: u32) -> Self {
+        Target::Group { channel: ROOM.into(), hops }
+    }
 }
 
 const MAX_HOPS: u32 = 4;
@@ -713,7 +767,7 @@ fn first_text(messages: &[AgentMessage]) -> String {
         .unwrap_or_default()
 }
 
-fn room_digest(root: &Path, team: &[TeamAgent]) -> String {
+fn room_digest(root: &Path, team: &[TeamAgent], channel: &str) -> String {
     let name = |from: &str| -> String {
         if from == "user" {
             "User".into()
@@ -721,7 +775,7 @@ fn room_digest(root: &Path, team: &[TeamAgent]) -> String {
             team.iter().find(|a| a.id == from).map(|a| format!("{} (@{})", a.name, a.id)).unwrap_or_else(|| from.to_string())
         }
     };
-    read_lines::<ChatMessage>(&room_path(root), ROOM_IN_PROMPT)
+    read_lines::<ChatMessage>(&channel_path(root, channel), ROOM_IN_PROMPT)
         .iter()
         .map(|m| format!("[{}] {}", name(&m.from), m.text.chars().take(1500).collect::<String>()))
         .collect::<Vec<_>>()
@@ -943,7 +997,7 @@ fn post_with_steps(
         steps,
         attachments: Vec::new(),
     };
-    let path = if channel == "room" { room_path(Path::new(root)) } else { dm_path(Path::new(root), channel) };
+    let path = channel_path(Path::new(root), channel);
     let _ = append_line(&path, &msg);
     emit_message(app, root, channel, &msg);
     msg
@@ -972,21 +1026,24 @@ fn finish(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request:
                     }
                 };
                 let (mentions, everyone) = mentions_in(&text, &team);
-                // A DM's reply is in the bot's thread already; the room gets a post.
-                if target != Target::Dm {
-                    post_with_steps(app, root, "room", id, &text, kind, mentions.clone(), steps);
+                // A DM's reply is in the bot's thread already; a group gets a post.
+                if let Target::Group { channel, .. } = &target {
+                    post_with_steps(app, root, channel, id, &text, kind, mentions.clone(), steps);
                 }
                 if needs || origin != Origin::User {
                     let title = if needs { format!("{name} needs you") } else { format!("{name} posted") };
                     crate::agent::system::notifications::notify_text(app, &title, &text.chars().take(140).collect::<String>());
                 }
-                // Handoffs: teammates mentioned in a room post are asked next.
-                if let Target::Room { hops } = target {
-                    if hops < MAX_HOPS {
-                        let next: Vec<String> =
-                            if everyone { team.iter().map(|a| a.id.clone()).collect() } else { mentions };
+                // Handoffs: teammates mentioned in a group post are asked next.
+                if let Target::Group { channel, hops } = &target {
+                    if *hops < MAX_HOPS {
+                        let group = members_of(&root_path, channel, &team);
+                        let next: Vec<String> = if everyone { group.iter().map(|a| a.id.clone()).collect() } else { mentions };
+                        let place = group_name(&root_path, channel);
+                        let digest = room_digest(&root_path, &team, channel);
                         for other in next.into_iter().filter(|o| o != id) {
-                            dispatch(app, root, &other, Origin::User, format!("{name} in the room: {text}\n\nRecent room:\n{}", room_digest(&root_path, &team)), Target::Room { hops: hops + 1 });
+                            let request = format!("{name} in {place}: {text}\n\nRecent messages there:\n{digest}");
+                            dispatch(app, root, &other, Origin::User, request, Target::Group { channel: channel.clone(), hops: hops + 1 });
                         }
                     }
                 }
@@ -994,7 +1051,10 @@ fn finish(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request:
         }
         Err(e) if target == Target::Dm => log::info!("[bots] @{id}'s turn failed: {e}"), // the thread shows it
         Err(e) => {
-            let channel = "room".to_string();
+            let channel = match &target {
+                Target::Group { channel, .. } => channel.clone(),
+                Target::Dm => ROOM.to_string(),
+            };
             // A provider's limit is something the user can fix in one click:
             // say so, rather than leaving a bare HTTP error.
             let low = e.to_lowercase();
@@ -1116,7 +1176,7 @@ fn tick(app: &tauri::AppHandle, root: &str) {
                     r.next_run = next_run(&r.cron);
                     changed = true;
                     let request = format!("{}\n\n{}", r.title, r.prompt);
-                    dispatch(app, root, &bot.id, Origin::Routine, request, Target::Room { hops: MAX_HOPS });
+                    dispatch(app, root, &bot.id, Origin::Routine, request, Target::everyone(MAX_HOPS));
                     r.runs.push(RoutineRun { at: now, ok: true, summary: "Started".into() });
                     let skip = r.runs.len().saturating_sub(RUNS_KEPT);
                     r.runs.drain(..skip);
@@ -1137,8 +1197,8 @@ fn tick(app: &tauri::AppHandle, root: &str) {
                 let mut s = settings.clone();
                 s.last_checkin = Some(now);
                 let _ = save_settings(&root_path, &bot.id, &s);
-                let request = format!("{CHECKIN_PROMPT}\n\nRecent room:\n{}", room_digest(&root_path, &active_bots(&root_path)));
-                dispatch(app, root, &bot.id, Origin::Proactive, request, Target::Room { hops: MAX_HOPS });
+                let request = format!("{CHECKIN_PROMPT}\n\nRecent room:\n{}", room_digest(&root_path, &active_bots(&root_path), ROOM));
+                dispatch(app, root, &bot.id, Origin::Proactive, request, Target::everyone(MAX_HOPS));
             }
         }
     }
@@ -1147,33 +1207,83 @@ fn tick(app: &tauri::AppHandle, root: &str) {
 // ── Commands ─────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn cmd_bots_room(root: String, limit: Option<usize>) -> Result<Vec<ChatMessage>, String> {
-    Ok(read_lines(&room_path(Path::new(&root)), limit.unwrap_or(200)))
+pub async fn cmd_bots_room(root: String, limit: Option<usize>, channel: Option<String>) -> Result<Vec<ChatMessage>, String> {
+    let channel = channel.unwrap_or_else(|| ROOM.into());
+    Ok(read_lines(&channel_path(Path::new(&root), &channel), limit.unwrap_or(200)))
+}
+
+/// The groups the user made (Everyone, the room, isn't one of them).
+#[tauri::command]
+pub async fn cmd_bots_groups(root: String) -> Result<Vec<Group>, String> {
+    Ok(load_groups(Path::new(&root)))
+}
+
+/// Make or change a group. A new one gets an id from its name.
+#[tauri::command]
+pub async fn cmd_bots_save_group(root: String, group: Group) -> Result<Group, String> {
+    let root_path = Path::new(&root);
+    let name = group.name.trim().to_string();
+    if name.is_empty() {
+        return Err("A group needs a name.".into());
+    }
+    let mut groups = load_groups(root_path);
+    let id = if group.id.is_empty() {
+        let base = crate::agent::team::slug(&name);
+        let mut id = base.clone();
+        let mut n = 2;
+        while groups.iter().any(|g| g.id == id) {
+            id = format!("{base}-{n}");
+            n += 1;
+        }
+        id
+    } else {
+        group.id.clone()
+    };
+    let saved = Group { id: id.clone(), name, members: group.members };
+    match groups.iter_mut().find(|g| g.id == id) {
+        Some(g) => *g = saved.clone(),
+        None => groups.push(saved.clone()),
+    }
+    std::fs::create_dir_all(bots_dir(root_path)).map_err(|e| e.to_string())?;
+    write_json(&groups_path(root_path), &groups)?;
+    Ok(saved)
+}
+
+#[tauri::command]
+pub async fn cmd_bots_delete_group(root: String, id: String) -> Result<(), String> {
+    let root_path = Path::new(&root);
+    let groups: Vec<Group> = load_groups(root_path).into_iter().filter(|g| g.id != id).collect();
+    write_json(&groups_path(root_path), &groups)?;
+    let _ = std::fs::remove_file(channel_path(root_path, &format!("{GROUP_PREFIX}{id}")));
+    Ok(())
 }
 
 /// The user posts in the room: mentioned bots answer, or whoever routing picks.
 #[tauri::command]
-pub async fn cmd_bots_post(app: tauri::AppHandle, root: String, text: String) -> Result<ChatMessage, String> {
+pub async fn cmd_bots_post(app: tauri::AppHandle, root: String, text: String, channel: Option<String>) -> Result<ChatMessage, String> {
+    let channel = channel.unwrap_or_else(|| ROOM.into());
     let text = text.trim().to_string();
     if text.is_empty() {
         return Err("Nothing to send.".into());
     }
     let root_path = PathBuf::from(&root);
-    let team = active_bots(&root_path);
+    let all = active_bots(&root_path);
+    let team = members_of(&root_path, &channel, &all);
     if team.is_empty() {
-        return Err("There are no agents on this team yet — add one first.".into());
+        return Err(if channel == ROOM { "There are no agents on this team yet — add one first.".into() } else { "This group has no one in it yet.".into() });
     }
     let (mut mentions, everyone) = mentions_in(&text, &team);
-    let msg = post(&app, &root, "room", "user", &text, "message", mentions.clone());
+    let msg = post(&app, &root, &channel, "user", &text, "message", mentions.clone());
     if everyone {
         mentions = team.iter().map(|a| a.id.clone()).collect();
     } else if mentions.is_empty() {
         mentions = route(&app, &team, &text).await;
     }
-    let digest = room_digest(&root_path, &team);
+    let digest = room_digest(&root_path, &all, &channel);
+    let place = group_name(&root_path, &channel);
     for id in mentions {
-        let request = format!("The user in the room: {text}\n\nRecent room:\n{digest}");
-        dispatch(&app, &root, &id, Origin::User, request, Target::Room { hops: 0 });
+        let request = format!("The user in {place}: {text}\n\nRecent messages there:\n{digest}");
+        dispatch(&app, &root, &id, Origin::User, request, Target::Group { channel: channel.clone(), hops: 0 });
     }
     Ok(msg)
 }
@@ -1444,7 +1554,7 @@ pub async fn cmd_bots_run_routine(app: tauri::AppHandle, root: String, bot_id: S
     let skip = r.runs.len().saturating_sub(RUNS_KEPT);
     r.runs.drain(..skip);
     save_routines(Path::new(&root), &bot_id, &all)?;
-    dispatch(&app, &root, &bot_id, Origin::Routine, request, Target::Room { hops: MAX_HOPS });
+    dispatch(&app, &root, &bot_id, Origin::Routine, request, Target::everyone(MAX_HOPS));
     Ok(())
 }
 
