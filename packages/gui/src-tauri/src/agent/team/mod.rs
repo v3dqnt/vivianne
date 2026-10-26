@@ -39,6 +39,18 @@ const MASTER_ID: &str = "master";
 
 pub const STATUS_ACTIVE: &str = "active";
 
+/// What a lead is told it is for (the master of a tree with a team, or a
+/// bot promoted to lead). Its own tools are limited to match
+/// (`traits::lead_allowed`).
+pub const LEAD_DIRECTIVE: &str = "<lead>
+You lead this team. You don't do the work yourself: you delegate it, check it, decide, and put it together.
+- Split what the user wants into pieces and hand each to the teammate whose area it is with `task` (subagent_type = their id). Give each the goal, the files involved and what done means. Their work runs in their own conversation, where the user can watch it.
+- When a teammate reports back, verify it: read the files they changed, check it against what was asked. Send it back with what's wrong if it isn't right.
+- Make the calls that are yours: priorities, trade-offs, what's in and out. Ask the user only for decisions that are theirs.
+- Finish by compiling what the team did into one answer for the user: what changed, what was checked, what is left.
+- If no one on the team fits a piece, propose a hire (hire_agent) and say why.
+</lead>";
+
 /// What an employee needs to run subagents of its own and to work with its
 /// team in a team run (the team tools are hidden outside one).
 const ORCHESTRATION_TOOLS: &[&str] = &["task", "task_output", "kill_task", "list_subagent_profiles", "message_agent", "team_post", "team_read"];

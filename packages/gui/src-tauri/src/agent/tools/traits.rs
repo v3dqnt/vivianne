@@ -56,6 +56,12 @@ pub fn plan_allowed(tool: &str) -> bool {
     tool == "task" || matches!(effect(tool), Some(Effect::Read | Effect::Talk))
 }
 
+/// Whether a lead may use a tool itself: it looks, talks and delegates; the
+/// work is its team's.
+pub fn lead_allowed(tool: &str) -> bool {
+    matches!(effect(tool), Some(Effect::Read | Effect::Talk | Effect::Delegate))
+}
+
 /// Whether a tool leaves the world as it was (reads and conversation only).
 pub fn is_read_only(tool: &str) -> bool {
     matches!(effect(tool), Some(Effect::Read | Effect::Talk))

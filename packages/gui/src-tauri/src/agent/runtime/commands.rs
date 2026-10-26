@@ -259,6 +259,25 @@ pub async fn run_turn(
         } else {
             format!("{base}\n\n{capability_blocks}")
         };
+        // The chat of a tree with a master and a team is its lead: it
+        // delegates, checks and decides (`traits::lead_allowed`).
+        if turn.main {
+            let lead = match agent.state.primary_workspace_folder().await {
+                Some(root) => {
+                    crate::agent::sessions::projects::is_tree(&root)
+                        && crate::agent::sessions::projects::has_master(&root)
+                        && crate::agent::team::list(std::path::Path::new(&root)).iter().any(|a| a.status == crate::agent::team::STATUS_ACTIVE)
+                }
+                None => false,
+            };
+            agent.state.set_lead(lead).await;
+        }
+        if agent.state.lead().await {
+            prompt.push_str("
+
+");
+            prompt.push_str(crate::agent::team::LEAD_DIRECTIVE);
+        }
         // After the directive, so the per-turn strip above removes it again
         // and a turn out of plan mode carries none of it.
         if agent.state.plan_mode().await {

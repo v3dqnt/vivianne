@@ -101,6 +101,8 @@ struct AgentStateInner {
     /// (see `agent::team::plans`). Per conversation — the old process-wide flag
     /// switched every project and every subagent into it at once.
     plan_mode: bool,
+    /// Leads a team: looks, talks and delegates, never does the work itself.
+    lead: bool,
     /// `(run id, member id)` while this agent works in a team run (see
     /// `agent::team::run`) — what lets it message its teammates.
     team_member: Option<(String, String)>,
@@ -158,6 +160,7 @@ impl AgentState {
                 goal: None,
                 long_task: None,
                 plan_mode: false,
+                lead: false,
                 team_member: None,
                 owned_paths: Vec::new(),
             })),
@@ -294,6 +297,14 @@ impl AgentState {
 
     pub async fn set_long_task(&self, key: Option<String>) {
         self.inner.write().await.long_task = key;
+    }
+
+    pub async fn lead(&self) -> bool {
+        self.inner.read().await.lead
+    }
+
+    pub async fn set_lead(&self, on: bool) {
+        self.inner.write().await.lead = on;
     }
 
     pub async fn plan_mode(&self) -> bool {

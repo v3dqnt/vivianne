@@ -26,6 +26,9 @@ pub struct AgentProfile {
     pub tools: Option<Vec<String>>,
     /// Research and conversation only, until a plan is approved.
     pub plan_mode: bool,
+    /// Leads a team: delegates, checks, decides and compiles; does no work
+    /// itself (`traits::lead_allowed`).
+    pub lead: bool,
     /// May run subagents of its own (an employee, a bot).
     pub delegation: bool,
     /// The paths it owns in a team; it may write only there.
@@ -63,6 +66,7 @@ impl AgentProfile {
             persona: PersonaMode::Agent,
             tools,
             plan_mode: parent.plan_mode,
+            lead: false,
             delegation,
             owned,
             bot: parent.bot.clone(),
@@ -77,6 +81,7 @@ impl AgentProfile {
             persona: state.persona_mode().await,
             tools: state.subagent_allowed_tools().await,
             plan_mode: state.plan_mode().await,
+            lead: state.lead().await,
             delegation: state.delegation_allowed().await,
             owned: state.owned_paths().await,
             bot: state.bot_policy().await,
@@ -90,6 +95,7 @@ impl AgentProfile {
         state.set_persona_mode(self.persona).await;
         state.set_subagent_allowed_tools(self.tools).await;
         state.set_plan_mode(self.plan_mode).await;
+        state.set_lead(self.lead).await;
         state.set_delegation_allowed(self.delegation).await;
         state.set_owned_paths(self.owned).await;
         state.set_bot_policy(self.bot).await;

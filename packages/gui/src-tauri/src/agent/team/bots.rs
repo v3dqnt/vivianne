@@ -635,8 +635,11 @@ struct Live {
     /// Where the run in flight will reply: `room` or the bot's own DM.
     channel: HashMap<(String, String), String>,
     /// Requests that arrived while the bot was busy, run after it finishes.
-    queued: HashMap<(String, String), Vec<(Origin, String, Target, Vec<ImageInput>)>>,
+    queued: HashMap<(String, String), Vec<(Origin, String, Target, Vec<ImageInput>, Option<Reply>)>>,
 }
+
+/// Where a delegated turn's outcome goes: the lead waiting on it.
+type Reply = tokio::sync::oneshot::Sender<Result<String, String>>;
 
 static LIVE: std::sync::LazyLock<Mutex<Live>> = std::sync::LazyLock::new(|| Mutex::new(Live::default()));
 
@@ -784,16 +787,26 @@ fn room_digest(root: &Path, team: &[TeamAgent], channel: &str) -> String {
 
 /// Run one turn of a bot. Queues it if the bot is busy.
 fn dispatch(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request: String, target: Target) {
-    dispatch_with(app, root, id, origin, request, target, Vec::new())
+    dispatch_with(app, root, id, origin, request, target, Vec::new(), None)
+}
+
+/// A lead hands a teammate work and waits for its answer. The work runs in
+/// the teammate's own conversation (its DM shows it as it happens), under its
+/// own rules, after whatever it is already doing.
+pub async fn delegate(app: &tauri::AppHandle, root: &str, id: &str, request: String) -> Result<String, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    dispatch_with(app, root, id, Origin::User, request, Target::Dm, Vec::new(), Some(tx));
+    rx.await.unwrap_or_else(|_| Err("it stopped before answering".into()))
 }
 
 /// `dispatch`, with images for the agent to look at (a DM's attachments).
-fn dispatch_with(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request: String, target: Target, images: Vec<ImageInput>) {
+#[allow(clippy::too_many_arguments)]
+fn dispatch_with(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request: String, target: Target, images: Vec<ImageInput>, reply: Option<Reply>) {
     let key = (root.to_string(), id.to_string());
     {
         let mut l = live();
         if l.running.contains_key(&key) {
-            l.queued.entry(key).or_default().push((origin, request, target, images));
+            l.queued.entry(key).or_default().push((origin, request, target, images, reply));
             return;
         }
         l.running.insert(key.clone(), Arc::new(AtomicBool::new(false)));
@@ -816,6 +829,9 @@ fn dispatch_with(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, r
             }
         };
         let outcome = rt.block_on(run_turn(&app, &root, &id, origin, &request, images));
+        if let Some(reply) = reply {
+            let _ = reply.send(outcome.clone());
+        }
         finish(&app, &root, &id, origin, &request, target, outcome);
     });
 }
@@ -888,7 +904,9 @@ async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, 
         root: root.to_string(),
         bot_id: id.to_string(),
     };
-    crate::agent::profiles::AgentProfile::bot(policy, allowed).apply(state).await;
+    let mut profile = crate::agent::profiles::AgentProfile::bot(policy, allowed);
+    profile.lead = bot.lead;
+    profile.apply(state).await;
     // Who it is; the turn adds the capability blocks after.
     state.set_system_prompt(identity(&root_path, &bot, &settings, &team)).await;
 
@@ -1084,8 +1102,8 @@ fn finish(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request:
         l.queued.get_mut(&key).and_then(|q| (!q.is_empty()).then(|| q.remove(0)))
     };
     emit_status(app, root, id);
-    if let Some((o, r, t, imgs)) = next {
-        dispatch_with(app, root, id, o, r, t, imgs);
+    if let Some((o, r, t, imgs, reply)) = next {
+        dispatch_with(app, root, id, o, r, t, imgs, reply);
     }
 }
 
@@ -1433,7 +1451,7 @@ pub async fn cmd_bots_dm_send(
             .join("\n\n");
         format!("{text}\n\nAttached files:\n{blocks}")
     };
-    dispatch_with(&app, &root, &bot_id, Origin::User, request, Target::Dm, images);
+    dispatch_with(&app, &root, &bot_id, Origin::User, request, Target::Dm, images, None);
     Ok(())
 }
 

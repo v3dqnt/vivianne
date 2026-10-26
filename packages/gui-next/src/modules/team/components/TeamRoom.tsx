@@ -78,7 +78,10 @@ function DirectMessage({ root, bot }: { root: string; bot: TeamAgent; team: Team
     const back = activeThreadId()
     const reload = async () => {
       const messages = (await call<AgentMessage[]>('cmd_bots_thread', { root, botId: bot.id })) ?? []
-      agentStoreFor(thread).setState({ messages, streamingIndex: null })
+      // Opened mid-run (work its lead handed it): busy until the run's end
+      // arrives, its steps streaming in from here.
+      const working = useBotsStore.getState().status[botKey(root, bot.id)]?.state === 'working'
+      agentStoreFor(thread).setState({ messages, streamingIndex: null, isBusy: working })
     }
     sendThrough(thread, (text, images) => call('cmd_bots_dm_send', { root, botId: bot.id, text, images }))
     setActiveThread(thread)

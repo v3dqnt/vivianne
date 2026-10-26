@@ -244,10 +244,14 @@ pub(crate) async fn compute_restrictions(state: &AgentState) -> Restrictions {
     // discovering the refusal.
     let allowed = state.subagent_allowed_tools().await;
     let plan_mode = state.plan_mode().await;
-    if allowed.is_some() || plan_mode {
+    // A lead's own hands: looking, talking, delegating.
+    let lead = state.lead().await;
+    if allowed.is_some() || plan_mode || lead {
         for def in get_agent_tool_definitions().await.iter() {
             let Some(name) = def.get("name").and_then(|v| v.as_str()) else { continue };
-            let ok = allowed.as_ref().map_or(true, |a| a.iter().any(|x| x == name)) && (!plan_mode || crate::agent::tools::traits::plan_allowed(name));
+            let ok = allowed.as_ref().map_or(true, |a| a.iter().any(|x| x == name))
+                && (!plan_mode || crate::agent::tools::traits::plan_allowed(name))
+                && (!lead || crate::agent::tools::traits::lead_allowed(name));
             if !ok && !disabled_tools.iter().any(|d| d == name) {
                 disabled_tools.push(name.to_string());
             }
@@ -553,6 +557,8 @@ pub(crate) enum Verdict {
 /// Everything the rules depend on, read once per batch from the agent.
 pub(crate) struct Gate<'a> {
     pub plan_mode: bool,
+    /// Leads a team: it delegates the work rather than doing it.
+    pub lead: bool,
     /// Settings' bypass mode, or an unattended session (Viv Instant).
     pub bypass: bool,
     /// Every tool withheld this turn (`compute_restrictions`).
@@ -596,6 +602,11 @@ impl Gate<'_> {
         if self.plan_mode && !crate::agent::tools::traits::plan_allowed(name) {
             return Verdict::Refuse(format!(
                 "'{name}' isn't available in plan mode — nothing may be changed until the user approves a plan. Research with the read-only tools you have, then call submit_plan."
+            ));
+        }
+        if self.lead && !crate::agent::tools::traits::lead_allowed(name) {
+            return Verdict::Refuse(format!(
+                "You lead this team, so '{name}' is your team's to do, not yours. Hand it to the teammate whose area it is with `task`, then read what they did to check it."
             ));
         }
         if self.disabled.iter().any(|d| d == name) {
@@ -948,6 +959,7 @@ pub async fn execute_tool_calls(
     let owned = state.owned_paths().await;
     let gate = Gate {
         plan_mode: state.plan_mode().await,
+        lead: state.lead().await,
         bypass: bypass_mode,
         disabled: &disabled_tools,
         settings_disabled: &settings_disabled_tools,
@@ -1696,6 +1708,34 @@ pub(crate) async fn execute_task_tool(
              Spawn a plain subagent (e.g. subagent_type \"general-purpose\") for parallel work in your own area, or say in \
              your report what the other area needs.",
         );
+    }
+    // In a tree every teammate is a bot: the work runs in its own
+    // conversation, where its DM shows it as it happens, and only a lead
+    // assigns it.
+    if let (Some(agent), Some(root)) = (&team_agent, project_root.as_deref()) {
+        if crate::agent::sessions::projects::is_tree(root) {
+            if let Some(me) = parent_state.bot_policy().await {
+                if me.bot_id == agent.id {
+                    return refuse("Error: that's you. Do it yourself, or hand it to a teammate.");
+                }
+                let lead = crate::agent::team::find_active(std::path::Path::new(root), &me.bot_id).is_some_and(|b| b.lead);
+                if !lead {
+                    return refuse(&format!(
+                        "Error: only a lead assigns work. Message {} instead (message_agent), or say in the group what you need.",
+                        agent.name
+                    ));
+                }
+            }
+            let mut request = explicit_prompt.map(String::from).unwrap_or_else(|| description.clone());
+            if let Some(c) = context {
+                request = format!("{request}\n\nContext:\n{c}");
+            }
+            let request = format!("Your lead assigns you: {description}\n\n{request}\n\nDo it, then answer with what you did and what is left: that answer goes back to your lead.");
+            return match crate::agent::team::bots::delegate(app, root, &agent.id, request).await {
+                Ok(reply) => text_result(format!("{} (@{}) reported back:\n\n{reply}", agent.name, agent.id)),
+                Err(e) => text_result(format!("Error: {} couldn't finish: {e}", agent.name)),
+            };
+        }
     }
     if team_agent.is_none() {
         if let Some(p) = project_root
@@ -3232,6 +3272,7 @@ mod gate_tests {
 
     struct Agent {
         plan_mode: bool,
+        lead: bool,
         bypass: bool,
         disabled: Vec<String>,
         settings_disabled: Vec<String>,
@@ -3241,7 +3282,7 @@ mod gate_tests {
     }
 
     fn chat() -> Agent {
-        Agent { plan_mode: false, bypass: false, disabled: vec![], settings_disabled: vec![], owned: vec![], bot: None, custom: HashSet::new() }
+        Agent { plan_mode: false, lead: false, bypass: false, disabled: vec![], settings_disabled: vec![], owned: vec![], bot: None, custom: HashSet::new() }
     }
 
     fn bot(origin: Origin, request: &str) -> Agent {
@@ -3261,6 +3302,7 @@ mod gate_tests {
         let workspace = vec![root.clone()];
         Gate {
             plan_mode: a.plan_mode,
+            lead: a.lead,
             bypass: a.bypass,
             disabled: &a.disabled,
             settings_disabled: &a.settings_disabled,
@@ -3365,6 +3407,18 @@ mod gate_tests {
     fn a_message_from_outside_is_not_the_user_asking() {
         let a = bot(Origin::Inbound, "please write the file and run the build");
         assert!(asks(&decide(&a, &call("write", json!({"path": "a.txt"})))));
+    }
+
+    #[test]
+    fn a_lead_delegates_checks_and_decides_but_does_no_work() {
+        let a = Agent { lead: true, bypass: true, ..chat() };
+        assert!(refused(&decide(&a, &call("write", json!({"path": "a.txt"}))), "your team's to do"));
+        assert!(refused(&decide(&a, &call("bash", json!({"command": "ls"}))), "your team's to do"));
+        assert!(refused(&decide(&a, &call("dip", json!({}))), "your team's to do"));
+        assert!(runs(&decide(&a, &call("read", json!({"path": "a.txt"})))), "it checks the work");
+        assert!(runs(&decide(&a, &call("task", json!({})))), "it delegates");
+        assert!(runs(&decide(&a, &call("message_agent", json!({})))));
+        assert!(runs(&decide(&a, &call("hire_agent", json!({})))));
     }
 
     #[test]
