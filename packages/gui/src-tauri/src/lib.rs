@@ -509,6 +509,8 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::team::bots::cmd_bots_groups,
       crate::agent::team::bots::cmd_bots_save_group,
       crate::agent::team::bots::cmd_bots_delete_group,
+      crate::agent::tools::code::github::cmd_github,
+      crate::agent::tools::code::github::cmd_github_repo,
       crate::agent::team::bots::cmd_bots_revert,
       crate::agent::team::bots::cmd_bots_dm_send,
       crate::agent::team::bots::cmd_bots_status,

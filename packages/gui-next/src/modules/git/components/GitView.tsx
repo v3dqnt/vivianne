@@ -1,12 +1,13 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { create } from 'zustand'
-import { Box, Chip, IconButton, Link, Stack, Tooltip, Typography, useTheme } from '../../../ui'
+import { Box, ButtonBase, Chip, IconButton, Link, Stack, Tooltip, Typography, useTheme } from '../../../ui'
 import { GithubLinear, RefreshLinear } from '../../../icons'
 import { surfaceCard } from '../../../theme'
 import { useWorkspaceStore } from '../../ai/store/workspaceStore'
 import { BranchIndicator } from '../../ai/components/BranchIndicator'
 import { useGitStore } from '../store/gitStore'
 import { ReviewPanel } from './ReviewPanel'
+import { Actions, Issues, PullRequests, Releases } from './GitHubPanels'
 
 /** What the main area shows, picked in the title bar: the chat and its
  * panels, or the repository. */
@@ -21,9 +22,21 @@ function when(iso: string): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
+type Tab = 'changes' | 'prs' | 'actions' | 'issues' | 'releases' | 'history'
+const TABS: Array<[Tab, string]> = [
+  ['changes', 'Changes'],
+  ['prs', 'Pull requests'],
+  ['actions', 'Actions'],
+  ['issues', 'Issues'],
+  ['releases', 'Releases'],
+  ['history', 'History'],
+]
+
 /**
  * The repository of the project's folder, in one place: its branch and
- * GitHub remote, what changed (with the diff review), and its history.
+ * GitHub remote, what changed (with the diff review), pull requests with
+ * their checks, Actions runs with their jobs and logs, issues, releases, and
+ * the history. GitHub comes through the same token the agent uses.
  */
 export function GitView() {
   const theme = useTheme()
@@ -33,6 +46,10 @@ export function GitView() {
   const branches = useGitStore((s) => s.branches)
   const loading = useGitStore((s) => s.loading)
   const refresh = useGitStore((s) => s.refresh)
+  const checkout = useGitStore((s) => s.checkoutBranch)
+  const [tab, setTab] = useState<Tab>('changes')
+  // A refresh remounts the open tab, so it loads again.
+  const [epoch, setEpoch] = useState(0)
 
   useEffect(() => {
     if (root) void refresh(root)
@@ -40,12 +57,13 @@ export function GitView() {
 
   const card = { ...surfaceCard(theme.palette.mode), minHeight: 0, overflow: 'hidden' } as const
   const local = branches.filter((b) => !b.isRemote).length
+  const folder = root ? root.split(/[\\/]/).filter(Boolean).pop() : 'No folder'
 
   return (
-    <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, gap: 0.75, mb: 1, mx: 1 }}>
-      <Stack direction="row" sx={{ ...card, alignItems: 'center', gap: 1, px: 1.5, py: 0.75, flexShrink: 0 }}>
+    <Stack sx={{ ...card, flex: 1, minWidth: 0, mb: 1, mx: 1 }}>
+      <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, pt: 0.75, flexShrink: 0 }}>
         <Typography variant="body2" sx={{ fontWeight: 650 }} noWrap>
-          {root ? root.split(/[\\/]/).filter(Boolean).pop() : 'No folder'}
+          {folder}
         </Typography>
         <BranchIndicator />
         <Typography variant="caption" color="text.secondary">
@@ -66,29 +84,67 @@ export function GitView() {
         )}
         <Tooltip title="Refresh">
           <span>
-            <IconButton size="small" aria-label="Refresh" disabled={!root || loading} onClick={() => root && void refresh(root)}>
+            <IconButton
+              size="small"
+              aria-label="Refresh"
+              disabled={!root || loading}
+              onClick={() => {
+                if (root) void refresh(root)
+                setEpoch((n) => n + 1)
+              }}
+            >
               <RefreshLinear size={14} color="currentColor" />
             </IconButton>
           </span>
         </Tooltip>
       </Stack>
 
-      <Stack direction="row" sx={{ flex: 1, minHeight: 0, gap: 0.75 }}>
-        <Box sx={{ ...card, flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <ReviewPanel />
-        </Box>
-        <Stack sx={{ ...card, width: 340, flexShrink: 0 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.6875rem', px: 1.5, pt: 1.25, pb: 0.5 }}>
-            History
-          </Typography>
-          <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pb: 1 }}>
+      <Stack direction="row" role="tablist" sx={{ px: 1, gap: 0.25, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
+        {TABS.map(([id, label]) => (
+          <ButtonBase
+            key={id}
+            role="tab"
+            aria-selected={tab === id}
+            onClick={() => setTab(id)}
+            sx={{
+              px: 1.25,
+              py: 0.875,
+              fontSize: '0.78125rem',
+              fontWeight: tab === id ? 600 : 500,
+              color: tab === id ? 'text.primary' : 'text.secondary',
+              borderBottom: 2,
+              borderColor: tab === id ? 'primary.main' : 'transparent',
+              mb: '-1px',
+              '&:hover': { color: 'text.primary' },
+            }}
+          >
+            {label}
+          </ButtonBase>
+        ))}
+      </Stack>
+
+      <Box key={`${tab}-${epoch}-${root}`} sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        {tab === 'changes' && <ReviewPanel />}
+        {tab === 'prs' && (
+          <PullRequests
+            root={root}
+            onCheckout={async (branch) => {
+              if (root) await checkout(root, branch)
+            }}
+          />
+        )}
+        {tab === 'actions' && <Actions root={root} />}
+        {tab === 'issues' && <Issues root={root} />}
+        {tab === 'releases' && <Releases root={root} />}
+        {tab === 'history' && (
+          <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', py: 0.5 }}>
             {commits.length === 0 && (
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 1.5 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', p: 2 }}>
                 {loading ? 'Loading…' : root ? 'No commits, or not a git repository.' : 'Open a project folder first.'}
               </Typography>
             )}
             {commits.map((c, i) => (
-              <Stack key={c.hash} direction="row" sx={{ gap: 1, px: 1.5, py: 0.625, alignItems: 'flex-start', '&:hover': { bgcolor: 'action.hover' } }}>
+              <Stack key={c.hash} direction="row" sx={{ gap: 1, px: 2, py: 0.75, alignItems: 'flex-start', '&:hover': { bgcolor: 'action.hover' } }}>
                 <Box sx={{ mt: '6px', width: 7, height: 7, borderRadius: '50%', flexShrink: 0, bgcolor: i === 0 ? 'warning.main' : 'text.disabled' }} />
                 <Stack sx={{ minWidth: 0, flex: 1 }}>
                   <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, minWidth: 0 }}>
@@ -104,8 +160,8 @@ export function GitView() {
               </Stack>
             ))}
           </Box>
-        </Stack>
-      </Stack>
+        )}
+      </Box>
     </Stack>
   )
 }

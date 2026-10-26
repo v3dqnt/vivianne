@@ -1116,3 +1116,33 @@ mod tests {
         }
     }
 }
+
+/// The Git view's window onto GitHub: one REST call for the repository of
+/// `cwd` (`{repo}` in `path` becomes its owner/name). These are the user's own
+/// clicks in the view, not the agent's, so writes aren't gated here. `raw`:
+/// the body as text (job logs).
+#[tauri::command]
+pub async fn cmd_github(cwd: String, path: String, method: Option<String>, body: Option<Value>, raw: Option<bool>) -> Result<Value, String> {
+    let gh = Gh::new().await?;
+    let path = if path.contains("{repo}") {
+        let repo = resolve_repo(&Value::Null, &cwd).await?;
+        path.replace("{repo}", &repo)
+    } else {
+        path
+    };
+    let method = reqwest::Method::from_bytes(method.as_deref().unwrap_or("GET").to_uppercase().as_bytes()).map_err(|e| e.to_string())?;
+    if raw.unwrap_or(false) {
+        let (status, text) = gh.call(method, &path, body.as_ref(), "application/vnd.github+json").await?;
+        if !(200..300).contains(&status) {
+            return Err(format!("GitHub returned {status}"));
+        }
+        return Ok(Value::String(text));
+    }
+    gh.json(method, &path, body.as_ref()).await
+}
+
+/// The repository the Git view talks to, or why there is none.
+#[tauri::command]
+pub async fn cmd_github_repo(cwd: String) -> Result<String, String> {
+    resolve_repo(&Value::Null, &cwd).await
+}
