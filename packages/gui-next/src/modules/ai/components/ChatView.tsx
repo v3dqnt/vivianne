@@ -3,14 +3,25 @@ import { Stack, Typography, Button, alpha, useTheme } from '../../../ui'
 import { useAgentStore } from '../store/agentStore'
 import { useDaysStore, type Viewing } from '../../sessions/store/daysStore'
 import { MessageList } from './MessageList'
+import type { AgentMessage } from '../lib/types'
 import { Composer } from './Composer'
 import { PermissionDialog } from './PermissionDialog'
 import { AskQuestionDialog } from './AskQuestionDialog'
 import { ConfirmationDialog } from './ConfirmationDialog'
 
+export interface OwnThread {
+  toolbar: ReactNode
+  onRevertTo: (index: number) => Promise<void>
+  /** Its archive, above the thread. */
+  earlier: AgentMessage[]
+  earlierStart: number
+  onLoadOlder: () => void
+  loadingOlder: boolean
+}
+
 /** The conversation on screen. A bot's DM passes `own`: no project archive
  * above it, its own model picker, and going back through the bot. */
-export function ChatView({ own }: { own?: { toolbar: ReactNode; onRevertTo: (index: number) => Promise<void> } } = {}) {
+export function ChatView({ own }: { own?: OwnThread } = {}) {
   const init = useAgentStore((s) => s.init)
   const viewing = useDaysStore((s) => s.viewing)
   const earlier = useDaysStore((s) => s.earlier)
@@ -29,7 +40,13 @@ export function ChatView({ own }: { own?: { toolbar: ReactNode; onRevertTo: (ind
       ) : (
         <>
           {own ? (
-            <MessageList onRevertTo={own.onRevertTo} />
+            <MessageList
+              onRevertTo={own.onRevertTo}
+              earlier={own.earlier}
+              earlierStart={own.earlierStart}
+              onLoadOlder={own.onLoadOlder}
+              loadingOlder={own.loadingOlder}
+            />
           ) : (
             <MessageList earlier={earlier} earlierStart={earlierStart} onLoadOlder={() => void loadOlder()} loadingOlder={loadingOlder} />
           )}

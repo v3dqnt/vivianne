@@ -515,10 +515,50 @@ async fn bot_thread(app: &tauri::AppHandle, root: &str, id: &str) -> Arc<crate::
         fresh
     };
     if fresh {
-        thread.agent_state.set_messages(read_json(&path)).await;
+        let messages: Vec<AgentMessage> = read_json(&path);
+        seed_archive(Path::new(root), id, &messages);
+        thread.agent_state.set_messages(messages).await;
+        // What compaction folds away goes here, where the DM shows it.
+        thread.agent_state.set_history_archive(Some(archive_path(Path::new(root), id))).await;
         *thread.session_id.lock().await = Some(crate::agent::changes::checkpoints::bot_session(root, id));
     }
     thread
+}
+
+fn archive_path(root: &Path, id: &str) -> PathBuf {
+    bot_dir(root, id).join("archive.jsonl")
+}
+
+/// Before bots ran as chat threads, a DM was kept in `dm.jsonl` while
+/// `thread.json` was cut short as it grew. What the DM held from before the
+/// thread's oldest message becomes the start of the archive, once.
+fn seed_archive(root: &Path, id: &str, thread: &[AgentMessage]) {
+    let path = archive_path(root, id);
+    if path.exists() {
+        return;
+    }
+    let stamp = |m: &AgentMessage| serde_json::to_value(m).ok().and_then(|v| v["timestamp"].as_u64()).unwrap_or(u64::MAX);
+    let oldest = thread.iter().filter(|m| !crate::agent::sessions::conversation::is_summary(m)).map(stamp).min().unwrap_or(u64::MAX);
+    let earlier: Vec<AgentMessage> = read_lines::<ChatMessage>(&dm_path(root, id), usize::MAX)
+        .into_iter()
+        .filter(|m| m.ts < oldest && m.from != "system" && !m.text.trim().is_empty())
+        .filter_map(|m| {
+            let content = serde_json::json!([{ "type": "text", "text": m.text }]);
+            let v = if m.from == "user" {
+                serde_json::json!({ "type": "user", "content": content, "timestamp": m.ts })
+            } else {
+                serde_json::json!({ "type": "assistant", "content": content, "stopReason": "stop", "timestamp": m.ts })
+            };
+            serde_json::from_value(v).ok()
+        })
+        .collect();
+    if earlier.is_empty() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(bot_dir(root, id));
+    if let Err(e) = crate::agent::sessions::conversation::append_archive(&path, &earlier) {
+        log::warn!("[bots] couldn't keep @{id}'s earlier DM: {e}");
+    }
 }
 
 fn thread_path(root: &Path, id: &str) -> PathBuf {
@@ -1183,6 +1223,20 @@ pub async fn cmd_bots_thread(app: tauri::AppHandle, root: String, bot_id: String
     Ok(bot_thread(&app, &root, &bot_id).await.agent_state.messages().await)
 }
 
+/// A page of what a bot's thread compacted away (and its DM from before
+/// bots were threads), oldest first, for the DM to show above the thread.
+#[tauri::command]
+pub async fn cmd_bots_archive(
+    app: tauri::AppHandle,
+    root: String,
+    bot_id: String,
+    before: Option<usize>,
+) -> Result<crate::agent::sessions::conversation::ArchivePage, String> {
+    bot_thread(&app, &root, &bot_id).await;
+    let page = crate::agent::sessions::conversation::ARCHIVE_PAGE;
+    Ok(crate::agent::sessions::conversation::read_archive_page(&archive_path(Path::new(&root), &bot_id), before, page))
+}
+
 /// What a revert did: how many messages went, and which files came back.
 #[derive(Debug, Clone, Serialize)]
 pub struct BotRevert {
@@ -1316,7 +1370,7 @@ pub async fn cmd_bots_stop(app: tauri::AppHandle, root: String, bot_id: String) 
 pub async fn cmd_bots_reset(app: tauri::AppHandle, root: String, bot_id: String) -> Result<(), String> {
     cmd_bots_stop(app.clone(), root.clone(), bot_id.clone()).await?;
     let dir = bot_dir(Path::new(&root), &bot_id);
-    for f in ["thread.json", "dm.jsonl", "memory.md"] {
+    for f in ["thread.json", "dm.jsonl", "archive.jsonl", "memory.md"] {
         let _ = std::fs::remove_file(dir.join(f));
     }
     bot_thread(&app, &root, &bot_id).await.agent_state.set_messages(Vec::new()).await;
@@ -1462,4 +1516,24 @@ what are we building?");
         assert!(!needs_you("All done, nothing needed from you.").1);
     }
 
+
+    #[test]
+    fn a_dm_from_before_threads_becomes_the_archive_once() {
+        let root = std::env::temp_dir().join(format!("viv-bot-seed-{}", now_ms()));
+        let dm = dm_path(&root, "b");
+        std::fs::create_dir_all(dm.parent().unwrap()).unwrap();
+        let line = |from: &str, text: &str, ts: u64| serde_json::json!({ "id": ts.to_string(), "from": from, "text": text, "ts": ts }).to_string();
+        std::fs::write(&dm, [line("user", "hi", 1), line("b", "hello", 2), line("system", "note", 3), line("user", "weather?", 50)].join("
+")).unwrap();
+        // The thread still holds the conversation from ts 50 on.
+        let thread = vec![AgentMessage::User { content: vec![MessageContent::Text { text: "weather?".into() }], timestamp: 50 }];
+        seed_archive(&root, "b", &thread);
+        let page = crate::agent::sessions::conversation::read_archive_page(&archive_path(&root, "b"), None, 100);
+        let texts: Vec<String> = page.messages.iter().map(|m| first_text(std::slice::from_ref(m))).collect();
+        assert_eq!(page.total, 2, "what the thread lost, not notes, not what it still has: {texts:?}");
+        assert!(matches!(page.messages[0], AgentMessage::User { .. }) && matches!(page.messages[1], AgentMessage::Assistant { .. }));
+        seed_archive(&root, "b", &[]);
+        assert_eq!(crate::agent::sessions::conversation::read_archive_page(&archive_path(&root, "b"), None, 100).total, 2, "once");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

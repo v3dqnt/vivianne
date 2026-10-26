@@ -75,7 +75,7 @@ fn read_archive(path: &Path) -> Vec<AgentMessage> {
 }
 
 /// How many archived messages the conversation view loads at a time.
-const ARCHIVE_PAGE: usize = 120;
+pub const ARCHIVE_PAGE: usize = 120;
 
 /// One page of a conversation's archive, newest last.
 #[derive(Debug, serde::Serialize)]
@@ -94,7 +94,7 @@ pub struct ArchivePage {
 /// included, so for a long-lived project it grows without bound. Only the
 /// requested window is parsed, sent over IPC and held by the view; older
 /// pages load when the user scrolls up for them.
-fn read_archive_page(path: &Path, before: Option<usize>, limit: usize) -> ArchivePage {
+pub fn read_archive_page(path: &Path, before: Option<usize>, limit: usize) -> ArchivePage {
     let Ok(text) = std::fs::read_to_string(path) else { return ArchivePage { messages: Vec::new(), start: 0, total: 0 } };
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
     let total = lines.len();

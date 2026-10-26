@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import type { AgentMessage } from '../../ai/lib/types'
 import { usePlanStore } from '../../plan/store/planStore'
 import { Button, ButtonBase, Stack, Tooltip, Typography } from '../../../ui'
@@ -60,6 +60,13 @@ function DirectMessage({ root, bot }: { root: string; bot: TeamAgent; team: Team
   const save = useTeamStore((s) => s.save)
   const thread = `bot:${root}:${bot.id}`
   const state = st?.state ?? 'idle'
+  // What compaction folded away, and its DM from before bots were threads.
+  const [archive, setArchive] = useState<{ messages: AgentMessage[]; start: number }>({ messages: [], start: 0 })
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const loadArchive = async (before?: number) => {
+    const page = await call<{ messages: AgentMessage[]; start: number }>('cmd_bots_archive', { root, botId: bot.id, before: before ?? null })
+    if (page) setArchive((a) => ({ messages: before === undefined ? page.messages : [...page.messages, ...a.messages], start: page.start }))
+  }
 
   useEffect(() => {
     const back = activeThreadId()
@@ -69,7 +76,7 @@ function DirectMessage({ root, bot }: { root: string; bot: TeamAgent; team: Team
     }
     sendThrough(thread, (text, images) => call('cmd_bots_dm_send', { root, botId: bot.id, text, images }))
     setActiveThread(thread)
-    void reload()
+    void reload().then(() => loadArchive())
     void loadStatus(root)
     // Its plans, not the open thread's, while this conversation is showing.
     void usePlanStore.getState().setScope({ root, send: (t) => sendDm(root, bot.id, t) })
@@ -121,6 +128,13 @@ function DirectMessage({ root, bot }: { root: string; bot: TeamAgent; team: Team
         own={{
           toolbar: <ModelPicker mode="agent" value={bot.model} onChange={(model) => void save(root, { ...bot, model }, bot.id)} />,
           onRevertTo: revertTo,
+          earlier: archive.messages,
+          earlierStart: archive.start,
+          loadingOlder,
+          onLoadOlder: () => {
+            setLoadingOlder(true)
+            void loadArchive(archive.start).finally(() => setLoadingOlder(false))
+          },
         }}
       />
     </Stack>
