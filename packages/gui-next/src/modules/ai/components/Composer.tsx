@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, memo, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, memo, type KeyboardEvent, type ReactNode } from 'react'
 import { Box, Stack } from '../../../ui'
 import { useAgentStore } from '../store/agentStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
@@ -133,7 +133,9 @@ function useNarrowFallback(ref: React.RefObject<HTMLElement | null>, maxWidth: n
 let fileTreeCache: { key: string; files: MentionableFile[]; at: number } | null = null
 const FILE_TREE_TTL_MS = 30_000
 
-export function Composer() {
+/** `toolbar`: what sits where the model picker does (a bot's DM puts its
+ * own picker there, which saves to the bot). */
+export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
   const [text, setText] = useState('')
   const isBusy = useAgentStore((s) => s.isBusy)
   const stopping = useAgentStore((s) => s.stopping)
@@ -346,7 +348,7 @@ export function Composer() {
             <>
               <ContextUsageBar />
               <ThinkingLevelControl />
-              <ChatModelPicker />
+              {toolbar ?? <ChatModelPicker />}
             </>
           }
         />

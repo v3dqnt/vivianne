@@ -42,7 +42,7 @@ use tauri::{Emitter, Manager};
 
 use crate::agent::runtime::events::AgentEvent;
 use crate::agent::team::TeamAgent;
-use crate::agent::runtime::types::{AgentContext, AgentMessage, MessageContent, QueueMode};
+use crate::agent::runtime::types::{AgentMessage, MessageContent};
 
 // ── Rules ────────────────────────────────────────────────────────────────
 
@@ -496,6 +496,31 @@ fn memory_path(root: &Path, id: &str) -> PathBuf {
     bot_dir(root, id).join("memory.md")
 }
 
+/// A bot's conversation in the agent registry: the chat's own runtime, so
+/// its DM has everything the chat has. The frontend builds the same id.
+pub fn thread_id(root: &str, id: &str) -> String {
+    format!("bot:{root}:{id}")
+}
+
+/// A bot's thread, its transcript loaded from `thread.json` and saved back
+/// there, its file checkpoints in its own store.
+async fn bot_thread(app: &tauri::AppHandle, root: &str, id: &str) -> Arc<crate::agent::runtime::commands::AppState> {
+    let registry = app.state::<crate::agent::runtime::commands::AgentRegistry>();
+    let thread = registry.resolve(Some(&thread_id(root, id))).await;
+    let path = thread_path(Path::new(root), id);
+    let fresh = {
+        let mut file = thread.transcript_file.lock().unwrap_or_else(|e| e.into_inner());
+        let fresh = file.is_none();
+        *file = Some(path.clone());
+        fresh
+    };
+    if fresh {
+        thread.agent_state.set_messages(read_json(&path)).await;
+        *thread.session_id.lock().await = Some(crate::agent::changes::checkpoints::bot_session(root, id));
+    }
+    thread
+}
+
 fn thread_path(root: &Path, id: &str) -> PathBuf {
     bot_dir(root, id).join("thread.json")
 }
@@ -562,9 +587,6 @@ enum Target {
 }
 
 const MAX_HOPS: u32 = 4;
-const THREAD_KEPT: usize = 80;
-/// Past this many messages the thread is cut back to `THREAD_KEPT`.
-const THREAD_MAX: usize = 160;
 const ROOM_IN_PROMPT: usize = 30;
 
 fn active_bots(root: &Path) -> Vec<TeamAgent> {
@@ -666,24 +688,6 @@ fn room_digest(root: &Path, team: &[TeamAgent]) -> String {
         .join("\n")
 }
 
-/// Keep the thread to its last messages, cut at a user turn so a tool
-/// result never arrives without its call.
-fn trim_thread(mut msgs: Vec<AgentMessage>) -> Vec<AgentMessage> {
-    // Trim in one cut once the thread has grown well past the window, not one
-    // message every turn: every change to the start of the history makes the
-    // provider re-read the whole prompt (no cache hit), which on a long
-    // thread is ~100k tokens of waiting before each reply.
-    if msgs.len() <= THREAD_MAX {
-        return msgs;
-    }
-    let mut start = msgs.len() - THREAD_KEPT;
-    while start < msgs.len() && !matches!(msgs[start], AgentMessage::User { .. }) {
-        start += 1;
-    }
-    msgs.drain(..start);
-    msgs
-}
-
 /// Run one turn of a bot. Queues it if the bot is busy.
 fn dispatch(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request: String, target: Target) {
     dispatch_with(app, root, id, origin, request, target, Vec::new())
@@ -730,11 +734,12 @@ async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, 
         return Err(format!("{} is paused", bot.name));
     }
     let team = active_bots(&root_path);
-    let abort = live().running.get(&(root.to_string(), id.to_string())).cloned().unwrap_or_default();
 
     let registry = app.state::<crate::agent::runtime::commands::AgentRegistry>();
     let primary = registry.resolve(None).await;
-    let state = crate::agent::runtime::state::AgentState::new();
+    let thread = bot_thread(app, root, id).await;
+    live().running.insert((root.to_string(), id.to_string()), thread.abort_flag.clone());
+    let state = &thread.agent_state;
     match bot.model.as_ref() {
         Some(m) => {
             state
@@ -769,14 +774,6 @@ async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, 
             state.set_model(model).await
         }
     }
-    // "Auto" isn't a model a request can go to: pick the tier for this
-    // message, as the chat does for each of its turns. A bot set to Auto, or
-    // one following a chat that is, gets Nano, Super or Ultra by difficulty.
-    let picked = state.model().await;
-    if crate::agent::models::routing::is_router(&picked) {
-        let (model, _) = crate::agent::models::routing::route_task(request, &picked).await;
-        state.set_model(model).await;
-    }
     state.set_workspace(vec![root.to_string()], crate::agent::runtime::state::WorkspaceAccessMode::Full).await;
     // Its own email and phone come with having them, whatever tools were picked.
     let contact = crate::agent::team::contact::load(root, id);
@@ -797,113 +794,20 @@ async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, 
         root: root.to_string(),
         bot_id: id.to_string(),
     };
-    crate::agent::profiles::AgentProfile::bot(policy, allowed).apply(&state).await;
+    crate::agent::profiles::AgentProfile::bot(policy, allowed).apply(state).await;
+    // Who it is; the turn adds the capability blocks after.
+    state.set_system_prompt(identity(&root_path, &bot, &settings, &team)).await;
 
-    let auth = app.state::<Arc<crate::ai::auth::AuthState>>().inner().clone();
-    let blocks = crate::agent::runtime::directive::assemble_capability_blocks(&state, None, request, Some(&auth), true, false).await;
-    let system_prompt = format!("{}\n\n{}", identity(&root_path, &bot, &settings, &team), blocks);
-    state.set_system_prompt(system_prompt.clone()).await;
-
-    let history: Vec<AgentMessage> = read_json(&thread_path(&root_path, id));
-    let mut context = AgentContext { system_prompt, messages: history.clone(), ..Default::default() };
-
-    let queues = crate::agent::runtime::loop_core::QueueHandles {
-        steering_queue: Arc::new(tokio::sync::RwLock::new(Vec::new())),
-        steering_mode: QueueMode::OneAtATime,
-        follow_up_queue: Arc::new(tokio::sync::RwLock::new(Vec::new())),
-        follow_up_mode: QueueMode::OneAtATime,
-    };
-    let steer = Arc::new(AtomicBool::new(false));
-
-    // A private event bus, forwarded as bot activity and approval requests.
-    let (tx, mut rx) = crate::agent::runtime::events::event_bus();
     let (app_ev, root_ev, id_ev) = (app.clone(), root.to_string(), id.to_string());
-    let drain = tokio::spawn(async move {
-        while let Some(event) = rx.rx.recv().await {
-            match event {
-                AgentEvent::ToolExecutionStart { tool_call_id, tool_name, args } => {
-                    let label = step_label(&tool_name, &args);
-                    {
-                        let mut l = live();
-                        let key = (root_ev.clone(), id_ev.clone());
-                        l.activity.insert(key.clone(), label.clone());
-                        let steps = l.steps.entry(key).or_default();
-                        steps.push(BotStep { id: tool_call_id, tool: tool_name, label, state: "running".into(), detail: None });
-                        if steps.len() > MAX_STEPS {
-                            steps.remove(0);
-                        }
-                    }
-                    emit_status(&app_ev, &root_ev, &id_ev);
-                    emit_steps(&app_ev, &root_ev, &id_ev);
-                }
-                AgentEvent::ToolExecutionEnd { tool_call_id, result, is_error, .. } => {
-                    {
-                        let mut l = live();
-                        if let Some(step) = l
-                            .steps
-                            .get_mut(&(root_ev.clone(), id_ev.clone()))
-                            .and_then(|s| s.iter_mut().rev().find(|s| s.id == tool_call_id))
-                        {
-                            step.state = if is_error { "error" } else { "done" }.into();
-                            let text = result_text(&result);
-                            let first = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-                            step.detail = (!first.is_empty()).then(|| clip(first, 160));
-                        }
-                    }
-                    emit_steps(&app_ev, &root_ev, &id_ev);
-                }
-                AgentEvent::PermissionAsked { request_id, tool_name, args, reason, .. } => {
-                    let _ = app_ev.emit(
-                        "bots:permission",
-                        serde_json::json!({ "root": root_ev, "botId": id_ev, "requestId": request_id, "toolName": tool_name, "args": args, "reason": reason }),
-                    );
-                    crate::agent::system::notifications::notify_text(&app_ev, "A teammate needs your approval", &format!("@{id_ev} wants to use {tool_name}"));
-                }
-                AgentEvent::PermissionResolved { request_id, .. } => {
-                    let _ = app_ev.emit("bots:permission_resolved", serde_json::json!({ "requestId": request_id }));
-                }
-                _ => {}
-            }
-        }
-    });
-
+    let on_event = move |event: &AgentEvent| track(&app_ev, &root_ev, &id_ev, event);
     let framed = match origin {
-        Origin::User => request.to_string(),
         Origin::Routine => format!("(Routine) {request}"),
-        Origin::Proactive | Origin::Inbound => request.to_string(),
+        Origin::User | Origin::Proactive | Origin::Inbound => request.to_string(),
     };
-    // Images go in as content blocks, with a line saying they're there: some
-    // models otherwise answer that they can't see images.
-    let framed = if images.is_empty() {
-        framed
-    } else {
-        format!("{framed}\n\n({} image{} attached to this message — look at it before answering.)", images.len(), if images.len() == 1 { "" } else { "s" })
-    };
-    let mut content = vec![MessageContent::Text { text: framed }];
-    for img in images {
-        content.push(MessageContent::Image { url: None, base64: Some(img.base64), media_type: Some(img.media_type) });
-    }
-    let new_messages = Box::pin(crate::agent::runtime::loop_core::run_agent_loop_with_prompts(
-        vec![AgentMessage::User { content, timestamp: now_ms() }],
-        app,
-        &mut context,
-        &state,
-        &tx,
-        &queues,
-        &abort,
-        &steer,
-        "bot",
-    ))
-    .await;
-    drop(tx);
-    let _ = drain.await;
-    crate::activity::end_run(app, "done", format!("{} finished", bot.name));
+    let turn = crate::agent::runtime::commands::Turn { main: false, source_tag: Some("bot".into()), on_event: Some(Arc::new(on_event)) };
+    let new_messages = Box::pin(crate::agent::runtime::commands::run_turn(app, thread.clone(), &thread_id(root, id), framed, images, turn)).await?;
 
-    let mut thread = history;
-    thread.extend(new_messages.iter().cloned());
-    let _ = write_json(&thread_path(&root_path, id), &trim_thread(thread));
-
-    if abort.load(Ordering::SeqCst) {
+    if thread.abort_flag.load(Ordering::SeqCst) {
         return Ok("Stopped.".into());
     }
     if let Some(AgentMessage::Assistant { stop_reason, error_message, .. }) =
@@ -914,6 +818,49 @@ async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, 
         }
     }
     Ok(first_text(&new_messages))
+}
+
+/// A bot's face and the steps it shows in the room, from its turn's events;
+/// and a notification when it needs an approval.
+fn track(app: &tauri::AppHandle, root: &str, id: &str, event: &AgentEvent) {
+    let key = (root.to_string(), id.to_string());
+    match event {
+        AgentEvent::ToolExecutionStart { tool_call_id, tool_name, args } => {
+            let label = step_label(tool_name, args);
+            {
+                let mut l = live();
+                l.activity.insert(key.clone(), label.clone());
+                let steps = l.steps.entry(key).or_default();
+                steps.push(BotStep { id: tool_call_id.clone(), tool: tool_name.clone(), label, state: "running".into(), detail: None });
+                if steps.len() > MAX_STEPS {
+                    steps.remove(0);
+                }
+            }
+            emit_status(app, root, id);
+            emit_steps(app, root, id);
+        }
+        AgentEvent::ToolExecutionEnd { tool_call_id, result, is_error, .. } => {
+            if let Some(step) = live().steps.get_mut(&key).and_then(|s| s.iter_mut().rev().find(|s| &s.id == tool_call_id)) {
+                step.state = if *is_error { "error" } else { "done" }.into();
+                let text = result_text(result);
+                let first = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+                step.detail = (!first.is_empty()).then(|| clip(first, 160));
+            }
+            emit_steps(app, root, id);
+        }
+        // The room shows approvals for turns it started (a DM's show in its thread).
+        AgentEvent::PermissionAsked { request_id, tool_name, args, reason, .. } => {
+            let _ = app.emit(
+                "bots:permission",
+                serde_json::json!({ "root": root, "botId": id, "requestId": request_id, "toolName": tool_name, "args": args, "reason": reason }),
+            );
+            crate::agent::system::notifications::notify_text(app, "A teammate needs your approval", &format!("@{id} wants to use {tool_name}"));
+        }
+        AgentEvent::PermissionResolved { request_id, .. } => {
+            let _ = app.emit("bots:permission_resolved", serde_json::json!({ "requestId": request_id }));
+        }
+        _ => {}
+    }
 }
 
 fn mentions_in(text: &str, team: &[TeamAgent]) -> (Vec<String>, bool) {
@@ -984,12 +931,11 @@ fn finish(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request:
                         Origin::User | Origin::Inbound => "message",
                     }
                 };
-                let channel = match target {
-                    Target::Dm => id.to_string(),
-                    Target::Room { .. } => "room".to_string(),
-                };
                 let (mentions, everyone) = mentions_in(&text, &team);
-                post_with_steps(app, root, &channel, id, &text, kind, mentions.clone(), steps);
+                // A DM's reply is in the bot's thread already; the room gets a post.
+                if target != Target::Dm {
+                    post_with_steps(app, root, "room", id, &text, kind, mentions.clone(), steps);
+                }
                 if needs || origin != Origin::User {
                     let title = if needs { format!("{name} needs you") } else { format!("{name} posted") };
                     crate::agent::system::notifications::notify_text(app, &title, &text.chars().take(140).collect::<String>());
@@ -1006,8 +952,9 @@ fn finish(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request:
                 }
             }
         }
+        Err(e) if target == Target::Dm => log::info!("[bots] @{id}'s turn failed: {e}"), // the thread shows it
         Err(e) => {
-            let channel = if target == Target::Dm { id.to_string() } else { "room".to_string() };
+            let channel = "room".to_string();
             // A provider's limit is something the user can fix in one click:
             // say so, rather than leaving a bare HTTP error.
             let low = e.to_lowercase();
@@ -1191,17 +1138,49 @@ pub async fn cmd_bots_post(app: tauri::AppHandle, root: String, text: String) ->
     Ok(msg)
 }
 
+/// A bot's DM as chat lines, for previews: what was said each way, from its
+/// thread.
 #[tauri::command]
 pub async fn cmd_bots_dm(root: String, bot_id: String, limit: Option<usize>) -> Result<Vec<ChatMessage>, String> {
-    Ok(read_lines(&dm_path(Path::new(&root), &bot_id), limit.unwrap_or(200)))
+    let thread: Vec<AgentMessage> = read_json(&thread_path(Path::new(&root), &bot_id));
+    let lines: Vec<ChatMessage> = thread
+        .iter()
+        .filter_map(|m| {
+            let (from, content, ts) = match m {
+                AgentMessage::User { content, timestamp } => ("user", content, *timestamp),
+                AgentMessage::Assistant { content, timestamp, .. } => (bot_id.as_str(), content, *timestamp),
+                _ => return None,
+            };
+            let text = first_text(std::slice::from_ref(m));
+            let text = if from == "user" {
+                content.iter().find_map(|c| match c {
+                    MessageContent::Text { text } => Some(text.clone()),
+                    _ => None,
+                })?
+            } else {
+                text
+            };
+            (!text.trim().is_empty()).then(|| ChatMessage {
+                id: format!("{ts}-{from}"),
+                from: from.to_string(),
+                text,
+                ts,
+                kind: "message".into(),
+                mentions: Vec::new(),
+                steps: Vec::new(),
+                attachments: Vec::new(),
+            })
+        })
+        .collect();
+    let keep = limit.unwrap_or(200);
+    Ok(lines[lines.len().saturating_sub(keep)..].to_vec())
 }
 
-/// A bot's whole working transcript: its messages with every tool call and
-/// result, the same shape the main chat renders. The DM view shows this so
-/// an agent's work reads like the coding agent's, not as a folded step list.
+/// Open a bot's thread (its transcript loaded) and return what is in it, for
+/// its DM, which then follows the thread's events like any chat.
 #[tauri::command]
-pub async fn cmd_bots_thread(root: String, bot_id: String) -> Result<Vec<AgentMessage>, String> {
-    Ok(read_json(&thread_path(Path::new(&root), &bot_id)))
+pub async fn cmd_bots_thread(app: tauri::AppHandle, root: String, bot_id: String) -> Result<Vec<AgentMessage>, String> {
+    Ok(bot_thread(&app, &root, &bot_id).await.agent_state.messages().await)
 }
 
 /// What a revert did: how many messages went, and which files came back.
@@ -1218,13 +1197,12 @@ pub struct BotRevert {
 /// back as it was (newest change first), from the checkpoints taken before
 /// each edit. A bot that is working can't be reverted.
 #[tauri::command]
-pub async fn cmd_bots_revert(root: String, bot_id: String, index: usize) -> Result<BotRevert, String> {
-    let root_path = Path::new(&root);
+pub async fn cmd_bots_revert(app: tauri::AppHandle, root: String, bot_id: String, index: usize) -> Result<BotRevert, String> {
     if status_of(&root, &bot_id).state == "working" {
         return Err("It's still working: stop it first, then go back.".into());
     }
-    let path = thread_path(root_path, &bot_id);
-    let mut thread: Vec<AgentMessage> = read_json(&path);
+    let live_thread = bot_thread(&app, &root, &bot_id).await;
+    let mut thread = live_thread.agent_state.messages().await;
     if index >= thread.len() {
         return Ok(BotRevert { removed: 0, restored: Vec::new(), deleted: Vec::new(), failed: Vec::new() });
     }
@@ -1259,7 +1237,8 @@ pub async fn cmd_bots_revert(root: String, bot_id: String, index: usize) -> Resu
     out.deleted.sort();
     out.deleted.dedup();
     thread.truncate(index);
-    write_json(&path, &thread)?;
+    live_thread.agent_state.set_messages(thread.clone()).await;
+    write_json(&thread_path(Path::new(&root), &bot_id), &thread)?;
     Ok(out)
 }
 
@@ -1271,7 +1250,7 @@ pub async fn cmd_bots_dm_send(
     text: String,
     files: Option<Vec<FileInput>>,
     images: Option<Vec<ImageInput>>,
-) -> Result<ChatMessage, String> {
+) -> Result<(), String> {
     let text = text.trim().to_string();
     let files = files.unwrap_or_default();
     let images = images.unwrap_or_default();
@@ -1279,23 +1258,7 @@ pub async fn cmd_bots_dm_send(
         return Err("Nothing to send.".into());
     }
     find_bot(Path::new(&root), &bot_id).ok_or("That agent isn't active.")?;
-    // The chat shows what was written and chips for what was attached; the
-    // agent gets the files' contents inline, as the main chat does.
-    let mut attachments: Vec<AttachmentRef> = files.iter().map(|f| AttachmentRef { name: f.name.clone(), kind: "file".into() }).collect();
-    attachments.extend((1..=images.len()).map(|i| AttachmentRef { name: format!("Image {i}"), kind: "image".into() }));
-    let shown = if text.is_empty() { "(attachments)".to_string() } else { text.clone() };
-    let msg = ChatMessage {
-        id: uuid::Uuid::new_v4().to_string(),
-        from: "user".into(),
-        text: shown,
-        ts: now_ms(),
-        kind: "message".into(),
-        mentions: Vec::new(),
-        steps: Vec::new(),
-        attachments,
-    };
-    let _ = append_line(&dm_path(Path::new(&root), &bot_id), &msg);
-    emit_message(&app, &root, &bot_id, &msg);
+    // The agent gets the files' contents inline, as the main chat does.
     let request = if files.is_empty() {
         text
     } else {
@@ -1307,8 +1270,7 @@ pub async fn cmd_bots_dm_send(
         format!("{text}\n\nAttached files:\n{blocks}")
     };
     dispatch_with(&app, &root, &bot_id, Origin::User, request, Target::Dm, images);
-
-    Ok(msg)
+    Ok(())
 }
 
 #[tauri::command]
@@ -1357,6 +1319,7 @@ pub async fn cmd_bots_reset(app: tauri::AppHandle, root: String, bot_id: String)
     for f in ["thread.json", "dm.jsonl", "memory.md"] {
         let _ = std::fs::remove_file(dir.join(f));
     }
+    bot_thread(&app, &root, &bot_id).await.agent_state.set_messages(Vec::new()).await;
     let mut routines = load_routines(Path::new(&root), &bot_id);
     for r in routines.iter_mut() {
         r.runs.clear();
@@ -1499,27 +1462,4 @@ what are we building?");
         assert!(!needs_you("All done, nothing needed from you.").1);
     }
 
-    #[test]
-    fn thread_trims_at_a_user_turn() {
-        let user = || AgentMessage::User { content: vec![], timestamp: 0 };
-        let tool = || AgentMessage::ToolResult {
-            tool_call_id: "t".into(),
-            tool_name: "read".into(),
-            content: vec![],
-            details: None,
-            is_error: None,
-            timestamp: 0,
-            arguments: None,
-        };
-        // Under the cap nothing moves, so the history's start (and the
-        // provider's prompt cache) stays put from turn to turn.
-        let short: Vec<_> = (0..THREAD_MAX).map(|i| if i % 3 == 0 { user() } else { tool() }).collect();
-        assert_eq!(trim_thread(short).len(), THREAD_MAX);
-        // Past it, one cut back to the window, starting at a user turn.
-        let mut msgs = vec![tool(); 10];
-        msgs.extend((0..THREAD_MAX).map(|i| if i % 3 == 0 { user() } else { tool() }));
-        let kept = trim_thread(msgs);
-        assert!(kept.len() <= THREAD_KEPT);
-        assert!(matches!(kept[0], AgentMessage::User { .. }));
-    }
 }

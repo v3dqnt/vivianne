@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { Stack, Typography, Button, alpha, useTheme } from '../../../ui'
 import { useAgentStore } from '../store/agentStore'
 import { useDaysStore, type Viewing } from '../../sessions/store/daysStore'
@@ -8,7 +8,9 @@ import { PermissionDialog } from './PermissionDialog'
 import { AskQuestionDialog } from './AskQuestionDialog'
 import { ConfirmationDialog } from './ConfirmationDialog'
 
-export function ChatView() {
+/** The conversation on screen. A bot's DM passes `own`: no project archive
+ * above it, its own model picker, and going back through the bot. */
+export function ChatView({ own }: { own?: { toolbar: ReactNode; onRevertTo: (index: number) => Promise<void> } } = {}) {
   const init = useAgentStore((s) => s.init)
   const viewing = useDaysStore((s) => s.viewing)
   const earlier = useDaysStore((s) => s.earlier)
@@ -22,12 +24,16 @@ export function ChatView() {
 
   return (
     <Stack sx={{ height: '100%', minHeight: 0 }}>
-      {viewing ? (
+      {viewing && !own ? (
         <HistoryView viewing={viewing} />
       ) : (
         <>
-          <MessageList earlier={earlier} earlierStart={earlierStart} onLoadOlder={() => void loadOlder()} loadingOlder={loadingOlder} />
-          <Composer />
+          {own ? (
+            <MessageList onRevertTo={own.onRevertTo} />
+          ) : (
+            <MessageList earlier={earlier} earlierStart={earlierStart} onLoadOlder={() => void loadOlder()} loadingOlder={loadingOlder} />
+          )}
+          <Composer toolbar={own?.toolbar} />
         </>
       )}
       {/* Mounted either way: a permission prompt from the running turn must

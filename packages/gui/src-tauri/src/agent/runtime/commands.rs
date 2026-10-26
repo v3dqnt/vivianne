@@ -37,6 +37,9 @@ pub struct AppState {
     /// the message being steered away from. Reset at the start of every
     /// `cmd_agent_prompt`/`cmd_agent_continue`.
     pub steer_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Where this thread's transcript is saved, when not in the sessions list:
+    /// a bot's conversation is its `thread.json`.
+    pub transcript_file: std::sync::Mutex<Option<std::path::PathBuf>>,
 }
 
 impl Default for AppState {
@@ -53,6 +56,7 @@ impl Default for AppState {
             follow_up_queue,
             abort_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             steer_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            transcript_file: std::sync::Mutex::new(None),
         }
     }
 }
@@ -152,8 +156,35 @@ pub async fn cmd_agent_prompt(
     app: tauri::AppHandle,
     registry: State<'_, AgentRegistry>,
 ) -> Result<Vec<AgentMessage>, String> {
-    use tauri::Emitter;
     let state = registry.resolve(threadId.as_deref()).await;
+    let turn = Turn { main: true, source_tag: None, on_event: None };
+    run_turn(&app, state, threadId.as_deref().unwrap_or_default(), text, images.unwrap_or_default(), turn).await?;
+    Ok(Vec::new())
+}
+
+/// How a turn differs by who runs it: the chat, or a bot (`agent::team::bots`).
+pub struct Turn {
+    /// The conversation the user is talking to: it gets the project's master
+    /// framing, and a team project's coordinator directive.
+    pub main: bool,
+    /// What usage is filed under; the session's own when `None`.
+    pub source_tag: Option<String>,
+    /// Sees every event of the turn too (a bot's face and steps).
+    pub on_event: Option<Arc<dyn Fn(&crate::agent::runtime::events::AgentEvent) + Send + Sync>>,
+}
+
+/// One turn of a thread, the way the chat runs one: the system prompt rebuilt,
+/// Auto resolved to a model, every event sent to the frontend tagged with the
+/// thread, the transcript saved after. Returns the turn's new messages.
+pub async fn run_turn(
+    app: &tauri::AppHandle,
+    state: Arc<AppState>,
+    thread_id: &str,
+    text: String,
+    images: Vec<ImageInput>,
+    turn: Turn,
+) -> Result<Vec<AgentMessage>, String> {
+    use tauri::Emitter;
     let mut agent = state.agent.lock().await;
     let (tx, mut rx) = crate::agent::runtime::events::event_bus();
 
@@ -162,17 +193,22 @@ pub async fn cmd_agent_prompt(
     // one instead of assuming a single global stream. The default/primary
     // pane sends no `threadId`, so its events carry `thread_id: ""` — the
     // same sentinel `AgentRegistry::resolve` treats as "primary".
-    let emit_thread_id = threadId.clone().unwrap_or_default();
+    let emit_thread_id = thread_id.to_string();
     let app_clone = app.clone();
     // Snapshotted once per turn, not re-read live inside the loop — the
     // workspace can't change mid-turn (nothing else runs while `agent`'s
     // mutex is held), and re-reading it live inside the spawned task would
     // just add an await per event for no different an answer.
-    let mp_workspace_folders = agent.state.workspace_folders().await;
+    // Multiplayer sync is the main chat's: a bot's turns aren't the partner's.
+    let mp_workspace_folders = if turn.main { agent.state.workspace_folders().await } else { Vec::new() };
     let mp_workspace_folders_for_loop = mp_workspace_folders.clone();
-    crate::notch::turn_started(&app, &emit_thread_id, &mp_workspace_folders, &text);
+    crate::notch::turn_started(app, &emit_thread_id, &mp_workspace_folders, &text);
+    let on_event = turn.on_event.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.rx.recv().await {
+            if let Some(f) = &on_event {
+                f(&event);
+            }
             crate::notch::event(&app_clone, &emit_thread_id, &event);
             crate::agent::system::notifications::on_agent_event(&app_clone, &emit_thread_id, &event);
             if let crate::agent::runtime::events::AgentEvent::AgentEnd { messages, .. } = &event {
@@ -208,14 +244,14 @@ pub async fn cmd_agent_prompt(
         let base = base.trim();
 
         let mode_section = agent.state.persona_mode().await.prompt_section();
-        let auth = crate::ai::auth::wait_for_state(&app).await;
+        let auth = crate::ai::auth::wait_for_state(app).await;
         let capability_blocks = crate::agent::runtime::directive::assemble_capability_blocks(
             &agent.state,
             mode_section,
             &text,
             Some(&auth),
             true,
-            true,
+            turn.main,
         ).await;
 
         let mut prompt = if base.is_empty() {
@@ -232,7 +268,7 @@ pub async fn cmd_agent_prompt(
             prompt.push_str(crate::agent::team::plans::PLAN_MODE_DIRECTIVE);
         }
         // A team project: the conversation coordinates the user's agents.
-        if let Some(root) = agent.state.primary_workspace_folder().await {
+        if let Some(root) = agent.state.primary_workspace_folder().await.filter(|_| turn.main) {
             if crate::agent::sessions::projects::mode_for_workspace(&root).as_deref() == Some("team") {
                 if let Some(d) = crate::agent::team::run::coordinator_directive(&root) {
                     prompt.push_str("
@@ -249,9 +285,9 @@ pub async fn cmd_agent_prompt(
     state.steer_flag.store(false, std::sync::atomic::Ordering::SeqCst);
     // Multiplayer project: take in the partner's commits and show the agent
     // what they did (a no-op anywhere else).
-    crate::multiplayer::collab::before_run(&app, &mp_workspace_folders, &agent.state).await;
+    crate::multiplayer::collab::before_run(app, &mp_workspace_folders, &agent.state).await;
     let request_text = text.clone();
-    let attached = images.unwrap_or_default();
+    let attached = images;
     // Prime the model explicitly: some models default to a boilerplate "I can't
     // see images" refusal unless the surrounding text confirms one is actually
     // present this turn, even though the image content block is right there.
@@ -276,8 +312,11 @@ pub async fn cmd_agent_prompt(
         content,
         timestamp: now_ms(),
     };
-    crate::multiplayer::broadcast_user_message(&app, &mp_workspace_folders, &message).await;
-    let source_tag = main_source_tag(&state).await;
+    crate::multiplayer::broadcast_user_message(app, &mp_workspace_folders, &message).await;
+    let source_tag = match turn.source_tag {
+        Some(tag) => tag,
+        None => main_source_tag(&state).await,
+    };
     // The "Auto" model: this turn runs on whichever model the request's
     // difficulty calls for, and the selection goes back to Auto afterwards.
     let selected = agent.state.model().await;
@@ -287,7 +326,7 @@ pub async fn cmd_agent_prompt(
                 let _ = app.emit(
                     "router_decision",
                     serde_json::json!({
-                        "threadId": threadId.clone().unwrap_or_default(),
+                        "threadId": thread_id,
                         "model": if model.name.is_empty() { model.id.clone() } else { model.name.clone() },
                         "level": verdict.map(|v| v.level),
                         "by": verdict.map(|v| v.by),
@@ -301,8 +340,8 @@ pub async fn cmd_agent_prompt(
     } else {
         None
     };
-    crate::agent::background::run_ledger::begin_run(&state, threadId.as_deref().unwrap_or_default(), &request_text).await;
-    let new_messages = agent.prompt(message, &app, &tx, &state.abort_flag, &state.steer_flag, &source_tag).await;
+    crate::agent::background::run_ledger::begin_run(&state, thread_id, &request_text).await;
+    let new_messages = agent.prompt(message, app, &tx, &state.abort_flag, &state.steer_flag, &source_tag).await;
     if let Some(auto) = routed_from {
         agent.state.set_model(auto).await;
     }
@@ -311,9 +350,10 @@ pub async fn cmd_agent_prompt(
     let _ = save_current_session_impl(None, &state).await;
     // Multiplayer project: summarise the run for the partner, commit, sync.
     // Off the reply path — git and the network never delay the turn ending.
-    tauri::async_runtime::spawn(crate::multiplayer::collab::after_run(app.clone(), mp_workspace_folders, request_text, new_messages));
-    Ok(Vec::new())
+    tauri::async_runtime::spawn(crate::multiplayer::collab::after_run(app.clone(), mp_workspace_folders, request_text, new_messages.clone()));
+    Ok(new_messages)
 }
+
 
 /// Continue the agent from the current transcript.
 #[tauri::command]
@@ -328,6 +368,7 @@ pub async fn cmd_agent_continue(
     let (tx, mut rx) = crate::agent::runtime::events::event_bus();
 
     let app_clone = app.clone();
+    let emit_thread_id = threadId.clone().unwrap_or_default();
     let mp_workspace_folders = agent.state.workspace_folders().await;
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.rx.recv().await {
@@ -336,7 +377,7 @@ pub async fn cmd_agent_continue(
                 crate::activity::end_run(&app_clone, state, message);
             }
             crate::multiplayer::broadcast_agent_event(&app_clone, &mp_workspace_folders, &event).await;
-            let _ = app_clone.emit("agent_event", serde_json::json!({ "threadId": "", "event": event }));
+            let _ = app_clone.emit("agent_event", serde_json::json!({ "threadId": emit_thread_id, "event": event }));
         }
     });
 
@@ -1681,6 +1722,22 @@ pub async fn cmd_save_current_session(
 /// already resolved a specific thread's `AppState` via `AgentRegistry` (like
 /// `cmd_agent_prompt`'s post-turn autosave) save *that* thread's transcript,
 /// not whichever state happens to be the singleton default.
+/// Save a thread that keeps its transcript in a file of its own there.
+/// `false` when it has none (it is a session).
+fn save_transcript_file(state: &AppState, messages: &[AgentMessage]) -> bool {
+    let Some(path) = state.transcript_file.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return false };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match serde_json::to_string(messages) {
+        Ok(json) => {
+            let _ = write_session_file_atomic(&path, &json);
+        }
+        Err(e) => log::warn!("[threads] couldn't save {}: {e}", path.display()),
+    }
+    true
+}
+
 async fn save_current_session_impl(name: Option<String>, state: &Arc<AppState>) -> Result<String, String> {
     // Lock-free — see `cmd_debug_agent_status`'s comment. This used to lock
     // `state.agent` and hold it through the whole save (message clone, JSON
@@ -1693,6 +1750,9 @@ async fn save_current_session_impl(name: Option<String>, state: &Arc<AppState>) 
     let messages = state.agent_state.messages().await;
     if messages.is_empty() {
         return Ok("".to_string());
+    }
+    if save_transcript_file(state, &messages) {
+        return Ok(state.session_id.lock().await.clone().unwrap_or_default());
     }
     
     let mut active_id_lock = state.session_id.lock().await;
@@ -1869,6 +1929,9 @@ pub async fn cmd_agent_revert_to_index(
 
     // Persist to the active session file, if one exists — a revert that
     // only lived in memory would silently un-revert on the next reload.
+    if save_transcript_file(&state, &messages) {
+        return Ok(removed);
+    }
     if let Some(session_id) = state.session_id.lock().await.clone() {
         if let Ok(dir) = get_session_dir() {
             let path = dir.join(format!("{session_id}.json"));

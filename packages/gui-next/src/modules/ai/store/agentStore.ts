@@ -584,6 +584,15 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
       // optimistic append here duplicated every sent message once that event
       // landed. `isBusy` alone gives instant composer feedback.
       set({ isBusy: true })
+      const own = senders.get(threadId)
+      if (own) {
+        // It runs when its owner gets to it; `agent_end` clears busy.
+        await own(trimmed, images?.length ? images : null).catch((err) => {
+          console.error('[agent] send failed:', err)
+          set({ isBusy: false })
+        })
+        return
+      }
       try {
         await call('cmd_agent_prompt', { text: trimmed, images: images?.length ? images : null, threadId })
       } catch (err) {
@@ -716,6 +725,15 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
 type AgentStore = UseBoundStore<StoreApi<AgentStoreState>>
 
 const stores = new Map<string, AgentStore>()
+
+/** Threads that send their own way: a bot's DM goes through the bot (its
+ * queue, its rules), not straight to the agent. */
+type Send = (text: string, images: ImageAttachment[] | null) => Promise<unknown>
+const senders = new Map<string, Send>()
+export function sendThrough(threadId: string, send: Send | null) {
+  if (send) senders.set(threadId, send)
+  else senders.delete(threadId)
+}
 
 /** One `agent_event` listener for every thread, handing each event to its
  * thread's store. */

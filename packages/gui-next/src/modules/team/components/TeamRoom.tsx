@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import type { AgentMessage } from '../../ai/lib/types'
 import { usePlanStore } from '../../plan/store/planStore'
 import { Button, ButtonBase, Stack, Tooltip, Typography } from '../../../ui'
@@ -10,6 +10,9 @@ import { usePanelStore } from '../../dock/store/panelStore'
 import { useBotFace } from './AgentFace'
 import { Avatar, faceOf } from './bits'
 import { BotChat } from './BotChat'
+import { ChatView } from '../../ai/components/ChatView'
+import { agentStoreFor, sendThrough, setActiveThread } from '../../ai/store/agentStore'
+import { activeThreadId } from '../../ai/store/activeThread'
 
 const EMPTY_AGENTS: TeamAgent[] = []
 const EMPTY_MSGS: never[] = []
@@ -46,41 +49,41 @@ export function TeamRoom({ root }: { root: string }) {
   return <Room root={root} team={team} />
 }
 
-/** One teammate, alone: the conversation it keeps from day to day. */
-function DirectMessage({ root, bot, team }: { root: string; bot: TeamAgent; team: TeamAgent[] }) {
-  const messages = useBotsStore((s) => s.dm[botKey(root, bot.id)] ?? EMPTY_MSGS)
-  const approvals = useBotsStore((s) => s.approvals).filter((a) => a.root === root && a.botId === bot.id)
+/** One teammate, alone: the conversation it keeps from day to day. It is
+ * the bot's own thread, shown in the chat view with everything the chat has
+ * (tool calls, plans, to-dos, checkpoints, approvals, cards); sending goes
+ * through the bot. */
+function DirectMessage({ root, bot }: { root: string; bot: TeamAgent; team: TeamAgent[] }) {
   const st = useBotsStore((s) => s.status[botKey(root, bot.id)])
-  const { loadDm, loadStatus, sendDm } = useBotsStore.getState()
+  const { loadStatus, sendDm } = useBotsStore.getState()
   const focus = useTeamStore((s) => s.focus)
   const save = useTeamStore((s) => s.save)
-  useEffect(() => {
-    void loadDm(root, bot.id)
-    void loadStatus(root)
-  }, [root, bot.id, loadDm, loadStatus])
-
+  const thread = `bot:${root}:${bot.id}`
   const state = st?.state ?? 'idle'
-  // Its plans, not the open thread's, while this conversation is showing.
+
   useEffect(() => {
-    void usePlanStore.getState().setScope({ root, send: (t) => sendDm(root, bot.id, t) })
-    return () => void usePlanStore.getState().setScope(null)
-  }, [root, bot.id, sendDm])
-  // The bot's full working transcript (every tool call and its result), read
-  // again whenever a turn ends or a new message lands.
-  const [transcript, setTranscript] = useState<AgentMessage[] | null>(null)
-  const [reloads, setReloads] = useState(0)
-  useEffect(() => {
-    let live = true
-    void call<AgentMessage[]>('cmd_bots_thread', { root, botId: bot.id })
-      .then((t) => live && setTranscript(t ?? []))
-      .catch(() => live && setTranscript([]))
-    return () => {
-      live = false
+    const back = activeThreadId()
+    const reload = async () => {
+      const messages = (await call<AgentMessage[]>('cmd_bots_thread', { root, botId: bot.id })) ?? []
+      agentStoreFor(thread).setState({ messages, streamingIndex: null })
     }
-  }, [root, bot.id, messages.length, state, reloads])
+    sendThrough(thread, (text, images) => call('cmd_bots_dm_send', { root, botId: bot.id, text, images }))
+    setActiveThread(thread)
+    void reload()
+    void loadStatus(root)
+    // Its plans, not the open thread's, while this conversation is showing.
+    void usePlanStore.getState().setScope({ root, send: (t) => sendDm(root, bot.id, t) })
+    return () => {
+      void usePlanStore.getState().setScope(null)
+      sendThrough(thread, null)
+      setActiveThread(back)
+    }
+  }, [root, bot.id, thread, loadStatus, sendDm])
+
   const revertTo = async (index: number) => {
     await call('cmd_bots_revert', { root, botId: bot.id, index })
-    setReloads((n) => n + 1)
+    const messages = (await call<AgentMessage[]>('cmd_bots_thread', { root, botId: bot.id })) ?? []
+    agentStoreFor(thread).setState({ messages, streamingIndex: null })
   }
 
   return (
@@ -100,11 +103,6 @@ function DirectMessage({ root, bot, team }: { root: string; bot: TeamAgent; team
             {state === 'working' ? (st?.activity ?? 'Working…') : state === 'paused' ? 'Paused' : bot.role}
           </Typography>
         </Stack>
-        {state === 'working' && (
-          <Button size="small" variant="outlined" color="error" onClick={() => void call('cmd_bots_stop', { root, botId: bot.id })} sx={{ borderRadius: '8px', flexShrink: 0 }}>
-            Stop
-          </Button>
-        )}
         <Tooltip title="Routines, rules, memory">
           <Button
             size="small"
@@ -119,31 +117,11 @@ function DirectMessage({ root, bot, team }: { root: string; bot: TeamAgent; team
           </Button>
         </Tooltip>
       </Stack>
-      <BotChat
-        root={root}
-        channel={bot.id}
-        messages={messages}
-        transcript={transcript}
-        onRevertTo={state === 'working' ? undefined : revertTo}
-        team={team}
-        approvals={approvals}
-        onSend={(t, att) => sendDm(root, bot.id, t, att)}
-        attachments
-        toolbar={<ModelPicker mode="agent" value={bot.model} onChange={(model) => void save(root, { ...bot, model }, bot.id)} />}
-        allowEveryone={false}
-        placeholder={`Message ${bot.name}`}
-        empty={
-          <Stack sx={{ alignItems: 'center', textAlign: 'center', gap: 1, py: 8, color: 'text.secondary' }}>
-            <Avatar {...faceOf(bot)} size={72} animate />
-            <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary' }}>
-              {bot.name}
-            </Typography>
-            <Typography variant="caption" sx={{ maxWidth: 360, lineHeight: 1.5 }}>
-              {bot.role ? `${bot.role}. ` : ''}Talk to {bot.name} on its own here. It keeps this conversation, and what it learns,
-              from one day to the next.
-            </Typography>
-          </Stack>
-        }
+      <ChatView
+        own={{
+          toolbar: <ModelPicker mode="agent" value={bot.model} onChange={(model) => void save(root, { ...bot, model }, bot.id)} />,
+          onRevertTo: revertTo,
+        }}
       />
     </Stack>
   )
