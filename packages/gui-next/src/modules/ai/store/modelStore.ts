@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { activeThreadId } from './activeThread'
 import { call, on } from '../../../ipc'
 import { preconnectProvider } from '../providers/shared'
 import type { DiscoveredModel, SessionStats, ThinkingLevel } from '../lib/types'
@@ -33,7 +34,7 @@ interface ModelStoreState {
 }
 
 async function fetchSessionCost(): Promise<SessionCost | null> {
-  const sessionId = await call<string | null>('cmd_get_active_session_id')
+  const sessionId = await call<string | null>('cmd_get_active_session_id', { threadId: activeThreadId() })
   return call<SessionCost>('cmd_session_cost', { sessionId: sessionId ?? null })
 }
 
@@ -56,7 +57,7 @@ export const useModelStore = create<ModelStoreState>((set, get) => ({
       // model's name should not wait for it.
       await Promise.all([
         call<DiscoveredModel[]>('cmd_list_available_models').then((models) => set({ models: models ?? [] })),
-        call<SessionStats>('cmd_agent_session_stats').then((stats) => {
+        call<SessionStats>('cmd_agent_session_stats', { threadId: activeThreadId() }).then((stats) => {
           set({ stats: stats ?? null })
           if (stats?.provider && stats.provider !== 'router') preconnectProvider(stats.provider)
         }),
@@ -77,17 +78,18 @@ export const useModelStore = create<ModelStoreState>((set, get) => ({
       baseUrl: model.baseUrl ?? null,
       contextWindow: model.contextWindow,
       maxTokens: model.maxOutputTokens,
+      threadId: activeThreadId(),
     })
     await get().refreshStats()
   },
 
   setThinkingLevel: async (level) => {
     set({ thinkingLevel: level })
-    await call('cmd_agent_set_thinking_level', { level })
+    await call('cmd_agent_set_thinking_level', { level, threadId: activeThreadId() })
   },
 
   refreshStats: async () => {
-    const [stats, sessionCost] = await Promise.all([call<SessionStats>('cmd_agent_session_stats'), fetchSessionCost()])
+    const [stats, sessionCost] = await Promise.all([call<SessionStats>('cmd_agent_session_stats', { threadId: activeThreadId() }), fetchSessionCost()])
     set({ stats: stats ?? null, sessionCost })
   },
 }))

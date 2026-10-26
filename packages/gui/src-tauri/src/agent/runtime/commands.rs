@@ -87,9 +87,19 @@ impl AgentRegistry {
             None | Some("") => self.primary.clone(),
             Some(id) => {
                 let mut map = self.extra.lock().await;
-                map.entry(id.to_string())
-                    .or_insert_with(|| Arc::new(AppState::default()))
-                    .clone()
+                if let Some(state) = map.get(id) {
+                    return state.clone();
+                }
+                // A new thread starts where the primary is: its model,
+                // thinking level and folders. Callers with their own (a bot,
+                // Viv Instant, `viv run`) set theirs after.
+                let state = Arc::new(AppState::default());
+                let (from, to) = (&self.primary.agent_state, &state.agent_state);
+                to.set_model(from.model().await).await;
+                to.set_thinking_level(from.thinking_level().await).await;
+                to.set_workspace(from.workspace_folders().await, from.access_mode().await).await;
+                map.insert(id.to_string(), state.clone());
+                state
             }
         }
     }
@@ -315,8 +325,10 @@ pub async fn cmd_agent_prompt(
 #[tauri::command]
 pub async fn cmd_agent_continue(
     app: tauri::AppHandle,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<Vec<AgentMessage>, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     use tauri::Emitter;
     let mut agent = state.agent.lock().await;
     let (tx, mut rx) = crate::agent::runtime::events::event_bus();
@@ -356,10 +368,14 @@ pub async fn cmd_agent_continue(
 /// calls). Non-blocking — returns immediately; the actual stop happens on the
 /// next loop iteration, which then emits a normal `agent_end`.
 #[tauri::command]
-pub async fn cmd_agent_abort(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+pub async fn cmd_agent_abort(#[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     state.abort_flag.store(true, std::sync::atomic::Ordering::SeqCst);
     // A plan being carried out runs inside one long tool call, which the
     // loop's abort check can't reach until it returns — stop it directly.
+    // ponytail: stops every thread's plans and team runs, not only this
+    // thread's; track them per thread if two threads run plans at once.
     crate::agent::team::plans::cancel_all();
     crate::agent::team::run::cancel_all();
     Ok(())
@@ -367,10 +383,11 @@ pub async fn cmd_agent_abort(state: State<'_, Arc<AppState>>) -> Result<(), Stri
 
 /// Stop from the activity notch: the run, and any typing mid-flight, now.
 #[tauri::command]
-pub async fn cmd_activity_stop(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+pub async fn cmd_activity_stop(app: tauri::AppHandle, #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>) -> Result<(), String> {
     crate::agent::tools::desktop::win_cancel();
     crate::activity::end_run(&app, "stopped", "Stopping…".into());
-    cmd_agent_abort(state).await
+    cmd_agent_abort(threadId, registry).await
 }
 
 /// Queue a steering message AND interrupt the in-flight run at the next
@@ -383,8 +400,10 @@ pub async fn cmd_activity_stop(app: tauri::AppHandle, state: State<'_, Arc<AppSt
 pub async fn cmd_agent_steer(
     text: String,
     images: Option<Vec<ImageInput>>,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let attached = images.unwrap_or_default();
     let mut content = vec![MessageContent::Text { text }];
     for img in attached {
@@ -421,8 +440,10 @@ pub async fn cmd_agent_reset(
 #[tauri::command]
 pub async fn cmd_agent_steering_queue(
     text: String,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     // Deliberately does NOT touch `state.agent`'s mutex — that mutex is held
     // for the full duration of an in-flight prompt/continue run, so routing
     // this through it would block until the run finishes, making mid-run
@@ -439,8 +460,10 @@ pub async fn cmd_agent_steering_queue(
 #[tauri::command]
 pub async fn cmd_agent_follow_up_queue(
     text: String,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let message = AgentMessage::User {
         content: vec![MessageContent::Text { text }],
         timestamp: now_ms(),
@@ -451,7 +474,9 @@ pub async fn cmd_agent_follow_up_queue(
 
 /// Clear all queues.
 #[tauri::command]
-pub async fn cmd_agent_clear_queues(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+pub async fn cmd_agent_clear_queues(#[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     state.steering_queue.write().await.clear();
     state.follow_up_queue.write().await.clear();
     Ok(())
@@ -468,11 +493,14 @@ pub struct QueueSnapshot {
 /// pending steering/follow-up messages are actually visible instead of
 /// being a write-only side channel.
 #[tauri::command]
-pub async fn cmd_agent_get_queues(state: State<'_, Arc<AppState>>) -> Result<QueueSnapshot, String> {
-    Ok(QueueSnapshot {
+pub async fn cmd_agent_get_queues(#[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>) -> Result<QueueSnapshot, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let snapshot = QueueSnapshot {
         steering: state.steering_queue.read().await.clone(),
         follow_up: state.follow_up_queue.read().await.clone(),
-    })
+    };
+    Ok(snapshot)
 }
 
 /// Remove one queued message by its position in the given queue (steering
@@ -482,8 +510,10 @@ pub async fn cmd_agent_get_queues(state: State<'_, Arc<AppState>>) -> Result<Que
 pub async fn cmd_agent_remove_queued(
     queue: String,
     index: usize,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let target = match queue.as_str() {
         "steering" => &state.steering_queue,
         "followUp" | "follow_up" => &state.follow_up_queue,
@@ -518,8 +548,10 @@ fn now_ms() -> u64 {
 #[tauri::command]
 pub async fn cmd_debug_agent_status(
     app: tauri::AppHandle,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<serde_json::Value, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     use crate::ai::auth::Credential;
 
     // Reads only `agent_state` (the lock-free `Arc<RwLock<_>>` clone `Agent`
@@ -585,9 +617,11 @@ pub async fn cmd_agent_set_model(
     reasoning: Option<bool>,
     max_tokens: Option<u32>,
     context_window: Option<u32>,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     use tauri::Manager;
 
     // For local providers, resolve the base URL from the endpoint registry
@@ -628,8 +662,10 @@ pub async fn cmd_agent_set_model(
 #[tauri::command]
 pub async fn cmd_agent_set_thinking_level(
     level: String,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let level_enum = match level.to_lowercase().as_str() {
         "off" => ThinkingLevel::Off,
         "minimal" => ThinkingLevel::Minimal,
@@ -648,8 +684,10 @@ pub async fn cmd_agent_set_thinking_level(
 #[tauri::command]
 pub async fn cmd_agent_set_persona_mode(
     mode: String,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let mode_enum = match mode.to_lowercase().as_str() {
         "ask" => PersonaMode::Ask,
         "debug" => PersonaMode::Debug,
@@ -664,7 +702,9 @@ pub async fn cmd_agent_set_persona_mode(
 /// session — the frontend has no other way to learn what a session load
 /// just restored server-side (`cmd_load_session` sets `AgentState` directly).
 #[tauri::command]
-pub async fn cmd_agent_get_workspace(state: State<'_, Arc<AppState>>) -> Result<serde_json::Value, String> {
+pub async fn cmd_agent_get_workspace(#[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>) -> Result<serde_json::Value, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let folders = state.agent_state.workspace_folders().await;
     let access_mode = match state.agent_state.access_mode().await {
         crate::agent::runtime::state::WorkspaceAccessMode::ReadOnly => "readOnly",
@@ -682,8 +722,10 @@ pub async fn cmd_agent_get_workspace(state: State<'_, Arc<AppState>>) -> Result<
 pub async fn cmd_agent_set_workspace(
     folders: Vec<String>,
     access_mode: String,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let mode = if access_mode == "readOnly" {
         crate::agent::runtime::state::WorkspaceAccessMode::ReadOnly
     } else {
@@ -783,8 +825,10 @@ pub async fn cmd_agent_set_compaction_config(
     keep_recent_tokens: u32,
     llm_summary_enabled: Option<bool>,
     image_keep_last_n: Option<u32>,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     state.agent_state.set_compaction_config(
         enabled,
         reserve_tokens,
@@ -799,8 +843,10 @@ pub async fn cmd_agent_set_compaction_config(
 /// needs this to show the user's saved values, not just write new ones.
 #[tauri::command]
 pub async fn cmd_agent_get_compaction_config(
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<serde_json::Value, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     Ok(serde_json::json!({
         "enabled": state.agent_state.compaction_enabled().await,
         "reserveTokens": state.agent_state.reserve_tokens().await,
@@ -818,8 +864,10 @@ pub async fn cmd_agent_get_compaction_config(
 #[tauri::command]
 pub async fn cmd_compact_now(
     app: tauri::AppHandle,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<usize, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let agent = state.agent.lock().await;
     let model = agent.state.model().await;
     let mut context = crate::agent::runtime::types::AgentContext {
@@ -843,8 +891,10 @@ pub async fn cmd_compact_now(
 #[tauri::command]
 pub async fn cmd_agent_set_steering_mode(
     mode: String,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let mut agent = state.agent.lock().await;
     let mode_enum = match mode.to_lowercase().as_str() {
         "all" => QueueMode::All,
@@ -859,8 +909,10 @@ pub async fn cmd_agent_set_steering_mode(
 #[tauri::command]
 pub async fn cmd_agent_set_follow_up_mode(
     mode: String,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let mut agent = state.agent.lock().await;
     let mode_enum = match mode.to_lowercase().as_str() {
         "all" => QueueMode::All,
@@ -916,8 +968,10 @@ pub struct SessionStats {
 /// Return estimated context usage and token totals for the active session.
 #[tauri::command]
 pub async fn cmd_agent_session_stats(
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<SessionStats, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     use crate::agent::runtime::compaction::{calculate_context_tokens, message_char_len};
 
     // Lock-free — see `cmd_debug_agent_status`'s comment.
@@ -1514,8 +1568,11 @@ pub async fn cmd_get_sessions() -> Result<Vec<SessionMeta>, String> {
 /// saved/loaded — a brand-new unsaved session is `None`). Needed by the
 /// frontend to scope per-session queries like `cmd_session_cost`.
 #[tauri::command]
-pub async fn cmd_get_active_session_id(state: State<'_, Arc<AppState>>) -> Result<Option<String>, String> {
-    Ok(state.session_id.lock().await.clone())
+pub async fn cmd_get_active_session_id(#[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>) -> Result<Option<String>, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let id = state.session_id.lock().await.clone();
+    Ok(id)
 }
 
 /// Permanently delete a saved session file. If it's the currently active
@@ -1524,8 +1581,10 @@ pub async fn cmd_get_active_session_id(state: State<'_, Arc<AppState>>) -> Resul
 #[tauri::command]
 pub async fn cmd_delete_session(
     id: String,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let dir = get_session_dir()?;
     let path = dir.join(format!("{}.json", id));
     if path.exists() {
@@ -1616,8 +1675,10 @@ pub async fn cmd_load_session(
 #[tauri::command]
 pub async fn cmd_save_current_session(
     name: Option<String>,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<String, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     save_current_session_impl(name, &state).await
 }
 
@@ -1795,8 +1856,10 @@ pub async fn cmd_rename_session(id: String, name: String) -> Result<(), String> 
 #[tauri::command]
 pub async fn cmd_agent_revert_to_index(
     index: usize,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<usize, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let agent = state.agent.lock().await;
     let mut messages = agent.state.messages().await;
     if index > messages.len() {
@@ -1833,8 +1896,10 @@ pub async fn cmd_agent_revert_to_index(
 #[tauri::command]
 pub async fn cmd_fork_session(
     id: String,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<String, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let dir = get_session_dir()?;
     let path = dir.join(format!("{}.json", id));
     if !path.exists() {
@@ -1884,7 +1949,9 @@ fn fork_at(source: &SessionInfo, messages: &[AgentMessage], index: usize, new_id
 /// that is open, leaving that conversation untouched. Returns the new id; it
 /// shows up in the thread list and can be opened like any other.
 #[tauri::command]
-pub async fn cmd_fork_session_at(index: usize, state: State<'_, Arc<AppState>>) -> Result<String, String> {
+pub async fn cmd_fork_session_at(index: usize, #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>) -> Result<String, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let messages = state.agent.lock().await.state.messages().await;
     let id = state.session_id.lock().await.clone().ok_or_else(|| "Nothing is open to fork.".to_string())?;
     let dir = get_session_dir()?;
@@ -1914,9 +1981,10 @@ pub async fn cmd_fork_session_at(index: usize, state: State<'_, Arc<AppState>>) 
 #[tauri::command]
 pub async fn cmd_clone_session(
     id: String,
-    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<String, String> {
-    cmd_fork_session(id, state).await
+    cmd_fork_session(id, threadId, registry).await
 }
 
 /// Respond to a pending tool-call permission request (bypass mode off).
@@ -2711,8 +2779,10 @@ pub async fn cmd_submit_bug_report(
 #[tauri::command]
 pub async fn cmd_list_checkpoints(
     session_id: Option<String>,
-    state: tauri::State<'_, std::sync::Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<Vec<crate::agent::changes::checkpoints::Checkpoint>, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let id = match session_id {
         Some(s) if !s.is_empty() => s,
         _ => state.session_id.lock().await.clone().unwrap_or_default(),
@@ -2732,8 +2802,10 @@ pub async fn cmd_list_checkpoints(
 pub async fn cmd_restore_checkpoint(
     checkpoint_id: String,
     session_id: Option<String>,
-    state: tauri::State<'_, std::sync::Arc<AppState>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
 ) -> Result<crate::agent::changes::checkpoints::RestoreReport, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
     let id = match session_id {
         Some(s) if !s.is_empty() => s,
         _ => state.session_id.lock().await.clone().unwrap_or_default(),
@@ -2835,5 +2907,27 @@ mod fork_at_tests {
         let src = session();
         assert!(fork_at(&src, &src.messages, 0, "x").is_err());
         assert!(fork_at(&src, &src.messages, 4, "x").is_err());
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn each_thread_has_its_own_state_and_none_is_the_primary() {
+        let primary = Arc::new(AppState::default());
+        let registry = AgentRegistry::new(primary.clone());
+        assert!(Arc::ptr_eq(&registry.resolve(None).await, &primary));
+        assert!(Arc::ptr_eq(&registry.resolve(Some("")).await, &primary));
+        let a = registry.resolve(Some("a")).await;
+        let b = registry.resolve(Some("b")).await;
+        assert!(!Arc::ptr_eq(&a, &b) && !Arc::ptr_eq(&a, &primary));
+        assert!(Arc::ptr_eq(&a, &registry.resolve(Some("a")).await), "the same id is the same thread");
+        assert_eq!(a.agent_state.model().await.id, primary.agent_state.model().await.id, "a new thread starts on the primary's model");
+        // Stopping one thread leaves the others running.
+        a.abort_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(!b.abort_flag.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!primary.abort_flag.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

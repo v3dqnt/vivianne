@@ -3,8 +3,8 @@ import { Box, Stack, Typography, IconButton, InputBase, ButtonBase, Tooltip, Col
 import { ExportLinear, AddLinear, TrashLinear } from '../../../icons'
 import { useProjectsStore, projectColor, modeOf, GENERAL_PROJECT_ID } from '../store/projectsStore'
 import { SidebarMods } from '../../mods/components/SidebarMods'
-import { useDaysStore } from '../store/daysStore'
-import { useAgentStore } from '../../ai/store/agentStore'
+import { useDaysStore, holderOf } from '../store/daysStore'
+import { useAgentStore, agentStoreFor } from '../../ai/store/agentStore'
 import { contentToText, type AgentMessage } from '../../ai/lib/types'
 import { isAppText } from '../../ai/components/HandoffDivider'
 import { surfaceCard } from '../../../theme'
@@ -498,7 +498,6 @@ function GeneralThreads({ onExport }: { onExport: () => void }) {
             leaveAgent()
             void newThread()
           }}
-          disabled={busy}
           sx={{
             display: 'flex',
             width: '100%',
@@ -564,7 +563,6 @@ function GeneralThreads({ onExport }: { onExport: () => void }) {
                         setRenaming(t.id)
                         setDraft(t.name)
                       }}
-                      disabled={busy && !active}
                       aria-current={active ? 'true' : undefined}
                       sx={{
                         flex: 1,
@@ -584,6 +582,7 @@ function GeneralThreads({ onExport }: { onExport: () => void }) {
                       >
                         {t.name || 'New chat'}
                       </Typography>
+                      {!active && <ThreadStatus sessionId={t.id} />}
                     </ButtonBase>
                   </Tooltip>
                   <Stack
@@ -704,6 +703,27 @@ function TeamRow({ agent, runs, onClick }: { agent: TeamAgent; runs: AgentRun[] 
         </Typography>
       </Stack>
     </ButtonBase>
+  )
+}
+
+/** A dot on a thread running in the background: working, or waiting on you. */
+function ThreadStatus({ sessionId }: { sessionId: string }) {
+  const holder = holderOf(sessionId)
+  return holder === undefined ? null : <ThreadStatusDot threadId={holder} />
+}
+
+function ThreadStatusDot({ threadId }: { threadId: string }) {
+  const store = agentStoreFor(threadId)
+  const busy = store((s) => s.isBusy)
+  const waiting = store((s) => !!(s.pendingPermission || s.pendingQuestion || s.pendingConfirmation))
+  if (!busy && !waiting) return null
+  return (
+    <Tooltip title={waiting ? 'Waiting on you' : 'Working'}>
+      <Box
+        aria-label={waiting ? 'Waiting on you' : 'Working'}
+        sx={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, ml: -3, mr: 3, bgcolor: waiting ? 'warning.main' : 'primary.main' }}
+      />
+    </Tooltip>
   )
 }
 

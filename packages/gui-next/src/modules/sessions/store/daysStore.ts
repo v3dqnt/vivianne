@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import { call } from '../../../ipc'
 import { usePlanStore } from '../../plan/store/planStore'
-import { useAgentStore } from '../../ai/store/agentStore'
+import { useAgentStore, agentStoreFor, setActiveThread, activeThreadId, PRIMARY_THREAD_ID } from '../../ai/store/agentStore'
+import { useModelStore } from '../../ai/store/modelStore'
 import type { AgentMessage } from '../../ai/lib/types'
 import type { SessionInfo } from '../lib/types'
 import { useProjectsStore, modeOf } from './projectsStore'
@@ -112,7 +113,7 @@ function lastThread(): string | null {
 
 /** Pull the live transcript the backend now holds into the chat view. */
 async function syncLiveMessages() {
-  const messages = await call<AgentMessage[]>('cmd_agent_messages')
+  const messages = await call<AgentMessage[]>('cmd_agent_messages', { threadId: activeThreadId() })
   useAgentStore.setState({ messages: messages ?? [], streamingIndex: null })
 }
 
@@ -144,7 +145,9 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
 
   openScope: (scope) => {
     const run = async () => {
-      if (useAgentStore.getState().isBusy) {
+      // A project conversation opens on the primary; a thread opens beside a
+      // busy one (`loadThread`), so only the former waits.
+      if (!isThreaded(scope) && agentStoreFor(PRIMARY_THREAD_ID).getState().isBusy) {
         pendingScope = scope
         return
       }
@@ -158,6 +161,8 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
         else await createThread()
         return
       }
+      setActiveThread(PRIMARY_THREAD_ID)
+      forget(PRIMARY_THREAD_ID)
       const opened = await call<OpenedConversation>('cmd_open_conversation', { scope })
       if (!opened) return
       set({ scope, todayId: opened.id, viewing: null, earlier: [], earlierStart: 0, threads: [] })
@@ -244,11 +249,7 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
 /** Thread switches share `opening` with project switches, so the two can't
  * interleave and leave the wrong transcript live. */
 function serialized(run: () => Promise<void>): Promise<void> {
-  const guarded = async () => {
-    if (useAgentStore.getState().isBusy) return // never swap mid-turn
-    await run()
-  }
-  opening = opening.then(guarded, guarded)
+  opening = opening.then(run, run)
   return opening
 }
 
@@ -276,43 +277,75 @@ function remember(id: string | null, messages: AgentMessage[]) {
   if (recent.size > RECENT_MAX) recent.delete(recent.keys().next().value!)
 }
 
-async function loadThread(id: string) {
-  remember(useDaysStore.getState().todayId, useAgentStore.getState().messages)
-  const cached = recent.get(id)
-  if (cached) {
-    useDaysStore.setState({ todayId: id, viewing: null, earlier: [], earlierStart: 0 })
-    useAgentStore.setState({ messages: cached, streamingIndex: null })
-  }
-  await call('cmd_load_session', { id })
+/** Which agent thread holds each open thread (session id -> thread id). A
+ * thread runs on the one on screen unless that one is mid-turn; then it gets
+ * its own (`s:<id>`) and the busy one keeps going. */
+const holders = new Map<string, string>()
+/** The agent thread a session is open on, if it is open. */
+export const holderOf = (sessionId: string) => holders.get(sessionId)
+function forget(threadId: string) {
+  for (const [session, holder] of holders) if (holder === threadId) holders.delete(session)
+}
+
+/** The agent thread to put a session on: the one on screen, or a fresh one
+ * beside it while it is busy. */
+function placeFor(sessionId: string): string {
+  const here = activeThreadId()
+  if (!agentStoreFor(here).getState().isBusy) return here
+  return `s:${sessionId}`
+}
+
+async function show(sessionId: string, threadId: string) {
+  holders.set(sessionId, threadId)
+  setActiveThread(threadId)
   await applyThreadWorkspace()
-  useDaysStore.setState({ todayId: id, viewing: null, earlier: [], earlierStart: 0 })
-  rememberThread(id)
+  useDaysStore.setState({ todayId: sessionId, viewing: null, earlier: [], earlierStart: 0 })
+  rememberThread(sessionId)
   await syncLiveMessages()
+  void useModelStore.getState().refreshStats()
+}
+
+async function loadThread(id: string) {
+  const holder = holders.get(id)
+  if (holder !== undefined) return show(id, holder) // already open, maybe still running
+  remember(useDaysStore.getState().todayId, useAgentStore.getState().messages)
+  const thread = placeFor(id)
+  forget(thread)
+  const cached = recent.get(id)
+  if (cached) agentStoreFor(thread).setState({ messages: cached, streamingIndex: null })
+  await call('cmd_load_session', { id, threadId: thread })
+  await show(id, thread)
 }
 
 async function createThread() {
+  const thread = placeFor(`new-${Date.now()}`)
+  forget(thread)
+  setActiveThread(thread)
   await applyThreadWorkspace()
-  const id = await call<string>('cmd_new_session')
+  const id = await call<string>('cmd_new_session', { threadId: thread })
   if (!id) return
   // A project's thread belongs to it.
   const scope = useDaysStore.getState().scope
   if (scope && scope !== GENERAL_SCOPE) await useProjectsStore.getState().assign(id, scope)
-  useDaysStore.setState({ todayId: id, viewing: null, earlier: [], earlierStart: 0 })
-  rememberThread(id)
-  await syncLiveMessages()
+  await show(id, thread)
   await useDaysStore.getState().refreshThreads()
 }
 
 // A turn just finished: apply a deferred project switch, or pick up whatever
 // compaction moved into the archive during it.
+let primaryWasBusy = false
+agentStoreFor(PRIMARY_THREAD_ID).subscribe((s) => {
+  if (primaryWasBusy && !s.isBusy && pendingScope) {
+    const scope = pendingScope
+    pendingScope = null
+    void useDaysStore.getState().openScope(scope)
+  }
+  primaryWasBusy = s.isBusy
+})
 let wasBusy = false
 useAgentStore.subscribe((s) => {
   if (wasBusy && !s.isBusy) {
-    if (pendingScope) {
-      const scope = pendingScope
-      pendingScope = null
-      void useDaysStore.getState().openScope(scope)
-    } else if (isThreaded(useDaysStore.getState().scope)) {
+    if (isThreaded(useDaysStore.getState().scope)) {
       // The autosave may have named the thread after its first message.
       void useDaysStore.getState().refreshThreads()
     } else {
