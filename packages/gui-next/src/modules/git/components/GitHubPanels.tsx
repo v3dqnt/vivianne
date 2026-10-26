@@ -434,15 +434,68 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 // ── Actions ───────────────────────────────────────────────────────────────
 
+/** Repositories whose Actions belong with this project's: its own, a
+ * `<repo>-releases` beside it when there is one (where releases often build),
+ * and any the user adds. Kept per folder. */
+function useActionRepos(root: string | null, gh: ReturnType<typeof useGh>) {
+  const key = `viv.git.actionRepos.${root ?? ''}`
+  const [own, setOwn] = useState<string | null>(null)
+  const [extra, setExtra] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(key) ?? '[]') as string[]
+    } catch {
+      return []
+    }
+  })
+  const save = (list: string[]) => {
+    setExtra(list)
+    try {
+      localStorage.setItem(key, JSON.stringify(list))
+    } catch {
+      // storage unavailable: kept for this session only
+    }
+  }
+  useEffect(() => {
+    if (!root) return
+    let live = true
+    void call<string>('cmd_github_repo', { cwd: root })
+      .then(async (repo) => {
+        if (!live || !repo) return
+        setOwn(repo)
+        const releases = `${repo}-releases`
+        if (extra.includes(releases)) return
+        try {
+          await gh(`/repos/${releases}`)
+          if (live) save([...extra, releases])
+        } catch {
+          // no such repository
+        }
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [root])
+  return { own, extra, add: (r: string) => !extra.includes(r) && save([...extra, r]), remove: (r: string) => save(extra.filter((x) => x !== r)) }
+}
+
 export function Actions({ root }: { root: string | null }) {
-  const gh = useGh(root)
-  const [workflow, setWorkflow] = useState<number | 'all'>('all')
+  const base = useGh(root)
+  const repos = useActionRepos(root, base)
+  const [target, setTarget] = useState<string | null>(null)
+  const [adding, setAdding] = useState('')
+  // The same calls, against the repository picked (`{repo}` is the folder's own).
+  const gh = useCallback(
+    <T = J,>(path: string, opts?: { method?: string; body?: unknown; raw?: boolean }) => base<T>(target ? path.replace('{repo}', target) : path, opts),
+    [base, target],
+  ) as ReturnType<typeof useGh>
+  const [workflow, setWorkflow] = useState<string | 'all'>('all')
   const [picked, setPicked] = useState<number | null>(null)
-  const flows = useLoad(async () => ((await gh('/repos/{repo}/actions/workflows?per_page=100')).workflows as J[]) ?? [], [gh])
-  const runs = useLoad(
-    async () => ((await gh(workflow === 'all' ? '/repos/{repo}/actions/runs?per_page=40' : `/repos/{repo}/actions/workflows/${workflow}/runs?per_page=40`)).workflow_runs as J[]) ?? [],
-    [gh, workflow],
-  )
+  const runs = useLoad(async () => ((await gh('/repos/{repo}/actions/runs?per_page=60')).workflow_runs as J[]) ?? [], [gh])
+  // Every workflow that has runs, including ones since deleted.
+  const names = useMemo(() => [...new Set((runs.data ?? []).map((r) => r.name as string))], [runs.data])
+  const shown = (runs.data ?? []).filter((r) => workflow === 'all' || r.name === workflow)
   // Running ones are watched: the list refreshes while anything is going.
   const live = runs.data?.some((r) => r.status !== 'completed')
   useEffect(() => {
@@ -450,21 +503,59 @@ export function Actions({ root }: { root: string | null }) {
     const t = window.setInterval(() => void runs.reload(), 10_000)
     return () => window.clearInterval(t)
   }, [live, runs.reload])
+  const pick = (r: string | null) => {
+    setTarget(r)
+    setWorkflow('all')
+    setPicked(null)
+  }
 
   return (
     <Split
-      empty={runs.data?.length === 0 ? 'No workflow runs yet.' : 'Pick a run to see its jobs and logs.'}
+      empty={shown.length === 0 && runs.data ? 'No workflow runs here yet.' : 'Pick a run to see its jobs and logs.'}
       list={
         <>
+          <Stack direction="row" sx={{ gap: 0.5, px: 1.5, pt: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Chip size="small" label={repos.own ?? 'This repository'} onClick={() => pick(null)} variant={target === null ? 'filled' : 'outlined'} sx={{ height: 22, fontSize: '0.71875rem' }} />
+            {repos.extra.map((r) => (
+              <Stack key={r} direction="row" sx={{ alignItems: 'center' }}>
+                <Chip size="small" label={r} onClick={() => pick(r)} variant={target === r ? 'filled' : 'outlined'} sx={{ height: 22, fontSize: '0.71875rem' }} />
+                <ButtonBase
+                  aria-label={`Stop showing ${r}`}
+                  title="Stop showing"
+                  onClick={() => {
+                    repos.remove(r)
+                    if (target === r) pick(null)
+                  }}
+                  sx={{ px: 0.375, fontSize: '0.75rem', color: 'text.disabled', '&:hover': { color: 'text.primary' } }}
+                >
+                  ×
+                </ButtonBase>
+              </Stack>
+            ))}
+            <InputBase
+              value={adding}
+              onChange={(e) => setAdding(e.target.value)}
+              onKeyDown={(e) => {
+                const r = adding.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
+                if (e.key === 'Enter' && /^[\w.-]+\/[\w.-]+$/.test(r)) {
+                  repos.add(r)
+                  setAdding('')
+                  pick(r)
+                }
+              }}
+              placeholder="+ owner/repo"
+              sx={{ width: 110, fontSize: '0.71875rem', px: 0.75, border: 1, borderColor: 'divider', borderRadius: '11px', height: 22 }}
+            />
+          </Stack>
           <Stack direction="row" sx={{ gap: 0.5, px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider', flexWrap: 'wrap' }}>
             <Chip size="small" label="All workflows" onClick={() => setWorkflow('all')} variant={workflow === 'all' ? 'filled' : 'outlined'} sx={{ height: 22, fontSize: '0.71875rem' }} />
-            {flows.data?.map((w) => (
-              <Chip key={w.id} size="small" label={w.name} onClick={() => setWorkflow(w.id)} variant={workflow === w.id ? 'filled' : 'outlined'} sx={{ height: 22, fontSize: '0.71875rem' }} />
+            {names.map((n) => (
+              <Chip key={n} size="small" label={n} onClick={() => setWorkflow(n)} variant={workflow === n ? 'filled' : 'outlined'} sx={{ height: 22, fontSize: '0.71875rem' }} />
             ))}
           </Stack>
           {runs.error && <Problem error={runs.error} onRetry={runs.reload} />}
           {runs.loading && !runs.data && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', p: 1.5 }}>Loading…</Typography>}
-          {runs.data?.map((r) => (
+          {shown.map((r) => (
             <ListRow
               key={r.id}
               active={picked === r.id}
@@ -476,7 +567,7 @@ export function Actions({ root }: { root: string | null }) {
           ))}
         </>
       }
-      detail={picked !== null ? <Run key={picked} gh={gh} id={picked} onChanged={runs.reload} /> : null}
+      detail={picked !== null ? <Run key={`${target}-${picked}`} gh={gh} id={picked} onChanged={runs.reload} /> : null}
     />
   )
 }
