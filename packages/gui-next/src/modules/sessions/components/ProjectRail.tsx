@@ -7,7 +7,24 @@ import { isWindows } from '../../../lib/platform'
 import { NewProjectDialog } from './NewProjectDialog'
 import { PairProjectDialog } from '../../multiplayer/components/PairProjectDialog'
 
-export const PROJECT_RAIL_WIDTH = 56
+export const PROJECT_RAIL_WIDTH = 48
+/** The rail's buttons. */
+const TILE = 30
+
+/** A picked image, cropped square from its centre and scaled to 64px, as a
+ * PNG data URL — small enough to keep in projects.json. */
+async function iconFrom(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file)
+  const side = Math.min(bitmap.width, bitmap.height)
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = 64
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('No canvas')
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, 64, 64)
+  bitmap.close()
+  return canvas.toDataURL('image/png')
+}
 
 /** Create/edit a project: name, folder, accent color. The folder is what
  * powers "open in Explorer/PowerShell" and the workspace the threads in this
@@ -121,6 +138,8 @@ export function ProjectRail() {
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const setActiveProject = useProjectsStore((s) => s.setActiveProject)
   const remove = useProjectsStore((s) => s.remove)
+  const setIcon = useProjectsStore((s) => s.setIcon)
+  const [iconFor, setIconFor] = useState<Project | null>(null)
   const refresh = useProjectsStore((s) => s.refresh)
   const openSettings = useSettingsUi((s) => s.openSettings)
   const [dialog, setDialog] = useState<{ open: boolean; project: Project | null }>({ open: false, project: null })
@@ -144,7 +163,7 @@ export function ProjectRail() {
         gap: 1,
         py: 1.5,
         // The sidebar card sits 8px to the right of the rail on the same
-        // chrome background, so the strip you see is 64px wide. The same 8px
+        // chrome background, so the strip you see is 56px wide. The same 8px
         // on the left centres the icons in it rather than in the rail alone.
         pl: '8px',
         boxSizing: 'border-box',
@@ -155,10 +174,10 @@ export function ProjectRail() {
         <ButtonBase
           onClick={() => setActiveProject(GENERAL_PROJECT_ID)}
           sx={{
-            width: 38,
-            height: 38,
+            width: TILE,
+            height: TILE,
             flexShrink: 0,
-            borderRadius: 2,
+            borderRadius: '8px',
             color: activeProjectId === GENERAL_PROJECT_ID ? 'text.primary' : 'text.secondary',
             bgcolor: 'action.hover',
             border: '1.5px solid',
@@ -168,11 +187,11 @@ export function ProjectRail() {
             '&:active': { transform: 'scale(0.94)' },
           }}
         >
-          <MessageSquareLinear size={17} color="currentColor" />
+          <MessageSquareLinear size={15} color="currentColor" />
         </ButtonBase>
       </Tooltip>
 
-      {projects.length > 0 && <Divider sx={{ width: 24 }} />}
+      {projects.length > 0 && <Divider sx={{ width: 20 }} />}
 
       {projects.map((p) => {
         const active = p.id === activeProjectId
@@ -185,11 +204,12 @@ export function ProjectRail() {
                 setMenu({ anchor: e.currentTarget as HTMLElement, project: p })
               }}
               sx={{
-                width: 38,
-                height: 38,
+                width: TILE,
+                height: TILE,
                 flexShrink: 0,
-                borderRadius: 2,
-                fontSize: '0.9rem',
+                borderRadius: '8px',
+                overflow: 'hidden',
+                fontSize: '0.78125rem',
                 fontWeight: 700,
                 color: projectColor(p),
                 bgcolor: `${projectColor(p)}22`,
@@ -200,7 +220,7 @@ export function ProjectRail() {
                 '&:active': { transform: 'scale(0.94)' },
               }}
             >
-              {projectInitial(p.name)}
+              {p.icon ? <Box component="img" src={p.icon} alt="" draggable={false} sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} /> : projectInitial(p.name)}
             </ButtonBase>
           </Tooltip>
         )
@@ -210,17 +230,17 @@ export function ProjectRail() {
         <IconButton
           size="small"
           onClick={() => setOnboarding(true)}
-          sx={{ width: 38, height: 38, flexShrink: 0, borderRadius: 2, color: 'text.secondary', '&:hover': { bgcolor: 'action.hover' } }}
+          sx={{ width: TILE, height: TILE, flexShrink: 0, borderRadius: '8px', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover' } }}
         >
-          <AddLinear size={17} color="currentColor" />
+          <AddLinear size={15} color="currentColor" />
         </IconButton>
       </Tooltip>
 
       <Box sx={{ flex: 1 }} />
 
       <Tooltip title="Settings" placement="right">
-        <IconButton size="small" onClick={() => openSettings()} sx={{ width: 32, height: 32, color: 'text.secondary' }}>
-          <SettingsLinear size={16} color="currentColor" />
+        <IconButton size="small" onClick={() => openSettings()} sx={{ width: 28, height: 28, color: 'text.secondary' }}>
+          <SettingsLinear size={15} color="currentColor" />
         </IconButton>
       </Tooltip>
 
@@ -235,6 +255,25 @@ export function ProjectRail() {
         </MenuItem>
         <MenuItem
           onClick={() => {
+            if (menu) setIconFor(menu.project)
+            setMenu(null)
+            document.getElementById('project-icon-input')?.click()
+          }}
+        >
+          Set icon…
+        </MenuItem>
+        {menu?.project.icon && (
+          <MenuItem
+            onClick={() => {
+              void setIcon(menu.project.id, null)
+              setMenu(null)
+            }}
+          >
+            Remove icon
+          </MenuItem>
+        )}
+        <MenuItem
+          onClick={() => {
             if (menu) void remove(menu.project.id)
             setMenu(null)
           }}
@@ -243,6 +282,24 @@ export function ProjectRail() {
           Delete project
         </MenuItem>
       </Menu>
+
+      <input
+        id="project-icon-input"
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+        hidden
+        onChange={async (e) => {
+          const file = e.target.files?.[0]
+          e.target.value = ''
+          if (!file || !iconFor) return
+          try {
+            await setIcon(iconFor.id, await iconFrom(file))
+          } catch (err) {
+            console.warn('Could not set the project icon', err)
+          }
+          setIconFor(null)
+        }}
+      />
 
       <ProjectDialog open={dialog.open} project={dialog.project} onClose={() => setDialog({ open: false, project: null })} />
       <NewProjectDialog

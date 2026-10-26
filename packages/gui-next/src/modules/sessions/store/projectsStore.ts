@@ -21,6 +21,8 @@ export interface Project {
   /** How work is organised (`projects::Project::mode`). Absent on projects
    * made before the choice existed; those work as `company`. */
   mode?: ProjectMode | 'company' | 'team' | null
+  /** A picture for the rail, as a small PNG data URL; the initial when absent. */
+  icon?: string | null
 }
 
 /** Threads: separate chats you run. Tree: a team of bots with roles, a
@@ -87,6 +89,8 @@ interface ProjectsStoreState {
   ) => Promise<Project | null>
   update: (id: string, name: string, path?: string | null, color?: string | null) => Promise<void>
   remove: (id: string) => Promise<void>
+  /** Set (a data URL) or clear (null) a project's rail picture. */
+  setIcon: (id: string, icon: string | null) => Promise<void>
   /** Assign (or clear, with null) a session's project. */
   assign: (sessionId: string, projectId: string | null) => Promise<void>
   setActiveProject: (id: string | null) => void
@@ -188,6 +192,10 @@ export const useProjectsStore = create<ProjectsStoreState>((set, get) => ({
     return project
   },
 
+  setIcon: async (id, icon) => {
+    await call('cmd_set_project_icon', { id, icon })
+    set((s) => ({ projects: s.projects.map((p) => (p.id === id ? { ...p, icon } : p)) }))
+  },
   update: async (id, name, path = null, color = null) => {
     const trimmed = name.trim()
     if (!trimmed) return

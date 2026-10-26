@@ -38,6 +38,10 @@ pub struct Project {
     /// the choice existed, which works as `company`.
     #[serde(default)]
     pub mode: Option<String>,
+    /// A picture of the user's own for the project rail, as a small
+    /// `data:image/...` URL (resized before it gets here).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 /// `tree` is how new projects are made; `company` and `team` are what it
@@ -143,6 +147,7 @@ pub async fn cmd_create_project(name: String, path: Option<String>, color: Optio
         color,
         multiplayer: None,
         mode,
+        icon: None,
     };
     data.projects.push(project.clone());
     save(&data)?;
@@ -237,6 +242,7 @@ pub async fn cmd_create_multiplayer_project(
             git_remote,
         }),
         mode: None,
+        icon: None,
     };
     data.projects.push(project.clone());
     save(&data)?;
@@ -263,6 +269,22 @@ pub async fn cmd_update_project(id: String, name: String, path: Option<String>, 
     if color.is_some() {
         project.color = color;
     }
+    save(&data)
+}
+
+/// Set or clear a project's own picture (a `data:image/...` URL, under 256KB).
+#[tauri::command]
+pub async fn cmd_set_project_icon(id: String, icon: Option<String>) -> Result<(), String> {
+    if let Some(i) = &icon {
+        if !i.starts_with("data:image/") || i.len() > 256 * 1024 {
+            return Err("The icon must be a small image.".into());
+        }
+    }
+    let mut data = load()?;
+    let Some(project) = data.projects.iter_mut().find(|p| p.id == id) else {
+        return Err("Project not found".to_string());
+    };
+    project.icon = icon;
     save(&data)
 }
 
@@ -394,6 +416,7 @@ pub fn add_multiplayer_project_to(
         color: None,
         multiplayer: Some(MultiplayerProjectInfo { peer_id: peer_id.to_string(), peer_display_name, git_remote: None }),
         mode: None,
+        icon: None,
     });
     if let Some(parent) = projects_json.parent() {
         let _ = std::fs::create_dir_all(parent);
