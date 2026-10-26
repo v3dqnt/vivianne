@@ -196,6 +196,32 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
   // window has looked, a task in "running" is one this session runs (or just
   // stopped), never one to start again on its own.
   let launchResumeChecked = false
+  // Streaming tokens not yet in the transcript (`message_update`), and the
+  // frame that will put them there.
+  const pending = { text: '', thinking: '' }
+  let frame = 0
+  const flushTokens = () => {
+    if (frame) cancelAnimationFrame(frame)
+    frame = 0
+    if (!pending.text && !pending.thinking) return
+    const { text, thinking } = pending
+    pending.text = ''
+    pending.thinking = ''
+    set((s) => {
+      if (s.streamingIndex === null) return s
+      const current = s.messages[s.streamingIndex]
+      if (!current || current.type !== 'assistant') return s
+      // Thinking and text stream as separate blocks; each delta extends its own.
+      const prevText = current.content.find((c): c is Extract<MessageContent, { type: 'text' }> => c.type === 'text')
+      const prevThinking = current.content.find((c): c is Extract<MessageContent, { type: 'thinking' }> => c.type === 'thinking')
+      const content: MessageContent[] = []
+      if (prevThinking || thinking) content.push({ type: 'thinking', thinking: (prevThinking?.thinking ?? '') + thinking })
+      if (prevText || text) content.push({ type: 'text', text: (prevText?.text ?? '') + text })
+      const messages = [...s.messages]
+      messages[s.streamingIndex] = { ...current, content }
+      return { messages }
+    })
+  }
   const resumeLongTask = async () => {
     const prompt = await call<string | null>('cmd_long_task_resume_prompt', { threadId })
     if (prompt) await get().sendMessage(prompt)
@@ -252,6 +278,7 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
       set({ initialized: true })
 
       await listen(threadId, (event) => {
+        if (event.type !== 'message_update') flushTokens()
         // `retryStatus` is explicitly transient — clear it on anything except
         // another retry tick, so a resolved retry doesn't linger forever.
         if (event.type !== 'retry_status') {
@@ -278,37 +305,13 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             break
           }
           case 'message_update': {
-            set((s) => {
-              if (s.streamingIndex === null) return s
-              const messages = [...s.messages]
-              const current = messages[s.streamingIndex]
-              if (!current || current.type !== 'assistant') return s
-              // Each update carries a single-block delta message tagged with
-              // its own kind (thinking vs text) — NOT the full accumulated
-              // message. Merge into whichever running block matches that kind
-              // and keep the other block (if any) untouched, so reasoning
-              // streams live instead of only appearing once the final message
-              // lands (the two kinds were previously being mashed into one
-              // text block regardless of which the delta actually was).
-              const delta = event.payload.message.content[0]
-              if (!delta) return s
-              const prevText = current.content.find((c): c is Extract<MessageContent, { type: 'text' }> => c.type === 'text')
-              const prevThinking = current.content.find(
-                (c): c is Extract<MessageContent, { type: 'thinking' }> => c.type === 'thinking',
-              )
-              let content: MessageContent[]
-              if (delta.type === 'thinking') {
-                const thinking: MessageContent = { type: 'thinking', thinking: (prevThinking?.thinking ?? '') + delta.thinking }
-                content = prevText ? [thinking, prevText] : [thinking]
-              } else if (delta.type === 'text') {
-                const text: MessageContent = { type: 'text', text: (prevText?.text ?? '') + delta.text }
-                content = prevThinking ? [prevThinking, text] : [text]
-              } else {
-                return s
-              }
-              messages[s.streamingIndex] = { ...current, content }
-              return { messages }
-            })
+            // Buffered: tokens can arrive hundreds a second, and each set()
+            // re-renders the transcript. They land once per frame instead.
+            const delta = event.payload.message.content[0]
+            if (delta?.type === 'thinking') pending.thinking += delta.thinking
+            else if (delta?.type === 'text') pending.text += delta.text
+            else break
+            if (!frame) frame = requestAnimationFrame(flushTokens)
             break
           }
           case 'message_end': {
