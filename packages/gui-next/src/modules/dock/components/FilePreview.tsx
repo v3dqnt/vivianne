@@ -289,7 +289,12 @@ export function FileContent({
   }
   return (
     <Box sx={{ minWidth: 0, '& > *': { minWidth: 0 } }}>
-      <CodeBlock code={data.content} lang={langFromPath(path)} wrap={wrap} bare={bare} dense={dense} />
+      {full ? (
+        // The file is the panel: no card, no fold, numbered lines.
+        <CodeBlock code={data.content} lang={langFromPath(path)} wrap={wrap} bare collapsible={false} showLineNumbers />
+      ) : (
+        <CodeBlock code={data.content} lang={langFromPath(path)} wrap={wrap} bare={bare} dense={dense} />
+      )}
       {data.truncated && meta(`Truncated — showing the first ${MAX_HIGHLIGHT_CHARS.toLocaleString()} characters`)}
     </Box>
   )
@@ -394,7 +399,7 @@ function RenderedText({ kind, path, content }: { kind: Rendered; path: string; c
 
   let body: ReactNode
   if (source) {
-    body = <CodeBlock code={content} lang={langFromPath(path)} wrap />
+    body = <CodeBlock code={content} lang={langFromPath(path)} wrap bare collapsible={false} showLineNumbers />
   } else if (kind === 'markdown') {
     body = (
       <Box sx={{ fontSize: '0.875rem', maxWidth: 760 }}>
@@ -489,7 +494,7 @@ function RenderedText({ kind, path, content }: { kind: Rendered; path: string; c
  * for everything that isn't an office document. */
 export function FileViewer({ path }: { path: string }) {
   return (
-    <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', p: 1.5 }}>
+    <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', py: 1, pl: 0.5, pr: 1 }}>
       <FileContent path={path} wrap full fresh />
     </Box>
   )
