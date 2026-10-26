@@ -1824,26 +1824,33 @@ pub(crate) async fn execute_task_tool(
             sub_state.set_model(model).await
         }
     }
-    sub_state.set_subagent_allowed_tools(profile.as_ref().and_then(|p| p.allowed_tools.clone())).await;
-    // An employee spawned by the top level may run subagents of its own.
-    sub_state.set_delegation_allowed(depth == 0 && team_agent.is_some()).await;
     // An employee's own subagents work inside the employee's area.
-    match &team_agent {
-        Some(a) => sub_state.set_owned_paths(a.owns.clone()).await,
-        None if employee => sub_state.set_owned_paths(parent_state.owned_paths().await).await,
-        None => {}
-    }
-    sub_state.set_run_record(run_record.clone()).await;
-    sub_state.set_thinking_level(parent_state.thinking_level().await).await;
-    // A subagent of a planning agent plans too: research, not action.
-    sub_state.set_plan_mode(parent_state.plan_mode().await).await;
+    let owned = match &team_agent {
+        Some(a) => a.owns.clone(),
+        None if employee => parent_state.owned_paths().await,
+        None => Vec::new(),
+    };
     // A member of a team run: checked against the run, so a model can't
     // make itself a member by passing these arguments.
-    if let (Some(run), Some(member)) = (args.get("team_run").and_then(|v| v.as_str()), args.get("team_member").and_then(|v| v.as_str())) {
-        if crate::agent::team::run::is_member(run, member) && member == subagent_type {
-            sub_state.set_team_member(Some((run.to_string(), member.to_string()))).await;
+    let team_member = match (args.get("team_run").and_then(|v| v.as_str()), args.get("team_member").and_then(|v| v.as_str())) {
+        (Some(run), Some(member)) if crate::agent::team::run::is_member(run, member) && member == subagent_type => {
+            Some((run.to_string(), member.to_string()))
         }
-    }
+        _ => None,
+    };
+    let parent = crate::agent::profiles::AgentProfile::of(parent_state).await;
+    crate::agent::profiles::AgentProfile::subagent(
+        &parent,
+        profile.as_ref().and_then(|p| p.allowed_tools.clone()),
+        owned,
+        // An employee spawned by the top level may run subagents of its own.
+        depth == 0 && team_agent.is_some(),
+        team_member,
+    )
+    .apply(&sub_state)
+    .await;
+    sub_state.set_run_record(run_record.clone()).await;
+    sub_state.set_thinking_level(parent_state.thinking_level().await).await;
     sub_state.set_workspace(parent_state.workspace_folders().await, parent_state.access_mode().await).await;
     let mut role_framing = format!(
         "You are a focused sub-agent handling one delegated task for a parent agent: {description}. \

@@ -13,7 +13,7 @@ use tauri::{Emitter, Manager};
 
 use crate::agent::runtime::commands::{AgentRegistry, AppState};
 use crate::agent::runtime::events::AgentEvent;
-use crate::agent::runtime::types::{AgentContext, AgentMessage, MessageContent, PersonaMode, QueueMode};
+use crate::agent::runtime::types::{AgentContext, AgentMessage, MessageContent, QueueMode};
 
 /// Thread id for Viv Instant's isolated agent state.
 ///
@@ -339,24 +339,16 @@ pub async fn cmd_instant_run(
         _ => primary.agent_state.workspace_folders().await,
     };
     state.agent_state.set_workspace(folders, primary.agent_state.access_mode().await).await;
-    // `Agent` is the only persona whose `restricted_tools()` is empty; any
-    // other would strip `dip` and leave Viv Instant unable to do the one thing
-    // it exists for.
-    state.agent_state.set_persona_mode(PersonaMode::Agent).await;
-    state
-        .agent_state
-        .set_subagent_allowed_tools(Some(
-            match route.kind {
-                Kind::Computer => ALLOWED_TOOLS,
-                Kind::Project => PROJECT_TOOLS,
-                _ => ANSWER_TOOLS,
-            }
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-        ))
+    // Unattended, with the tools for this kind of request. Its persona is
+    // `Agent`, the only one that withholds nothing, so `dip` stays.
+    let tools = match route.kind {
+        Kind::Computer => ALLOWED_TOOLS,
+        Kind::Project => PROJECT_TOOLS,
+        _ => ANSWER_TOOLS,
+    };
+    crate::agent::profiles::AgentProfile::unattended(Some(tools.iter().map(|s| s.to_string()).collect()))
+        .apply(&state.agent_state)
         .await;
-    state.agent_state.set_auto_approve(true).await;
 
     let auth = app.state::<Arc<crate::ai::auth::AuthState>>().inner().clone();
     let capability_blocks = crate::agent::runtime::directive::assemble_capability_blocks(

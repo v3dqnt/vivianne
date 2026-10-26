@@ -22,7 +22,7 @@ use tauri::{Listener, Manager};
 
 use crate::agent::runtime::commands::{cmd_agent_prompt, AgentRegistry};
 use crate::agent::runtime::state::WorkspaceAccessMode;
-use crate::agent::runtime::types::{AgentMessage, MessageContent, ModelRef, PersonaMode, ThinkingLevel};
+use crate::agent::runtime::types::{AgentMessage, MessageContent, ModelRef, ThinkingLevel};
 
 static NATIVE: AtomicBool = AtomicBool::new(false);
 
@@ -256,9 +256,8 @@ pub async fn run(app: tauri::AppHandle, args: RunArgs) -> ! {
         state.agent_state.set_thinking_level(thinking_from(level)).await;
     }
     state.agent_state.set_workspace(vec![cwd.clone()], WorkspaceAccessMode::Full).await;
-    state.agent_state.set_persona_mode(PersonaMode::Agent).await;
     // Nobody is there to approve a tool call.
-    state.agent_state.set_auto_approve(true).await;
+    crate::agent::profiles::AgentProfile::unattended(None).apply(&state.agent_state).await;
 
     // Print what the agent does, as it does it.
     let steps = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));

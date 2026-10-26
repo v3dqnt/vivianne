@@ -42,7 +42,7 @@ use tauri::{Emitter, Manager};
 
 use crate::agent::runtime::events::AgentEvent;
 use crate::agent::team::TeamAgent;
-use crate::agent::runtime::types::{AgentContext, AgentMessage, MessageContent, PersonaMode, QueueMode};
+use crate::agent::runtime::types::{AgentContext, AgentMessage, MessageContent, QueueMode};
 
 // ── Rules ────────────────────────────────────────────────────────────────
 
@@ -778,7 +778,6 @@ async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, 
         state.set_model(model).await;
     }
     state.set_workspace(vec![root.to_string()], crate::agent::runtime::state::WorkspaceAccessMode::Full).await;
-    state.set_persona_mode(PersonaMode::Agent).await;
     // Its own email and phone come with having them, whatever tools were picked.
     let contact = crate::agent::team::contact::load(root, id);
     let mut allowed = bot.allowed_tools.clone();
@@ -790,18 +789,15 @@ async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, 
             list.push("phone".into());
         }
     }
-    state.set_subagent_allowed_tools(allowed).await;
-    state.set_delegation_allowed(true).await;
-    state
-        .set_bot_policy(Some(BotPolicy {
-            bot_name: bot.name.clone(),
-            rules: settings.rules.clone(),
-            origin,
-            request: request.to_string(),
-            root: root.to_string(),
-            bot_id: id.to_string(),
-        }))
-        .await;
+    let policy = BotPolicy {
+        bot_name: bot.name.clone(),
+        rules: settings.rules.clone(),
+        origin,
+        request: request.to_string(),
+        root: root.to_string(),
+        bot_id: id.to_string(),
+    };
+    crate::agent::profiles::AgentProfile::bot(policy, allowed).apply(&state).await;
 
     let auth = app.state::<Arc<crate::ai::auth::AuthState>>().inner().clone();
     let blocks = crate::agent::runtime::directive::assemble_capability_blocks(&state, None, request, Some(&auth), true, false).await;
