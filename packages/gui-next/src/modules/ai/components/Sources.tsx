@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import type React from 'react'
 import { Box, ButtonBase, Stack, Tooltip } from '../../../ui'
 import { GlobalLinear } from '../../../icons'
 import type { Source } from '../lib/sources'
+import { onWebLinkClick } from '../lib/openLink'
 
 function host(url: string): string {
   try {
@@ -55,8 +57,8 @@ export function Sources({ sources }: { sources: Source[] }) {
   return (
     <Stack direction="row" sx={{ flexWrap: 'wrap', gap: '4px', mt: '8px', alignItems: 'center' }} aria-label={`${sources.length} sources`}>
       {shown.map((s) => (
-        <Tooltip key={s.url} title={s.title || s.url}>
-          <ButtonBase component="a" href={s.url} target="_blank" rel="noopener noreferrer" sx={chip}>
+        <Tooltip key={s.url} title={`${s.title || s.url} — click to open in Preview, Ctrl-click for your browser`}>
+          <ButtonBase component="a" href={s.url} target="_blank" rel="noopener noreferrer" onClick={(e: React.MouseEvent) => onWebLinkClick(e, s.url)} sx={chip}>
             <Favicon url={s.url} />
             <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {host(s.url)}

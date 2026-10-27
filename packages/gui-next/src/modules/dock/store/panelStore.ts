@@ -32,6 +32,11 @@ interface PanelStoreState {
   activeDoc: string | null
   /** Show a document in Preview (opening the panel and its Documents mode). */
   openDocument: (path: string) => void
+  /** A web address to show in Preview's browser (a link or source the user
+   * chose to open there); `liveNonce` makes the same address reload. */
+  liveUrl: string | null
+  liveNonce: number
+  openUrl: (url: string) => void
   closeDocument: (path: string) => void
   /** True while a panel resize drag is in flight. Transient. Lets a terminal
    * skip its per-frame `fit()` + resize IPC and fit once at the end. */
@@ -71,6 +76,13 @@ export const usePanelStore = create<PanelStoreState>((set, get) => ({
     saveDocs(openDocs, path)
     savePersisted(STORAGE_KEY, 'documents')
     set({ openDocs, activeDoc: path, previewMode: 'documents' })
+    openPanel('preview')
+  },
+  liveUrl: null,
+  liveNonce: 0,
+  openUrl: (url) => {
+    savePersisted(STORAGE_KEY, 'live')
+    set((s) => ({ liveUrl: url, liveNonce: s.liveNonce + 1, previewMode: 'live' }))
     openPanel('preview')
   },
   closeDocument: (path) => {

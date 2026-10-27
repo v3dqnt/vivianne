@@ -67,7 +67,7 @@ export const TOOL_ROW_SX = {
 } as const
 
 /** What a single tool row opens onto: indented under it, tied by a rail. */
-export const TOOL_BODY_SX = { ml: 1, pl: 1.5, mt: 0.25, borderLeft: 2, borderColor: 'divider' } as const
+export const TOOL_BODY_SX = { mt: '4px', minWidth: 0 } as const
 
 /** A step row with nothing to show: empty, or holding only empty elements
  * (a reply that was all tool calls renders an empty wrapper). Media counts

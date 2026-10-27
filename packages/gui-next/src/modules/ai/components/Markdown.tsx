@@ -1,4 +1,5 @@
 import { memo, type ReactNode } from 'react'
+import type React from 'react'
 import { ChatImage } from './ImageBlock'
 import { InteractiveBlock } from './InteractiveBlock'
 import { WidgetBlock } from './WidgetBlock'
@@ -26,6 +27,7 @@ import { ModChatBlock } from '../../mods/components/ModChatBlock'
 import { remarkFiles } from '../lib/remarkFiles'
 import { FileLink } from './FileLink'
 import { CHAT_FONT } from '../lib/chatStyle'
+import { onWebLinkClick } from '../lib/openLink'
 
 const VIDEO_EXT = /\.(mp4|webm|mov|m4v)$/i
 const AUDIO_EXT = /\.(mp3|wav|ogg|m4a|flac)$/i
@@ -123,7 +125,8 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
             if (href && VIDEO_EXT.test(href)) return <Box component="video" src={href} controls sx={{ maxWidth: '100%', borderRadius: 1.5, my: 1 }} />
             if (href && AUDIO_EXT.test(href)) return <Box component="audio" src={href} controls sx={{ width: '100%', my: 1 }} />
             return (
-              <Link href={href} target="_blank" rel="noopener noreferrer">
+              <Link href={href} target="_blank" rel="noopener noreferrer" title={href ? `${href}
+Click: open in Preview · Ctrl-click: open in your browser` : undefined} onClick={(e: React.MouseEvent) => onWebLinkClick(e, href)}>
                 {children}
               </Link>
             )

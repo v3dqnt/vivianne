@@ -18,7 +18,7 @@ export const ReasoningBlock = memo(function ReasoningBlock({ text, streaming }: 
   const open = manualOpen ?? !!streaming
 
   return (
-    <Box sx={{ maxWidth: '80%', mb: 0.5 }}>
+    <Box sx={{ maxWidth: '100%', mb: '4px' }}>
       <Box
         onClick={() => setManualOpen(!open)}
         sx={{
@@ -36,20 +36,26 @@ export const ReasoningBlock = memo(function ReasoningBlock({ text, streaming }: 
         </Box>
       </Box>
       {open && (
-        <Typography
-          variant="caption"
+        // A soft card, not a rail: the reasoning reads as an aside, set a step
+        // quieter than the reply (smaller, muted, on a faint tint).
+        <Box
           sx={{
-            display: 'block',
-            mt: 0.5,
-            pl: 1.5,
-            borderLeft: 2,
-            borderColor: 'divider',
+            mt: '4px',
+            px: '12px',
+            py: '8px',
+            borderRadius: '8px',
+            bgcolor: 'action.hover',
             color: 'text.secondary',
+            fontSize: '12.5px',
+            lineHeight: '20px',
             whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            maxHeight: streaming ? 'none' : 360,
+            overflowY: 'auto',
           }}
         >
           {throttledText}
-        </Typography>
+        </Box>
       )}
     </Box>
   )

@@ -310,7 +310,7 @@ export function ToolCallCard({
         // card is actually expanded.
         <Collapse in={open}>
           {open && (
-            <Stack sx={{ ...TOOL_BODY_SX, gap: 0.75, py: 0.5 }}>
+            <Stack sx={{ ...TOOL_BODY_SX, gap: '8px', pb: '4px' }}>
               {diffs.map((d, i) => (
                 <Box key={i}>
                   <Box sx={{ display: 'flex', pb: 0.5 }}>
@@ -342,10 +342,58 @@ export function ToolCallCard({
  * hover, and the long-output collapse. No header — the card's header already
  * says what this is.
  */
+/** A todo list as the tool reports it (`[x] done`, `[~] doing`, `[ ] to do`). */
+const TODO_LINE = /^\s*\[( |x|~|-)\]\s+(.*)$/i
+
+function TodoOutput({ text }: { text: string }) {
+  const lines = text.split(/\r?\n/)
+  const items = lines.map((l) => TODO_LINE.exec(l)).filter((m): m is RegExpExecArray => !!m)
+  const footer = lines.filter((l) => l.trim() && !TODO_LINE.test(l) && !/^todo list updated:?$/i.test(l.trim())).join(' ')
+  return (
+    <Stack sx={{ gap: '2px', px: '12px', py: '8px', borderRadius: '8px', bgcolor: 'action.hover', minWidth: 0 }}>
+      {items.map((m, i) => {
+        const state = m[1].toLowerCase()
+        const done = state === 'x'
+        const doing = state === '~' || state === '-'
+        return (
+          <Stack key={i} direction="row" sx={{ gap: '8px', alignItems: 'flex-start', fontSize: '12.5px', lineHeight: '20px' }}>
+            <Box
+              component="span"
+              sx={{
+                mt: '4px',
+                width: 12,
+                height: 12,
+                flexShrink: 0,
+                borderRadius: '3px',
+                border: 1.5,
+                borderColor: done ? 'success.main' : doing ? 'primary.main' : 'text.disabled',
+                bgcolor: done ? 'success.main' : 'transparent',
+                display: 'grid',
+                placeItems: 'center',
+                color: 'background.paper',
+                fontSize: 9,
+                fontWeight: 700,
+                lineHeight: 1,
+              }}
+            >
+              {done ? '✓' : doing ? <Box component="span" sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: 'primary.main' }} /> : null}
+            </Box>
+            <Box component="span" sx={{ color: done ? 'text.disabled' : 'text.primary', textDecoration: done ? 'line-through' : 'none', fontWeight: doing ? 600 : 400 }}>
+              {m[2]}
+            </Box>
+          </Stack>
+        )
+      })}
+      {footer && <Box sx={{ mt: '4px', fontSize: '11px', lineHeight: '16px', color: 'text.secondary' }}>{footer}</Box>}
+    </Stack>
+  )
+}
+
 function ToolOutput({ code, lang }: { code: string; lang: string }) {
   const theme = useTheme()
+  if (code.split(/\r?\n/).filter((l) => TODO_LINE.test(l)).length >= 2) return <TodoOutput text={code} />
   return (
-    <Box sx={{ borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.035), px: 1.25, py: 0.875, color: 'text.secondary', minWidth: 0 }}>
+    <Box sx={{ borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.035), px: '12px', py: '8px', color: 'text.secondary', minWidth: 0 }}>
       <CodeBlock code={code} lang={lang} wrap bare dense collapsible />
     </Box>
   )
@@ -355,7 +403,7 @@ function ToolOutput({ code, lang }: { code: string; lang: string }) {
  * something rather than text to read. */
 function BodyLine({ children }: { children: React.ReactNode }) {
   return (
-    <Stack direction="row" sx={{ ...TOOL_BODY_SX, alignItems: 'center', gap: 1, py: 0.5, minWidth: 0 }}>
+    <Stack direction="row" sx={{ ...TOOL_BODY_SX, alignItems: 'center', gap: '8px', px: '12px', py: '8px', borderRadius: '8px', bgcolor: 'action.hover', minWidth: 0 }}>
       {children}
     </Stack>
   )

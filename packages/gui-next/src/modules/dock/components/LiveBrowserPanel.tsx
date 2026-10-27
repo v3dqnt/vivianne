@@ -1,3 +1,4 @@
+import { usePanelStore } from '../store/panelStore'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Box, Stack, Typography, IconButton, InputBase, Tooltip } from '../../../ui'
 import { ArrowLeftLinear, ArrowRightLinear, RefreshLinear, GlobalLinear } from '../../../icons'
@@ -107,6 +108,14 @@ export function LiveBrowserPanel({ active }: { active: boolean }) {
     }, 1000)
     return () => clearInterval(id)
   }, [active])
+
+  // An address opened from elsewhere (a link in the chat, a source chip).
+  const asked = usePanelStore((s) => s.liveUrl)
+  const nonce = usePanelStore((s) => s.liveNonce)
+  useEffect(() => {
+    if (asked) go(asked)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked, nonce])
 
   const go = (raw: string) => {
     const t = raw.trim()
