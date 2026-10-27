@@ -260,7 +260,7 @@ export function DiscoverModels() {
     )
   }
 
-  const card = { p: 1.5, borderRadius: '12px', bgcolor: alpha(theme.palette.text.primary, 0.03) } as const
+  const card = { p: 1.5, borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.03) } as const
 
   return (
     <Stack sx={{ gap: 1.5 }}>
@@ -344,7 +344,7 @@ export function DiscoverModels() {
       {/* Anything else on Hugging Face that ships a GGUF. */}
       <Stack sx={{ gap: 0.75 }}>
         <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>Search Hugging Face</Typography>
-        <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.25, height: 34, borderRadius: '10px', bgcolor: alpha(theme.palette.text.primary, 0.05) }}>
+        <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.25, height: 28, borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.05) }}>
           <SearchNormalLinear size={14} color="currentColor" />
           <InputBase
             fullWidth

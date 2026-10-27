@@ -299,21 +299,21 @@ export const InputBase = forwardRef<Any, InputBaseProps>(function InputBase(prop
 function fieldStyles(theme: Theme, o: { small: boolean; focused: boolean; error: boolean; multiline: boolean; start: boolean; end: boolean }): SxObject {
   const p = theme.palette
   const t = p.tokens
-  const h = o.small ? 32 : 36
+  const h = o.small ? 28 : 32
   const ring = o.error ? p.error.main : t.ring
   return {
     ...theme.typography.body2,
-    fontSize: theme.typography.pxToRem(o.small ? 13 : 14),
+    fontSize: theme.typography.pxToRem(o.small ? 12 : 13),
     lineHeight: 1.5,
     backgroundColor: fade(t.input, 0.5),
     border: `1px solid ${o.error ? p.error.main : o.focused ? t.ring : 'transparent'}`,
     boxShadow: o.focused ? `0 0 0 3px ${alpha(ring, o.error ? 0.2 : 0.3)}` : 'none',
-    borderRadius: o.multiline ? theme.radius['2xl'] : theme.radius['3xl'],
+    borderRadius: o.multiline ? 8 : 6,
     transition: `border-color ${theme.transitions.duration.fast}ms, box-shadow ${theme.transitions.duration.fast}ms, background-color ${theme.transitions.duration.fast}ms`,
-    ...(o.multiline ? { padding: o.small ? '8px 12px' : '10px 12px', alignItems: 'flex-start' } : { minHeight: h, paddingLeft: o.start ? 12 : 0, paddingRight: o.end ? 12 : 0, gap: o.start || o.end ? 6 : 0 }),
+    ...(o.multiline ? { padding: o.small ? '4px 8px' : '8px', alignItems: 'flex-start' } : { minHeight: h, paddingLeft: o.start ? 8 : 0, paddingRight: o.end ? 8 : 0, gap: o.start || o.end ? 4 : 0 }),
     '& .ui-InputBase-input': o.multiline
       ? { padding: 0 }
-      : { padding: `0 ${o.end ? 0 : 12}px 0 ${o.start ? 0 : 12}px`, height: h - 2, lineHeight: `${h - 2}px` },
+      : { padding: `0 ${o.end ? 0 : 8}px 0 ${o.start ? 0 : 8}px`, height: h - 2, lineHeight: `${h - 2}px` },
   }
 }
 
@@ -566,7 +566,7 @@ export function Select({ value, onChange, size: sizeProp, label: labelProp, labe
   const register = useCallback((k: string, v: unknown) => values.current.set(k, v), [])
   const autoId = useId()
   const triggerId = id ?? `ui-sel-${autoId}`
-  const h = small ? 32 : 36
+  const h = small ? 28 : 32
 
   const styles: SxObject = {
     ...inputBaseStyles(theme, disabled, fullWidth, false),
@@ -584,7 +584,7 @@ export function Select({ value, onChange, size: sizeProp, label: labelProp, labe
       height: h - 2,
       display: 'block',
       textAlign: 'left',
-      padding: '0 34px 0 12px',
+      padding: '0 28px 0 8px',
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
@@ -595,7 +595,7 @@ export function Select({ value, onChange, size: sizeProp, label: labelProp, labe
     },
     '& .ui-Select-icon': {
       position: 'absolute',
-      right: 12,
+      right: 8,
       top: 'calc(50% - 8px)',
       width: 16,
       height: 16,
@@ -664,7 +664,7 @@ function SelectContent({ children }: { children: ReactNode }) {
   }
   return (
     <RadixSelect.Content asChild position="item-aligned">
-      {render('div', { className: 'ui-Select-menu', children: <RadixSelect.Viewport style={{ padding: 6 }}>{children}</RadixSelect.Viewport> }, styles, undefined, theme)}
+      {render('div', { className: 'ui-Select-menu', children: <RadixSelect.Viewport style={{ padding: 4 }}>{children}</RadixSelect.Viewport> }, styles, undefined, theme)}
     </RadixSelect.Content>
   )
 }
@@ -676,7 +676,7 @@ export function menuPaper(theme: Theme): SxObject {
     backgroundColor: theme.palette.background.paper,
     color: theme.palette.text.primary,
     boxShadow: `${theme.elevation.ring}, ${theme.elevation.lg}`,
-    borderRadius: theme.radius['3xl'],
+    borderRadius: 8,
     outline: 0,
   }
 }
@@ -693,12 +693,12 @@ export function menuItemStyles(theme: Theme): SxObject {
     display: 'flex',
     justifyContent: 'flex-start',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
     position: 'relative',
     textDecoration: 'none',
-    minHeight: 32,
-    padding: '6px 12px',
-    borderRadius: theme.radius['2xl'],
+    minHeight: 28,
+    padding: '4px 8px',
+    borderRadius: 4,
     boxSizing: 'border-box',
     whiteSpace: 'nowrap',
     cursor: 'pointer',

@@ -540,7 +540,7 @@ function DayRow({
         gap: 0.125,
         px: primary ? 1.5 : 1,
         py: primary ? 1 : 0.625,
-        borderRadius: primary ? '12px' : '8px',
+        borderRadius: '8px',
         bgcolor: active ? alpha(theme.palette.primary.main, primary ? 0.14 : 0.1) : 'transparent',
         border: primary ? 1 : 0,
         borderColor: active ? alpha(theme.palette.primary.main, 0.4) : 'divider',

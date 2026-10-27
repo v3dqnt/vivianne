@@ -170,7 +170,7 @@ function EndpointDialog({
             </Typography>
           </FormControl>
           {info && (
-            <Stack sx={{ gap: 0.25, px: 1.25, py: 1, borderRadius: '10px', bgcolor: 'action.hover' }}>
+            <Stack sx={{ gap: 0.25, px: 1.25, py: 1, borderRadius: '8px', bgcolor: 'action.hover' }}>
               <Typography variant="body2" sx={{ fontWeight: 600 }}>
                 {[info.format ?? 'Unknown format', info.architecture, info.sizeLabel].filter(Boolean).join(' · ')}
               </Typography>

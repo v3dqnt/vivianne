@@ -117,7 +117,7 @@ export function RoutingPanel() {
         </Typography>
       </Stack>
 
-      <Stack sx={{ gap: 1.25, p: 1.5, borderRadius: '10px', border: 1, borderColor: 'divider' }}>
+      <Stack sx={{ gap: 1.25, p: 1.5, borderRadius: '8px', border: 1, borderColor: 'divider' }}>
         <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
           <Stack sx={{ flex: 1 }}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>
@@ -162,7 +162,7 @@ export function RoutingPanel() {
             placeholder="Type a task to see how it would be read"
             value={probe}
             onChange={(e) => setProbe(e.target.value)}
-            sx={{ fontSize: '0.8125rem', px: 1.25, height: 34, border: 1, borderColor: 'divider', borderRadius: '9px' }}
+            sx={{ fontSize: '0.8125rem', px: 1.25, height: 28, border: 1, borderColor: 'divider', borderRadius: '8px' }}
           />
           {verdict && (
             <Typography variant="body2">
@@ -173,7 +173,7 @@ export function RoutingPanel() {
         </Stack>
       </Stack>
 
-      <Stack sx={{ gap: 0.5, p: 1.5, borderRadius: '10px', bgcolor: alpha(theme.palette.text.primary, 0.04) }}>
+      <Stack sx={{ gap: 0.5, p: 1.5, borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.04) }}>
         <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
           What it routes
         </Typography>

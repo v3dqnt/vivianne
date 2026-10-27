@@ -66,7 +66,7 @@ function AppTile({ app, onSetup }: { app: ConnectionApp; onSetup: (app: Connecti
         p: 1.5,
         border: 1,
         borderColor: 'divider',
-        borderRadius: '10px',
+        borderRadius: '8px',
         minWidth: 0,
         transition: 'border-color 0.15s',
         '&:hover': { borderColor: 'text.disabled' },

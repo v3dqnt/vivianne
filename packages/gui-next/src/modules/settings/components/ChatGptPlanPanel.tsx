@@ -73,7 +73,7 @@ export function ChatGptPlanPanel({ onChange }: { onChange?: (status: ChatGptStat
       </Stack>
 
       {connected ? (
-        <Stack sx={{ gap: 1.25, p: 1.5, border: 1, borderColor: 'divider', borderRadius: '12px' }}>
+        <Stack sx={{ gap: 1.25, p: 1.5, border: 1, borderColor: 'divider', borderRadius: '8px' }}>
           <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
             <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'success.main' }} />
             <Typography variant="body2" sx={{ fontWeight: 600 }}>
@@ -112,12 +112,12 @@ export function ChatGptPlanPanel({ onChange }: { onChange?: (status: ChatGptStat
             sx={{
               alignSelf: 'flex-start',
               gap: 1,
-              height: 40,
+              height: 32,
               px: 2,
-              borderRadius: '999px',
+              borderRadius: '6px',
               bgcolor: 'text.primary',
               color: 'background.paper',
-              fontSize: '0.875rem',
+              fontSize: '0.8125rem',
               fontWeight: 600,
               opacity: busy ? 0.7 : 1,
               '&:hover': { opacity: 0.88 },

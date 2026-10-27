@@ -27,7 +27,7 @@ const FIELDS: Record<Kind, { key: string; label: string; secret: boolean }[]> = 
 }
 const KIND_LABEL: Record<Kind, string> = { password: 'Login', card: 'Card', note: 'Secret' }
 
-const input = { fontSize: '0.8125rem', px: 1.25, height: 36, border: 1, borderColor: 'divider', borderRadius: '9px' } as const
+const input = { fontSize: '0.8125rem', px: 1.25, height: 28, border: 1, borderColor: 'divider', borderRadius: '8px' } as const
 
 function ago(ms: number | null): string {
   if (!ms) return 'never used'
@@ -77,7 +77,7 @@ export function VaultSection() {
         </Typography>
       </Stack>
 
-      <Stack sx={{ gap: 0.5, p: 1.5, borderRadius: '10px', bgcolor: alpha(theme.palette.text.primary, 0.04) }}>
+      <Stack sx={{ gap: 0.5, p: 1.5, borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.04) }}>
         <Typography variant="body2">What the agent can see: the label, the site, the account name and a hint like “ending 4242”.</Typography>
         <Typography variant="body2" color="text.secondary">
           What it never sees: the password, card number, expiry or security code. It is refused on pages that aren't secure, and on any
@@ -94,7 +94,7 @@ export function VaultSection() {
           </Typography>
         )}
         {entries.map((e) => (
-          <Stack key={e.id} direction="row" sx={{ alignItems: 'center', gap: 1.25, px: 1.5, py: 1, border: 1, borderColor: 'divider', borderRadius: '10px' }}>
+          <Stack key={e.id} direction="row" sx={{ alignItems: 'center', gap: 1.25, px: 1.5, py: 1, border: 1, borderColor: 'divider', borderRadius: '8px' }}>
             <LockLinear size={15} color="currentColor" />
             <Stack sx={{ flex: 1, minWidth: 0 }}>
               <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>

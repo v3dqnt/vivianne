@@ -206,7 +206,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, {
       <Box
         sx={{
           position: 'relative',
-          borderRadius: '18px',
+          borderRadius: '12px',
           bgcolor: 'background.card',
           border: 1,
           borderColor: dragging ? theme.palette.tokens.ring : 'divider',
@@ -220,7 +220,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, {
               position: 'absolute',
               inset: 4,
               zIndex: 2,
-              borderRadius: '14px',
+              borderRadius: '8px',
               border: '2px dashed',
               borderColor: 'primary.main',
               bgcolor: alpha(theme.palette.background.card, 0.85),
@@ -293,8 +293,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, {
               onClick={primary}
               disabled={(!busy && !typed && !hasAttachments) || (stopMode && (stopping || !onStop))}
               sx={{
-                width: 30,
-                height: 30,
+                width: 28,
+                height: 28,
                 borderRadius: '50%',
                 flexShrink: 0,
                 bgcolor: stopMode ? 'error.main' : 'text.primary',
@@ -422,10 +422,10 @@ export function AttachmentChip({ label, kind, image, onRemove }: { label: string
     <Stack
       direction="row"
       aria-label={`${kind === 'image' ? 'Image' : 'File'}: ${label}`}
-      sx={{ alignItems: 'center', gap: 0.75, pl: image ? 0.375 : 1, pr: onRemove ? 0.375 : 1, py: 0.375, borderRadius: '10px', border: 1, borderColor: 'divider', bgcolor: 'background.paper', maxWidth: 240 }}
+      sx={{ alignItems: 'center', gap: 0.75, pl: image ? 0.375 : 1, pr: onRemove ? 0.375 : 1, py: 0.375, borderRadius: '8px', border: 1, borderColor: 'divider', bgcolor: 'background.paper', maxWidth: 240 }}
     >
       {image ? (
-        <Box component="img" src={image} alt="" sx={{ width: 28, height: 28, borderRadius: '7px', objectFit: 'cover', flexShrink: 0 }} />
+        <Box component="img" src={image} alt="" sx={{ width: 28, height: 28, borderRadius: '6px', objectFit: 'cover', flexShrink: 0 }} />
       ) : (
         <Box sx={{ display: 'inline-flex', color: 'text.secondary', flexShrink: 0 }}>
           <DocumentTextLinear size={14} color="currentColor" />
@@ -514,8 +514,8 @@ function DictateButton({ onText, onInterim, onError }: { onText: (t: string) => 
           disabled={state === 'preparing' || state === 'finishing'}
           onClick={() => (state === 'listening' ? stop() : void start())}
           sx={{
-            width: 30,
-            height: 30,
+            width: 28,
+            height: 28,
             borderRadius: '50%',
             flexShrink: 0,
             color: state === 'listening' ? 'common.white' : 'text.secondary',

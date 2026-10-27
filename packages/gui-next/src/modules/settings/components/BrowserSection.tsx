@@ -62,7 +62,7 @@ export function BrowserSection() {
         </Typography>
       </Stack>
 
-      <Stack direction="row" sx={{ alignItems: 'center', gap: 1, p: 1.5, border: 1, borderColor: 'divider', borderRadius: '12px' }}>
+      <Stack direction="row" sx={{ alignItems: 'center', gap: 1, p: 1.5, border: 1, borderColor: 'divider', borderRadius: '8px' }}>
         <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: status?.connected ? 'success.main' : 'text.disabled', flexShrink: 0 }} />
         <Typography variant="body2" sx={{ fontWeight: 600 }}>
           {status?.connected ? 'Connected' : 'Not connected'}
@@ -79,7 +79,7 @@ export function BrowserSection() {
           <Typography variant="body2" sx={{ fontWeight: 600 }}>
             Browsers on this computer
           </Typography>
-          <Stack sx={{ border: 1, borderColor: 'divider', borderRadius: '12px', overflow: 'hidden' }}>
+          <Stack sx={{ border: 1, borderColor: 'divider', borderRadius: '8px', overflow: 'hidden' }}>
             {browsers.map((b, i) => (
               <Stack
                 key={b.id}

@@ -102,10 +102,11 @@ export type ButtonProps = ButtonBaseProps & {
   fullWidth?: boolean
 }
 
-const HEIGHT: Record<ButtonSize, number> = { small: 32, medium: 36, large: 40 }
+/** Compact, like the Git view's: 24/28/32. */
+const HEIGHT: Record<ButtonSize, number> = { small: 24, medium: 28, large: 32 }
 
 /**
- * Terax buttons: pills, 14px/500, a 1px press. Solid is the ink colour;
+ * Compact buttons: 6px corners, 12–13px/500, 8–16px in, a 1px press. Solid is the ink colour;
  * a status colour is always a tint, never solid; `inherit` is the quiet
  * secondary.
  */
@@ -116,13 +117,14 @@ function buttonStyles(theme: Theme, variant: ButtonVariant, color: ButtonColor, 
   const fast = `${theme.transitions.duration.fast}ms ${theme.transitions.easing.soft}`
   const base: SxObject = {
     ...theme.typography.button,
-    fontSize: size === 'small' ? theme.typography.pxToRem(13) : theme.typography.button.fontSize,
+    fontSize: theme.typography.pxToRem(size === 'small' ? 12 : 13),
+    lineHeight: '16px',
     height: HEIGHT[size],
     minWidth: 0,
-    padding: `0 ${size === 'small' ? 12 : size === 'large' ? 20 : 16}px`,
-    gap: 6,
+    padding: `0 ${size === 'small' ? 8 : size === 'large' ? 16 : 12}px`,
+    gap: 4,
     whiteSpace: 'nowrap',
-    borderRadius: theme.radius['4xl'],
+    borderRadius: 6,
     border: '1px solid transparent',
     transition: `background-color ${fast}, color ${fast}, border-color ${fast}, box-shadow ${fast}, transform ${fast}, opacity ${fast}`,
     width: fullWidth ? '100%' : undefined,
@@ -166,7 +168,7 @@ function buttonStyles(theme: Theme, variant: ButtonVariant, color: ButtonColor, 
 }
 
 function iconSlot(side: 'start' | 'end', size: ButtonSize): SxObject {
-  const inset = size === 'small' ? -2 : -4
+  const inset = size === 'small' ? -1 : -2
   return { display: 'inline-flex', ...(side === 'start' ? { marginLeft: inset } : { marginRight: inset }) }
 }
 
@@ -218,8 +220,9 @@ export function ButtonGroup({ size = 'medium', sx, children, variant: _variant, 
   const dark = theme.palette.mode === 'dark'
   const h = HEIGHT[size]
   const grouped: SxObject = {
-    height: h - 6,
-    padding: `0 ${size === 'small' ? 10 : 12}px`,
+    height: h - 4,
+    padding: `0 ${size === 'small' ? 8 : 12}px`,
+    borderRadius: 6,
     border: '1px solid transparent',
     backgroundColor: 'transparent',
     color: alpha(t.foreground, 0.6),
@@ -236,7 +239,7 @@ export function ButtonGroup({ size = 'medium', sx, children, variant: _variant, 
       {render(
         'div',
         { role: 'group', ...rest, children },
-        { display: 'inline-flex', alignItems: 'center', gap: 2, height: h, padding: 3, borderRadius: theme.radius.full, backgroundColor: t.muted },
+        { display: 'inline-flex', alignItems: 'center', gap: 2, height: h, padding: 2, borderRadius: 8, backgroundColor: t.muted, boxSizing: 'border-box' },
         sx,
         theme,
       )}
@@ -253,13 +256,13 @@ export const IconButton = forwardRef<Any, IconButtonProps>(function IconButton({
   const p = theme.palette
   const t = p.tokens
   const status = color === 'error' || color === 'warning' || color === 'success' || color === 'info' ? p[color].main : null
-  const px = size === 'small' ? 28 : size === 'large' ? 40 : 32
+  const px = size === 'small' ? 24 : size === 'large' ? 32 : 28
   const styles: SxObject = {
     flex: '0 0 auto',
     width: px,
     height: px,
-    fontSize: size === 'small' ? 16 : 18,
-    borderRadius: size === 'small' ? theme.radius.md : theme.radius.lg,
+    fontSize: size === 'small' ? 14 : 16,
+    borderRadius: 6,
     color: color === 'inherit' ? 'inherit' : (status ?? (color === 'primary' ? p.primary.main : t.mutedForeground)),
     transition: `background-color ${theme.transitions.duration.fast}ms, color ${theme.transitions.duration.fast}ms, transform ${theme.transitions.duration.fast}ms`,
     ...(edge === 'start' ? { marginLeft: -6 } : edge === 'end' ? { marginRight: -6 } : {}),

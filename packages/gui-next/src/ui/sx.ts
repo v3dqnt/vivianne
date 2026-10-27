@@ -104,12 +104,22 @@ export function paletteColor(theme: Theme, value: SxValue): SxValue {
   return value
 }
 
-/** The spacing unit: `p: 2` is two of these. 7px, a step under the usual 8,
- * keeps every gap in proportion while the app sits tighter. */
+/** The spacing unit: `p: 2` is two of these, before snapping (below). */
 export const SPACING_UNIT = 7
 
+/**
+ * A spacing number in pixels, on the 4px grid: the unit's length rounded
+ * to a multiple of 4, leaning tighter (`1` is 8px, `1.5` 8px, `2` 12px,
+ * `3` 20px). Below 3px it stays a hairline step (`0.25` is 2px).
+ */
+export function spacePx(n: number): number {
+  const raw = Math.abs(n * SPACING_UNIT)
+  const snapped = raw < 3 ? Math.round(raw) : Math.max(4, Math.round((raw - 1) / 4) * 4)
+  return n < 0 ? -snapped : snapped
+}
+
 function spacing(value: SxValue): SxValue {
-  return typeof value === 'number' ? `${value * SPACING_UNIT}px` : value
+  return typeof value === 'number' ? `${spacePx(value)}px` : value
 }
 
 /** One property after theme mapping. Returns style entries to merge. */

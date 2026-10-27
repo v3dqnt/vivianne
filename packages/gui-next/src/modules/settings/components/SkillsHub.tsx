@@ -165,7 +165,7 @@ export function SkillsHub({ onInstalled }: { onInstalled: () => void }) {
         </Typography>
       </Stack>
 
-      <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, height: 34, borderRadius: 2, border: 1, borderColor: 'divider' }}>
+      <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, height: 28, borderRadius: 2, border: 1, borderColor: 'divider' }}>
         <SearchNormalLinear size={14} color="currentColor" />
         <InputBase fullWidth placeholder={`Search ${src.label} skills`} value={query} onChange={(e) => setQuery(e.target.value)} sx={{ fontSize: '0.8125rem' }} />
       </Stack>
@@ -246,7 +246,7 @@ export function SkillsHub({ onInstalled }: { onInstalled: () => void }) {
                   {i.status !== 'ok' ? ` · changed: ${i.changed.slice(0, 3).join(', ')}${i.changed.length > 3 ? '…' : ''}` : ''}
                 </Typography>
               </Stack>
-              <ButtonBase onClick={() => void remove(i.name)} sx={{ px: 1, height: 24, borderRadius: '7px', fontSize: '0.75rem', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'error.main' } }}>
+              <ButtonBase onClick={() => void remove(i.name)} sx={{ px: 1, height: 24, borderRadius: '6px', fontSize: '0.75rem', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'error.main' } }}>
                 Remove
               </ButtonBase>
             </Stack>

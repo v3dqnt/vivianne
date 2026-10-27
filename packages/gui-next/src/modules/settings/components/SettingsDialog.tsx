@@ -119,7 +119,7 @@ export function SettingsDialog() {
             bgcolor: 'background.paper',
             border: 0,
             borderColor: 'divider',
-            borderRadius: `${theme.radius['3xl']}px`,
+            borderRadius: '12px',
             boxShadow: `${theme.elevation.ring}, ${theme.elevation.xl}`,
           },
         },
@@ -157,10 +157,10 @@ export function SettingsDialog() {
                   sx={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 1.25,
-                    px: 1.5,
-                    py: 0.875,
-                    borderRadius: 1.5,
+                    gap: 1,
+                    height: 28,
+                    px: 1,
+                    borderRadius: '6px',
                     justifyContent: 'flex-start',
                     fontSize: '0.8125rem',
                     fontWeight: 500,
@@ -171,7 +171,7 @@ export function SettingsDialog() {
                     '&:active': { transform: 'scale(0.98)' },
                   }}
                 >
-                  <s.icon size={15} color="currentColor" />
+                  <s.icon size={14} color="currentColor" />
                   {s.label}
                 </ButtonBase>
               ))}
@@ -182,7 +182,7 @@ export function SettingsDialog() {
         <Stack sx={{ flex: 1, minWidth: 0, height: '100%', minHeight: 0 }}>
           <Stack
             direction="row"
-            sx={{ alignItems: 'center', justifyContent: 'space-between', px: 3.5, py: 1.75, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}
+            sx={{ alignItems: 'center', justifyContent: 'space-between', px: 3, py: 1.5, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}
           >
             <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'text.secondary' }}>
               {activeLabel}
@@ -202,7 +202,7 @@ export function SettingsDialog() {
             </Tooltip>
           </Stack>
 
-          <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 3.5, py: 3 }}>
+          <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 3, py: 2 }}>
             {/* Providers is a master-detail layout (list + form) that wants
                 the full width; every other section is a single settings
                 column, which reads better constrained. */}

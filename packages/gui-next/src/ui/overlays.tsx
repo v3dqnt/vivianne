@@ -268,7 +268,7 @@ export function Menu({ open, anchorEl, onClose, anchorOrigin = { vertical: 'top'
               'div',
               {
                 className: cx('ui-Menu-paper', slotProps?.paper?.className),
-                children: render('div', { className: 'ui-Menu-list', children }, { padding: 6, outline: 0, minWidth: 192 }, slotProps?.list?.sx, theme),
+                children: render('div', { className: 'ui-Menu-list', children }, { padding: 4, outline: 0, minWidth: 180 }, slotProps?.list?.sx, theme),
               },
               styles,
               slotProps?.paper?.sx,

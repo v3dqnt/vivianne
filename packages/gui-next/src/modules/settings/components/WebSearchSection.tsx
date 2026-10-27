@@ -139,7 +139,7 @@ export function WebSearchSection() {
       </Stack>
 
       {APIS.map((a) => (
-        <Stack key={a.id} sx={{ gap: 0.75, p: 1.5, border: 1, borderColor: 'divider', borderRadius: '10px' }}>
+        <Stack key={a.id} sx={{ gap: 0.75, p: 1.5, border: 1, borderColor: 'divider', borderRadius: '8px' }}>
           <Stack direction="row" sx={{ alignItems: 'baseline', gap: 1 }}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>
               {a.label}
