@@ -1,10 +1,9 @@
 # Design
 
-Documents that look calm, certain and designed by someone who cares. Read `principles` first, then what the task needs.
+The look of a document is the user's to decide: follow their direction (style, colours, fonts, references, brand) first. These guides are the craft for carrying it out well, and the fallback when they leave it open. Read what the task needs.
 
 | Guide | What it covers |
 |---|---|
-| [principles](principles.md) | The core taste and the things that make documents look generated. |
 | [typography](typography.md) | Typefaces and pairings, the type scale, line length, spacing, numerals. |
 | [color](color.md) | Neutrals, one accent, contrast, dark pages, brand colours. |
 | [layout](layout.md) | Spacing, margins, grids, composition, and page sizes for every output. |

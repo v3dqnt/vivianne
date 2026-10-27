@@ -27,7 +27,6 @@ const EMBEDDED: &[(&str, &str)] = &[
     ("design/formats/xlsx.md", include_str!("../../../../../vivianne-guides/design/formats/xlsx.md")),
     ("design/index.md", include_str!("../../../../../vivianne-guides/design/index.md")),
     ("design/layout.md", include_str!("../../../../../vivianne-guides/design/layout.md")),
-    ("design/principles.md", include_str!("../../../../../vivianne-guides/design/principles.md")),
     ("design/templates/cv.html", include_str!("../../../../../vivianne-guides/design/templates/cv.html")),
     ("design/templates/invoice.html", include_str!("../../../../../vivianne-guides/design/templates/invoice.html")),
     ("design/templates/letter.html", include_str!("../../../../../vivianne-guides/design/templates/letter.html")),
@@ -154,11 +153,11 @@ pub async fn read(path: &str) -> Result<String, String> {
 pub fn schema() -> serde_json::Value {
     serde_json::json!({
         "name": "guide",
-        "description": "Read Vivianne's guides: how documents should look, and how to get to know and carry a project. Read the relevant ones BEFORE the work, not after.\n- Making any document, deck, spreadsheet or graphic: read `design/principles`, then the format guide (`design/formats/pdf`, `design/formats/slides`, `design/formats/docx`, `design/formats/xlsx`, `design/formats/graphics`) and anything else it points to (`design/typography`, `design/data`, `design/layout`…). Templates: `design/templates/cv`, `invoice`, `letter`, `poster`, `social`.\n- Starting a new project: `projects/new-project`. Joining or first working on an existing one: `projects/existing-project`. The project knowledge files: `projects/knowledge`. Day-to-day: `projects/working`, `projects/roadmap`, `projects/team`.\n- Putting chemistry, biology, physics or maths in a reply as drawings: `science/chemistry` (structures, reactions, mechanisms, 3D molecules), `science/biology` (sequences, plasmids, trees, pathways, cells), `science/physics` (graphs and physics diagrams). Read the one you need before writing the fence.\nPass no path for the overview.",
+        "description": "Read Vivianne's guides: how documents should look, and how to get to know and carry a project. Read the relevant ones BEFORE the work, not after.\n- Making any document, deck, spreadsheet or graphic: follow the user's design direction; read the format guide (`design/formats/pdf`, `design/formats/slides`, `design/formats/docx`, `design/formats/xlsx`, `design/formats/graphics`) and anything else it points to (`design/typography`, `design/data`, `design/layout`…). Templates: `design/templates/cv`, `invoice`, `letter`, `poster`, `social`.\n- Starting a new project: `projects/new-project`. Joining or first working on an existing one: `projects/existing-project`. The project knowledge files: `projects/knowledge`. Day-to-day: `projects/working`, `projects/roadmap`, `projects/team`.\n- Putting chemistry, biology, physics or maths in a reply as drawings: `science/chemistry` (structures, reactions, mechanisms, 3D molecules), `science/biology` (sequences, plasmids, trees, pathways, cells), `science/physics` (graphs and physics diagrams). Read the one you need before writing the fence.\nPass no path for the overview.",
         "parameters": {
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "e.g. \"design/principles\", \"design/formats/slides\", \"projects/existing-project\". Empty for the overview." }
+                "path": { "type": "string", "description": "e.g. \"design/formats/slides\", \"design/typography\", \"projects/existing-project\". Empty for the overview." }
             }
         }
     })
@@ -171,7 +170,7 @@ mod tests {
     #[test]
     fn every_guide_named_in_the_tool_exists() {
         let names: Vec<&str> = EMBEDDED.iter().map(|(p, _)| *p).collect();
-        for p in ["README.md", "design/index.md", "design/principles.md", "design/formats/pdf.md", "design/formats/slides.md", "design/formats/graphics.md", "design/templates/cv.html", "projects/index.md", "projects/new-project.md", "projects/existing-project.md", "projects/knowledge.md", "projects/working.md", "projects/roadmap.md", "projects/team.md", "science/chemistry.md", "science/biology.md", "science/physics.md", "science/index.md"] {
+        for p in ["README.md", "design/index.md", "design/formats/pdf.md", "design/formats/slides.md", "design/formats/graphics.md", "design/templates/cv.html", "projects/index.md", "projects/new-project.md", "projects/existing-project.md", "projects/knowledge.md", "projects/working.md", "projects/roadmap.md", "projects/team.md", "science/chemistry.md", "science/biology.md", "science/physics.md", "science/index.md"] {
             assert!(names.contains(&p), "missing {p}");
         }
         assert!(EMBEDDED.iter().all(|(_, t)| !t.trim().is_empty()));
