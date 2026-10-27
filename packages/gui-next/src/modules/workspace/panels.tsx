@@ -7,7 +7,7 @@ import type {
   IWatermarkPanelProps,
   DockviewGroupPanel,
 } from 'dockview-react'
-import { AddLinear, CloseLinear, LayerLinear, MaximizeLinear, MinimizeLinear } from '../../icons'
+import { AddLinear, CloseLinear, ExitFullScreenLinear, FullScreenLinear, LayerLinear, MaximizeLinear, MinimizeLinear } from '../../icons'
 import { hasTauri } from '../../ipc'
 import { ChatView } from '../ai/components/ChatView'
 import { useProjectsStore, modeOf, GENERAL_PROJECT_ID } from '../sessions/store/projectsStore'
@@ -16,7 +16,7 @@ import { useBotsStore } from '../team/store/botsStore'
 import { LEAD_CHANNEL } from '../team/components/TreeTeam'
 import { useModsStore, modPanels } from '../mods/store/modsStore'
 import { ADDABLE, PANELS, type PanelKind } from './registry'
-import { openPanel, saveStack, stackZone, unstackZone, zoneOf, ZONE_LABELS, type StackItem } from './layout'
+import { dockBack, isFloating, openFullScreen, openPanel, saveStack, stackZone, unstackZone, zoneOf, ZONE_LABELS, type StackItem } from './layout'
 import { StackedPanels } from './Stack'
 import { QuickAccess } from './QuickAccess'
 import { usePanelStore } from '../dock/store/panelStore'
@@ -333,6 +333,22 @@ export function GroupActions(props: IDockviewHeaderActionsProps) {
             <LayerLinear size={13} color="currentColor" />
           </Box>
         </Tooltip>
+      )}
+      {isFloating(props.group as DockviewGroupPanel) ? (
+        <Tooltip title="Back to the panel">
+          <Box component="button" type="button" aria-label="Exit full screen" onClick={() => dockBack(props.group as DockviewGroupPanel)} sx={headerBtnSx}>
+            <ExitFullScreenLinear size={12} color="currentColor" />
+          </Box>
+        </Tooltip>
+      ) : (
+        zoneOf(props.group) &&
+        props.group.activePanel && (
+          <Tooltip title="Open full screen">
+            <Box component="button" type="button" aria-label="Open full screen" onClick={() => props.group.activePanel && openFullScreen(props.group.activePanel.id)} sx={headerBtnSx}>
+              <FullScreenLinear size={12} color="currentColor" />
+            </Box>
+          </Tooltip>
+        )
       )}
       <Tooltip title={maximized ? 'Restore' : 'Expand'}>
         <Box

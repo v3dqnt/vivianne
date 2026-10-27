@@ -95,6 +95,8 @@ export const TrashLinear = icon(G.Delete02Icon)
 export const UndoLinear = icon(G.Undo02Icon)
 export const RedoLinear = icon(G.Redo02Icon)
 export const MaximizeLinear = icon(G.Maximize01Icon)
+export const FullScreenLinear = icon(G.FullScreenIcon)
+export const ExitFullScreenLinear = icon(G.MinimizeScreenIcon)
 export const MinimizeLinear = icon(G.Minimize01Icon)
 /** Context window — a stack of data filling up. */
 export const ContextLinear = icon(G.DatabaseIcon)

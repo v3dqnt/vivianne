@@ -683,6 +683,41 @@ function confine() {
   for (const zone of ['left', 'right'] as const) if (!sides.includes(zone) && api.isEdgeGroupVisible(zone)) api.setEdgeGroupVisible(zone, false)
 }
 
+/**
+ * Show a panel full screen: lifted out of its zone into a floating group
+ * that covers the workspace, like a dialog, still the same live panel (a
+ * terminal keeps its shell, the preview its page). `dockBack` returns it.
+ */
+export function openFullScreen(panelId: string) {
+  const panel = api?.getPanel(panelId)
+  if (!api || !panel) return
+  const size = measure?.() ?? { width: window.innerWidth, height: window.innerHeight }
+  const inset = 12
+  api.addFloatingGroup(panel, { x: inset, y: inset, width: Math.max(320, size.width - inset * 2), height: Math.max(240, size.height - inset * 2) })
+  panel.api.setActive()
+  syncState()
+}
+
+/** Whether a group is one `openFullScreen` lifted out. */
+export function isFloating(group: { api: { location: { type: string } } } | undefined): boolean {
+  return group?.api.location.type === 'floating'
+}
+
+/** Put a full-screen panel back in its side panel (or the bottom, for a
+ * terminal). */
+export function dockBack(group: DockviewGroupPanel) {
+  if (!api) return
+  for (const p of [...group.panels]) {
+    const kind = paramsOf(p)?.kind
+    const zone: Zone = kind === 'terminal' || kind === 'quick' ? 'bottom' : sideZone()
+    showZone(zone)
+    const target = zoneGroup(zone)
+    if (target) p.api.moveTo({ group: target })
+  }
+  syncState()
+  scheduleSave()
+}
+
 /** Put the chat on the left, in the centre or on the right. */
 export function setChatSide(side: ChatSide) {
   savePersisted(CHAT_SIDE_KEY, side)
@@ -697,13 +732,39 @@ export function setChatSide(side: ChatSide) {
   scheduleSave()
 }
 
+/**
+ * A side panel dragged wider (or a bottom one taller) raises no layout
+ * event, so the fit that keeps the chat its room never ran and the panel
+ * could be dragged right over the chat. Each zone's size is watched instead,
+ * and held between its minimum and what the chat can spare, frame by frame.
+ */
+let zoneObserver: ResizeObserver | null = null
+function watchZoneSizes(dv: DockviewApi) {
+  zoneObserver?.disconnect()
+  let raf = 0
+  zoneObserver = new ResizeObserver(() => {
+    cancelAnimationFrame(raf)
+    raf = requestAnimationFrame(fitZones)
+  })
+  for (const zone of ZONES) {
+    const el = dv.groups.find((g) => g.id === ZONE_IDS[zone])?.element
+    if (el) zoneObserver.observe(el)
+  }
+  // And once more when a drag ends, whatever the observer saw.
+  if (!releaseHooked) {
+    releaseHooked = true
+    window.addEventListener('pointerup', () => fitZones(), { capture: true })
+  }
+}
+let releaseHooked = false
+
 /** Called once dockview is ready: restore the saved layout, or start fresh. */
 export function attach(dockview: DockviewApi) {
   api = dockview
   // Dev builds only: the live instance, for poking at the layout from
   // DevTools. A module imported from the console is a separate copy with no
   // dockview attached, so this is the only way to reach the real one.
-  if (import.meta.env.DEV) (window as unknown as { __vivDock?: DockviewApi }).__vivDock = dockview
+  if (import.meta.env.DEV) Object.assign(window, { __vivDock: dockview, __vivFit: fitZones })
 
   // Panels drop only into the zones; the chat's tab doesn't drag.
   dockview.onWillShowOverlay((e) => {
@@ -753,6 +814,7 @@ export function attach(dockview: DockviewApi) {
   keepEmptyZonesOpen()
   fitZones()
   syncState()
+  watchZoneSizes(dockview)
   useWorkspace.setState({ ready: true })
 }
 
