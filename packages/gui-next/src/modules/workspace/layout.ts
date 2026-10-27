@@ -817,6 +817,8 @@ export function attach(dockview: DockviewApi) {
   // The chat is the one panel that must always exist; a layout saved without
   // it gets it back.
   if (!find('chat')) dockview.addPanel(panelOptions('chat', undefined, 'chat'))
+  // A layout saved when the chat used the overlay renderer keeps it.
+  find('chat')?.api.setRenderer(PANELS.chat.renderer)
   confine()
   keepEmptyZonesOpen()
   fitZones()

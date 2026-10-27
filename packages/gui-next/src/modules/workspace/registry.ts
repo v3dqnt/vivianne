@@ -45,7 +45,12 @@ export interface PanelDef {
 }
 
 export const PANELS: Record<PanelKind, PanelDef> = {
-  chat: { title: 'Chat', icon: MessageSquareLinear, renderer: 'always', singleton: true, closable: false },
+  // Rendered in its own slot, not dockview's overlay layer: the overlay
+  // is positioned separately and fell behind the slot's size when a side
+  // panel changed, leaving the chat off-centre. The chat is alone in the
+  // centre and never moves or hides, so it never needs the overlay's
+  // keep-mounted behaviour.
+  chat: { title: 'Chat', icon: MessageSquareLinear, renderer: 'onlyWhenVisible', singleton: true, closable: false },
   files: { title: 'All files', icon: DocumentTextLinear, renderer: 'onlyWhenVisible', singleton: true, closable: true },
   ide: { title: 'Editor', icon: CodeLinear, renderer: 'always', singleton: true, closable: true },
   preview: { title: 'Preview', icon: MonitorLinear, renderer: 'always', singleton: true, closable: true },
