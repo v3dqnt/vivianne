@@ -680,7 +680,10 @@ function confine() {
       api.addPanel(panelOptions('chat', undefined, 'chat'))
     }
   }
-  for (const zone of ['left', 'right'] as const) if (!sides.includes(zone) && api.isEdgeGroupVisible(zone)) api.setEdgeGroupVisible(zone, false)
+  for (const zone of ['left', 'right'] as const) {
+    const empty = !zoneGroup(zone)?.panels.length
+    if ((!sides.includes(zone) || empty) && api.isEdgeGroupVisible(zone)) api.setEdgeGroupVisible(zone, false)
+  }
 }
 
 /**
@@ -724,8 +727,12 @@ export function setChatSide(side: ChatSide) {
   useWorkspace.setState({ chatSide: side })
   if (!api) return
   confine()
-  // The side the chat now faces opens, an empty one with its chooser.
-  for (const zone of sideZones(side)) showZone(zone)
+  // Sides with panels in them open; an empty side stays closed rather than
+  // showing a chooser nobody asked for.
+  for (const zone of sideZones(side)) {
+    if (zoneGroup(zone)?.panels.length) showZone(zone)
+    else if (api.isEdgeGroupVisible(zone)) api.setEdgeGroupVisible(zone, false)
+  }
   keepEmptyZonesOpen()
   fitZones()
   syncState()
