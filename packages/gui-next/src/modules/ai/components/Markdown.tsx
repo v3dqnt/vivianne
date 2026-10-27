@@ -25,6 +25,7 @@ import { useModsStore, chatRenderer } from '../../mods/store/modsStore'
 import { ModChatBlock } from '../../mods/components/ModChatBlock'
 import { remarkFiles } from '../lib/remarkFiles'
 import { FileLink } from './FileLink'
+import { CHAT_FONT } from '../lib/chatStyle'
 
 const VIDEO_EXT = /\.(mp4|webm|mov|m4v)$/i
 const AUDIO_EXT = /\.(mp3|wav|ogg|m4a|flac)$/i
@@ -51,29 +52,29 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
     <Box
       className="select-text"
       sx={{
-        // The chat's type: a 14px body on a 24px line (14 × φ ≈ 22.6, held
-        // to the 4px grid), headings a step of √φ apart (14 → 18 → 22 → 28),
-        // and every gap a multiple of 4.
-        fontSize: '14px',
-        lineHeight: '24px',
+        // The chat's type follows the size set in Settings → Appearance
+        // (`CHAT_FONT.text`), on a line of about φ times it; headings are
+        // modest steps above it, and every gap a multiple of 4.
+        fontSize: CHAT_FONT.text,
+        lineHeight: 1.6,
         '& > *:first-of-type': { mt: 0 },
         '& > *:last-of-type': { mb: 0 },
-        '& p': { m: 0, mb: '12px', fontSize: '14px', lineHeight: '24px' },
-        '& ul, & ol': { mt: 0, mb: '12px', pl: '20px', fontSize: '14px', lineHeight: '24px' },
-        '& li': { mb: '4px', pl: '4px' },
+        '& p': { m: 0, mb: '8px', fontSize: 'inherit', lineHeight: 'inherit' },
+        '& ul, & ol': { mt: 0, mb: '8px', pl: '20px', fontSize: 'inherit', lineHeight: 'inherit' },
+        '& li': { mb: '2px', pl: '4px' },
         '& li::marker': { color: 'text.secondary' },
         '& li > p': { mb: 0 },
         '& li > ul, & li > ol': { mt: '4px', mb: 0 },
-        '& h1, & h2, & h3, & h4': { mt: '24px', mb: '8px', fontWeight: 600, letterSpacing: '-0.01em', color: 'text.primary' },
-        '& h1': { fontSize: '28px', lineHeight: '36px' },
-        '& h2': { fontSize: '22px', lineHeight: '28px' },
-        '& h3': { fontSize: '18px', lineHeight: '24px' },
-        '& h4': { fontSize: '14px', lineHeight: '20px', color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.04em' },
+        '& h1, & h2, & h3, & h4': { mt: '16px', mb: '8px', fontWeight: 600, letterSpacing: '-0.01em', color: 'text.primary' },
+        '& h1': { fontSize: '1.286em', lineHeight: 1.35 },
+        '& h2': { fontSize: '1.143em', lineHeight: 1.4 },
+        '& h3': { fontSize: '1.071em', lineHeight: 1.45 },
+        '& h4': { fontSize: '0.857em', lineHeight: 1.5, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.04em' },
         '& strong': { fontWeight: 600, color: 'text.primary' },
         '& em': { fontStyle: 'italic' },
         '& blockquote': {
           m: 0,
-          mb: '12px',
+          mb: '8px',
           py: '4px',
           pl: '12px',
           borderLeft: '2px solid',
@@ -82,7 +83,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
           '& p': { mb: '4px' },
         },
         '& hr': { border: 0, borderTop: 1, borderColor: 'divider', my: '24px' },
-        '& table': { borderCollapse: 'collapse', mb: '12px', fontSize: '13px', lineHeight: '20px', display: 'block', overflowX: 'auto' },
+        '& table': { borderCollapse: 'collapse', mb: '8px', fontSize: '0.929em', lineHeight: 1.5, display: 'block', overflowX: 'auto' },
         '& th, & td': { border: 1, borderColor: 'divider', px: '8px', py: '4px', textAlign: 'left' },
         '& th': { bgcolor: 'action.hover', fontWeight: 600 },
         // Inline code reads as code at a glance: the accent colour on a
