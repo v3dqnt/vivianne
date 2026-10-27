@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { create } from 'zustand'
-import { Box, ButtonBase, Chip, IconButton, Link, Stack, Tooltip, Typography, useTheme } from '../../../ui'
+import { Box, ButtonBase, IconButton, Link, Stack, Tooltip, Typography, useTheme } from '../../../ui'
 import { GithubLinear, RefreshLinear } from '../../../icons'
 import { surfaceCard } from '../../../theme'
 import { useWorkspaceStore } from '../../ai/store/workspaceStore'
@@ -9,6 +9,7 @@ import { useGitStore } from '../store/gitStore'
 import { ReviewPanel } from './ReviewPanel'
 import { Actions, Issues, PullRequests, Releases } from './GitHubPanels'
 import { GitQuickActions, PrChip } from './GitActions'
+import { T, u } from './gitStyle'
 import { useGitStatus, changedCount } from '../store/gitStatusStore'
 
 /** What the main area shows, picked in the title bar: the chat and its
@@ -71,25 +72,25 @@ export function GitView() {
 
   return (
     <Stack sx={{ ...card, flex: 1, minWidth: 0, mb: 1, mx: 1 }}>
-      <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, pt: 0.75, flexShrink: 0 }}>
-        <Typography variant="body2" sx={{ fontWeight: 650 }} noWrap>
+      <Stack direction="row" sx={{ alignItems: 'center', gap: u(2), px: u(3), height: 40, flexShrink: 0, minWidth: 0 }}>
+        <Typography sx={{ ...T.title }} noWrap>
           {folder}
         </Typography>
         <BranchIndicator />
-        <Typography variant="caption" color="text.secondary">
+        <Typography sx={{ ...T.meta, color: 'text.secondary', whiteSpace: 'nowrap' }}>
           {local} branch{local === 1 ? '' : 'es'}
         </Typography>
         {pr && <PrChip pr={pr} />}
         <Box sx={{ flex: 1 }} />
         <GitQuickActions />
         {remote?.githubUrl ? (
-          <Link href={remote.githubUrl} target="_blank" rel="noreferrer" underline="hover" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, fontSize: '0.75rem', color: 'text.secondary' }}>
+          <Link href={remote.githubUrl} target="_blank" rel="noreferrer" underline="hover" sx={{ display: 'flex', alignItems: 'center', gap: u(1), ...T.small, color: 'text.secondary', whiteSpace: 'nowrap' }}>
             <GithubLinear size={14} color="currentColor" />
             {remote.githubRepo}
           </Link>
         ) : (
           remote?.url && (
-            <Typography variant="caption" color="text.secondary" noWrap sx={{ maxWidth: 320 }}>
+            <Typography noWrap sx={{ ...T.small, color: 'text.secondary', maxWidth: 320 }}>
               {remote.url}
             </Typography>
           )
@@ -98,6 +99,7 @@ export function GitView() {
           <span>
             <IconButton
               size="small"
+              sx={{ width: 24, height: 24 }}
               aria-label="Refresh"
               disabled={!root || loading}
               onClick={() => {
@@ -111,7 +113,7 @@ export function GitView() {
         </Tooltip>
       </Stack>
 
-      <Stack direction="row" role="tablist" sx={{ px: 1, gap: 0.25, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
+      <Stack direction="row" role="tablist" sx={{ px: u(2), gap: u(1), height: 32, alignItems: 'stretch', borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
         {TABS.map(([id, label]) => (
           <ButtonBase
             key={id}
@@ -119,9 +121,9 @@ export function GitView() {
             aria-selected={tab === id}
             onClick={() => setTab(id)}
             sx={{
-              px: 1.25,
-              py: 0.875,
-              fontSize: '0.78125rem',
+              px: u(2),
+              gap: u(1),
+              ...T.small,
               fontWeight: tab === id ? 600 : 500,
               color: tab === id ? 'text.primary' : 'text.secondary',
               borderBottom: 2,
@@ -132,7 +134,7 @@ export function GitView() {
           >
             {label}
             {count(id) > 0 && (
-              <Box component="span" sx={{ ml: 0.625, px: 0.5, borderRadius: '8px', fontSize: '0.65625rem', fontWeight: 700, bgcolor: id === 'actions' ? 'error.main' : 'action.selected', color: id === 'actions' ? 'error.contrastText' : 'text.secondary' }}>
+              <Box component="span" sx={{ minWidth: 16, height: 16, px: u(1), borderRadius: '4px', fontSize: '10px', lineHeight: '16px', fontWeight: 700, textAlign: 'center', boxSizing: 'border-box', bgcolor: id === 'actions' ? 'error.main' : 'action.selected', color: id === 'actions' ? 'error.contrastText' : 'text.secondary' }}>
                 {count(id)}
               </Box>
             )}
@@ -154,26 +156,32 @@ export function GitView() {
         {tab === 'issues' && <Issues root={root} />}
         {tab === 'releases' && <Releases root={root} />}
         {tab === 'history' && (
-          <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', py: 0.5 }}>
+          <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', py: u(1) }}>
             {commits.length === 0 && (
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', p: 2 }}>
+              <Typography sx={{ ...T.small, color: 'text.secondary', display: 'block', p: u(4) }}>
                 {loading ? 'Loading…' : root ? 'No commits, or not a git repository.' : 'Open a project folder first.'}
               </Typography>
             )}
             {commits.map((c, i) => (
-              <Stack key={c.hash} direction="row" sx={{ gap: 1, px: 2, py: 0.75, alignItems: 'flex-start', '&:hover': { bgcolor: 'action.hover' } }}>
-                <Box sx={{ mt: '6px', width: 7, height: 7, borderRadius: '50%', flexShrink: 0, bgcolor: i === 0 ? 'warning.main' : 'text.disabled' }} />
-                <Stack sx={{ minWidth: 0, flex: 1 }}>
-                  <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, minWidth: 0 }}>
-                    {i === 0 && <Chip size="small" label="HEAD" variant="outlined" sx={{ height: 16, fontSize: '0.625rem', borderColor: 'warning.main', color: 'warning.main' }} />}
-                    <Typography variant="body2" noWrap sx={{ fontSize: '0.8125rem' }} title={c.message}>
-                      {c.message}
-                    </Typography>
-                  </Stack>
-                  <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: '0.6875rem' }}>
-                    {c.author} · {when(c.date)} · <Box component="span" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace' }}>{c.hash.slice(0, 7)}</Box>
-                  </Typography>
-                </Stack>
+              <Stack key={c.hash} direction="row" sx={{ gap: u(3), px: u(4), height: 28, alignItems: 'center', '&:hover': { bgcolor: 'action.hover' } }}>
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, bgcolor: i === 0 ? 'warning.main' : 'text.disabled' }} />
+                <Box component="span" sx={{ ...T.meta, ...T.mono, color: 'text.secondary', flexShrink: 0, width: 56 }}>
+                  {c.hash.slice(0, 7)}
+                </Box>
+                {i === 0 && (
+                  <Box component="span" sx={{ ...T.meta, fontWeight: 700, px: u(1), borderRadius: '4px', border: 1, borderColor: 'warning.main', color: 'warning.main', flexShrink: 0 }}>
+                    HEAD
+                  </Box>
+                )}
+                <Typography noWrap sx={{ ...T.body, flex: 1, minWidth: 0 }} title={c.message}>
+                  {c.message}
+                </Typography>
+                <Typography noWrap sx={{ ...T.meta, color: 'text.secondary', flexShrink: 0, maxWidth: 160 }}>
+                  {c.author}
+                </Typography>
+                <Typography sx={{ ...T.meta, color: 'text.secondary', flexShrink: 0, width: 64, textAlign: 'right' }}>
+                  {when(c.date)}
+                </Typography>
               </Stack>
             ))}
           </Box>

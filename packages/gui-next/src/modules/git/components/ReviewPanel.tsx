@@ -3,6 +3,7 @@ import { Box, Stack, Typography, IconButton, ButtonBase, Button, Menu, MenuItem,
 import { CloseCircleLinear, ArrowDownLinear, ArrowRightLinear, RefreshLinear, DocumentTextLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { useActiveWorkspaceRoot } from '../../dock/useActiveWorkspace'
+import { BTN_SX, MONO_FONT, T, u } from './gitStyle'
 
 interface GitFileChange {
   path: string
@@ -65,7 +66,7 @@ function parseDiff(diff: string): DiffLine[] {
   return out
 }
 
-const MONO = { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.6875rem', lineHeight: 1.6 } as const
+const MONO = { fontFamily: MONO_FONT, fontSize: '11px', lineHeight: '18px' } as const
 
 function lineBg(kind: DiffLine['kind']): string {
   if (kind === 'add') return 'rgba(61, 214, 140, 0.13)'
@@ -76,7 +77,7 @@ function lineBg(kind: DiffLine['kind']): string {
 
 function Gutter({ n }: { n: number | null }) {
   return (
-    <Box component="span" sx={{ ...MONO, width: 34, flexShrink: 0, textAlign: 'right', pr: 1, color: 'text.disabled', userSelect: 'none' }}>
+    <Box component="span" sx={{ ...MONO, width: 40, flexShrink: 0, textAlign: 'right', pr: u(2), color: 'text.disabled', userSelect: 'none' }}>
       {n ?? ''}
     </Box>
   )
@@ -89,7 +90,7 @@ function UnifiedDiff({ lines }: { lines: DiffLine[] }) {
         <Stack key={i} direction="row" sx={{ bgcolor: lineBg(l.kind), minWidth: 'fit-content' }}>
           <Gutter n={l.oldNo} />
           <Gutter n={l.newNo} />
-          <Box component="pre" sx={{ ...MONO, m: 0, px: 1, whiteSpace: 'pre', color: l.kind === 'hunk' ? 'text.secondary' : 'text.primary' }}>
+          <Box component="pre" sx={{ ...MONO, m: 0, px: u(2), whiteSpace: 'pre', color: l.kind === 'hunk' ? 'text.secondary' : 'text.primary' }}>
             {l.kind === 'add' ? '+' : l.kind === 'del' ? '-' : ' '}
             {l.text}
           </Box>
@@ -123,7 +124,7 @@ function SplitDiff({ lines }: { lines: DiffLine[] }) {
   const Side = ({ line, side }: { line: DiffLine | null; side: 'left' | 'right' }) => (
     <Stack direction="row" sx={{ flex: 1, minWidth: 0, bgcolor: line ? lineBg(line.kind) : 'action.disabledBackground' }}>
       <Gutter n={line ? (side === 'left' ? line.oldNo : line.newNo) : null} />
-      <Box component="pre" sx={{ ...MONO, m: 0, px: 0.5, whiteSpace: 'pre', overflowX: 'auto', flex: 1, minWidth: 0 }}>
+      <Box component="pre" sx={{ ...MONO, m: 0, px: u(1), whiteSpace: 'pre', overflowX: 'auto', flex: 1, minWidth: 0 }}>
         {line?.kind === 'hunk' ? '' : (line?.text ?? '')}
       </Box>
     </Stack>
@@ -171,15 +172,18 @@ function FileRow({
     <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
       <ButtonBase
         onClick={onToggle}
-        sx={{ display: 'flex', width: '100%', alignItems: 'center', gap: 1, px: 1.5, py: 0.875, '&:hover': { bgcolor: 'action.hover' } }}
+        sx={{ display: 'flex', width: '100%', height: 28, alignItems: 'center', gap: u(2), px: u(3), '&:hover': { bgcolor: 'action.hover' } }}
       >
+        <Box sx={{ display: 'flex', flexShrink: 0, color: 'text.secondary' }}>
+          {expanded ? <ArrowDownLinear size={12} color="currentColor" /> : <ArrowRightLinear size={12} color="currentColor" />}
+        </Box>
         <Box sx={{ display: 'flex', flexShrink: 0, color: 'text.secondary' }}>
           <DocumentTextLinear size={13} color="currentColor" />
         </Box>
-        <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem', flexShrink: 0 }}>
+        <Typography sx={{ ...T.small, fontWeight: 600, flexShrink: 0 }}>
           {fileName(change.path)}
         </Typography>
-        <Typography variant="caption" color="text.disabled" noWrap sx={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+        <Typography noWrap sx={{ ...T.meta, color: 'text.disabled', flex: 1, minWidth: 0, textAlign: 'left' }}>
           {dirName(change.path)}
         </Typography>
         <Typography variant="caption" sx={{ ...MONO, color: 'success.main', flexShrink: 0 }}>
@@ -188,19 +192,16 @@ function FileRow({
         <Typography variant="caption" sx={{ ...MONO, color: 'error.main', flexShrink: 0 }}>
           -{change.removed}
         </Typography>
-        <Box sx={{ display: 'flex', flexShrink: 0, color: 'text.secondary' }}>
-          {expanded ? <ArrowDownLinear size={12} color="currentColor" /> : <ArrowRightLinear size={12} color="currentColor" />}
-        </Box>
       </ButtonBase>
 
       {expanded && (
         <Box sx={{ bgcolor: 'action.hover', borderTop: 1, borderColor: 'divider' }}>
           {loading || !diff ? (
-            <Box sx={{ p: 1.5 }}>
-              <CircularProgress size={13} />
+            <Box sx={{ p: u(3) }}>
+              <CircularProgress size={12} />
             </Box>
           ) : diff.length === 0 ? (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', p: 1.5 }}>
+            <Typography sx={{ ...T.small, color: 'text.secondary', display: 'block', p: u(3) }}>
               No textual diff (binary file, or no changes).
             </Typography>
           ) : view === 'split' ? (
@@ -261,8 +262,8 @@ export function ReviewPanel({ onClose }: { onClose?: () => void }) {
 
   if (!root) {
     return (
-      <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 2 }}>
-        <Typography variant="caption" color="text.secondary">
+      <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: u(4) }}>
+        <Typography sx={{ ...T.small, color: 'text.secondary' }}>
           No workspace folder set.
         </Typography>
       </Box>
@@ -271,45 +272,21 @@ export function ReviewPanel({ onClose }: { onClose?: () => void }) {
 
   return (
     <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0 }}>
-      <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, py: 0.75, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
-        <Typography variant="caption" sx={{ fontWeight: 700 }}>
-          Review
-        </Typography>
-        <Box
-          sx={{ px: 0.75, py: 0.125, borderRadius: 1, bgcolor: 'action.selected', fontSize: '0.6875rem', fontWeight: 600, color: 'text.secondary' }}
+      <Stack direction="row" sx={{ alignItems: 'center', gap: u(2), px: u(3), height: 36, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
+        <Button
+          size="small"
+          onClick={(e) => setScopeAnchor(e.currentTarget)}
+          endIcon={<ArrowDownLinear size={10} color="currentColor" />}
+          sx={{ ...BTN_SX, textTransform: 'none', color: 'text.primary', border: 1, borderColor: 'divider', '& .MuiButton-endIcon': { ml: u(1) } }}
         >
-          {changes.length}
-        </Box>
-        <Box sx={{ flex: 1 }} />
+          {SCOPE_LABELS[scope]} · {changes.length}
+        </Button>
         <Typography variant="caption" sx={{ ...MONO, color: 'success.main' }}>
           +{totals.added}
         </Typography>
         <Typography variant="caption" sx={{ ...MONO, color: 'error.main' }}>
           -{totals.removed}
         </Typography>
-        <Tooltip title="Refresh">
-          <IconButton size="small" onClick={() => void refresh()} sx={{ width: 22, height: 22 }}>
-            <RefreshLinear size={12} color="currentColor" />
-          </IconButton>
-        </Tooltip>
-        {onClose && (
-          <Tooltip title="Close panel">
-            <IconButton size="small" onClick={onClose} sx={{ width: 22, height: 22 }}>
-              <CloseCircleLinear size={13} color="currentColor" />
-            </IconButton>
-          </Tooltip>
-        )}
-      </Stack>
-
-      <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, px: 1.5, py: 0.75, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
-        <Button
-          size="small"
-          onClick={(e) => setScopeAnchor(e.currentTarget)}
-          endIcon={<ArrowDownLinear size={10} color="currentColor" />}
-          sx={{ textTransform: 'none', fontSize: '0.75rem', color: 'text.primary', px: 1, py: 0.25, border: 1, borderColor: 'divider', borderRadius: 1.5 }}
-        >
-          {SCOPE_LABELS[scope]}
-        </Button>
         <Menu anchorEl={scopeAnchor} open={!!scopeAnchor} onClose={() => setScopeAnchor(null)}>
           {(Object.keys(SCOPE_LABELS) as Scope[]).map((s) => (
             <MenuItem
@@ -319,7 +296,7 @@ export function ReviewPanel({ onClose }: { onClose?: () => void }) {
                 setScope(s)
                 setScopeAnchor(null)
               }}
-              sx={{ fontSize: '0.8125rem' }}
+              sx={{ ...T.small }}
             >
               {SCOPE_LABELS[s]}
             </MenuItem>
@@ -328,15 +305,14 @@ export function ReviewPanel({ onClose }: { onClose?: () => void }) {
 
         <Box sx={{ flex: 1 }} />
 
-        <Stack direction="row" sx={{ border: 1, borderColor: 'divider', borderRadius: 1.5, overflow: 'hidden' }}>
+        <Stack direction="row" sx={{ height: 24, border: 1, borderColor: 'divider', borderRadius: '6px', overflow: 'hidden', boxSizing: 'border-box' }}>
           {(['unified', 'split'] as ViewMode[]).map((m) => (
             <ButtonBase
               key={m}
               onClick={() => setView(m)}
               sx={{
-                px: 1.25,
-                py: 0.375,
-                fontSize: '0.6875rem',
+                px: u(2),
+                ...T.meta,
                 fontWeight: 600,
                 textTransform: 'capitalize',
                 bgcolor: view === m ? 'action.selected' : 'transparent',
@@ -352,19 +328,31 @@ export function ReviewPanel({ onClose }: { onClose?: () => void }) {
         <Button
           size="small"
           onClick={() => setExpanded(expanded.size ? new Set() : new Set(changes.map((c) => c.path)))}
-          sx={{ textTransform: 'none', fontSize: '0.6875rem', color: 'text.secondary', px: 0.75, minWidth: 0 }}
+          sx={{ ...BTN_SX, textTransform: 'none', color: 'text.secondary' }}
         >
           {expanded.size ? 'Collapse all' : 'Expand all'}
         </Button>
+        <Tooltip title="Refresh">
+          <IconButton size="small" onClick={() => void refresh()} sx={{ width: 24, height: 24 }}>
+            <RefreshLinear size={12} color="currentColor" />
+          </IconButton>
+        </Tooltip>
+        {onClose && (
+          <Tooltip title="Close panel">
+            <IconButton size="small" onClick={onClose} sx={{ width: 24, height: 24 }}>
+              <CloseCircleLinear size={13} color="currentColor" />
+            </IconButton>
+          </Tooltip>
+        )}
       </Stack>
 
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {loading && changes.length === 0 ? (
-          <Box sx={{ p: 2 }}>
+          <Box sx={{ p: u(4) }}>
             <CircularProgress size={14} />
           </Box>
         ) : changes.length === 0 ? (
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', p: 2 }}>
+          <Typography sx={{ ...T.small, color: 'text.secondary', display: 'block', p: u(4) }}>
             No {SCOPE_LABELS[scope].toLowerCase()} changes.
           </Typography>
         ) : (

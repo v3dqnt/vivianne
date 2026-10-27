@@ -17,6 +17,7 @@ import { useAgentStore } from '../../ai/store/agentStore'
 import { useGitStatus, changedCount, type BranchPr } from '../store/gitStatusStore'
 import { useGitStore } from '../store/gitStore'
 import { useAppView } from './GitView'
+import { BTN_SX, MONO_FONT, T, u } from './gitStyle'
 
 /** Hand the agent a git job in the chat, and show the chat. */
 export function askAgent(text: string) {
@@ -33,9 +34,9 @@ export function PrChip({ pr, onClick }: { pr: BranchPr; onClick?: () => void }) 
     <Tooltip title={`${pr.title} · ${pr.state === 'merged' ? 'Merged' : pr.state === 'closed' ? 'Closed' : pr.draft ? 'Draft' : 'Open'}${pr.checks !== 'none' ? ` · checks ${pr.checks}` : ''}`}>
       <ButtonBase
         onClick={onClick ?? (() => window.open(pr.url, '_blank'))}
-        sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 0.75, py: 0.125, borderRadius: '6px', border: 1, borderColor: 'divider', fontSize: '0.6875rem', '&:hover': { bgcolor: 'action.hover' } }}
+        sx={{ display: 'flex', alignItems: 'center', gap: u(1), height: 20, px: u(2), borderRadius: '4px', border: 1, borderColor: 'divider', ...T.meta, '&:hover': { bgcolor: 'action.hover' } }}
       >
-        <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: color }} />
+        <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color }} />
         <Box component="span" sx={{ fontWeight: 600 }}>#{pr.number}</Box>
         {checks && <Box component="span" sx={{ color: checksColor, fontWeight: 700 }}>{checks}</Box>}
       </ButtonBase>
@@ -54,13 +55,13 @@ export function GitStatusChip() {
   if (!s) return null
   const changed = changedCount(s)
   return (
-    <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+    <Stack direction="row" sx={{ alignItems: 'center', gap: u(1), minWidth: 0 }}>
       <ButtonBase
         onClick={() => useAppView.setState({ view: 'git' })}
         title="Open the Git view"
-        sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0, px: 0.75, py: 0.25, borderRadius: '6px', fontSize: '0.71875rem', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } }}
+        sx={{ display: 'flex', alignItems: 'center', gap: u(2), minWidth: 0, height: 20, px: u(2), borderRadius: '4px', ...T.meta, color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } }}
       >
-        <Box component="span" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>
+        <Box component="span" sx={{ fontFamily: MONO_FONT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>
           {s.branch || 'detached'}
         </Box>
         {s.ahead > 0 && <Box component="span" title={`${s.ahead} to push`}>↑{s.ahead}</Box>}
@@ -110,15 +111,15 @@ export function GitQuickActions() {
   const sync = s.upstream ? (s.behind && s.ahead ? 'Sync' : s.behind ? 'Pull' : s.ahead ? 'Push' : null) : 'Publish branch'
 
   return (
-    <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+    <Stack direction="row" sx={{ alignItems: 'center', gap: u(2), flexWrap: 'wrap' }}>
       {note && (
-        <Typography variant="caption" color={note.error ? 'error' : 'text.secondary'} noWrap sx={{ maxWidth: 360 }} title={note.text}>
+        <Typography noWrap sx={{ ...T.meta, color: note.error ? 'error.main' : 'text.secondary', maxWidth: 360 }} title={note.text}>
           {note.text}
         </Typography>
       )}
       {changed > 0 && (
         <Tooltip title={`Commit ${changed} change${changed === 1 ? '' : 's'}, with a message written from the diff`}>
-          <Button size="small" variant="contained" disableElevation onClick={() => setDialog('commit')} sx={{ borderRadius: '8px', py: 0.25, fontSize: '0.75rem' }}>
+          <Button size="small" variant="contained" disableElevation onClick={() => setDialog('commit')} sx={BTN_SX}>
             Commit {changed}
           </Button>
         </Tooltip>
@@ -131,7 +132,7 @@ export function GitQuickActions() {
               variant="outlined"
               disabled={!!busy}
               onClick={() => void run(sync, () => call<string>('cmd_git_sync', { path: root, action: s.upstream ? (s.behind && s.ahead ? 'sync' : s.behind ? 'pull' : 'push') : 'push' }))}
-              sx={{ borderRadius: '8px', py: 0.25, fontSize: '0.75rem' }}
+              sx={BTN_SX}
             >
               {busy === sync ? '…' : `${sync}${s.ahead ? ` ↑${s.ahead}` : ''}${s.behind ? ` ↓${s.behind}` : ''}`}
             </Button>
@@ -140,7 +141,7 @@ export function GitQuickActions() {
       )}
       {repo && !onDefault && (!pr || pr.state !== 'open') && s.branch && (
         <Tooltip title={s.upstream ? 'Open a pull request for this branch' : 'Pushes the branch, then opens a pull request'}>
-          <Button size="small" variant="outlined" onClick={() => setDialog('pr')} sx={{ borderRadius: '8px', py: 0.25, fontSize: '0.75rem' }}>
+          <Button size="small" variant="outlined" onClick={() => setDialog('pr')} sx={BTN_SX}>
             Create PR
           </Button>
         </Tooltip>
@@ -156,7 +157,7 @@ export function GitQuickActions() {
                 `The checks on pull request #${pr.number} are failing: ${pr.failing.join(', ')}. Read the failing runs' logs with the github tool (actions run / checks), find the cause, fix it on this branch, commit, push, and tell me when the checks pass.`,
               )
             }
-            sx={{ borderRadius: '8px', py: 0.25, fontSize: '0.75rem' }}
+            sx={BTN_SX}
           >
             Fix checks with the agent
           </Button>
@@ -168,7 +169,7 @@ export function GitQuickActions() {
             size="small"
             variant="text"
             onClick={() => askAgent('Review my uncommitted changes (git diff HEAD, and new files) for bugs, risky changes and anything missed. List what you find by file and line; change nothing yet.')}
-            sx={{ borderRadius: '8px', py: 0.25, fontSize: '0.75rem' }}
+            sx={BTN_SX}
           >
             Review changes
           </Button>

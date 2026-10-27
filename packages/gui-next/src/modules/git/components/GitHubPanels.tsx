@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Box, Button, ButtonBase, Chip, CircularProgress, IconButton, InputBase, Link, Stack, Tooltip, Typography, alpha, useTheme } from '../../../ui'
+import { Box, Button, ButtonBase, CircularProgress, IconButton, InputBase, Link, Stack, Tooltip, Typography, alpha, useTheme } from '../../../ui'
 import { ArrowRightLinear, CloseCircleLinear, ClockLinear, ExportLinear, StopCircleLinear, TickCircleLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { Markdown } from '../../ai/components/Markdown'
@@ -7,6 +7,7 @@ import { resolvePath } from '../../ai/components/FileLink'
 import { useWorkspaceStore } from '../../ai/store/workspaceStore'
 import { usePanelStore } from '../../dock/store/panelStore'
 import { useAppView } from './GitView'
+import { BTN_SX, MONO_FONT, Pill, T, u } from './gitStyle'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- GitHub's REST shapes, read as they come. */
 type J = any
@@ -84,16 +85,15 @@ export function StatusMark({ status, conclusion, size = 14 }: { status?: string 
   )
 }
 
-const LABEL_SX = { fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.6875rem' } as const
 
 /** A list on the left, the picked item on the right. */
 function Split({ list, detail, empty }: { list: ReactNode; detail: ReactNode | null; empty: string }) {
   return (
     <Stack direction="row" sx={{ flex: 1, minHeight: 0 }}>
-      <Box sx={{ width: 360, flexShrink: 0, borderRight: 1, borderColor: 'divider', overflowY: 'auto' }}>{list}</Box>
+      <Box sx={{ width: 320, flexShrink: 0, borderRight: 1, borderColor: 'divider', overflowY: 'auto' }}>{list}</Box>
       <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
         {detail ?? (
-          <Typography variant="body2" color="text.secondary" sx={{ p: 3 }}>
+          <Typography sx={{ ...T.small, color: 'text.secondary', p: u(4) }}>
             {empty}
           </Typography>
         )}
@@ -113,37 +113,37 @@ function ListRow({ active, onClick, icon, title, meta, right }: { active: boolea
         width: '100%',
         justifyContent: 'flex-start',
         alignItems: 'flex-start',
-        gap: 1,
+        gap: u(2),
         textAlign: 'left',
-        px: 1.5,
-        py: 0.875,
+        px: u(3),
+        py: u(1),
         borderBottom: 1,
         borderColor: 'divider',
         bgcolor: active ? alpha(theme.palette.primary.main, 0.1) : 'transparent',
         '&:hover': { bgcolor: active ? alpha(theme.palette.primary.main, 0.14) : 'action.hover' },
       }}
     >
-      <Box sx={{ pt: '2px', display: 'flex' }}>{icon}</Box>
+      <Box sx={{ height: 20, display: 'flex', alignItems: 'center', flexShrink: 0 }}>{icon}</Box>
       <Stack sx={{ minWidth: 0, flex: 1 }}>
-        <Typography variant="body2" sx={{ fontSize: '0.8125rem', fontWeight: 500, lineHeight: 1.35 }} noWrap title={title}>
+        <Typography sx={{ ...T.body, fontWeight: 500 }} noWrap title={title}>
           {title}
         </Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }} noWrap>
+        <Typography sx={{ ...T.meta, color: 'text.secondary' }} noWrap>
           {meta}
         </Typography>
       </Stack>
-      {right}
+      {right && <Box sx={{ height: 20, display: 'flex', alignItems: 'center', flexShrink: 0 }}>{right}</Box>}
     </ButtonBase>
   )
 }
 
 function Problem({ error, onRetry }: { error: string; onRetry: () => void }) {
   return (
-    <Stack sx={{ p: 2, gap: 1, alignItems: 'flex-start' }}>
-      <Typography variant="body2" color="error">
+    <Stack sx={{ p: u(3), gap: u(2), alignItems: 'flex-start' }}>
+      <Typography sx={{ ...T.small, color: 'error.main' }}>
         {error}
       </Typography>
-      <Button size="small" onClick={onRetry}>
+      <Button size="small" onClick={onRetry} sx={BTN_SX}>
         Try again
       </Button>
     </Stack>
@@ -152,9 +152,11 @@ function Problem({ error, onRetry }: { error: string; onRetry: () => void }) {
 
 function Filter<T extends string>({ value, options, onChange }: { value: T; options: Array<[T, string]>; onChange: (v: T) => void }) {
   return (
-    <Stack direction="row" sx={{ gap: 0.5, px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider' }}>
+    <Stack direction="row" sx={{ gap: u(1), px: u(3), py: u(2), borderBottom: 1, borderColor: 'divider' }}>
       {options.map(([v, label]) => (
-        <Chip key={v} size="small" label={label} onClick={() => onChange(v)} variant={value === v ? 'filled' : 'outlined'} sx={{ height: 22, fontSize: '0.71875rem' }} />
+        <Pill key={v} active={value === v} onClick={() => onChange(v)}>
+          {label}
+        </Pill>
       ))}
     </Stack>
   )
@@ -162,18 +164,18 @@ function Filter<T extends string>({ value, options, onChange }: { value: T; opti
 
 function DetailHead({ title, sub, url, actions }: { title: string; sub: ReactNode; url?: string; actions?: ReactNode }) {
   return (
-    <Stack sx={{ px: 2, py: 1.5, gap: 0.5, borderBottom: 1, borderColor: 'divider' }}>
-      <Typography variant="subtitle2" sx={{ fontWeight: 700, lineHeight: 1.35 }}>
+    <Stack sx={{ px: u(4), py: u(3), gap: u(2), borderBottom: 1, borderColor: 'divider' }}>
+      <Typography sx={{ ...T.title }}>
         {title}
       </Typography>
-      <Stack direction="row" sx={{ alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-        <Typography variant="caption" color="text.secondary" component="div" sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+      <Stack direction="row" sx={{ alignItems: 'center', gap: u(2), flexWrap: 'wrap' }}>
+        <Typography component="div" sx={{ ...T.small, color: 'text.secondary', display: 'flex', alignItems: 'center', gap: u(1), flexWrap: 'wrap', '& code': { ...T.mono, fontSize: '11px' } }}>
           {sub}
         </Typography>
         <Box sx={{ flex: 1 }} />
         {actions}
         {url && (
-          <Link href={url} target="_blank" rel="noreferrer" underline="hover" sx={{ fontSize: '0.75rem' }}>
+          <Link href={url} target="_blank" rel="noreferrer" underline="hover" sx={{ ...T.small, whiteSpace: 'nowrap' }}>
             Open on GitHub
           </Link>
         )}
@@ -187,9 +189,9 @@ function Act({ label, run, color, confirm }: { label: string; run: () => Promise
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   return (
-    <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75 }}>
+    <Stack direction="row" sx={{ alignItems: 'center', gap: u(2) }}>
       {err && (
-        <Typography variant="caption" color="error" sx={{ maxWidth: 280 }} noWrap title={err}>
+        <Typography sx={{ ...T.meta, color: 'error.main', maxWidth: 280 }} noWrap title={err}>
           {err}
         </Typography>
       )}
@@ -210,7 +212,7 @@ function Act({ label, run, color, confirm }: { label: string; run: () => Promise
             setBusy(false)
           }
         }}
-        sx={{ borderRadius: '8px', py: 0.125, fontSize: '0.75rem' }}
+        sx={BTN_SX}
       >
         {busy ? '…' : label}
       </Button>
@@ -233,7 +235,7 @@ export function PullRequests({ root, onCheckout }: { root: string | null; onChec
         <>
           <Filter value={state} options={[['open', 'Open'], ['closed', 'Closed']]} onChange={(v) => { setState(v); setPicked(null) }} />
           {list.error && <Problem error={list.error} onRetry={list.reload} />}
-          {list.loading && !list.data && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', p: 1.5 }}>Loading…</Typography>}
+          {list.loading && !list.data && <Typography sx={{ ...T.small, color: 'text.secondary', display: 'block', p: u(3) }}>Loading…</Typography>}
           {list.data?.map((p) => (
             <ListRow
               key={p.number}
@@ -242,7 +244,7 @@ export function PullRequests({ root, onCheckout }: { root: string | null; onChec
               icon={<PrMark pr={p} />}
               title={p.title}
               meta={`#${p.number} · ${p.user?.login} · ${p.head?.ref} → ${p.base?.ref} · ${ago(p.updated_at)}`}
-              right={p.draft ? <Chip size="small" label="Draft" sx={{ height: 18, fontSize: '0.625rem' }} /> : undefined}
+              right={p.draft ? <Box component="span" sx={{ ...T.meta, fontWeight: 600, px: u(1), borderRadius: '4px', bgcolor: 'action.selected', color: 'text.secondary' }}>Draft</Box> : undefined}
             />
           ))}
         </>
@@ -254,7 +256,7 @@ export function PullRequests({ root, onCheckout }: { root: string | null; onChec
 
 function PrMark({ pr }: { pr: J }) {
   const color = pr.merged_at ? 'secondary.main' : pr.state === 'closed' ? 'error.main' : pr.draft ? 'text.disabled' : 'success.main'
-  return <Box sx={{ width: 10, height: 10, mt: '3px', borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
+  return <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
 }
 
 function PullRequest({ gh, number, onCheckout, onChanged }: { gh: ReturnType<typeof useGh>; number: number; onCheckout: (b: string, pr: number) => Promise<void>; onChanged: () => void }) {
@@ -266,7 +268,7 @@ function PullRequest({ gh, number, onCheckout, onChanged }: { gh: ReturnType<typ
   const [comment, setComment] = useState('')
   const p = pr.data
   if (pr.error) return <Problem error={pr.error} onRetry={pr.reload} />
-  if (!p) return <Typography variant="caption" color="text.secondary" sx={{ display: 'block', p: 2 }}>Loading…</Typography>
+  if (!p) return <Typography sx={{ ...T.small, color: 'text.secondary', display: 'block', p: u(4) }}>Loading…</Typography>
   const open = p.state === 'open' && !p.merged_at
   const after = async () => {
     await pr.reload()
@@ -307,20 +309,20 @@ function PullRequest({ gh, number, onCheckout, onChanged }: { gh: ReturnType<typ
           </>
         }
       />
-      <Stack sx={{ p: 2, gap: 2 }}>
+      <Stack sx={{ px: u(4), py: u(3), gap: u(4) }}>
         <Section title={`Checks${checks.data ? ` · ${checks.data.length}` : ''}`}>
-          {checks.data?.length === 0 && <Typography variant="caption" color="text.secondary">No checks on this commit.</Typography>}
+          {checks.data?.length === 0 && <Typography sx={{ ...T.small, color: 'text.secondary' }}>No checks on this commit.</Typography>}
           {checks.data?.map((c) => (
-            <Stack key={c.id} direction="row" sx={{ alignItems: 'center', gap: 1, py: 0.375 }}>
+            <Stack key={c.id} direction="row" sx={{ alignItems: 'center', gap: u(2), height: 24 }}>
               <StatusMark status={c.status} conclusion={c.conclusion} />
-              <Typography variant="body2" sx={{ fontSize: '0.8125rem', flex: 1, minWidth: 0 }} noWrap>
+              <Typography sx={{ ...T.small, flex: 1, minWidth: 0 }} noWrap>
                 {c.name}
               </Typography>
-              <Typography variant="caption" color="text.secondary">
+              <Typography sx={{ ...T.meta, color: 'text.secondary' }}>
                 {duration(c.started_at, c.completed_at)}
               </Typography>
               {c.html_url && (
-                <Link href={c.html_url} target="_blank" rel="noreferrer" underline="hover" sx={{ fontSize: '0.71875rem' }}>
+                <Link href={c.html_url} target="_blank" rel="noreferrer" underline="hover" sx={{ ...T.meta }}>
                   Details
                 </Link>
               )}
@@ -330,7 +332,7 @@ function PullRequest({ gh, number, onCheckout, onChanged }: { gh: ReturnType<typ
         {reviews.data && reviews.data.length > 0 && (
           <Section title="Reviews">
             {reviews.data.map((r) => (
-              <Typography key={r.id} variant="body2" sx={{ fontSize: '0.8125rem' }}>
+              <Typography key={r.id} sx={{ ...T.small }}>
                 <b>{r.user?.login}</b> {r.state === 'APPROVED' ? 'approved' : r.state === 'CHANGES_REQUESTED' ? 'requested changes' : 'commented'} · {ago(r.submitted_at)}
               </Typography>
             ))}
@@ -338,7 +340,7 @@ function PullRequest({ gh, number, onCheckout, onChanged }: { gh: ReturnType<typ
         )}
         {p.body && (
           <Section title="Description">
-            <Box sx={{ fontSize: '0.875rem' }}>
+            <Box sx={{ ...T.body }}>
               <Markdown text={p.body} />
             </Box>
           </Section>
@@ -349,8 +351,8 @@ function PullRequest({ gh, number, onCheckout, onChanged }: { gh: ReturnType<typ
           ))}
         </Section>
         <Section title="Comment">
-          <InputBase multiline minRows={2} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Leave a comment" sx={{ fontSize: '0.8125rem', border: 1, borderColor: 'divider', borderRadius: '8px', px: 1, py: 0.75 }} />
-          <Box sx={{ pt: 0.75 }}>
+          <InputBase multiline minRows={2} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Leave a comment" sx={{ ...T.body, border: 1, borderColor: 'divider', borderRadius: '6px', px: u(2), py: u(1) }} />
+          <Box sx={{ pt: u(2) }}>
             <Act label="Comment" run={async () => { if (!comment.trim()) return; await gh(`/repos/{repo}/issues/${number}/comments`, { method: 'POST', body: { body: comment.trim() } }); setComment('') }} />
           </Box>
         </Section>
@@ -371,24 +373,24 @@ function PrFile({ file }: { file: J }) {
   const lines: string[] = (file.patch ?? '').split('\n')
   return (
     <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-      <Stack direction="row" sx={{ gap: 1, alignItems: 'center', '&:hover .pr-open': { opacity: 1 } }}>
-        <ButtonBase onClick={() => setOpen((v) => !v)} aria-expanded={open} sx={{ flex: 1, minWidth: 0, justifyContent: 'flex-start', gap: 1, py: 0.5, borderRadius: '6px', '&:hover': { color: 'primary.main' } }}>
+      <Stack direction="row" sx={{ gap: u(1), alignItems: 'center', height: 28, '&:hover .pr-open': { opacity: 1 } }}>
+        <ButtonBase onClick={() => setOpen((v) => !v)} aria-expanded={open} sx={{ flex: 1, minWidth: 0, height: '100%', justifyContent: 'flex-start', gap: u(2), borderRadius: '4px', '&:hover': { color: 'primary.main' } }}>
           <Box sx={{ display: 'flex', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 150ms', color: 'text.secondary' }}>
             <ArrowRightLinear size={11} color="currentColor" />
           </Box>
-          <Typography variant="body2" sx={{ fontSize: '0.78125rem', fontFamily: '"Geist Mono", ui-monospace, monospace', flex: 1, minWidth: 0, textAlign: 'left' }} noWrap title={file.filename}>
+          <Typography sx={{ ...T.small, ...T.mono, flex: 1, minWidth: 0, textAlign: 'left' }} noWrap title={file.filename}>
             {file.filename}
           </Typography>
           {file.status !== 'modified' && (
-            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65625rem' }}>
+            <Typography sx={{ ...T.meta, color: 'text.secondary' }}>
               {file.status}
             </Typography>
           )}
-          <Typography variant="caption" sx={{ color: 'success.main' }}>+{file.additions}</Typography>
-          <Typography variant="caption" sx={{ color: 'error.main' }}>−{file.deletions}</Typography>
+          <Typography sx={{ ...T.meta, ...T.mono, color: 'success.main' }}>+{file.additions}</Typography>
+          <Typography sx={{ ...T.meta, ...T.mono, color: 'error.main' }}>−{file.deletions}</Typography>
         </ButtonBase>
         <Tooltip title="Open in Preview">
-          <IconButton size="small" className="pr-open" aria-label={`Open ${file.filename}`} onClick={show} sx={{ opacity: 0, transition: 'opacity 0.12s' }}>
+          <IconButton size="small" className="pr-open" aria-label={`Open ${file.filename}`} onClick={show} sx={{ width: 24, height: 24, opacity: 0, transition: 'opacity 0.12s' }}>
             <ExportLinear size={12} color="currentColor" />
           </IconButton>
         </Tooltip>
@@ -397,7 +399,7 @@ function PrFile({ file }: { file: J }) {
         <Box
           component="pre"
           className="select-text"
-          sx={{ m: 0, mb: 1, py: 0.75, overflowX: 'auto', borderRadius: '8px', border: 1, borderColor: 'divider', fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.71875rem', lineHeight: 1.5 }}
+          sx={{ m: 0, mb: u(2), py: u(1), overflowX: 'auto', borderRadius: '6px', border: 1, borderColor: 'divider', fontFamily: MONO_FONT, fontSize: '11px', lineHeight: '16px' }}
         >
           {file.patch
             ? lines.map((l, i) => (
@@ -405,7 +407,7 @@ function PrFile({ file }: { file: J }) {
                   key={i}
                   component="div"
                   sx={{
-                    px: 1,
+                    px: u(2),
                     whiteSpace: 'pre',
                     color: l.startsWith('@@') ? 'text.secondary' : undefined,
                     bgcolor: l.startsWith('+') ? 'rgba(46,160,67,0.15)' : l.startsWith('-') ? 'rgba(248,81,73,0.15)' : undefined,
@@ -414,7 +416,7 @@ function PrFile({ file }: { file: J }) {
                   {l || ' '}
                 </Box>
               ))
-            : <Box sx={{ px: 1, color: 'text.secondary' }}>No text diff (binary, or too large for GitHub to show).</Box>}
+            : <Box sx={{ px: u(2), color: 'text.secondary' }}>No text diff (binary, or too large for GitHub to show).</Box>}
         </Box>
       )}
     </Box>
@@ -423,8 +425,8 @@ function PrFile({ file }: { file: J }) {
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <Stack sx={{ gap: 0.5 }}>
-      <Typography variant="caption" color="text.secondary" sx={LABEL_SX}>
+    <Stack sx={{ gap: u(1) }}>
+      <Typography sx={{ ...T.label, color: 'text.secondary', pb: u(1) }}>
         {title}
       </Typography>
       {children}
@@ -514,11 +516,15 @@ export function Actions({ root }: { root: string | null }) {
       empty={shown.length === 0 && runs.data ? 'No workflow runs here yet.' : 'Pick a run to see its jobs and logs.'}
       list={
         <>
-          <Stack direction="row" sx={{ gap: 0.5, px: 1.5, pt: 1, flexWrap: 'wrap', alignItems: 'center' }}>
-            <Chip size="small" label={repos.own ?? 'This repository'} onClick={() => pick(null)} variant={target === null ? 'filled' : 'outlined'} sx={{ height: 22, fontSize: '0.71875rem' }} />
+          <Stack direction="row" sx={{ gap: u(1), px: u(3), pt: u(2), flexWrap: 'wrap', alignItems: 'center' }}>
+            <Pill active={target === null} onClick={() => pick(null)}>
+              {repos.own ?? 'This repository'}
+            </Pill>
             {repos.extra.map((r) => (
               <Stack key={r} direction="row" sx={{ alignItems: 'center' }}>
-                <Chip size="small" label={r} onClick={() => pick(r)} variant={target === r ? 'filled' : 'outlined'} sx={{ height: 22, fontSize: '0.71875rem' }} />
+                <Pill active={target === r} onClick={() => pick(r)} title={r}>
+                  {r}
+                </Pill>
                 <ButtonBase
                   aria-label={`Stop showing ${r}`}
                   title="Stop showing"
@@ -526,7 +532,7 @@ export function Actions({ root }: { root: string | null }) {
                     repos.remove(r)
                     if (target === r) pick(null)
                   }}
-                  sx={{ px: 0.375, fontSize: '0.75rem', color: 'text.disabled', '&:hover': { color: 'text.primary' } }}
+                  sx={{ width: 16, height: 20, ...T.small, color: 'text.disabled', '&:hover': { color: 'text.primary' } }}
                 >
                   ×
                 </ButtonBase>
@@ -544,17 +550,21 @@ export function Actions({ root }: { root: string | null }) {
                 }
               }}
               placeholder="+ owner/repo"
-              sx={{ width: 110, fontSize: '0.71875rem', px: 0.75, border: 1, borderColor: 'divider', borderRadius: '11px', height: 22 }}
+              sx={{ width: 112, ...T.meta, px: u(2), border: 1, borderColor: 'divider', borderRadius: '4px', height: 20 }}
             />
           </Stack>
-          <Stack direction="row" sx={{ gap: 0.5, px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider', flexWrap: 'wrap' }}>
-            <Chip size="small" label="All workflows" onClick={() => setWorkflow('all')} variant={workflow === 'all' ? 'filled' : 'outlined'} sx={{ height: 22, fontSize: '0.71875rem' }} />
+          <Stack direction="row" sx={{ gap: u(1), px: u(3), py: u(2), borderBottom: 1, borderColor: 'divider', flexWrap: 'wrap' }}>
+            <Pill active={workflow === 'all'} onClick={() => setWorkflow('all')}>
+              All workflows
+            </Pill>
             {names.map((n) => (
-              <Chip key={n} size="small" label={n} onClick={() => setWorkflow(n)} variant={workflow === n ? 'filled' : 'outlined'} sx={{ height: 22, fontSize: '0.71875rem' }} />
+              <Pill key={n} active={workflow === n} onClick={() => setWorkflow(n)} title={n}>
+                {n}
+              </Pill>
             ))}
           </Stack>
           {runs.error && <Problem error={runs.error} onRetry={runs.reload} />}
-          {runs.loading && !runs.data && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', p: 1.5 }}>Loading…</Typography>}
+          {runs.loading && !runs.data && <Typography sx={{ ...T.small, color: 'text.secondary', display: 'block', p: u(3) }}>Loading…</Typography>}
           {shown.map((r) => (
             <ListRow
               key={r.id}
@@ -594,7 +604,7 @@ function Run({ gh, id, onChanged }: { gh: ReturnType<typeof useGh>; id: number; 
     }
   }, [jobs.data, logOf])
   if (run.error) return <Problem error={run.error} onRetry={run.reload} />
-  if (!r) return <Typography variant="caption" color="text.secondary" sx={{ display: 'block', p: 2 }}>Loading…</Typography>
+  if (!r) return <Typography sx={{ ...T.small, color: 'text.secondary', display: 'block', p: u(4) }}>Loading…</Typography>
   const after = async () => {
     await Promise.all([run.reload(), jobs.reload()])
     onChanged()
@@ -623,7 +633,7 @@ function Run({ gh, id, onChanged }: { gh: ReturnType<typeof useGh>; id: number; 
           </>
         }
       />
-      <Stack sx={{ p: 2, gap: 1 }}>
+      <Stack sx={{ px: u(4), py: u(3), gap: u(2) }}>
         {jobs.error && <Problem error={jobs.error} onRetry={jobs.reload} />}
         {jobs.data?.map((j) => (
           <Job key={j.id} gh={gh} job={j} open={logOf === j.id} onToggle={() => setLogOf(logOf === j.id ? null : j.id)} />
@@ -636,26 +646,26 @@ function Run({ gh, id, onChanged }: { gh: ReturnType<typeof useGh>; id: number; 
 function Job({ gh, job, open, onToggle }: { gh: ReturnType<typeof useGh>; job: J; open: boolean; onToggle: () => void }) {
   const theme = useTheme()
   return (
-    <Box sx={{ border: 1, borderColor: 'divider', borderRadius: '10px', overflow: 'hidden' }}>
-      <ButtonBase onClick={onToggle} sx={{ display: 'flex', width: '100%', justifyContent: 'flex-start', gap: 1, px: 1.25, py: 0.875, '&:hover': { bgcolor: 'action.hover' } }}>
+    <Box sx={{ border: 1, borderColor: 'divider', borderRadius: '8px', overflow: 'hidden' }}>
+      <ButtonBase onClick={onToggle} sx={{ display: 'flex', width: '100%', height: 32, justifyContent: 'flex-start', gap: u(2), px: u(3), '&:hover': { bgcolor: 'action.hover' } }}>
         <StatusMark status={job.status} conclusion={job.conclusion} />
-        <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem', flex: 1, textAlign: 'left' }} noWrap>
+        <Typography sx={{ ...T.small, fontWeight: 600, flex: 1, textAlign: 'left' }} noWrap>
           {job.name}
         </Typography>
-        <Typography variant="caption" color="text.secondary">
+        <Typography sx={{ ...T.meta, color: 'text.secondary' }}>
           {duration(job.started_at, job.completed_at)}
         </Typography>
       </ButtonBase>
       {open && (
         <Box sx={{ borderTop: 1, borderColor: 'divider', bgcolor: alpha(theme.palette.text.primary, 0.025) }}>
-          <Stack sx={{ px: 1.25, py: 0.75, gap: 0.25 }}>
+          <Stack sx={{ px: u(3), py: u(1) }}>
             {(job.steps ?? []).map((s: J) => (
-              <Stack key={s.number} direction="row" sx={{ alignItems: 'center', gap: 1 }}>
+              <Stack key={s.number} direction="row" sx={{ alignItems: 'center', gap: u(2), height: 20 }}>
                 <StatusMark status={s.status} conclusion={s.conclusion} size={12} />
-                <Typography variant="caption" sx={{ fontSize: '0.75rem', flex: 1, minWidth: 0 }} noWrap>
+                <Typography sx={{ ...T.small, flex: 1, minWidth: 0 }} noWrap>
                   {s.name}
                 </Typography>
-                <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
+                <Typography sx={{ ...T.meta, color: 'text.disabled' }}>
                   {duration(s.started_at, s.completed_at)}
                 </Typography>
               </Stack>
@@ -679,13 +689,13 @@ function JobLog({ gh, id }: { gh: ReturnType<typeof useGh>; id: number }) {
   useEffect(() => {
     if (box.current) box.current.scrollTop = box.current.scrollHeight
   }, [lines])
-  if (log.error) return <Typography variant="caption" color="error" sx={{ display: 'block', px: 1.25, pb: 1 }}>{log.error}</Typography>
+  if (log.error) return <Typography sx={{ ...T.meta, color: 'error.main', display: 'block', px: u(3), pb: u(2) }}>{log.error}</Typography>
   return (
     <Box
       ref={box}
       component="pre"
       className="select-text"
-      sx={{ m: 0, px: 1.25, py: 1, maxHeight: 420, overflow: 'auto', borderTop: 1, borderColor: 'divider', fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.71875rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'text.secondary' }}
+      sx={{ m: 0, px: u(3), py: u(2), maxHeight: 420, overflow: 'auto', borderTop: 1, borderColor: 'divider', fontFamily: MONO_FONT, fontSize: '11px', lineHeight: '16px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'text.secondary' }}
     >
       {log.loading && !log.data ? 'Loading the log…' : lines || 'No log.'}
     </Box>
@@ -707,8 +717,8 @@ export function Issues({ root }: { root: string | null }) {
       list={
         <>
           <Filter value={state} options={[['open', 'Open'], ['closed', 'Closed']]} onChange={(v) => { setState(v); setPicked(null) }} />
-          <Stack direction="row" sx={{ gap: 0.75, px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider' }}>
-            <InputBase value={title} onChange={(e) => setTitle(e.target.value)} placeholder="New issue title" sx={{ flex: 1, fontSize: '0.8125rem', border: 1, borderColor: 'divider', borderRadius: '8px', px: 1 }} />
+          <Stack direction="row" sx={{ gap: u(2), px: u(3), py: u(2), borderBottom: 1, borderColor: 'divider' }}>
+            <InputBase value={title} onChange={(e) => setTitle(e.target.value)} placeholder="New issue title" sx={{ flex: 1, ...T.small, height: 24, border: 1, borderColor: 'divider', borderRadius: '6px', px: u(2) }} />
             <Act
               label="Create"
               run={async () => {
@@ -726,14 +736,14 @@ export function Issues({ root }: { root: string | null }) {
               key={i.number}
               active={picked === i.number}
               onClick={() => setPicked(i.number)}
-              icon={<Box sx={{ width: 10, height: 10, mt: '3px', borderRadius: '50%', bgcolor: i.state === 'open' ? 'success.main' : 'secondary.main' }} />}
+              icon={<Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: i.state === 'open' ? 'success.main' : 'secondary.main' }} />}
               title={i.title}
               meta={`#${i.number} · ${i.user?.login} · ${i.comments} comment${i.comments === 1 ? '' : 's'} · ${ago(i.updated_at)}`}
               right={
                 i.labels?.length ? (
-                  <Stack direction="row" sx={{ gap: 0.25 }}>
+                  <Stack direction="row" sx={{ gap: u(1) }}>
                     {i.labels.slice(0, 2).map((l: J) => (
-                      <Box key={l.id} sx={{ px: 0.5, borderRadius: '4px', fontSize: '0.625rem', bgcolor: `#${l.color}33`, color: 'text.secondary' }}>
+                      <Box key={l.id} sx={{ px: u(1), borderRadius: '4px', fontSize: '10px', lineHeight: '16px', bgcolor: `#${l.color}33`, color: 'text.secondary' }}>
                         {l.name}
                       </Box>
                     ))}
@@ -755,7 +765,7 @@ function Issue({ gh, number, onChanged }: { gh: ReturnType<typeof useGh>; number
   const [text, setText] = useState('')
   const i = issue.data
   if (issue.error) return <Problem error={issue.error} onRetry={issue.reload} />
-  if (!i) return <Typography variant="caption" color="text.secondary" sx={{ display: 'block', p: 2 }}>Loading…</Typography>
+  if (!i) return <Typography sx={{ ...T.small, color: 'text.secondary', display: 'block', p: u(4) }}>Loading…</Typography>
   const setState = async (state: 'open' | 'closed') => {
     await gh(`/repos/{repo}/issues/${number}`, { method: 'PATCH', body: { state } })
     await issue.reload()
@@ -769,24 +779,24 @@ function Issue({ gh, number, onChanged }: { gh: ReturnType<typeof useGh>; number
         sub={<>{i.state === 'open' ? 'Open' : 'Closed'} · opened by {i.user?.login} {ago(i.created_at)}</>}
         actions={i.state === 'open' ? <Act label="Close" color="error" run={() => setState('closed')} /> : <Act label="Reopen" run={() => setState('open')} />}
       />
-      <Stack sx={{ p: 2, gap: 2 }}>
+      <Stack sx={{ px: u(4), py: u(3), gap: u(4) }}>
         {i.body && (
-          <Box sx={{ fontSize: '0.875rem' }}>
+          <Box sx={{ ...T.body }}>
             <Markdown text={i.body} />
           </Box>
         )}
         {comments.data?.map((c) => (
-          <Stack key={c.id} sx={{ gap: 0.5, borderTop: 1, borderColor: 'divider', pt: 1.5 }}>
-            <Typography variant="caption" color="text.secondary">
+          <Stack key={c.id} sx={{ gap: u(1), borderTop: 1, borderColor: 'divider', pt: u(3) }}>
+            <Typography sx={{ ...T.meta, color: 'text.secondary' }}>
               <b>{c.user?.login}</b> · {ago(c.created_at)}
             </Typography>
-            <Box sx={{ fontSize: '0.875rem' }}>
+            <Box sx={{ ...T.body }}>
               <Markdown text={c.body ?? ''} />
             </Box>
           </Stack>
         ))}
-        <Stack sx={{ gap: 0.75 }}>
-          <InputBase multiline minRows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="Leave a comment" sx={{ fontSize: '0.8125rem', border: 1, borderColor: 'divider', borderRadius: '8px', px: 1, py: 0.75 }} />
+        <Stack sx={{ gap: u(2) }}>
+          <InputBase multiline minRows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="Leave a comment" sx={{ ...T.body, border: 1, borderColor: 'divider', borderRadius: '6px', px: u(2), py: u(1) }} />
           <Box>
             <Act label="Comment" run={async () => { if (!text.trim()) return; await gh(`/repos/{repo}/issues/${number}/comments`, { method: 'POST', body: { body: text.trim() } }); setText(''); await comments.reload() }} />
           </Box>
@@ -804,34 +814,34 @@ export function Releases({ root }: { root: string | null }) {
   return (
     <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
       {list.error && <Problem error={list.error} onRetry={list.reload} />}
-      {list.data?.length === 0 && <Typography variant="body2" color="text.secondary" sx={{ p: 3 }}>No releases yet.</Typography>}
-      <Stack sx={{ maxWidth: 860, px: 2, py: 1.5, gap: 2 }}>
+      {list.data?.length === 0 && <Typography sx={{ ...T.small, color: 'text.secondary', p: u(4) }}>No releases yet.</Typography>}
+      <Stack sx={{ maxWidth: 880, px: u(4), py: u(3), gap: u(4) }}>
         {list.data?.map((r) => (
-          <Stack key={r.id} sx={{ gap: 0.75, pb: 2, borderBottom: 1, borderColor: 'divider' }}>
-            <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+          <Stack key={r.id} sx={{ gap: u(2), pb: u(4), borderBottom: 1, borderColor: 'divider' }}>
+            <Stack direction="row" sx={{ alignItems: 'center', gap: u(2) }}>
+              <Typography sx={{ ...T.title }}>
                 {r.name || r.tag_name}
               </Typography>
-              <Chip size="small" label={r.tag_name} variant="outlined" sx={{ height: 18, fontSize: '0.625rem' }} />
-              {r.prerelease && <Chip size="small" label="Pre-release" sx={{ height: 18, fontSize: '0.625rem' }} />}
-              {r.draft && <Chip size="small" label="Draft" sx={{ height: 18, fontSize: '0.625rem' }} />}
+              <Box component="span" sx={{ ...T.meta, ...T.mono, px: u(1), borderRadius: '4px', border: 1, borderColor: 'divider', color: 'text.secondary' }}>{r.tag_name}</Box>
+              {r.prerelease && <Box component="span" sx={{ ...T.meta, fontWeight: 600, px: u(1), borderRadius: '4px', bgcolor: 'action.selected', color: 'warning.main' }}>Pre-release</Box>}
+              {r.draft && <Box component="span" sx={{ ...T.meta, fontWeight: 600, px: u(1), borderRadius: '4px', bgcolor: 'action.selected', color: 'text.secondary' }}>Draft</Box>}
               <Box sx={{ flex: 1 }} />
-              <Typography variant="caption" color="text.secondary">
+              <Typography sx={{ ...T.meta, color: 'text.secondary' }}>
                 {ago(r.published_at ?? r.created_at)}
               </Typography>
-              <Link href={r.html_url} target="_blank" rel="noreferrer" underline="hover" sx={{ fontSize: '0.75rem' }}>
+              <Link href={r.html_url} target="_blank" rel="noreferrer" underline="hover" sx={{ ...T.small }}>
                 Open
               </Link>
             </Stack>
             {r.body && (
-              <Box sx={{ fontSize: '0.8125rem' }}>
+              <Box sx={{ ...T.body }}>
                 <Markdown text={r.body} />
               </Box>
             )}
             {r.assets?.length > 0 && (
-              <Stack direction="row" sx={{ gap: 0.75, flexWrap: 'wrap' }}>
+              <Stack direction="row" sx={{ gap: u(3), flexWrap: 'wrap' }}>
                 {r.assets.map((a: J) => (
-                  <Link key={a.id} href={a.browser_download_url} target="_blank" rel="noreferrer" underline="hover" sx={{ fontSize: '0.71875rem', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
+                  <Link key={a.id} href={a.browser_download_url} target="_blank" rel="noreferrer" underline="hover" sx={{ ...T.meta, ...T.mono }}>
                     {a.name} ({Math.round(a.size / 1024 / 1024)} MB · {a.download_count}↓)
                   </Link>
                 ))}
