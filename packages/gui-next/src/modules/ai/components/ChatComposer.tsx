@@ -329,21 +329,19 @@ export const ChatComposer = forwardRef<ChatComposerHandle, {
         {interim && (
           <Typography sx={{ px: 1.75, pb: 0.5, fontSize: '0.875rem', color: 'text.disabled', fontStyle: 'italic' }}>{interim}…</Typography>
         )}
-        {/* The controls sit inside the box, under the text, so the composer
-            reads as one thing. */}
-        {(left || right) && (
-          <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: '8px', px: '8px', pb: '8px', minWidth: 0 }}>
-            {/* Each side is one group with one gap, so the spacing between
-                controls is the same whatever they are. */}
-            <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, minWidth: 0, flexWrap: 'wrap' }}>
-              {left}
-            </Stack>
-            <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, minWidth: 0, flexShrink: 0 }}>
-              {right}
-            </Stack>
-          </Stack>
-        )}
       </Box>
+      {(left || right) && (
+        <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 0.5, pt: 0.5, minWidth: 0 }}>
+          {/* Each side is one group with one gap, so the spacing between
+              controls is the same whatever they are. */}
+          <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, minWidth: 0, flexWrap: 'wrap' }}>
+            {left}
+          </Stack>
+          <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, minWidth: 0, flexShrink: 0 }}>
+            {right}
+          </Stack>
+        </Stack>
+      )}
       {shownError && (
         <Alert severity="error" sx={{ mt: 0.75, py: 0.25, fontSize: '0.75rem' }}>
           {shownError}
