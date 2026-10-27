@@ -229,7 +229,7 @@ pub fn generate_mermaid_summary(messages: &[AgentMessage]) -> String {
     out
 }
 
-const LLM_SUMMARY_SYSTEM_PROMPT: &str = "You are compacting an AI coding agent's conversation history to save context space. Summarize the segment of the transcript below into exactly six sections, each on its own line starting with the section name in bold markdown: **Goal**, **Constraints**, **Progress** (list Done / In Progress / Blocked items), **Key Decisions**, **Next Steps**, **Relevant Files**. Be concise but preserve concrete facts (file paths, function names, specific values) — the agent continuing this conversation will only see your summary, not the original messages. Do not add commentary outside the six sections.";
+const LLM_SUMMARY_SYSTEM_PROMPT: &str = "You are compacting an AI coding agent's conversation history to save context space. Summarize the segment of the transcript below into exactly seven sections, each on its own line starting with the section name in bold markdown: **Goal**, **Constraints**, **Progress** (list Done / In Progress / Blocked items), **Key Decisions** (with why), **Tried and failed** (each approach that didn't work, with the exact error or reason, so it isn't tried again), **Next Steps**, **Relevant Files**. Be concise but preserve concrete facts (file paths, function names, specific values, exact error messages) — the agent continuing this conversation will only see your summary, not the original messages. Do not add commentary outside the seven sections.";
 
 /// LLM-authored structured compaction summary (Goal/Constraints/Progress/
 /// Decisions/Next-Steps/Relevant-Files) — a semantic alternative to

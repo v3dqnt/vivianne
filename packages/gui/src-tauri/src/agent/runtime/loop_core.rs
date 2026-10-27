@@ -92,10 +92,55 @@ fn save_ledger(ledger: &mut crate::agent::background::run_ledger::RunLedger, emi
 
 /// After compaction has summarised the run's history away, remind a long
 /// task where it stands — its objective, what is done, what is left.
-fn brief_after_compaction(context: &mut AgentContext, ledger: &Option<crate::agent::background::run_ledger::RunLedger>) {
+fn brief_after_compaction(
+    context: &mut AgentContext,
+    ledger: &Option<crate::agent::background::run_ledger::RunLedger>,
+    attempts: &crate::agent::runtime::attempts::Attempts,
+) {
     if let Some(l) = ledger {
         context.messages.push(system_reminder(&l.briefing()));
     }
+    // What is still failing outlives the outputs compaction just dropped.
+    if let Some(failing) = attempts.failing_summary() {
+        context.messages.push(system_reminder(&failing));
+    }
+}
+
+/// Said when a reply announces its next step but takes none.
+const ANNOUNCED_NUDGE: &str = "You said what you'd do next but didn't do it: no tool was called, so nothing happened. If that step is still right, make the call now. If you meant to stop here, give your final answer instead.";
+/// Times per run a reply that only announces an action is sent back.
+const MAX_ANNOUNCED_NUDGES: u32 = 1;
+
+/// Whether a reply with no tool calls ends by saying what it will do next
+/// ("Let me check the config…", "Now I'll run the tests.") rather than
+/// answering or asking. Such a reply would end the run with the step
+/// undone.
+fn announces_action(message: &AgentMessage) -> bool {
+    let AgentMessage::Assistant { content, stop_reason, .. } = message else { return false };
+    if stop_reason != "stop" && stop_reason != "end_turn" {
+        return false;
+    }
+    if content.iter().any(|c| matches!(c, crate::agent::runtime::types::MessageContent::ToolCall(_))) {
+        return false;
+    }
+    let text: String = content
+        .iter()
+        .filter_map(|c| if let crate::agent::runtime::types::MessageContent::Text { text } = c { Some(text.as_str()) } else { None })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let last = text.trim().rsplit('\n').map(str::trim).find(|l| !l.is_empty()).unwrap_or("").to_lowercase();
+    if last.is_empty() || last.ends_with('?') || last.len() > 280 {
+        return false;
+    }
+    const ASKS: &[&str] = &["let me know", "would you like", "should i", "if you'd like", "if you want", "want me to", "shall i"];
+    if ASKS.iter().any(|a| last.contains(a)) {
+        return false;
+    }
+    // The last sentence of the last line.
+    let sentence = last.trim_end_matches(['.', ':', '…']).rsplit(['.', '!']).next().unwrap_or("").trim();
+    const INTENT: &[&str] = &["let me ", "i'll ", "i will ", "i'm going to ", "i am going to ", "next, i", "now i'll", "now i will", "now let me", "going to "];
+    INTENT.iter().any(|p| sentence.starts_with(p) || sentence.contains(&format!(", {p}")) || sentence.starts_with(&format!("now {p}")) || sentence.starts_with(&format!("next {p}")))
+        || last.ends_with(':') && INTENT.iter().any(|p| last.contains(p))
 }
 
 /// The plan from the last successful `todo_write` in these results, as
@@ -194,6 +239,32 @@ fn track_doom_loop(
         (last_signature, previous_count + 1)
     } else {
         (Some(new_signature), 1)
+    }
+}
+
+#[cfg(test)]
+mod announced_action_tests {
+    use super::announces_action;
+    use crate::agent::runtime::types::{AgentMessage, MessageContent};
+
+    fn says(text: &str) -> AgentMessage {
+        AgentMessage::Assistant { content: vec![MessageContent::Text { text: text.into() }], stop_reason: "stop".into(), error_message: None, timestamp: 0, usage: None }
+    }
+
+    #[test]
+    fn a_reply_that_only_announces_its_next_step_is_caught() {
+        assert!(announces_action(&says("The build passes. Now I'll run the tests.")));
+        assert!(announces_action(&says("Found the handler.
+
+Let me check the config next…")));
+        assert!(announces_action(&says("I'm going to rewrite the parser:")));
+    }
+
+    #[test]
+    fn answers_and_questions_are_not() {
+        assert!(!announces_action(&says("Done: the tests pass and the fix is in src/a.rs.")));
+        assert!(!announces_action(&says("Let me know if you want the other files changed.")));
+        assert!(!announces_action(&says("Should I also update the docs?")));
     }
 }
 
@@ -477,6 +548,15 @@ pub async fn run_agent_loop_continue(
     // Why the run ended, when it ended on a failure — so a long task can be
     // marked paused with the real reason.
     let mut ended_on: Option<String> = None;
+    // What has been tried and how it went, kept outside the messages so
+    // compaction can't take it (`attempts`); the trace of this run
+    // (`trace`); replies sent back for announcing a step they didn't take;
+    // the fallback the model was last told is standing in.
+    let mut attempts = crate::agent::runtime::attempts::Attempts::default();
+    let run_model = state.model().await;
+    let mut trace = crate::agent::runtime::trace::RunTrace::start(source_tag, &format!("{}/{}", run_model.provider, run_model.id));
+    let mut announced_nudges: u32 = 0;
+    let mut told_standing_in: Option<String> = None;
     let mut ledger = match state.long_task().await {
         Some(key) => crate::agent::background::run_ledger::RunLedger::load(&key),
         None => None,
@@ -533,6 +613,7 @@ pub async fn run_agent_loop_continue(
         // Step ceiling: nudge the model to wrap up on the last allowed turn, and
         // hard-stop past it so a tool-call loop can't run forever.
         step += 1;
+        trace.set_step(step);
         // A long task has no step ceiling: its spend and time caps are what
         // bound it, checked after every step below.
         let ceiling = if ledger.is_some() { usize::MAX } else { MAX_STEPS };
@@ -555,10 +636,12 @@ pub async fn run_agent_loop_continue(
                 new_messages.push(stop_msg.clone());
                 state.add_message(stop_msg.clone()).await;
                 emit.emit(AgentEvent::TurnEnd { message: stop_msg, tool_results: Vec::new(), stats: None, cost: None });
+                trace.event("stop", serde_json::json!({ "reason": "step_limit" }));
                 break 'outer;
             }
             StepAction::Nudge => {
                 context.messages.push(system_reminder(STEP_LIMIT_NUDGE));
+                trace.event("reminder", serde_json::json!({ "reminder": "step_limit" }));
             }
             StepAction::Continue => {}
         }
@@ -583,8 +666,10 @@ pub async fn run_agent_loop_continue(
         // before any tool has run this turn — the original call site below
         // only fires after tool execution. Cheap (no LLM call) unless
         // actually over budget.
+        let before = context.messages.len();
         if maybe_compact_context(context, state, app, &model, false).await {
-            brief_after_compaction(context, &ledger);
+            trace.event("compaction", serde_json::json!({ "when": "preflight", "messages_before": before, "messages_after": context.messages.len() }));
+            brief_after_compaction(context, &ledger, &attempts);
         }
 
         #[cfg(debug_assertions)]
@@ -621,7 +706,28 @@ pub async fn run_agent_loop_continue(
         // evicted one regardless, so keeping only the most recent few is a
         // clean token-budget win. The replacement text makes the eviction
         // visible to the model, so it won't hallucinate still seeing it.
-        crate::agent::runtime::context_shaping::shape_history(&mut context.messages, state.image_keep_last_n().await as usize);
+        if crate::agent::runtime::context_shaping::shape_history(&mut context.messages, state.image_keep_last_n().await as usize) {
+            trace.event("history_shaped", serde_json::json!({ "messages": context.messages.len() }));
+        }
+
+        // The run's model, then its fallback chain. When a fallback is
+        // standing in, the model answering is told so once: it is picking up
+        // another model's work and should re-read where things stand rather
+        // than trust reasoning it can't see.
+        let models = model_chain(&model, &sticky_model).await;
+        if let Some(first) = models.first().filter(|m| m.provider != model.provider || m.id != model.id) {
+            let name = format!("{}/{}", first.provider, first.id);
+            if told_standing_in.as_deref() != Some(name.as_str()) {
+                context.messages.push(system_reminder(&format!(
+                    "Note from the app: {}/{} is unavailable right now, so {name} is answering in its place. You are continuing its work mid-task: re-read the latest results and the todo list before acting, and don't assume earlier reasoning you can't see.",
+                    model.provider, model.id
+                )));
+                trace.event("reminder", serde_json::json!({ "reminder": "fallback_standing_in", "model": name }));
+                told_standing_in = Some(name);
+            }
+        } else {
+            told_standing_in = None;
+        }
 
         // Convert context messages to AI messages
         drop_orphaned_tool_results(&mut context.messages);
@@ -681,7 +787,10 @@ pub async fn run_agent_loop_continue(
         // (saving ~50-200ms of CPU time per turn). Expected to essentially
         // never fire in normal use.
         const MAX_REQUEST_BYTES: usize = 4_000_000;
-        if estimate_context_json_size(&llm_context) > MAX_REQUEST_BYTES {
+        let request_bytes = estimate_context_json_size(&llm_context);
+        let tools_offered = llm_context.tools.as_ref().map_or(0, |t| t.len());
+        if request_bytes > MAX_REQUEST_BYTES {
+            trace.event("byte_guard", serde_json::json!({ "bytes": request_bytes }));
             log::warn!(
                 "[loop] request body exceeds the {MAX_REQUEST_BYTES}-byte safety cap after pruning/compaction — evicting all but the newest image, then dropping the oldest half of history if still over"
             );
@@ -699,7 +808,6 @@ pub async fn run_agent_loop_continue(
         #[cfg(debug_assertions)]
         eprintln!("[DEBUG] calling call_provider_stream_and_await...");
         // Call the provider — the run's model, then its fallback chain.
-        let models = model_chain(&model, &sticky_model).await;
         // What the stream needs to start reads early (`speculation`).
         let scope = Arc::new(crate::agent::tools::speculation::Scope::of(state).await);
         let (outcome, used) = crate::agent::tools::speculation::SCOPE.scope(scope, call_provider_with_fallback(
@@ -712,6 +820,24 @@ pub async fn run_agent_loop_continue(
             abort_flag,
         )).await;
         let used_model = models.get(used).cloned().unwrap_or_else(|| model.clone());
+        {
+            let (stop, usage) = match &outcome {
+                Ok(AgentMessage::Assistant { stop_reason, usage, .. }) => (Some(stop_reason.clone()), usage.as_ref().map(|u| (u.input + u.cache_read + u.cache_write, u.output))),
+                _ => (None, None),
+            };
+            trace.event("turn", serde_json::json!({
+                "model": format!("{}/{}", model.provider, model.id),
+                "answered_by": format!("{}/{}", used_model.provider, used_model.id),
+                "fallback": used_model.provider != model.provider || used_model.id != model.id,
+                "context_messages": context.messages.len(),
+                "request_bytes": request_bytes,
+                "tools_offered": tools_offered,
+                "stop_reason": stop,
+                "input_tokens": usage.map(|u| u.0),
+                "output_tokens": usage.map(|u| u.1),
+                "error": outcome.as_ref().err().map(|e| crate::ai::utils::truncate_error_text(e, 300)),
+            }));
+        }
 
         // Every model failed. Before giving up, see whether this is a failure
         // worth waiting out or fixing in place — the difference between a
@@ -736,6 +862,7 @@ pub async fn run_agent_loop_continue(
                 log::warn!("[loop] request no longer fits the context window; compacting and retrying");
                 maybe_compact_context(context, state, app, &model, true).await;
                 crate::agent::runtime::context_shaping::evict_old_images(&mut context.messages, 1);
+                trace.event("compaction", serde_json::json!({ "when": "overflow", "messages_after": context.messages.len() }));
                 step -= 1;
                 has_more_tool_calls = true;
                 continue;
@@ -749,6 +876,7 @@ pub async fn run_agent_loop_continue(
                     failure_waits += 1;
                     let reason = crate::ai::utils::truncate_error_text(err, 200);
                     emit.emit(AgentEvent::RunWaiting { until_ms: until, reason: reason.clone() });
+                    trace.event("waiting", serde_json::json!({ "until": until, "reason": reason }));
                     if let Some(l) = ledger.as_mut() {
                         l.set_status(crate::agent::background::run_ledger::RunStatus::Waiting, Some(reason));
                         l.wait_until = Some(until);
@@ -941,13 +1069,25 @@ pub async fn run_agent_loop_continue(
             Vec::new()
         };
 
+        let mut just_called: Vec<(String, serde_json::Value)> = Vec::new();
         for result in &tool_results {
             if let AgentMessage::ToolResult { tool_name, arguments, is_error, content, .. } = result {
                 let text: String = content
                     .iter()
                     .filter_map(|c| if let MessageContent::Text { text } = c { Some(text.as_str()) } else { None })
                     .collect();
-                verification.observe(tool_name, arguments.as_ref(), *is_error == Some(true), &text);
+                let failed = *is_error == Some(true);
+                verification.observe(tool_name, arguments.as_ref(), failed, &text);
+                let args = arguments.clone().unwrap_or(serde_json::Value::Null);
+                attempts.record(step, tool_name, &args, failed, &text);
+                trace.event("tool", serde_json::json!({
+                    "tool": tool_name,
+                    "call": crate::agent::runtime::attempts::key_of(tool_name, &args).1,
+                    "failed": failed,
+                    "bytes": text.len(),
+                    "error": failed.then(|| text.lines().take(3).collect::<Vec<_>>().join(" | ").chars().take(300).collect::<String>()),
+                }));
+                just_called.push((tool_name.clone(), args));
             }
         }
         if let Some(todos) = latest_todos(&tool_results) {
@@ -959,6 +1099,13 @@ pub async fn run_agent_loop_continue(
             context.messages.push(result.clone());
             new_messages.push(result.clone());
             state.add_message(result.clone()).await;
+        }
+
+        // A call that has failed before is answered with the record of how,
+        // right after its result, where the model will read it.
+        if let Some(note) = attempts.note_for(&just_called) {
+            context.messages.push(system_reminder(&note));
+            trace.event("reminder", serde_json::json!({ "reminder": "attempt_record" }));
         }
 
         // The plan as the agent last wrote it becomes the long task's
@@ -981,7 +1128,12 @@ pub async fn run_agent_loop_continue(
             reflections += 1;
             repeat_count = 0;
             last_tool_signature = None;
-            context.messages.push(system_reminder(REFLECTION_PROMPT));
+            let reflection = match attempts.failing_summary() {
+                Some(failing) => format!("{REFLECTION_PROMPT}\n\n{failing}"),
+                None => REFLECTION_PROMPT.to_string(),
+            };
+            context.messages.push(system_reminder(&reflection));
+            trace.event("reminder", serde_json::json!({ "reminder": "reflection", "count": reflections }));
         } else if repeat_count >= DOOM_LOOP_STOP_THRESHOLD {
             ended_on = Some("it kept repeating the same step without making progress".to_string());
             let stop_msg = AgentMessage::Assistant {
@@ -999,11 +1151,15 @@ pub async fn run_agent_loop_continue(
             new_messages.push(stop_msg.clone());
             state.add_message(stop_msg.clone()).await;
             emit.emit(AgentEvent::TurnEnd { message: stop_msg, tool_results: tool_results.clone(), stats: None, cost: None });
+            trace.event("stop", serde_json::json!({ "reason": "repetition" }));
             break 'outer;
         } else if repeat_count == DOOM_LOOP_NUDGE_THRESHOLD {
-            context.messages.push(system_reminder(
-                "You've called the same tool with identical arguments several times in a row with no apparent progress. Stop repeating it — either try a materially different approach, or explain what's blocking you and ask the user for guidance."
-            ));
+            let mut text = "You've called the same tool with identical arguments several times in a row with no apparent progress. Stop repeating it — either try a materially different approach, or explain what's blocking you and ask the user for guidance.".to_string();
+            if let Some(failing) = attempts.failing_summary() {
+                text.push_str(&format!("\n\n{failing}"));
+            }
+            context.messages.push(system_reminder(&text));
+            trace.event("reminder", serde_json::json!({ "reminder": "doom_loop" }));
         }
 
         // Todo nudge: fires again after another threshold's worth of calls if
@@ -1013,11 +1169,16 @@ pub async fn run_agent_loop_continue(
                 "You've made several tool calls without tracking progress in a todo list. If this task has multiple remaining steps, call todo_write to lay them out before continuing."
             ));
             tool_calls_since_todo = 0;
+            trace.event("reminder", serde_json::json!({ "reminder": "todo" }));
         }
 
+        let before = context.messages.len();
         if !tool_results.is_empty() && maybe_compact_context(context, state, app, &model, false).await {
-            brief_after_compaction(context, &ledger);
+            trace.event("compaction", serde_json::json!({ "when": "after_tools", "messages_before": before, "messages_after": context.messages.len() }));
+            brief_after_compaction(context, &ledger, &attempts);
         }
+
+        let announced = tool_results.is_empty() && !was_cut_off && announces_action(&assistant_message);
 
         emit.emit(AgentEvent::TurnEnd {
             message: assistant_message,
@@ -1059,6 +1220,16 @@ pub async fn run_agent_loop_continue(
             truncated_resumes += 1;
             context.messages.push(system_reminder(TRUNCATED_NUDGE));
             has_more_tool_calls = true;
+            trace.event("reminder", serde_json::json!({ "reminder": "truncated" }));
+        }
+
+        // A reply that only says what it will do next would end the run with
+        // that step undone: send it back once to do it.
+        if announced && !has_more_tool_calls && announced_nudges < MAX_ANNOUNCED_NUDGES && !state.plan_mode().await {
+            announced_nudges += 1;
+            context.messages.push(system_reminder(ANNOUNCED_NUDGE));
+            has_more_tool_calls = true;
+            trace.event("reminder", serde_json::json!({ "reminder": "announced_action" }));
         }
 
         if abort_flag.load(Ordering::SeqCst) {
@@ -1094,6 +1265,7 @@ pub async fn run_agent_loop_continue(
         // say plainly that they're unchecked (`agent::runtime::verification`).
         if !abort_flag.load(Ordering::SeqCst) && ended_on.is_none() && !planning {
             if let Some(text) = verification.reminder(&open_todos) {
+                trace.event("reminder", serde_json::json!({ "reminder": "verification" }));
                 context.messages.push(system_reminder(&text));
                 has_more_tool_calls = true;
                 continue 'outer;
@@ -1121,6 +1293,7 @@ pub async fn run_agent_loop_continue(
                     // settled — the model stopping to talk is not the end.
                     Some((crate::agent::runtime::types::GoalPhase::Active, _)) if idle_continuations < MAX_IDLE_CONTINUATIONS => {
                         idle_continuations += 1;
+                        trace.event("reminder", serde_json::json!({ "reminder": "goal_continue", "count": idle_continuations }));
                         context.messages.push(system_reminder(&format!("{CONTINUE_PROMPT}
 
 {}", l.briefing())));
@@ -1183,6 +1356,12 @@ pub async fn run_agent_loop_continue(
         }
     }
 
+    trace.event("run_end", serde_json::json!({
+        "steps": step,
+        "aborted": abort_flag.load(Ordering::SeqCst),
+        "ended_on": ended_on,
+        "still_failing": attempts.failing_summary(),
+    }));
     emit.emit(AgentEvent::AgentEnd { messages: new_messages.clone(), stats: None, cost: None });
 }
 

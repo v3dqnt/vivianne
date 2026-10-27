@@ -50,6 +50,16 @@ fn mask_note(tool: &str, args: Option<&serde_json::Value>, bytes: usize) -> Stri
     format!("{MASK_MARKER} to save context: {what} ({} KB). Run it again if you need it.]", bytes / 1024 + 1)
 }
 
+/// The lines of a failed result that say what failed: the first few, and
+/// the last few (where a stack trace or test summary usually ends), under
+/// about 800 bytes.
+fn error_lines(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let pick: Vec<&str> = if lines.len() <= 10 { lines } else { [&lines[..5], &["…"], &lines[lines.len() - 4..]].concat() };
+    let joined = pick.join("\n");
+    if joined.len() <= 800 { joined } else { format!("{}…", char_boundary_prefix(&joined, 800)) }
+}
+
 fn result_bytes(content: &[MessageContent]) -> usize {
     content.iter().map(|c| if let MessageContent::Text { text } = c { text.len() } else { 0 }).sum()
 }
@@ -122,9 +132,16 @@ fn mask_old_results(messages: &mut [AgentMessage], force: bool) -> bool {
         return false;
     }
     for i in eligible {
-        if let AgentMessage::ToolResult { tool_name, content, arguments, .. } = &mut messages[i] {
+        if let AgentMessage::ToolResult { tool_name, content, arguments, is_error, .. } = &mut messages[i] {
             let bytes = result_bytes(content);
-            let note = mask_note(tool_name, arguments.as_ref(), bytes);
+            let mut note = mask_note(tool_name, arguments.as_ref(), bytes);
+            // A failure keeps its error: what went wrong is the part worth
+            // remembering, and rerunning a failed call to see it again is
+            // exactly the loop to avoid.
+            if *is_error == Some(true) {
+                let text: String = content.iter().filter_map(|c| if let MessageContent::Text { text } = c { Some(text.as_str()) } else { None }).collect();
+                note.push_str(&format!("\nIt failed:\n{}", error_lines(&text)));
+            }
             // Images in the result are left to `evict_old_images`.
             content.retain(|c| !matches!(c, MessageContent::Text { .. }));
             content.insert(0, MessageContent::Text { text: note });
@@ -333,6 +350,26 @@ mod tests {
             assert_eq!(text_of(m).len(), big.len(), "the newest results stay in full");
         }
         assert!(!prune_aging_tool_results(&mut messages), "masking is idempotent");
+    }
+
+    #[test]
+    fn a_masked_failure_keeps_its_error() {
+        let big = "x".repeat(MASK_BATCH_BYTES);
+        let mut msgs: Vec<AgentMessage> = Vec::new();
+        let mut failed = result_named("bash", &format!("error[E0308]: mismatched types
+  --> src/a.rs:3:9
+{big}"), serde_json::json!({ "command": "cargo build" }));
+        if let AgentMessage::ToolResult { is_error, .. } = &mut failed {
+            *is_error = Some(true);
+        }
+        msgs.push(failed);
+        for i in 0..KEEP_RECENT_TOOL_RESULTS {
+            msgs.push(result_named("read", "small", serde_json::json!({ "path": format!("f{i}") })));
+        }
+        assert!(prune_aging_tool_results(&mut msgs));
+        let t = text_of(&msgs[0]);
+        assert!(t.starts_with(MASK_MARKER) && t.contains("It failed:") && t.contains("mismatched types"));
+        assert!(t.len() < 1_200);
     }
 
     #[test]
