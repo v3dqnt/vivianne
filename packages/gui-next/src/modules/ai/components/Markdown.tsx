@@ -3,7 +3,7 @@ import { ChatImage } from './ImageBlock'
 import { InteractiveBlock } from './InteractiveBlock'
 import { WidgetBlock } from './WidgetBlock'
 import { OpenUIBlock } from './OpenUIBlock'
-import { Box, Link } from '../../../ui'
+import { Box, Link, alpha } from '../../../ui'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
@@ -51,41 +51,57 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
     <Box
       className="select-text"
       sx={{
+        // The chat's type: a 14px body on a 24px line (14 × φ ≈ 22.6, held
+        // to the 4px grid), headings a step of √φ apart (14 → 18 → 22 → 28),
+        // and every gap a multiple of 4.
+        fontSize: '14px',
+        lineHeight: '24px',
         '& > *:first-of-type': { mt: 0 },
         '& > *:last-of-type': { mb: 0 },
-        '& p': { m: 0, mb: 1, lineHeight: 1.6, fontSize: '0.875rem' },
-        '& ul, & ol': { mt: 0, mb: 1, pl: 3, fontSize: '0.875rem' },
-        '& li': { mb: 0.25 },
+        '& p': { m: 0, mb: '12px', fontSize: '14px', lineHeight: '24px' },
+        '& ul, & ol': { mt: 0, mb: '12px', pl: '20px', fontSize: '14px', lineHeight: '24px' },
+        '& li': { mb: '4px', pl: '4px' },
+        '& li::marker': { color: 'text.secondary' },
         '& li > p': { mb: 0 },
-        '& h1, & h2, & h3, & h4': { mt: 1.5, mb: 0.75, fontWeight: 600, lineHeight: 1.35 },
-        '& h1': { fontSize: '1.25rem' },
-        '& h2': { fontSize: '1.125rem' },
-        '& h3': { fontSize: '1rem' },
-        '& h4': { fontSize: '0.9375rem' },
+        '& li > ul, & li > ol': { mt: '4px', mb: 0 },
+        '& h1, & h2, & h3, & h4': { mt: '24px', mb: '8px', fontWeight: 600, letterSpacing: '-0.01em', color: 'text.primary' },
+        '& h1': { fontSize: '28px', lineHeight: '36px' },
+        '& h2': { fontSize: '22px', lineHeight: '28px' },
+        '& h3': { fontSize: '18px', lineHeight: '24px' },
+        '& h4': { fontSize: '14px', lineHeight: '20px', color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.04em' },
+        '& strong': { fontWeight: 600, color: 'text.primary' },
+        '& em': { fontStyle: 'italic' },
         '& blockquote': {
           m: 0,
-          mb: 1,
-          pl: 1.5,
-          borderLeft: 3,
-          borderColor: 'divider',
+          mb: '12px',
+          py: '4px',
+          pl: '12px',
+          borderLeft: '2px solid',
+          borderColor: 'primary.main',
           color: 'text.secondary',
+          '& p': { mb: '4px' },
         },
-        '& hr': { border: 0, borderTop: 1, borderColor: 'divider', my: 1.5 },
-        '& table': { borderCollapse: 'collapse', mb: 1, fontSize: '0.8125rem', display: 'block', overflowX: 'auto' },
-        '& th, & td': { border: 1, borderColor: 'divider', px: 1, py: 0.5, textAlign: 'left' },
+        '& hr': { border: 0, borderTop: 1, borderColor: 'divider', my: '24px' },
+        '& table': { borderCollapse: 'collapse', mb: '12px', fontSize: '13px', lineHeight: '20px', display: 'block', overflowX: 'auto' },
+        '& th, & td': { border: 1, borderColor: 'divider', px: '8px', py: '4px', textAlign: 'left' },
         '& th': { bgcolor: 'action.hover', fontWeight: 600 },
+        // Inline code reads as code at a glance: the accent colour on a
+        // tint of it, not prose grey.
         '& code:not(pre code)': {
           fontFamily: '"Geist Mono", ui-monospace, monospace',
-          fontSize: '0.8125em',
-          bgcolor: 'action.hover',
-          borderRadius: 1,
-          px: 0.5,
-          py: 0.15,
+          fontSize: '0.857em',
+          color: 'primary.main',
+          bgcolor: (t: { palette: { primary: { main: string } } }) => alpha(t.palette.primary.main, 0.12),
+          border: '1px solid',
+          borderColor: (t: { palette: { primary: { main: string } } }) => alpha(t.palette.primary.main, 0.2),
+          borderRadius: '4px',
+          px: '4px',
+          py: '1px',
         },
-        '& a': { color: 'primary.main' },
+        '& a': { color: 'primary.main', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } },
         // Display maths scrolls sideways instead of overflowing the bubble;
         // a long derivation is still readable, and the page never widens.
-        '& .katex-display': { overflowX: 'auto', overflowY: 'hidden', py: 0.5, my: 1 },
+        '& .katex-display': { overflowX: 'auto', overflowY: 'hidden', py: '4px', my: '8px' },
         '& .katex': { fontSize: '1.05em' },
       }}
     >

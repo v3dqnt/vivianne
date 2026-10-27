@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Box, Link, Stack, Typography } from '../../../ui'
-import { ChevronRightLinear, GlobalLinear } from '../../../icons'
+import { Box, ButtonBase, Stack, Tooltip } from '../../../ui'
+import { GlobalLinear } from '../../../icons'
 import type { Source } from '../lib/sources'
 
 function host(url: string): string {
@@ -11,44 +11,63 @@ function host(url: string): string {
   }
 }
 
-/** What a reply's web searches drew on, under it, folded away until asked
- * for: "Used 4 sources", then each as a link. */
-export function Sources({ sources }: { sources: Source[] }) {
-  const [open, setOpen] = useState(false)
-  if (sources.length === 0) return null
+/** Chips shown before "+N more". */
+const SHOWN = 6
+
+/** The site's icon, or a globe when it has none (or is offline). */
+function Favicon({ url }: { url: string }) {
+  const [failed, setFailed] = useState(false)
+  const h = host(url)
+  if (failed || !/^https?:/.test(url)) return <GlobalLinear size={12} color="currentColor" style={{ flexShrink: 0, opacity: 0.6 }} />
   return (
-    <Stack sx={{ gap: 0.5, px: 0.25, mt: 0.5, alignItems: 'flex-start' }}>
-      <Box
-        role="button"
-        tabIndex={0}
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), setOpen((o) => !o))}
-        sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', color: 'text.secondary', '&:hover': { color: 'text.primary' } }}
-      >
-        <ChevronRightLinear
-          size={13}
-          color="currentColor"
-          style={{ transition: 'transform 120ms', transform: open ? 'rotate(90deg)' : 'none' }}
-        />
-        <Typography variant="caption" sx={{ fontWeight: 500 }}>
-          Used {sources.length} source{sources.length === 1 ? '' : 's'}
-        </Typography>
-      </Box>
-      {open && (
-        <Stack sx={{ gap: 0.5, pl: 2.25, minWidth: 0, maxWidth: '100%' }}>
-          {sources.map((s) => (
-            <Stack key={s.url} direction="row" sx={{ gap: 0.75, alignItems: 'baseline', minWidth: 0 }}>
-              <GlobalLinear size={12} color="currentColor" style={{ flexShrink: 0, alignSelf: 'center', opacity: 0.6 }} />
-              <Link href={s.url} target="_blank" rel="noopener noreferrer" underline="hover" title={s.url} sx={{ fontSize: '0.8125rem', minWidth: 0 }}>
-                {s.title}
-              </Link>
-              <Typography variant="caption" color="text.secondary" noWrap sx={{ flexShrink: 0 }}>
-                {host(s.url)}
-              </Typography>
-            </Stack>
-          ))}
-        </Stack>
+    <Box
+      component="img"
+      src={`https://icons.duckduckgo.com/ip3/${h}.ico`}
+      alt=""
+      onError={() => setFailed(true)}
+      sx={{ width: 12, height: 12, borderRadius: '2px', flexShrink: 0 }}
+    />
+  )
+}
+
+/** What a reply's web searches drew on, under it: one chip per source (its
+ * site, the title on hover), a few at first and the rest a click away. */
+export function Sources({ sources }: { sources: Source[] }) {
+  const [all, setAll] = useState(false)
+  if (sources.length === 0) return null
+  const shown = all ? sources : sources.slice(0, SHOWN)
+  const chip = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    height: 24,
+    maxWidth: 220,
+    px: '8px',
+    borderRadius: '6px',
+    border: 1,
+    borderColor: 'divider',
+    fontSize: '12px',
+    lineHeight: '16px',
+    color: 'text.secondary',
+    textDecoration: 'none',
+    '&:hover': { color: 'text.primary', bgcolor: 'action.hover', borderColor: 'text.disabled' },
+  } as const
+  return (
+    <Stack direction="row" sx={{ flexWrap: 'wrap', gap: '4px', mt: '8px', alignItems: 'center' }} aria-label={`${sources.length} sources`}>
+      {shown.map((s) => (
+        <Tooltip key={s.url} title={s.title || s.url}>
+          <ButtonBase component="a" href={s.url} target="_blank" rel="noopener noreferrer" sx={chip}>
+            <Favicon url={s.url} />
+            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {host(s.url)}
+            </Box>
+          </ButtonBase>
+        </Tooltip>
+      ))}
+      {sources.length > SHOWN && (
+        <ButtonBase onClick={() => setAll((v) => !v)} sx={{ ...chip, borderStyle: 'dashed' }}>
+          {all ? 'Fewer' : `+${sources.length - SHOWN} more`}
+        </ButtonBase>
       )}
     </Stack>
   )

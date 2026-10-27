@@ -55,10 +55,10 @@ export const TOOL_ROW_SX = {
   gap: 0.75,
   maxWidth: '100%',
   minWidth: 0,
-  px: 0.75,
-  mx: -0.75,
-  py: 0.375,
-  borderRadius: '7px',
+  px: '4px',
+  mx: '-4px',
+  py: '4px',
+  borderRadius: '6px',
   color: 'text.secondary',
   fontSize: CHAT_FONT.title,
   fontWeight: 400,
@@ -69,13 +69,22 @@ export const TOOL_ROW_SX = {
 /** What a single tool row opens onto: indented under it, tied by a rail. */
 export const TOOL_BODY_SX = { ml: 1, pl: 1.5, mt: 0.25, borderLeft: 2, borderColor: 'divider' } as const
 
+/** A step row with nothing to show: empty, or holding only empty elements
+ * (a reply that was all tool calls renders an empty wrapper). Media counts
+ * as content even though its elements are empty. */
+const BLANK = ':empty, :not(:has(> :not(:empty), img, svg, canvas, video, iframe))'
+
 /** A group's steps when opened: one rounded list, a hairline between rows. */
 export const TOOL_LIST_SX = {
-  mt: 0.5,
+  mt: '4px',
   border: 1,
   borderColor: 'divider',
-  borderRadius: '12px',
+  borderRadius: '8px',
   overflow: 'hidden',
-  '& > *': { px: 1.25, py: 0.5 },
-  '& > * + *': { borderTop: 1, borderColor: 'divider' },
+  '& > *': { px: '12px', py: '4px', minHeight: 32, display: 'flex', flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box' },
+  // A step that renders nothing takes no row, and a divider sits only
+  // between two rows that show something: no blank bands, no stray line
+  // above the first.
+  [`& > :is(${BLANK})`]: { display: 'none' },
+  [`& > :not(${BLANK}) ~ :not(${BLANK})`]: { borderTop: 1, borderColor: 'divider' },
 } as const
