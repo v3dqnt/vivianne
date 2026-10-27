@@ -327,7 +327,7 @@ export function GroupActions(props: IDockviewHeaderActionsProps) {
           <AddLinear size={13} color="currentColor" />
         </Box>
       </Tooltip>
-      {zoneOf(props.group) === 'right' && props.group.panels.length > 1 && (
+      {(zoneOf(props.group) === 'right' || zoneOf(props.group) === 'left') && props.group.panels.length > 1 && (
         <Tooltip title="Show panels stacked">
           <Box component="button" type="button" className="viv-add-panel" aria-label="Show panels stacked" onClick={stackZone} sx={headerBtnSx}>
             <LayerLinear size={13} color="currentColor" />

@@ -11,8 +11,10 @@
  * moment their last tab leaves — they persist when empty. An empty zone shows
  * a chooser of utilities to open in it, alongside the "+" in its header.
  *
- * Everything else in the centre is an ordinary grid: drag a tab onto the
- * chat's edge to split beside it, onto another group to join it.
+ * The centre is the chat's alone: nothing docks beside it or joins its tab
+ * strip, and the chat itself stays put. Where it sits is a setting — on the
+ * left with the side panel to its right, on the right with the side panel to
+ * its left, or in the centre between a panel on each side.
  *
  * ## Who calls this
  *
@@ -26,10 +28,28 @@ import { loadPersisted, savePersisted } from '../../lib/persist'
 import { useModsStore, findModPanel } from '../mods/store/modsStore'
 import { PANELS, type PanelKind, RETIRED } from './registry'
 
-export type Zone = 'right' | 'bottom'
+export type Zone = 'left' | 'right' | 'bottom'
+/** Where the chat sits across the window. */
+export type ChatSide = 'left' | 'centre' | 'right'
 export type Preset = 'default' | 'full' | 'focus' | 'coding' | 'research'
 
-export const ZONE_LABELS: Record<Zone, string> = { right: 'Right panel', bottom: 'Bottom panel' }
+export const ZONE_LABELS: Record<Zone, string> = { left: 'Left panel', right: 'Right panel', bottom: 'Bottom panel' }
+
+export const CHAT_SIDE_LABELS: Record<ChatSide, string> = { left: 'Left', centre: 'Centre', right: 'Right' }
+
+const CHAT_SIDE_KEY = 'viv.workspace.chatSide'
+
+/** The side panels the chat's position allows: the one opposite it, or both
+ * when it is centred. */
+export function sideZones(side: ChatSide): Zone[] {
+  return side === 'left' ? ['right'] : side === 'right' ? ['left'] : ['left', 'right']
+}
+
+/** Where a panel goes when nobody says: the side panel (the right one when
+ * there are two). */
+function sideZone(): Zone {
+  return useWorkspace.getState().chatSide === 'right' ? 'left' : 'right'
+}
 
 export const PRESET_LABELS: Record<Preset, string> = {
   default: 'Chat with right panel',
@@ -104,45 +124,49 @@ export function applySavedLayout(id: string): boolean {
   dropRetired(api)
   ensureZones()
   if (!find('chat')) api.addPanel(panelOptions('chat', undefined, 'chat'))
+  confine()
   keepEmptyZonesOpen()
   syncState()
   scheduleSave()
   return true
 }
 
-const ZONES: Zone[] = ['right', 'bottom']
-const ZONE_IDS: Record<Zone, string> = { right: 'zone-right', bottom: 'zone-bottom' }
+const ZONES: Zone[] = ['left', 'right', 'bottom']
+const ZONE_IDS: Record<Zone, string> = { left: 'zone-left', right: 'zone-right', bottom: 'zone-bottom' }
 /** How big each zone starts, and the smallest it can be dragged to. Below
  * these a panel stops being usable: the right panel's file tree and preview
  * need room for a path and a readable page, the bottom panel for a few lines
  * of terminal output under its tabs. */
 const ZONE_SIZE: Record<Zone, { initialSize: number; minimumSize: number }> = {
+  left: { initialSize: 400, minimumSize: 320 },
   right: { initialSize: 400, minimumSize: 320 },
   bottom: { initialSize: 260, minimumSize: 160 },
 }
 
 /** The least room the chat keeps, however the zones are sized or the window
  * shrinks. Below it the chat stops being a place to type and read. */
-const CHAT_MIN = { right: 440, bottom: 240 } as const
+const CHAT_MIN = { left: 440, right: 440, bottom: 240 } as const
 /** A hidden zone comes back only once it has this much room to spare, so a
  * window resized across the line doesn't flicker it in and out. */
 const REVEAL_SLACK = 40
 
 /** Zones hidden because the window got too small for them (not by the user),
  * to be brought back when it grows. */
-const autoHidden: Record<Zone, boolean> = { right: false, bottom: false }
+const autoHidden: Record<Zone, boolean> = { left: false, right: false, bottom: false }
 /** Zones the user (or the agent) just asked for: kept even when the chat is
  * tight, rather than snatched away again by the fit below. */
-const requested: Record<Zone, boolean> = { right: false, bottom: false }
+const requested: Record<Zone, boolean> = { left: false, right: false, bottom: false }
 
 /** How big a zone opens for a window of this size: a share of it, within
  * the zone's own bounds. A fixed 400px was a third of a laptop screen and
  * most of a small window. */
 function openingSize(zone: Zone): number {
-  const total = zone === 'right' ? api?.width : api?.height
+  const across = zone !== 'bottom'
+  const total = across ? api?.width : api?.height
   const { initialSize, minimumSize } = ZONE_SIZE[zone]
   if (!total) return initialSize
-  const share = zone === 'right' ? 0.34 : 0.32
+  // Two side panels share the width the one would have had.
+  const share = across ? (useWorkspace.getState().chatSide === 'centre' ? 0.24 : 0.34) : 0.32
   return Math.round(Math.min(Math.max(total * share, minimumSize), initialSize * 1.2))
 }
 
@@ -171,13 +195,15 @@ interface WorkspaceState {
   /** One entry per open panel: `kind`, or `custom:<mod key>/<panel id>` for mod panels. */
   open: string[]
   zones: Record<Zone, boolean>
+  chatSide: ChatSide
   ready: boolean
 }
 
 export const useWorkspace = create<WorkspaceState>(() => ({
   stacked: false,
   open: [],
-  zones: { right: false, bottom: false },
+  zones: { left: false, right: false, bottom: false },
+  chatSide: loadPersisted<ChatSide>(CHAT_SIDE_KEY, 'left'),
   ready: false,
 }))
 
@@ -211,7 +237,7 @@ function paramsOf(panel: IDockviewPanel): PanelParams | undefined {
 
 export function zoneOf(group: { id: string } | undefined): Zone | null {
   if (!group) return null
-  return group.id === ZONE_IDS.right ? 'right' : group.id === ZONE_IDS.bottom ? 'bottom' : null
+  return group.id === ZONE_IDS.left ? 'left' : group.id === ZONE_IDS.right ? 'right' : group.id === ZONE_IDS.bottom ? 'bottom' : null
 }
 
 function zoneGroup(zone: Zone): DockviewGroupPanel | undefined {
@@ -250,11 +276,13 @@ function syncState() {
   })
   // A group holding only a stack has no tabs worth showing: each card in it
   // has its own header.
-  for (const g of api.groups) g.header.hidden = g.panels.length === 1 && paramsOf(g.panels[0])?.kind === 'stack'
+  // The chat's own group has nothing to switch between or add to: no strip.
+  for (const g of api.groups) g.header.hidden = g.panels.length === 1 && (paramsOf(g.panels[0])?.kind === 'stack' || (!zoneOf(g) && paramsOf(g.panels[0])?.kind === 'chat'))
   useWorkspace.setState({
     stacked: !!stackPanel(),
     open,
     zones: {
+      left: api.isEdgeGroupVisible('left'),
       right: api.isEdgeGroupVisible('right'),
       bottom: api.isEdgeGroupVisible('bottom'),
     },
@@ -372,10 +400,10 @@ export function saveStack(items: StackItem[], sizes?: number[]) {
   scheduleSave()
 }
 
-/** Show the right panel's tabs one above another instead. */
+/** Show the side panel's tabs one above another instead. */
 export function stackZone() {
   if (!api) return
-  const group = zoneGroup('right')
+  const group = zoneGroup(sideZone())
   if (!group || stackPanel()) return
   const tabs = group.panels.filter((p) => paramsOf(p)?.kind !== 'stack')
   if (tabs.length < 2) return
@@ -399,7 +427,7 @@ export function stackZone() {
 /** Put a stack's panels back as tabs. */
 export function unstackZone() {
   const stack = stackPanel()
-  const group = zoneGroup('right')
+  const group = stack?.group ?? zoneGroup(sideZone())
   if (!api || !stack || !group) return
   const items = paramsOf(stack)?.items ?? []
   stack.api.close()
@@ -444,7 +472,8 @@ export function openPanel(
     if (!find(kind, opts.panelName)) {
       saveStack([...items, { kind, panelName: opts.panelName }], [...(params?.sizes ?? items.map(() => 1)), 1])
     }
-    showZone('right')
+    const zone = zoneOf(stack.group)
+    if (zone) showZone(zone)
     stack.api.setActive()
     return
   }
@@ -460,9 +489,10 @@ export function openPanel(
     }
   }
 
-  let target = opts.group
+  // Only the zones take panels: the centre is the chat's.
+  let target = opts.group && zoneOf(opts.group) ? opts.group : undefined
   if (!target && kind !== 'chat') {
-    const zone: Zone = kind === 'terminal' || kind === 'quick' ? 'bottom' : 'right'
+    const zone: Zone = kind === 'terminal' || kind === 'quick' ? 'bottom' : sideZone()
     showZone(zone)
     target = zoneGroup(zone)
   }
@@ -504,7 +534,7 @@ export function applyPreset(preset: Preset) {
   api.clear()
   ensureZones()
   api.addPanel(panelOptions('chat', undefined, 'chat'))
-  const right = zoneGroup('right')
+  const right = zoneGroup(sideZone())
   const bottom = zoneGroup('bottom')
 
   if (preset === 'research' && right) {
@@ -526,7 +556,8 @@ export function applyPreset(preset: Preset) {
       api.addPanel({ ...panelOptions('terminal', undefined, newId('terminal')), position: { referenceGroup: bottom } })
     }
   }
-  api.setEdgeGroupVisible('right', preset !== 'focus')
+  const sides = sideZones(useWorkspace.getState().chatSide)
+  for (const zone of ['left', 'right'] as const) api.setEdgeGroupVisible(zone, preset !== 'focus' && sides.includes(zone))
   api.setEdgeGroupVisible('bottom', withBottom)
   keepEmptyZonesOpen()
   api.getPanel('chat')?.api.setActive()
@@ -547,7 +578,10 @@ function fitZone(zone: Zone, total: number) {
   const group = zoneGroup(zone)
   if (!group) return
   const min = ZONE_SIZE[zone].minimumSize
-  const room = total - CHAT_MIN[zone]
+  // Across, the other side panel (when the chat is centred) takes its share too.
+  const other = zone === 'left' ? 'right' : zone === 'right' ? 'left' : null
+  const taken = other && api.isEdgeGroupVisible(other) ? (zoneGroup(other)?.api.width ?? 0) : 0
+  const room = total - CHAT_MIN[zone] - taken
   const visible = api.isEdgeGroupVisible(zone)
 
   if (room < min) {
@@ -570,9 +604,10 @@ function fitZone(zone: Zone, total: number) {
   const edge = api.getEdgeGroup(zone)
   const stuck = !!edge?.isCollapsed()
   if (stuck) edge?.expand()
-  const size = zone === 'right' ? group.api.width : group.api.height
+  const across = zone !== 'bottom'
+  const size = across ? group.api.width : group.api.height
   const wanted = revealed || stuck || size < min ? Math.min(openingSize(zone), room) : Math.min(size, room)
-  if (wanted !== size) group.api.setSize(zone === 'right' ? { width: wanted } : { height: wanted })
+  if (wanted !== size) group.api.setSize(across ? { width: wanted } : { height: wanted })
 }
 
 let fitting = false
@@ -593,6 +628,7 @@ export function fitZones() {
   fitting = true
   try {
     fitZone('right', width)
+    fitZone('left', width)
     fitZone('bottom', height)
   } finally {
     fitting = false
@@ -619,6 +655,48 @@ function withZoneMinimums(saved: unknown): unknown {
   return saved
 }
 
+/**
+ * Hold the layout to the chat's position: the centre holds only the chat, and
+ * a side panel the position doesn't allow hands its panels to the one it does
+ * (a layout saved before either rule, or with the chat elsewhere, is put right).
+ */
+function confine() {
+  if (!api) return
+  const sides = sideZones(useWorkspace.getState().chatSide)
+  const home = zoneGroup(sideZone())
+  if (!home) return
+  for (const p of [...api.panels]) {
+    if (paramsOf(p)?.kind === 'chat') continue
+    const zone = zoneOf(p.group)
+    if (!zone || (zone !== 'bottom' && !sides.includes(zone))) p.api.moveTo({ group: home })
+  }
+  // The chat back in the centre, out of any zone it was dragged to.
+  const chat = find('chat')
+  if (chat && zoneOf(chat.group)) {
+    const centre = api.groups.find((g) => !zoneOf(g) && g !== chat.group)
+    if (centre) chat.api.moveTo({ group: centre })
+    else {
+      chat.api.close()
+      api.addPanel(panelOptions('chat', undefined, 'chat'))
+    }
+  }
+  for (const zone of ['left', 'right'] as const) if (!sides.includes(zone) && api.isEdgeGroupVisible(zone)) api.setEdgeGroupVisible(zone, false)
+}
+
+/** Put the chat on the left, in the centre or on the right. */
+export function setChatSide(side: ChatSide) {
+  savePersisted(CHAT_SIDE_KEY, side)
+  useWorkspace.setState({ chatSide: side })
+  if (!api) return
+  confine()
+  // The side the chat now faces opens, an empty one with its chooser.
+  for (const zone of sideZones(side)) showZone(zone)
+  keepEmptyZonesOpen()
+  fitZones()
+  syncState()
+  scheduleSave()
+}
+
 /** Called once dockview is ready: restore the saved layout, or start fresh. */
 export function attach(dockview: DockviewApi) {
   api = dockview
@@ -626,6 +704,14 @@ export function attach(dockview: DockviewApi) {
   // DevTools. A module imported from the console is a separate copy with no
   // dockview attached, so this is the only way to reach the real one.
   if (import.meta.env.DEV) (window as unknown as { __vivDock?: DockviewApi }).__vivDock = dockview
+
+  // Panels drop only into the zones; the chat's tab doesn't drag.
+  dockview.onWillShowOverlay((e) => {
+    if (!zoneOf(e.group)) e.preventDefault()
+  })
+  dockview.onWillDragPanel((e) => {
+    if (paramsOf(e.panel)?.kind === 'chat') e.nativeEvent.preventDefault()
+  })
 
   dockview.onDidLayoutChange(() => {
     keepEmptyZonesOpen()
@@ -663,6 +749,7 @@ export function attach(dockview: DockviewApi) {
   // The chat is the one panel that must always exist; a layout saved without
   // it gets it back.
   if (!find('chat')) dockview.addPanel(panelOptions('chat', undefined, 'chat'))
+  confine()
   keepEmptyZonesOpen()
   fitZones()
   syncState()

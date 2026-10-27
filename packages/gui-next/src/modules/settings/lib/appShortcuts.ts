@@ -4,7 +4,7 @@ import { useSettingsUi } from '../store/uiStore'
 import { useDaysStore } from '../../sessions/store/daysStore'
 import { useAgentStore } from '../../ai/store/agentStore'
 import { useProjectsStore } from '../../sessions/store/projectsStore'
-import { applyPreset, openPanel, toggleZone, useSavedLayouts, applySavedLayout, type Preset } from '../../workspace/layout'
+import { applyPreset, openPanel, toggleZone, useSavedLayouts, applySavedLayout, useWorkspace, type Preset } from '../../workspace/layout'
 
 const PRESET_ORDER: Preset[] = ['default', 'focus', 'coding', 'research']
 
@@ -23,7 +23,7 @@ export function appShortcuts(): ShortcutAction[] {
       run: () => void window.dispatchEvent(new Event('viv:focus-composer')),
     },
     { id: 'chat.stop', label: 'Stop the agent', group: 'Chat', defaultKeys: 'Mod+Shift+.', run: () => useAgentStore.getState().abort() },
-    { id: 'panel.right', label: 'Show or hide the right panel', group: 'Panels', defaultKeys: 'Mod+Alt+B', run: () => toggleZone('right') },
+    { id: 'panel.right', label: 'Show or hide the side panel', group: 'Panels', defaultKeys: 'Mod+Alt+B', run: () => toggleZone(useWorkspace.getState().chatSide === 'right' ? 'left' : 'right') },
     { id: 'panel.bottom', label: 'Show or hide the bottom panel', group: 'Panels', defaultKeys: 'Mod+J', run: () => toggleZone('bottom') },
     { id: 'panel.terminal', label: 'New terminal', group: 'Panels', defaultKeys: 'Mod+Shift+`', run: () => openPanel('terminal', { newInstance: true }) },
     { id: 'panel.files', label: 'Open All files', group: 'Panels', defaultKeys: 'Mod+Shift+E', run: () => openPanel('files') },

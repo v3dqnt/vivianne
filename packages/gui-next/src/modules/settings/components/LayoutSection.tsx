@@ -15,6 +15,9 @@ import {
   setStartupLayout,
   useSavedLayouts,
   type Preset,
+  setChatSide,
+  useWorkspace,
+  type ChatSide,
 } from '../../workspace/layout'
 import {
   clashes,
@@ -273,6 +276,7 @@ export function LayoutSection() {
   const saved = useSavedLayouts((s) => s.saved)
   const startup = useSavedLayouts((s) => s.startup)
   const sidebarSide = useLayoutPrefs((s) => s.sidebarSide)
+  const chatSide = useWorkspace((s) => s.chatSide)
   const showRail = useLayoutPrefs((s) => s.showRail)
   const updatePrefs = useLayoutPrefs((s) => s.update)
   const resetAll = useShortcutStore((s) => s.resetAll)
@@ -385,6 +389,17 @@ export function LayoutSection() {
       <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
         Window
       </Typography>
+      <Row label="Chat position" hint="The side panel sits opposite; centred puts one on each side">
+        <Segmented<ChatSide>
+          value={chatSide}
+          options={[
+            ['left', 'Left'],
+            ['centre', 'Centre'],
+            ['right', 'Right'],
+          ]}
+          onChange={setChatSide}
+        />
+      </Row>
       <Row label="Sidebar side">
         <Segmented<'left' | 'right'>
           value={sidebarSide}
