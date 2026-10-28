@@ -1,3 +1,4 @@
+import type React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { Box, ButtonBase, Orb, Stack, Typography, alpha, useTheme } from '../../../ui'
 import { call } from '../../../ipc'
@@ -97,6 +98,54 @@ export function TeamStrip({ root, leadName, leadColor }: { root: string; leadNam
       '&:hover': { bgcolor: active ? alpha(theme.palette.primary.main, 0.16) : 'action.hover' },
     }) as const
 
+  // The org chart: everyone sits under whoever they report to, the lead's
+  // direct reports first, nested by a rail on the left.
+  const known = new Set(team.map((a) => a.id))
+  const bossOf = (a: TeamAgent) => (a.reportsTo && known.has(a.reportsTo) ? a.reportsTo : null)
+  const under = (id: string | null) =>
+    team.filter((a) => bossOf(a) === id).sort((x, y) => Number(!!y.lead) - Number(!!x.lead) || x.name.localeCompare(y.name))
+
+  const person = (a: TeamAgent) => {
+    const working = status[botKey(root, a.id)]?.state === 'working'
+    const active = channel === a.id
+    return (
+      <ButtonBase
+        onClick={() => setChannel(root, a.id)}
+        onMouseEnter={(e) => show(a, e.currentTarget as HTMLElement)}
+        onMouseLeave={hide}
+        aria-current={active ? 'true' : undefined}
+        sx={{ ...row(active), height: 32 }}
+      >
+        <LiveAvatar root={root} agent={a} size={20} animate />
+        <Box component="span" sx={{ flex: 1, minWidth: 0, fontSize: '13px', fontWeight: active ? 600 : 500, color: active ? 'text.primary' : 'text.secondary', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {a.name}
+        </Box>
+        {a.lead && <Box component="span" sx={{ fontSize: '10px', fontWeight: 700, color: 'warning.main', flexShrink: 0 }}>LEAD</Box>}
+        {working && <Orb state="working" px={12} label={`${a.name} is working`} />}
+      </ButtonBase>
+    )
+  }
+
+  const branch = (id: string | null, depth: number): React.ReactNode => {
+    const reports = under(id)
+    if (reports.length === 0) return null
+    return (
+      <Stack sx={{ position: 'relative', ml: depth === 0 && leadName ? '18px' : depth > 0 ? '18px' : 0, pl: leadName || depth > 0 ? '10px' : 0, gap: '2px' }}>
+        {(leadName || depth > 0) && (
+          // The rail: from the parent down to the last child's middle.
+          <Box sx={{ position: 'absolute', left: 0, top: 0, bottom: 16, width: '1px', bgcolor: 'divider' }} />
+        )}
+        {reports.map((a) => (
+          <Box key={a.id} sx={{ position: 'relative' }}>
+            {(leadName || depth > 0) && <Box sx={{ position: 'absolute', left: '-10px', top: 16, width: '8px', height: '1px', bgcolor: 'divider' }} />}
+            {person(a)}
+            {branch(a.id, depth + 1)}
+          </Box>
+        ))}
+      </Stack>
+    )
+  }
+
   const show = (agent: TeamAgent, el: HTMLElement) => {
     window.clearTimeout(hideTimer.current)
     const base = stripRef.current?.getBoundingClientRect().top ?? 0
@@ -111,35 +160,19 @@ export function TeamStrip({ root, leadName, leadColor }: { root: string; leadNam
     <Box ref={stripRef} sx={{ position: 'absolute', left: 12, top: 12, width: 180, zIndex: 3 }}>
       <Stack sx={{ gap: '2px' }}>
         {leadName && (
-          <ButtonBase onClick={() => setChannel(root, LEAD_CHANNEL)} aria-current={onLead ? 'true' : undefined} sx={row(onLead)}>
-            <Box sx={{ width: 22, height: 22, borderRadius: '50%', flexShrink: 0, display: 'grid', placeItems: 'center', bgcolor: alpha(leadColor, 0.2), color: leadColor, fontSize: '11px', fontWeight: 700 }}>
+          <ButtonBase onClick={() => setChannel(root, LEAD_CHANNEL)} aria-current={onLead ? 'true' : undefined} sx={{ ...row(onLead), height: 44 }}>
+            <Box sx={{ width: 26, height: 26, borderRadius: '50%', flexShrink: 0, display: 'grid', placeItems: 'center', bgcolor: alpha(leadColor, 0.2), color: leadColor, fontSize: '12px', fontWeight: 700 }}>
               {leadName.trim()[0]?.toUpperCase() ?? 'L'}
             </Box>
-            <Box component="span" sx={{ flex: 1, minWidth: 0, fontSize: '13px', fontWeight: onLead ? 600 : 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {leadName}
-            </Box>
+            <Stack sx={{ flex: 1, minWidth: 0 }}>
+              <Box component="span" sx={{ fontSize: '13px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {leadName}
+              </Box>
+              <Box component="span" sx={{ fontSize: '11px', color: 'text.secondary', lineHeight: '14px' }}>Lead · you talk here</Box>
+            </Stack>
           </ButtonBase>
         )}
-        {team.map((a) => {
-          const working = status[botKey(root, a.id)]?.state === 'working'
-          const active = channel === a.id
-          return (
-            <ButtonBase
-              key={a.id}
-              onClick={() => setChannel(root, a.id)}
-              onMouseEnter={(e) => show(a, e.currentTarget as HTMLElement)}
-              onMouseLeave={hide}
-              aria-current={active ? 'true' : undefined}
-              sx={row(active)}
-            >
-              <LiveAvatar root={root} agent={a} size={22} animate />
-              <Box component="span" sx={{ flex: 1, minWidth: 0, fontSize: '13px', fontWeight: active ? 600 : 500, color: active ? 'text.primary' : 'text.secondary', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {a.name}
-              </Box>
-              {working && <Orb state="working" px={12} label={`${a.name} is working`} />}
-            </ButtonBase>
-          )
-        })}
+        {branch(null, 0)}
       </Stack>
       {hover && (
         <Box
