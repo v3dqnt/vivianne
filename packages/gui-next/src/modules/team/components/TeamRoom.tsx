@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { AgentMessage } from '../../ai/lib/types'
 import { usePlanStore } from '../../plan/store/planStore'
-import { Button, ButtonBase, Stack, Tooltip, Typography } from '../../../ui'
+import { ButtonBase, Stack, Tooltip, Typography } from '../../../ui'
 import { call } from '../../../ipc'
 import { ModelPicker } from '../../ai/components/ModelPicker'
 import { useTeamStore, type TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey, isGroup, GROUP_PREFIX, type BotStatus } from '../store/botsStore'
-import { usePanelStore } from '../../dock/store/panelStore'
 import { useBotFace } from './AgentFace'
 import { Avatar, faceOf } from './bits'
 import { BotChat } from './BotChat'
@@ -62,7 +61,6 @@ export function TeamRoom({ root }: { root: string }) {
 function DirectMessage({ root, bot }: { root: string; bot: TeamAgent; team: TeamAgent[] }) {
   const st = useBotsStore((s) => s.status[botKey(root, bot.id)])
   const { loadStatus, sendDm } = useBotsStore.getState()
-  const focus = useTeamStore((s) => s.focus)
   const save = useTeamStore((s) => s.save)
   const thread = `bot:${root}:${bot.id}`
   const state = st?.state ?? 'idle'
@@ -119,19 +117,6 @@ function DirectMessage({ root, bot }: { root: string; bot: TeamAgent; team: Team
             {state === 'working' ? (st?.activity ?? 'Working…') : state === 'paused' ? 'Paused' : bot.role}
           </Typography>
         </Stack>
-        <Tooltip title="Routines, rules, memory">
-          <Button
-            size="small"
-            variant="outlined"
-            onClick={() => {
-              focus(root, bot.id)
-              usePanelStore.getState().openRight('agents')
-            }}
-            sx={{ borderRadius: '8px', flexShrink: 0 }}
-          >
-            Profile
-          </Button>
-        </Tooltip>
       </Stack>
       <ChatView
         own={{
@@ -154,6 +139,7 @@ function DirectMessage({ root, bot }: { root: string; bot: TeamAgent; team: Team
 function Room({ root, team, channel = 'room', name }: { root: string; team: TeamAgent[]; channel?: string; name?: string }) {
   const loadTeam = useTeamStore((s) => s.load)
   const focus = useTeamStore((s) => s.focus)
+  const setChannel = useBotsStore((s) => s.setChannel)
   const messages = useBotsStore((s) => (channel === 'room' ? s.room[root] : s.dm[botKey(root, channel)]) ?? EMPTY_MSGS)
   const approvals = useBotsStore((s) => s.approvals).filter((a) => a.root === root)
   const status = useBotsStore((s) => s.status)
@@ -167,7 +153,7 @@ function Room({ root, team, channel = 'room', name }: { root: string; team: Team
 
   const open = (id: string) => {
     focus(root, id)
-    usePanelStore.getState().openRight('agents')
+    setChannel(root, id)
   }
   const working = team.filter((a) => status[botKey(root, a.id)]?.state === 'working')
 

@@ -4,7 +4,7 @@ import { useSettingsUi } from '../store/uiStore'
 import { useDaysStore } from '../../sessions/store/daysStore'
 import { useAgentStore } from '../../ai/store/agentStore'
 import { useProjectsStore } from '../../sessions/store/projectsStore'
-import { applyPreset, openPanel, toggleZone, useSavedLayouts, applySavedLayout, useWorkspace, type Preset } from '../../workspace/layout'
+import { applyPreset, sideZone, togglePanel, toggleZone, useSavedLayouts, applySavedLayout, type Preset } from '../../workspace/layout'
 
 const PRESET_ORDER: Preset[] = ['default', 'focus', 'coding', 'research']
 
@@ -23,11 +23,10 @@ export function appShortcuts(): ShortcutAction[] {
       run: () => void window.dispatchEvent(new Event('viv:focus-composer')),
     },
     { id: 'chat.stop', label: 'Stop the agent', group: 'Chat', defaultKeys: 'Mod+Shift+.', run: () => useAgentStore.getState().abort() },
-    { id: 'panel.right', label: 'Show or hide the side panel', group: 'Panels', defaultKeys: 'Mod+Alt+B', run: () => toggleZone(useWorkspace.getState().chatSide === 'right' ? 'left' : 'right') },
-    { id: 'panel.bottom', label: 'Show or hide the bottom panel', group: 'Panels', defaultKeys: 'Mod+J', run: () => toggleZone('bottom') },
-    { id: 'panel.terminal', label: 'New terminal', group: 'Panels', defaultKeys: 'Mod+Shift+`', run: () => openPanel('terminal', { newInstance: true }) },
-    { id: 'panel.files', label: 'Open All files', group: 'Panels', defaultKeys: 'Mod+Shift+E', run: () => openPanel('files') },
-    { id: 'panel.preview', label: 'Open Preview', group: 'Panels', defaultKeys: null, run: () => openPanel('preview') },
+    { id: 'panel.right', label: 'Show or hide the side panel', group: 'Panels', defaultKeys: 'Mod+Alt+B', run: () => toggleZone(sideZone()) },
+    { id: 'panel.files', label: 'Files', group: 'Panels', defaultKeys: 'Mod+Shift+E', run: () => togglePanel('files') },
+    { id: 'panel.browser', label: 'Browser', group: 'Panels', defaultKeys: 'Mod+Shift+B', run: () => togglePanel('browser') },
+    { id: 'panel.terminal', label: 'Terminal', group: 'Panels', defaultKeys: 'Mod+`', run: () => togglePanel('terminal') },
   ]
   PRESET_ORDER.forEach((p, i) =>
     actions.push({

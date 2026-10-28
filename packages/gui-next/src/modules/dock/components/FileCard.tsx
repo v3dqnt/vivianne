@@ -60,8 +60,8 @@ export function FileCard({ path, onExpand }: { path: string; onExpand?: () => vo
             </IconButton>
           </Tooltip>
         )}
-        <Tooltip title="Open in Preview">
-          <IconButton size="small" aria-label="Open in Preview" onClick={() => usePanelStore.getState().openDocument(path)} sx={{ width: 24, height: 24 }}>
+        <Tooltip title="Open in Browser">
+          <IconButton size="small" aria-label="Open in Browser" onClick={() => usePanelStore.getState().openDocument(path)} sx={{ width: 24, height: 24 }}>
             <ArrowRightLinear size={13} color="currentColor" />
           </IconButton>
         </Tooltip>

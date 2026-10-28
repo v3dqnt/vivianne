@@ -95,6 +95,9 @@ export const TrashLinear = icon(G.Delete02Icon)
 export const UndoLinear = icon(G.Undo02Icon)
 export const RedoLinear = icon(G.Redo02Icon)
 export const MaximizeLinear = icon(G.Maximize01Icon)
+/** Lift a panel out of its container: a two-headed arrow, because it opens
+ * the panel full screen rather than just growing the container. */
+export const ExpandLinear = icon(G.ArrowExpand01Icon)
 export const FullScreenLinear = icon(G.FullScreenIcon)
 export const ExitFullScreenLinear = icon(G.MinimizeScreenIcon)
 export const MinimizeLinear = icon(G.Minimize01Icon)

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Box, Button, Collapse, CircularProgress, Typography, Stack, alpha, useTheme } from '../../../ui'
+import { Box, Collapse, CircularProgress, Typography, Stack, alpha, useTheme } from '../../../ui'
 import {
   CommandLinear,
   EditLinear,
@@ -16,22 +16,21 @@ import {
   MonitorLinear,
   MagicpenLinear,
 } from '../../../icons'
-import { usePlanStore } from '../../plan/store/planStore'
-import { usePanelStore } from '../../dock/store/panelStore'
 import type { AgentMessage } from '../lib/types'
 import { contentToText, contentImages } from '../lib/types'
 import { ImageBlock } from './ImageBlock'
 import { DiffView } from './DiffView'
 import { CodeBlock } from './CodeBlock'
 import { FileLink, filePathArg } from './FileLink'
-import { CHAT_MAX_WIDTH, TOOL_BODY_SX, TOOL_ROW_SX } from '../lib/chatStyle'
+import { TOOL_BODY_SX, TOOL_ROW_SX } from '../lib/chatStyle'
 
 type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
 
 /** One width for everything a tool leaves in the chat — groups, cards,
  * checkpoints, team runs — so they line up as a column instead of each
- * being as wide as its own text. */
-export const TOOL_BLOCK_SX = { width: '100%', maxWidth: CHAT_MAX_WIDTH } as const
+ * being as wide as its own text. That column is the transcript's own: tool
+ * activity runs exactly as wide as the prose above and below it. */
+export const TOOL_BLOCK_SX = { width: '100%', minWidth: 0 } as const
 
 const MEMORY_TOOLS: Record<string, string> = {
   memory_get: 'Recalling memory…',
@@ -244,7 +243,10 @@ export function ToolCallCard({
           ...TOOL_ROW_SX,
           color: isError ? 'error.main' : 'text.secondary',
           cursor: hasBody ? 'pointer' : 'default',
-          ...(compact && { display: 'flex', mx: 0, px: 0, width: '100%' }),
+          // Inside a group the row is one step in a bordered list; the list's
+          // hairline is an inset shadow, so the row needs no compensation and
+          // its text lands on the group heading's left edge exactly.
+          ...(compact && { display: 'flex', width: '100%' }),
           '&:hover': hasBody ? { color: isError ? 'error.main' : 'text.primary' } : undefined,
         }}
       >
@@ -264,7 +266,7 @@ export function ToolCallCard({
               variant="caption"
               color="text.secondary"
               noWrap
-              sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', minWidth: 0 }}
+              sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', flex: '0 1 auto', minWidth: 0 }}
             >
               {target}
             </Typography>
@@ -277,7 +279,7 @@ export function ToolCallCard({
           </Box>
         )}
         {hasBody && (
-          <Box sx={{ display: 'flex', flexShrink: 0, opacity: 0.7, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>
+          <Box sx={{ display: 'flex', flexShrink: 0, ml: 'auto', opacity: 0.7, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>
             <ChevronRightLinear size={12} color="currentColor" />
           </Box>
         )}
@@ -425,16 +427,6 @@ function specialBody(message: ToolResultMessage): React.ReactNode | null {
             {title}
             {version ? ` · v${version}` : ''} — ready for your review
           </Typography>
-          <Button
-            size="small"
-            onClick={() => {
-              void usePlanStore.getState().open(planId, version ?? undefined)
-              usePanelStore.getState().openRight('plan')
-            }}
-            sx={{ flexShrink: 0 }}
-          >
-            Open plan
-          </Button>
         </BodyLine>
       )
     }

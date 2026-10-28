@@ -16,7 +16,6 @@ import { WorkspaceSelector } from '../../ai/components/WorkspaceSelector'
 import { GitStatusChip } from '../../git/components/GitActions'
 import { OnboardingDialog } from './OnboardingDialog'
 import { useTeamStore } from '../../team/store/teamStore'
-import { openPanel } from '../../workspace/layout'
 import { TreeTeam } from '../../team/components/TreeTeam'
 import { GeneralAgents } from '../../team/components/GeneralAgents'
 import { useGeneralAgents } from '../../team/store/generalAgentsStore'
@@ -118,7 +117,9 @@ export function Sidebar() {
   const openAgent = (id: string | null) => {
     if (!root) return
     focusAgent(root, id)
-    openPanel('agents')
+    // The Agents panel is gone; picking an agent opens its conversation in
+    // the chat instead.
+    if (id) useBotsStore.getState().setChannel(root, id)
   }
   const [charterOpen, setCharterOpen] = useState(false)
   const [briefOpen, setBriefOpen] = useState(false)

@@ -125,9 +125,9 @@ function ImageViewer({ open, onClose, url, alt, local }: { open: boolean; onClos
               </IconButton>
             </Tooltip>
             {local && (
-              <Tooltip title="Open in Preview">
+              <Tooltip title="Open in Browser">
                 <IconButton
-                  aria-label="Open in Preview"
+                  aria-label="Open in Browser"
                   onClick={() => {
                     usePanelStore.getState().openDocument(local)
                     onClose()

@@ -389,12 +389,11 @@ export function LayoutSection() {
       <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
         Window
       </Typography>
-      <Row label="Chat position" hint="The side panel sits opposite; centred puts one on each side">
+      <Row label="Chat position" hint="The side panel sits opposite">
         <Segmented<ChatSide>
           value={chatSide}
           options={[
             ['left', 'Left'],
-            ['centre', 'Centre'],
             ['right', 'Right'],
           ]}
           onChange={setChatSide}

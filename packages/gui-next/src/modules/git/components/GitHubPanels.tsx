@@ -389,7 +389,7 @@ function PrFile({ file }: { file: J }) {
           <Typography sx={{ ...T.meta, ...T.mono, color: 'success.main' }}>+{file.additions}</Typography>
           <Typography sx={{ ...T.meta, ...T.mono, color: 'error.main' }}>−{file.deletions}</Typography>
         </ButtonBase>
-        <Tooltip title="Open in Preview">
+        <Tooltip title="Open in Browser">
           <IconButton size="small" className="pr-open" aria-label={`Open ${file.filename}`} onClick={show} sx={{ width: 24, height: 24, opacity: 0, transition: 'opacity 0.12s' }}>
             <ExportLinear size={12} color="currentColor" />
           </IconButton>

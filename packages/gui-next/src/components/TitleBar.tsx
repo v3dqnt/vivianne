@@ -4,7 +4,13 @@ import { call, hasTauri } from '../ipc'
 import { fileManagerName, terminalAppName } from '../lib/platform'
 import { FolderLinear, CommandSquareLinear, TickCircleLinear, PanelsLinear, LayoutLinear, SidebarLinear } from '../icons'
 import { useSidebarStore } from '../modules/sessions/store/sidebarStore'
-import { CHAT_SIDE_LABELS, PRESET_LABELS, ZONE_LABELS, applyPreset, resetLayout, setChatSide, sideZones, toggleZone, useWorkspace, type ChatSide, type Preset, type Zone } from '../modules/workspace/layout'
+import { CHAT_SIDE_LABELS, PRESET_LABELS, ZONE_LABELS, applyPreset, resetLayout, setChatSide, sideZone, togglePanel, toggleZone, useWorkspace, type ChatSide, type Preset } from '../modules/workspace/layout'
+
+const PANEL_ITEMS = [
+  { kind: 'files' as const, label: 'Files', shortcut: 'Ctrl+Shift+E' },
+  { kind: 'browser' as const, label: 'Browser', shortcut: 'Ctrl+Shift+B' },
+  { kind: 'terminal' as const, label: 'Terminal', shortcut: 'Ctrl+`' },
+]
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
 import { PairChip } from '../modules/multiplayer/components/PairChip'
 import { useAppView } from '../modules/git/components/GitView'
@@ -18,6 +24,7 @@ const TRAFFIC_LIGHT_SIZE = 12
 function TitleBarActions() {
   const zones = useWorkspace((s) => s.zones)
   const chatSide = useWorkspace((s) => s.chatSide)
+  const open = useWorkspace((s) => s.open)
   const [panelsAnchor, setPanelsAnchor] = useState<HTMLElement | null>(null)
   const [layoutAnchor, setLayoutAnchor] = useState<HTMLElement | null>(null)
   const openExternal = useProjectsStore((s) => s.openExternal)
@@ -87,7 +94,7 @@ function TitleBarActions() {
           Chat position
         </Typography>
         <Stack direction="row" sx={{ gap: 0.5, px: 1.5, pb: 1 }}>
-          {(['left', 'centre', 'right'] as ChatSide[]).map((side) => (
+          {(['left', 'right'] as ChatSide[]).map((side) => (
             <ButtonBase
               key={side}
               onClick={() => setChatSide(side)}
@@ -110,21 +117,39 @@ function TitleBarActions() {
           ))}
         </Stack>
         <Divider />
-        {([...sideZones(chatSide), 'bottom'] as Zone[]).map((zone) => (
+        <MenuItem
+          onClick={() => {
+            toggleZone(sideZone())
+            setPanelsAnchor(null)
+          }}
+          sx={{ gap: 1, fontSize: '0.8125rem', minWidth: 210 }}
+        >
+          <Box sx={{ flex: 1 }}>{ZONE_LABELS[sideZone()]}</Box>
+          {zones[sideZone()] && (
+            <ListItemIcon sx={{ minWidth: 0, color: 'primary.main' }}>
+              <TickCircleLinear size={13} color="currentColor" />
+            </ListItemIcon>
+          )}
+        </MenuItem>
+        <Divider />
+        {PANEL_ITEMS.map((p) => (
           <MenuItem
-            key={zone}
+            key={p.kind}
             onClick={() => {
-              toggleZone(zone)
+              togglePanel(p.kind)
               setPanelsAnchor(null)
             }}
-            sx={{ gap: 1, fontSize: '0.8125rem', minWidth: 190 }}
+            sx={{ gap: 1, fontSize: '0.8125rem', minWidth: 210 }}
           >
-            <Box sx={{ flex: 1 }}>{ZONE_LABELS[zone]}</Box>
-            {zones[zone] && (
+            <Box sx={{ flex: 1 }}>{p.label}</Box>
+            {open.includes(p.kind) && (
               <ListItemIcon sx={{ minWidth: 0, color: 'primary.main' }}>
                 <TickCircleLinear size={13} color="currentColor" />
               </ListItemIcon>
             )}
+            <Typography variant="caption" color="text.disabled">
+              {p.shortcut}
+            </Typography>
           </MenuItem>
         ))}
       </Menu>

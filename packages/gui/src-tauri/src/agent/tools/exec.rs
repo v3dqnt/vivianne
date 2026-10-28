@@ -2326,7 +2326,9 @@ fn goal_json(g: &Goal) -> serde_json::Value {
 /// Panel names the `set_panel` tool accepts — must stay in sync with the
 /// `panel` enum in its schema and the `RIGHT_PANEL_KINDS` list the frontend
 /// checks in `agentStore.ts`'s `panel_focus_requested` handler.
-const SETTABLE_PANELS: &[&str] = &["review", "files", "preview_dev", "preview_browser", "documents", "tasks", "plan", "terminal"];
+/// Panel names `set_panel` accepts — in step with the `panel` enum in its
+/// schema and with `PanelKind` in the frontend.
+const SETTABLE_PANELS: &[&str] = &["files", "browser", "terminal"];
 
 fn execute_set_panel_tool(args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
     let Some(panel) = args.get("panel").and_then(|v| v.as_str()) else {
@@ -2335,19 +2337,8 @@ fn execute_set_panel_tool(args: &serde_json::Value, emit: &EventSender) -> Agent
     let Some(action) = args.get("action").and_then(|v| v.as_str()) else {
         return image_tool_err("Error: 'action' is required (\"open\" or \"close\").");
     };
-    // `mod:<key>/<panel id>` opens a running mod's panel — validated against
-    // what's on disk right now, since mods come and go without a restart.
-    let is_valid_custom = panel.strip_prefix("mod:").is_some_and(|rest| {
-        let (key, id) = rest.split_once('/').unwrap_or((rest, ""));
-        crate::mods::find_on(key)
-            .and_then(|m| m.manifest)
-            .is_some_and(|m| m.contributes.panels.iter().any(|p| id.is_empty() || p.id == id))
-    });
-    if !SETTABLE_PANELS.contains(&panel) && !is_valid_custom {
-        return image_tool_err(format!(
-            "Error: unknown panel '{panel}' — must be one of: {}, or \"mod:<key>/<panel>\" for a mod's panel (Settings → Mods).",
-            SETTABLE_PANELS.join(", ")
-        ));
+    if !SETTABLE_PANELS.contains(&panel) {
+        return image_tool_err(format!("Error: unknown panel '{panel}' — must be one of: {}.", SETTABLE_PANELS.join(", ")));
     }
     if action != "open" && action != "close" {
         return image_tool_err("Error: 'action' must be \"open\" or \"close\".");

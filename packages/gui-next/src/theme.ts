@@ -314,6 +314,11 @@ export const theme = buildTheme('dark', 'terax')
  * also mean 14px, but reads as a mystery number). */
 export const SURFACE_RADIUS = 14
 
+/** Corner radius of something laid *over* the workspace — Settings, and a panel
+ * lifted out into a full-screen dialog. Slightly squarer than a pane so the
+ * overlay reads as a rectangular sheet of work, not a soft floating blob. */
+export const DIALOG_RADIUS = 12
+
 /**
  * A pane: the working surfaces floating on the frame. Solid fill, a 9%
  * hairline, no drop shadow (resizable panes would clip it) — in dark mode

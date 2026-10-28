@@ -4,9 +4,8 @@ import type { AgentEvent, AgentMessage, ImageAttachment, MessageContent, Questio
 import { useModelStore } from './modelStore'
 import { useSubagentStore } from './subagentStore'
 import { useShellTaskStore, isShellTool } from '../../dock/store/shellTaskStore'
-import { useWebPreviewStore } from './webPreviewStore'
-import { usePanelStore, type RightPanelKind } from '../../dock/store/panelStore'
-import { useModsStore } from '../../mods/store/modsStore'
+import { usePanelStore } from '../../dock/store/panelStore'
+import type { PanelKind } from '../../workspace/registry'
 import { notifyFileChanged, resolveAgentPath } from '../../ide/lib/fileChangeBus'
 import { useWorkspaceStore } from './workspaceStore'
 import { activeThreadId, useActiveThread, PRIMARY_THREAD_ID } from './activeThread'
@@ -513,55 +512,17 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
           }
           case 'web_preview_requested': {
             if (!isOnScreen(threadId)) break
-            const p = event.payload
-            useWebPreviewStore.getState().requested(p.url, p.screenshot_base64, p.error)
-            // Pop the merged Preview panel open in Browser mode so agent-driven
-            // browsing (web_preview, or any browser_* interaction tool) is
-            // actually visible without the user having to go find it.
-            usePanelStore.getState().openRight('preview')
-            // 'live', not 'browser'. The agent now drives the embedded webview,
-            // so this is the same page and the same session the user can click
-            // — not a parallel screenshot feed of a second browser. Sending them
-            // to 'browser' here is what kept the live view unreachable in
-            // practice, however many times it was built.
-            usePanelStore.getState().setPreviewMode('live')
+            // The camofox screenshot feed is gone: the Browser panel shows the
+            // same page in a real webview, so the event opens it there.
+            usePanelStore.getState().openUrl(event.payload.url)
             break
           }
           case 'panel_focus_requested': {
             if (!isOnScreen(threadId)) break
             const p = event.payload
-            const RIGHT_PANEL_KINDS: RightPanelKind[] = ['files', 'preview', 'plan']
-            if (p.panel.startsWith('mod:')) {
-              // A mod's panel, `mod:<key>/<panel id>` — set_panel's backend
-              // side already confirmed it's running. With no panel id, the
-              // mod's first panel.
-              const [key, id] = p.panel.slice('mod:'.length).split('/')
-              const mod = useModsStore.getState().mods.find((m) => m.key === key)
-              const panelId = id || mod?.manifest?.contributes.panels[0]?.id
-              if (p.action === 'open' && panelId) usePanelStore.getState().openCustomPanel(`${key}/${panelId}`)
-              else usePanelStore.getState().closeRight()
-            } else if (p.panel === 'terminal') {
-              if (p.action === 'open') usePanelStore.getState().openBottom()
-              else usePanelStore.getState().closeBottom()
-            } else if (p.panel === 'documents') {
-              // Documents are a mode of the Preview panel.
-              if (p.action === 'open') {
-                usePanelStore.getState().openRight('preview')
-                usePanelStore.getState().setPreviewMode('documents')
-              } else {
-                usePanelStore.getState().closeRight('preview')
-              }
-            } else if (p.panel === 'preview_dev' || p.panel === 'preview_browser') {
-              if (p.action === 'open') {
-                usePanelStore.getState().openRight('preview')
-                usePanelStore.getState().setPreviewMode(p.panel === 'preview_dev' ? 'dev' : 'browser')
-              } else {
-                usePanelStore.getState().closeRight()
-              }
-            } else if ((RIGHT_PANEL_KINDS as string[]).includes(p.panel)) {
-              if (p.action === 'open') usePanelStore.getState().openRight(p.panel as RightPanelKind)
-              else usePanelStore.getState().closeRight()
-            }
+            const kinds: PanelKind[] = ['files', 'browser', 'terminal']
+            const kind = kinds.find((k) => k === p.panel)
+            if (kind && p.action === 'open') usePanelStore.getState().openRight(kind)
             break
           }
           default:

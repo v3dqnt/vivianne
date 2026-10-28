@@ -160,10 +160,9 @@ export class ModConnection {
 /** The real app behind the bridge. Imported lazily by `ModFrame` so tests
  * of the bridge don't pull in the stores. */
 export async function appHost(): Promise<HostApi> {
-  const [{ useAgentStore }, { useProjectsStore }, { usePanelStore }, { toast }, { on }] = await Promise.all([
+  const [{ useAgentStore }, { useProjectsStore }, { toast }, { on }] = await Promise.all([
     import('../../ai/store/agentStore'),
     import('../../sessions/store/projectsStore'),
-    import('../../dock/store/panelStore'),
     import('../store/toastStore'),
     import('../../../ipc'),
   ])
@@ -201,6 +200,7 @@ export async function appHost(): Promise<HostApi> {
     openUrl: async (key, url) => {
       await ipc('cmd_mods_open_url', { key, url })
     },
-    openPanel: (name) => usePanelStore.getState().openCustomPanel(name),
+    // Mod panels went with the panel rebuild; a mod asking for one gets nothing.
+    openPanel: () => {},
   }
 }

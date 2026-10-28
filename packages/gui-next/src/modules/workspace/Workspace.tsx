@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { Box, GlobalStyles, alpha, useTheme } from '../../ui'
 import { DockviewReact, themeDark, themeLight, type DockviewTheme } from 'dockview-react'
 import 'dockview-react/dist/styles/dockview.css'
-import { SURFACE_RADIUS } from '../../theme'
+import { SURFACE_RADIUS, DIALOG_RADIUS } from '../../theme'
 import { COMPONENTS, GroupActions, PanelTab, ZoneEmptyState } from './panels'
 import { attach, detach, fitZones, setFitMeasure } from './layout'
 
@@ -141,14 +141,27 @@ export function Workspace() {
           },
           '.viv-dock .dv-tab:not(.dv-active-tab):hover': { color: t.foreground, backgroundColor: alpha(t.foreground, 0.04) },
           '.viv-dock .dv-tab.dv-active-tab': { boxShadow: `inset 0 0 0 1px ${alpha(t.foreground, 0.05)}, ${theme.elevation.sm}` },
-          // A group with one panel is just a title: no pill, no tint, and
-          // the tab's own close gives way to the one at the strip's end.
+          // A group with one panel is just a title: no pill, no tint. Its tab
+          // keeps its close button — the container's own close now closes the
+          // whole container, so this is how a single panel is closed.
           '.viv-dock .dv-tabs-container .dv-tab:only-child, .viv-dock .dv-tabs-container .dv-tab:only-child:hover': {
             backgroundColor: 'transparent',
             boxShadow: 'none',
             color: t.foreground,
           },
-          '.viv-dock .dv-tabs-container .dv-tab:only-child .viv-tab-close': { display: 'none' },
+          // A lifted-out panel is a dialog, not another pane: squarer than a
+          // docked pane, like Settings, and the wrapper follows the same
+          // shape so its hairline and shadow don't sit on square corners.
+          '.viv-dock .dv-resize-container': { borderRadius: `${DIALOG_RADIUS}px` },
+          '.viv-dock .dv-resize-container .dv-groupview': { borderRadius: `${DIALOG_RADIUS}px` },
+          '.viv-dock .dv-resize-container .dv-tabs-and-actions-container': {
+            borderTopLeftRadius: `${DIALOG_RADIUS}px`,
+            borderTopRightRadius: `${DIALOG_RADIUS}px`,
+          },
+          '.viv-dock .dv-resize-container .dv-floating-titlebar': {
+            borderTopLeftRadius: `${DIALOG_RADIUS}px`,
+            borderTopRightRadius: `${DIALOG_RADIUS}px`,
+          },
           // The "add a panel" button is there when wanted, not always.
           '.viv-dock .viv-add-panel': { opacity: 0, transition: `opacity ${fast}` },
           '.viv-dock .dv-tabs-and-actions-container:hover .viv-add-panel, .viv-dock .viv-add-panel:focus-visible, .viv-dock .viv-add-panel[aria-expanded="true"]': { opacity: 1 },

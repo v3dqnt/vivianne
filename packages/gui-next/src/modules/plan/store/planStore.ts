@@ -2,7 +2,6 @@ import { create } from 'zustand'
 import { call, on } from '../../../ipc'
 import { useWorkspaceStore } from '../../ai/store/workspaceStore'
 import { useAgentStore } from '../../ai/store/agentStore'
-import { usePanelStore } from '../../dock/store/panelStore'
 
 /** `agent::plans::PlanSection` / `PlanStep` / `Plan` — camelCase on the wire. */
 export interface PlanSection {
@@ -143,7 +142,6 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
       const latest = get().plans.find((p) => p.id === id)
       if (!cur || cur.plan.id !== id || latest?.status === 'review') {
         await get().open(id)
-        usePanelStore.getState().openRight('plan')
       } else {
         await get().open(id, cur.plan.version)
       }

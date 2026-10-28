@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import { Box, Typography, useTheme, alpha } from '../../../ui'
 import { Terminal, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { call, on } from '../../../ipc'
 import { useWorkspaceStore } from '../../ai/store/workspaceStore'
-import { usePanelStore } from '../store/panelStore'
+import { usePanelStore } from '../../dock/store/panelStore'
 
 interface ShellOption {
   id: string
@@ -22,7 +22,7 @@ interface TerminalExitPayload {
   exitCode: number | null
 }
 
-/** ANSI 16-color set, fixed per mode rather than derived from the palette —
+/** ANSI 16-color set, fixed per mode rather than derived from the palette â€”
  * a themed terminal should still show real red/green/etc for command output,
  * only its chrome (background/foreground/cursor) needs to track the app
  * theme. Two sets (light/dark) keeps both legible against either background. */
@@ -60,7 +60,7 @@ function terminalTheme(mode: 'light' | 'dark', textPrimary: string, primary: str
  * @param attachTabId Attach to an already-running PTY (from the Background
  *   Tasks list) instead of spawning a fresh one. The backend keeps sessions
  *   alive independently of this component, so reattaching just means not
- *   calling spawn — output resumes streaming via the same event listeners.
+ *   calling spawn â€” output resumes streaming via the same event listeners.
  * @param cwd Working directory for a newly-spawned shell. Defaults to the
  *   active workspace root.
  */
@@ -70,13 +70,13 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const folders = useWorkspaceStore((s) => s.folders)
-  const [status, setStatus] = useState<string | null>(attachTabId ? null : 'Spawning shell…')
+  const [status, setStatus] = useState<string | null>(attachTabId ? null : 'Spawning shellâ€¦')
   const theme = useTheme()
 
   // True while a ResizeHandle drag (right panel or bottom terminal, whichever
   // this instance happens to live inside) is in flight. The panel's real DOM
-  // size changes every frame of the drag regardless of that — flexbox lays
-  // out `containerRef` continuously — so the ResizeObserver below would
+  // size changes every frame of the drag regardless of that â€” flexbox lays
+  // out `containerRef` continuously â€” so the ResizeObserver below would
   // still fire `fit()` + a resize IPC call per frame even though the drag
   // itself no longer touches React state. Mirrored into a ref because the
   // observer callback is created once, in the mount effect below.
@@ -93,7 +93,7 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
     }
   }, [panelResizing])
 
-  // Live theme updates (mode/palette switch) — xterm supports patching
+  // Live theme updates (mode/palette switch) â€” xterm supports patching
   // `.options.theme` on an existing instance, no need to respawn the PTY.
   useEffect(() => {
     if (termRef.current) {
@@ -125,7 +125,7 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
     fitAddon.fit()
 
     const ro = new ResizeObserver(() => {
-      // Skip mid-drag — the effect above runs one `fit()` when the drag
+      // Skip mid-drag â€” the effect above runs one `fit()` when the drag
       // ends instead of one per frame while it's in flight.
       if (panelResizingRef.current) return
       try {
@@ -140,8 +140,8 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
       void call('cmd_terminal_write', { tabId, data })
     })
     // The ResizeObserver's first `fit()` fires onResize during mount, before
-    // `cmd_terminal_spawn` has resolved — resizing a PTY that doesn't exist
-    // yet threw "no terminal session for tab …" on every terminal that
+    // `cmd_terminal_spawn` has resolved â€” resizing a PTY that doesn't exist
+    // yet threw "no terminal session for tab â€¦" on every terminal that
     // started life hidden (which is every dock tab that isn't the active
     // one). Hold the last requested size instead and replay it once the PTY
     // is actually there. An attached session is ready by definition.
@@ -165,10 +165,10 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
     let unlistenExit: (() => void) | null = null
 
     // Synchronous promise chain: each unlisten is stored the moment its
-    // listener resolves, before the next await — so an unmount can never
+    // listener resolves, before the next await â€” so an unmount can never
     // slip between "listener attached" and "unlisten stored" (the exact
     // leak class the old app fixed with the same shape). If unmount wins the
-    // race entirely — disposed before a promise resolves — the late listener
+    // race entirely â€” disposed before a promise resolves â€” the late listener
     // registers just long enough to unregister itself, instead of living
     // forever with its unlisten never captured.
     on<TerminalOutputPayload>('terminal-output', (event) => {
@@ -195,7 +195,7 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
       setStatus(null)
     })
 
-    // Attaching to an existing session must NOT spawn — the PTY is already
+    // Attaching to an existing session must NOT spawn â€” the PTY is already
     // running (possibly started by the agent's own shell tools).
     if (!attachTabId) {
       void (async () => {
@@ -227,12 +227,12 @@ export function TerminalPanel({ attachTabId, cwd }: { attachTabId?: string; cwd?
       fitAddonRef.current = null
       unlistenOutput?.()
       unlistenExit?.()
-      // Only kill a PTY this component actually spawned — closing an attached
+      // Only kill a PTY this component actually spawned â€” closing an attached
       // session on unmount would kill the agent's shell out from under it just
       // because the user switched dock tabs.
       if (!attachTabId) void call('cmd_terminal_close', { tabId })
     }
-    // `folders` and `theme` are intentionally excluded — re-spawning a PTY on
+    // `folders` and `theme` are intentionally excluded â€” re-spawning a PTY on
     // every workspace/theme change would wipe scrollback for no benefit; the
     // theme effect above patches the live instance instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps

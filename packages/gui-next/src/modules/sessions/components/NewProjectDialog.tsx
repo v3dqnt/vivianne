@@ -6,7 +6,6 @@ import { isWindows } from '../../../lib/platform'
 import { AgentMark } from '../../../ui/brand/AgentMark'
 import { SUBAGENT_COLOR_HEX } from '../../settings/lib/subagentProfiles'
 import { useTeamStore, blankAgent } from '../../team/store/teamStore'
-import { openPanel } from '../../workspace/layout'
 import { useProjectsStore, type ProjectMode } from '../store/projectsStore'
 import { Choices, Question } from '../onboarding/fields'
 import { KINDS, domainOf } from '../onboarding/model'
@@ -121,7 +120,6 @@ export function NewProjectDialog({ open, onClose, onMultiplayer }: { open: boole
         for (const a of team?.agents ?? []) {
           await saveAgent(root, { ...blankAgent(), name: a.name, role: a.role, color: a.color, instructions: a.instructions, proposedBy: 'user' }, null)
         }
-        openPanel('agents')
       }
       onClose()
     } catch (e) {
@@ -260,8 +258,8 @@ export function NewProjectDialog({ open, onClose, onMultiplayer }: { open: boole
                     label="Start with a team"
                     hint={
                       domainOf(kind) === 'research'
-                        ? 'Experts who check each other’s work. Edit or add to them any time in the Agents panel.'
-                        : 'Edit them, or add your own, any time in the Agents panel.'
+                        ? 'Experts who check each other’s work. Edit or add to them any time from the sidebar.'
+                        : 'Edit them, or add your own, any time from the sidebar.'
                     }
                   >
                     <Stack sx={{ gap: 1 }}>

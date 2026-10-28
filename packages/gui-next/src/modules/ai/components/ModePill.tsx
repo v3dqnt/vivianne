@@ -3,7 +3,6 @@ import { ButtonBase, Popover, Stack, Typography, alpha, useTheme } from '../../.
 import { ArrowDownLinear, ClipboardTextLinear, MessageQuestionLinear, ShieldTickLinear, TickCircleLinear } from '../../../icons'
 import { usePermissionModeStore } from '../store/permissionModeStore'
 import { usePlanStore } from '../../plan/store/planStore'
-import { usePanelStore } from '../../dock/store/panelStore'
 
 type Mode = 'ask' | 'auto' | 'plan'
 
@@ -41,7 +40,6 @@ export function ModePill() {
     if (mode === current) return
     if (mode === 'plan') {
       await setPlanMode(true)
-      usePanelStore.getState().openRight('plan')
       return
     }
     if (planOn) await setPlanMode(false)

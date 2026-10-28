@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { INSTANT_ENABLED } from '../../instant/enabled'
 import { Dialog, Box, Divider, Stack, Typography, IconButton, ButtonBase, Tooltip, useTheme } from '../../../ui'
+import { DIALOG_RADIUS } from '../../../theme'
 import {
   CloseCircleLinear,
   KeyLinear,
@@ -119,7 +120,7 @@ export function SettingsDialog() {
             bgcolor: 'background.paper',
             border: 0,
             borderColor: 'divider',
-            borderRadius: '12px',
+            borderRadius: `${DIALOG_RADIUS}px`,
             boxShadow: `${theme.elevation.ring}, ${theme.elevation.xl}`,
           },
         },
