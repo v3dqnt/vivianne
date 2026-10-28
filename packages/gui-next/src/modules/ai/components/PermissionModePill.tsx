@@ -5,6 +5,7 @@ import { ButtonBase, Typography } from '../../../ui'
 // `tsc` will happily pass on a name that then fails the bundler.
 import { ShieldTickLinear, MessageQuestionLinear } from '../../../icons'
 import { usePermissionModeStore } from '../store/permissionModeStore'
+import { TOOLBAR_PILL } from '../lib/toolbarPill'
 
 /** Toggles the same `bypassMode` flag the old app's AUTO/PERM control wrote — auto skips tool-call approval, "Ask for approval" pauses for it. */
 export function PermissionModePill() {
@@ -20,20 +21,9 @@ export function PermissionModePill() {
     <ButtonBase
       onClick={() => void toggle()}
       title={bypassMode ? 'Auto mode — click to require approval for tool calls' : 'Click to let the agent act without asking'}
-      sx={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 0.75,
-        px: 1,
-        py: 0.375,
-        borderRadius: '8px',
-        border: 1,
-        borderColor: bypassMode ? 'transparent' : 'divider',
-        bgcolor: bypassMode ? 'rgba(255,255,255,0.05)' : 'transparent',
-        color: bypassMode ? 'text.secondary' : 'text.primary',
-      }}
+      sx={{ ...TOOLBAR_PILL, ...(!bypassMode && { color: 'text.primary' }) }}
     >
-      {bypassMode ? <ShieldTickLinear size={13} color="currentColor" /> : <MessageQuestionLinear size={13} color="currentColor" />}
+      {bypassMode ? <ShieldTickLinear size={14} color="currentColor" /> : <MessageQuestionLinear size={13} color="currentColor" />}
       <Typography className="cq-label" variant="caption" sx={{ fontWeight: 500 }}>
         {bypassMode ? 'Auto' : 'Ask for approval'}
       </Typography>

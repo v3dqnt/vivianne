@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Box, Button, Popover, Slider, Stack, Typography, alpha } from '../../../ui'
 import { THINKING_LEVELS, type ThinkingLevel } from '../lib/types'
 import { useModelStore } from '../store/modelStore'
+import { TOOLBAR_PILL } from '../lib/toolbarPill'
 
 /**
  * Copy for each stop on the slider.
@@ -46,17 +47,7 @@ export function ThinkingLevelControl() {
         onClick={(e) => setAnchor(e.currentTarget)}
         title={`Thinking: ${current.label}`}
         aria-label={`Thinking level: ${current.label}`}
-        sx={{
-          textTransform: 'none',
-          fontSize: '0.8125rem',
-          fontWeight: 500,
-          color: 'text.secondary',
-          minWidth: 0,
-          borderRadius: '8px',
-          px: 1,
-          py: 0.375,
-          '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
-        }}
+        sx={TOOLBAR_PILL}
       >
         {/* Always shown: the level in use must be readable at any width. */}
         <Box component="span">{current.label}</Box>

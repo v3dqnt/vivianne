@@ -3,6 +3,7 @@ import { Box, Popover, Stack, Tooltip, Typography, ButtonBase, Snackbar, Circula
 import { ArchiveLinear } from '../../../icons'
 import { useModelStore } from '../store/modelStore'
 import { useAgentStore } from '../store/agentStore'
+import { TOOLBAR_PILL } from '../lib/toolbarPill'
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -51,7 +52,7 @@ function ContextRing({
   accent: string
   size?: number
 }) {
-  const stroke = 3.5
+  const stroke = size <= 16 ? 2 : 3.5
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
   let used = 0
@@ -141,24 +142,16 @@ export function ContextUsageBar() {
             className="cq-context"
             aria-label={`Context ${Math.round(pct)}% full`}
             onClick={(e) => setAnchor(e.currentTarget)}
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 0.75,
-              borderRadius: '8px',
-              px: 1,
-              py: 0.375,
-              '&:hover': { bgcolor: 'action.hover' },
-            }}
+            sx={TOOLBAR_PILL}
           >
             {/* A ring: its arcs are the same segments as the breakdown, each in
                 its own colour, so the shape shows which category is eating
                 the window. The percentage sits beside it. */}
-            <ContextRing rows={rows} colors={colors} window={window} accent={accent} />
+            <ContextRing rows={rows} colors={colors} window={window} accent={accent} size={14} />
             <Typography
               className="cq-wide"
               variant="caption"
-              sx={{ ...NUM, fontSize: '12px', color: pct > 70 ? accent : 'text.secondary', minWidth: 28, textAlign: 'left' }}
+              sx={{ ...NUM, color: pct > 70 ? accent : 'inherit', minWidth: 28, textAlign: 'left' }}
             >
               {Math.round(pct)}%
             </Typography>

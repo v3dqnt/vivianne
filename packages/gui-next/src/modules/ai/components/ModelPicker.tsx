@@ -8,6 +8,7 @@ import { useCustomProviderStore } from '../../settings/store/customProviderStore
 import { useSettingsUi } from '../../settings/store/uiStore'
 import { llamaModelId, isRunning } from '../../settings/lib/llama'
 import type { SubagentModelOverride } from '../../settings/lib/subagentProfiles'
+import { TOOLBAR_PILL } from '../lib/toolbarPill'
 
 const MONO = '"Geist Mono", ui-monospace, monospace'
 
@@ -324,10 +325,10 @@ export function ModelPicker(
           onClick={(e) => setAnchor(e.currentTarget)}
           aria-label={`Model: ${currentName}`}
           aria-haspopup="dialog"
-          sx={{
+          sx={variant === 'field' ? {
             gap: 0.75,
             px: 1,
-            height: variant === 'field' ? 34 : 28,
+            height: 34,
             minWidth: 0,
             maxWidth: variant === 'field' ? '100%' : 220,
             width: variant === 'field' ? '100%' : undefined,
@@ -338,12 +339,12 @@ export function ModelPicker(
             fontSize: '0.8125rem',
             color: 'text.primary',
             '&:hover': { bgcolor: 'action.hover' },
-          }}
+          } : { ...TOOLBAR_PILL, maxWidth: 220, color: 'text.primary' }}
         >
           {currentProvider ? <ProviderMark provider={currentProvider} size={14} /> : <CpuLinear size={14} color="currentColor" />}
           {/* Never hidden when the composer narrows (`cq-model` only shortens it):
               which model is selected is the one thing that must stay readable. */}
-          <Typography className="cq-model" noWrap sx={{ fontSize: '0.8125rem', fontWeight: 500, minWidth: 0, flex: variant === 'field' ? 1 : undefined, textAlign: 'left' }}>
+          <Typography className="cq-model" noWrap sx={{ fontSize: variant === 'field' ? '0.8125rem' : 'inherit', fontWeight: 500, minWidth: 0, flex: variant === 'field' ? 1 : undefined, textAlign: 'left' }}>
             {currentName}
           </Typography>
           <Box className="cq-label" sx={{ display: 'flex', color: 'text.secondary', flexShrink: 0 }}>

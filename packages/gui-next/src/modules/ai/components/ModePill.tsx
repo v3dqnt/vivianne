@@ -3,6 +3,7 @@ import { ButtonBase, Popover, Stack, Typography, alpha, useTheme } from '../../.
 import { ArrowDownLinear, ClipboardTextLinear, MessageQuestionLinear, ShieldTickLinear, TickCircleLinear } from '../../../icons'
 import { usePermissionModeStore } from '../store/permissionModeStore'
 import { usePlanStore } from '../../plan/store/planStore'
+import { TOOLBAR_PILL } from '../lib/toolbarPill'
 
 type Mode = 'ask' | 'auto' | 'plan'
 
@@ -54,25 +55,13 @@ export function ModePill() {
         aria-haspopup="listbox"
         aria-expanded={!!anchor}
         title={`${shown.label}: ${shown.hint}`}
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 0.75,
-          px: 1,
-          py: 0.375,
-          borderRadius: '8px',
-          border: 1,
-          borderColor: current === 'plan' ? 'primary.main' : 'divider',
-          bgcolor: current === 'plan' ? 'action.selected' : 'transparent',
-          color: current === 'ask' ? 'text.primary' : 'text.secondary',
-          '&:hover': { bgcolor: 'action.hover' },
-        }}
+        sx={{ ...TOOLBAR_PILL, ...(current === 'plan' && { bgcolor: 'action.selected', color: 'text.primary' }) }}
       >
-        <shown.Icon size={13} color="currentColor" />
+        <shown.Icon size={14} color="currentColor" />
         <Typography className="cq-label" variant="caption" sx={{ fontWeight: 500 }}>
           {shown.label}
         </Typography>
-        <ArrowDownLinear size={11} color="currentColor" />
+        <ArrowDownLinear size={12} color="currentColor" />
       </ButtonBase>
       <Popover
         open={!!anchor}

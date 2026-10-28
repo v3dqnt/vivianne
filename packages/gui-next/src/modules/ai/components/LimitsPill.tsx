@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Box, Button, ButtonBase, Popover, Stack, TextField, Typography } from '../../../ui'
 import { ClockLinear } from '../../../icons'
 import { call } from '../../../ipc'
+import { TOOLBAR_PILL } from '../lib/toolbarPill'
 
 interface RunLimits {
   capUsd: number | null
@@ -65,19 +66,9 @@ export function LimitsPill() {
       <ButtonBase
         onClick={(e) => open(e.currentTarget)}
         title={label ? `Each task stops at ${label} — click to change` : 'Set a budget or time limit per task'}
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 0.75,
-          px: 1,
-          py: 0.375,
-          borderRadius: '8px',
-          border: 1,
-          borderColor: 'divider',
-          color: label ? 'text.primary' : 'text.secondary',
-        }}
+        sx={{ ...TOOLBAR_PILL, ...(label && { color: 'text.primary' }) }}
       >
-        <ClockLinear size={13} color="currentColor" />
+        <ClockLinear size={14} color="currentColor" />
         <Typography className="cq-label" variant="caption" sx={{ fontWeight: 500 }}>
           {label || 'No limits'}
         </Typography>
