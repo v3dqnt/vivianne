@@ -3,6 +3,7 @@ import { ModsRuntime } from './modules/mods/components/ModsRuntime'
 import { Box, Stack } from './ui'
 import { TitleBar } from './components/TitleBar'
 import { HomeView } from './modules/home/HomeView'
+import { useProjectsStore, modeOf, GENERAL_PROJECT_ID } from './modules/sessions/store/projectsStore'
 import { AgentsView } from './modules/home/AgentsView'
 import { Sidebar } from './modules/sessions/components/Sidebar'
 import { SettingsDialog } from './modules/settings/components/SettingsDialog'
@@ -38,7 +39,9 @@ function App() {
   useEffect(() => startGitStatus(), [])
 
   // Home lists the projects and threads itself; the sidebar is for working in one.
-  const sidebar = !sidebarCollapsed && view === 'chat' && <Sidebar />
+  // A team project shows its people beside the chat instead (TeamStrip).
+  const teamProject = useProjectsStore((s) => modeOf(s.projects.find((p) => p.id === s.activeProjectId)) === 'tree' && s.activeProjectId !== GENERAL_PROJECT_ID)
+  const sidebar = !sidebarCollapsed && view === 'chat' && !teamProject && <Sidebar />
 
   return (
     <Stack sx={{ height: '100%' }}>

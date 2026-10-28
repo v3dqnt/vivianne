@@ -4,7 +4,9 @@ import { hasTauri } from '../../ipc'
 import { SURFACE_RADIUS } from '../../theme'
 import { ChatView } from '../ai/components/ChatView'
 import { HireRequests } from '../team/components/HireRequests'
-import { useProjectsStore, modeOf } from '../sessions/store/projectsStore'
+import { useProjectsStore, modeOf, projectColor } from '../sessions/store/projectsStore'
+import { useMasterStore } from '../sessions/store/masterStore'
+import { TeamStrip } from '../team/components/TeamStrip'
 import { useBotsStore } from '../team/store/botsStore'
 import { LEAD_CHANNEL } from '../team/components/TreeTeam'
 
@@ -24,6 +26,7 @@ function Fill({ children }: { children: React.ReactNode }) {
 function Chat() {
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === s.activeProjectId))
   const treeChannel = useBotsStore((s) => (project?.path ? s.channel[project.path] : undefined))
+  const master = useMasterStore((s) => (project?.path ? s.byRoot[project.path] : null))
   if (!hasTauri()) {
     return (
       <Fill>
@@ -36,21 +39,25 @@ function Chat() {
       </Fill>
     )
   }
-  // A team project: a teammate picked in the sidebar shows its work, read
+  const isTeam = !!project?.path && modeOf(project) === 'tree'
+  // A team project: a teammate picked on the left shows its work, read
   // only; otherwise the lead's conversation, where you talk to the team.
-  const teammate = project?.path && modeOf(project) === 'tree' && treeChannel && treeChannel !== LEAD_CHANNEL && treeChannel !== 'room' && !treeChannel.startsWith('group:')
-  if (project?.path && teammate) {
-    return (
-      <Fill>
-        <TeamRoom key={project.path} root={project.path} readOnly />
-      </Fill>
-    )
-  }
+  const teammate = isTeam && treeChannel && treeChannel !== LEAD_CHANNEL && treeChannel !== 'room' && !treeChannel.startsWith('group:')
   return (
     <Fill>
-      {/* A team project's lead asks to hire here, where you talk to it. */}
-      {project?.path && modeOf(project) === 'tree' && <HireRequests root={project.path} />}
-      <ChatView />
+      {/* The team's people sit on the left; the same space on the right keeps the chat centred. */}
+      <Box sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', px: isTeam ? '196px' : 0 }}>
+        {isTeam && project?.path && <TeamStrip root={project.path} leadName={master?.name ?? null} leadColor={projectColor(project)} />}
+        {project?.path && teammate ? (
+          <TeamRoom key={project.path} root={project.path} readOnly />
+        ) : (
+          <>
+            {/* A team project's lead asks to hire here, where you talk to it. */}
+            {isTeam && project?.path && <HireRequests root={project.path} />}
+            <ChatView />
+          </>
+        )}
+      </Box>
     </Fill>
   )
 }
