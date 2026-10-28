@@ -11,7 +11,6 @@ import {
   Link2Linear,
   ArchiveBookLinear,
   MagicpenLinear,
-  ClockLinear,
   ColorSwatchLinear,
   LayoutLinear,
   UserOctagonLinear,
@@ -31,7 +30,6 @@ const MemorySection = lazy(() => import('./MemorySection').then((m) => ({ defaul
 const DiagnosticsSection = lazy(() => import('./DiagnosticsSection').then((m) => ({ default: m.DiagnosticsSection })))
 const UsageSection = lazy(() => import('./UsageSection').then((m) => ({ default: m.UsageSection })))
 const SkillsSection = lazy(() => import('./SkillsSection').then((m) => ({ default: m.SkillsSection })))
-const AutomationsSection = lazy(() => import('./AutomationsSection').then((m) => ({ default: m.AutomationsSection })))
 const ThemesSection = lazy(() => import('./ThemesSection').then((m) => ({ default: m.ThemesSection })))
 const LayoutSection = lazy(() => import('./LayoutSection').then((m) => ({ default: m.LayoutSection })))
 const ComponentsSection = lazy(() => import('./ComponentsSection').then((m) => ({ default: m.ComponentsSection })))
@@ -78,7 +76,6 @@ const GROUPS: { label: string; items: SectionDef[] }[] = [
       { id: 'memory', label: 'Memory', icon: ArchiveBookLinear },
       { id: 'vault', label: 'Vault', icon: LockLinear },
       { id: 'skills', label: 'Skills', icon: MagicpenLinear },
-      { id: 'automations', label: 'Workflows', icon: ClockLinear },
       ...(INSTANT_ENABLED ? [{ id: 'instant' as const, label: 'Viv Instant', icon: MicrophoneLinear }] : []),
     ],
   },
@@ -234,7 +231,6 @@ export function SettingsDialog() {
               {section === 'vault' && <VaultSection />}
               {section === 'diagnostics' && <DiagnosticsSection />}
               {section === 'skills' && <SkillsSection />}
-              {section === 'automations' && <AutomationsSection />}
               {section === 'instant' && <InstantSection />}
               {/* One tab for the web: how the agent searches it, and the
                   user's own browser it can work in. 'browser' still opens it. */}

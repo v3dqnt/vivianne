@@ -12,7 +12,6 @@ export type SettingsSection =
   | 'usage'
   | 'diagnostics'
   | 'skills'
-  | 'automations'
   | 'themes'
   | 'layout'
   | 'components'
