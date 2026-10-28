@@ -243,7 +243,7 @@ export function MessageList({
       </Box>
     ) : (
       <Box key={`g${item.start}`} sx={ROW_SX}>
-        <ToolGroup tools={item.toolIndices.map((i) => messages[i] as ToolResultMessage)}>
+        <ToolGroup tools={item.toolIndices.map((i) => messages[i] as ToolResultMessage)} thoughts={item.thoughts}>
           {item.indices.map((i) => (
             <Box key={i}>{renderMessage(i, true)}</Box>
           ))}

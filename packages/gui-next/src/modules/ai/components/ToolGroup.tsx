@@ -20,7 +20,7 @@ type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
  * produced for the eye — screenshots, plots, generated images — shows below
  * the heading even when collapsed: that output is the point, not a detail.
  */
-export function ToolGroup({ tools, children }: { tools: ToolResultMessage[]; children: ReactNode }) {
+export function ToolGroup({ tools, thoughts = 0, children }: { tools: ToolResultMessage[]; thoughts?: number; children: ReactNode }) {
   const [open, setOpen] = useState(false)
   const running = [...tools].reverse().find((t) => t.isError === null)
   const failed = tools.filter((t) => t.isError === true).length
@@ -33,7 +33,8 @@ export function ToolGroup({ tools, children }: { tools: ToolResultMessage[]; chi
     ;[label, target] = declarationFor(running.toolName, true, argSummary(running.arguments))
     file = target !== null ? filePathArg(running.arguments) : null
   } else {
-    label = summarizeTools(tools)
+    // The reasoning folded in with the calls leads the heading.
+    label = thoughts > 0 ? `Thought${thoughts > 1 ? ` ${thoughts} times` : ''} · ${summarizeTools(tools)}` : summarizeTools(tools)
   }
 
   return (
