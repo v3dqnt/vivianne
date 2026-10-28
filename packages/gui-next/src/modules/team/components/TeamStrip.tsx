@@ -61,21 +61,15 @@ function Preview({ root, agent }: { root: string; agent: TeamAgent }) {
   )
 }
 
-/** The project's name, top left of a team project's chat. Also where the
- * team, the lead and their status are loaded for the chat. */
-export function TeamStrip({ root, projectName }: { root: string; projectName: string }) {
+/** Loads the team, the lead and their status for a team project's chat.
+ * Draws nothing. */
+export function TeamStrip({ root }: { root: string; projectName?: string }) {
   useEffect(() => {
     void useTeamStore.getState().load(root)
     void useMasterStore.getState().load(root)
     void useBotsStore.getState().loadStatus(root)
   }, [root])
-  return (
-    <Box sx={{ position: 'absolute', left: 24, top: 24, width: 184, zIndex: 3 }}>
-      <Typography noWrap title={projectName} sx={{ fontSize: '14px', fontWeight: 600, letterSpacing: '-0.01em', px: '8px' }}>
-        {projectName}
-      </Typography>
-    </Box>
-  )
+  return null
 }
 
 /**
