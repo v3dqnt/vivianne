@@ -94,8 +94,8 @@ export function TeamStrip({ root, projectName, leadName, leadColor }: { root: st
       px: '8px',
       borderRadius: '8px',
       textAlign: 'left',
-      bgcolor: active ? alpha(theme.palette.primary.main, 0.12) : 'transparent',
-      '&:hover': { bgcolor: active ? alpha(theme.palette.primary.main, 0.16) : 'action.hover' },
+      bgcolor: active ? 'action.selected' : 'transparent',
+      '&:hover': { bgcolor: active ? 'action.selected' : 'action.hover' },
     }) as const
 
   // The org chart: everyone sits under whoever they report to, the lead's
@@ -130,14 +130,14 @@ export function TeamStrip({ root, projectName, leadName, leadColor }: { root: st
     const reports = under(id)
     if (reports.length === 0) return null
     return (
-      <Stack sx={{ position: 'relative', ml: depth === 0 && leadName ? '18px' : depth > 0 ? '18px' : 0, pl: leadName || depth > 0 ? '10px' : 0, gap: '2px' }}>
+      <Stack sx={{ position: 'relative', ml: leadName || depth > 0 ? '17px' : 0, pl: leadName || depth > 0 ? '8px' : 0, gap: '2px' }}>
         {(leadName || depth > 0) && (
           // The rail: from the parent down to the last child's middle.
-          <Box sx={{ position: 'absolute', left: 0, top: 0, bottom: 16, width: '1px', bgcolor: 'divider' }} />
+          <Box sx={{ position: 'absolute', left: 0, top: 0, bottom: 16, width: '1px', bgcolor: 'divider', opacity: 0.6 }} />
         )}
         {reports.map((a) => (
           <Box key={a.id} sx={{ position: 'relative' }}>
-            {(leadName || depth > 0) && <Box sx={{ position: 'absolute', left: '-10px', top: 16, width: '8px', height: '1px', bgcolor: 'divider' }} />}
+            {(leadName || depth > 0) && <Box sx={{ position: 'absolute', left: '-8px', top: 16, width: '6px', height: '1px', bgcolor: 'divider', opacity: 0.6 }} />}
             {person(a)}
             {branch(a.id, depth + 1)}
           </Box>
@@ -157,22 +157,19 @@ export function TeamStrip({ root, projectName, leadName, leadColor }: { root: st
   }
 
   return (
-    <Box ref={stripRef} sx={{ position: 'absolute', left: 12, top: 12, width: 180, zIndex: 3 }}>
-      <Typography noWrap title={projectName} sx={{ fontSize: '15px', fontWeight: 700, letterSpacing: '-0.01em', px: '8px', pb: '8px' }}>
+    <Box ref={stripRef} sx={{ position: 'absolute', left: 12, top: 12, width: 192, zIndex: 3 }}>
+      <Typography noWrap title={projectName} sx={{ fontSize: '14px', fontWeight: 600, letterSpacing: '-0.01em', px: '8px', pb: '12px' }}>
         {projectName}
       </Typography>
       <Stack sx={{ gap: '2px' }}>
         {leadName && (
-          <ButtonBase onClick={() => setChannel(root, LEAD_CHANNEL)} aria-current={onLead ? 'true' : undefined} sx={{ ...row(onLead), height: 44 }}>
-            <Box sx={{ width: 26, height: 26, borderRadius: '50%', flexShrink: 0, display: 'grid', placeItems: 'center', bgcolor: alpha(leadColor, 0.2), color: leadColor, fontSize: '12px', fontWeight: 700 }}>
+          <ButtonBase onClick={() => setChannel(root, LEAD_CHANNEL)} aria-current={onLead ? 'true' : undefined} title="Where you talk to the team" sx={{ ...row(onLead), height: 32 }}>
+            <Box sx={{ width: 20, height: 20, borderRadius: '50%', flexShrink: 0, display: 'grid', placeItems: 'center', bgcolor: alpha(leadColor, 0.2), color: leadColor, fontSize: '10px', fontWeight: 700 }}>
               {leadName.trim()[0]?.toUpperCase() ?? 'L'}
             </Box>
-            <Stack sx={{ flex: 1, minWidth: 0 }}>
-              <Box component="span" sx={{ fontSize: '13px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {leadName}
-              </Box>
-              <Box component="span" sx={{ fontSize: '11px', color: 'text.secondary', lineHeight: '14px' }}>Lead · you talk here</Box>
-            </Stack>
+            <Box component="span" title={leadName} sx={{ flex: 1, minWidth: 0, fontSize: '13px', fontWeight: 600, color: onLead ? 'text.primary' : 'text.secondary', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              Lead
+            </Box>
           </ButtonBase>
         )}
         {branch(null, 0)}
@@ -185,7 +182,7 @@ export function TeamStrip({ root, projectName, leadName, leadColor }: { root: st
             setChannel(root, hover.agent.id)
             setHover(null)
           }}
-          sx={{ position: 'absolute', left: 188, top: hover.top, width: 300, p: '12px', borderRadius: '12px', bgcolor: 'background.paper', border: 1, borderColor: 'divider', boxShadow: theme.elevation.lg, cursor: 'pointer' }}
+          sx={{ position: 'absolute', left: 200, top: hover.top, width: 300, p: '12px', borderRadius: '12px', bgcolor: 'background.paper', border: 1, borderColor: 'divider', boxShadow: theme.elevation.lg, cursor: 'pointer' }}
         >
           <Preview root={root} agent={hover.agent} />
         </Box>

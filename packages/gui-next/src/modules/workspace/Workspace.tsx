@@ -47,7 +47,7 @@ function Chat() {
   return (
     <Fill>
       {/* The team's people sit on the left; the same space on the right keeps the chat centred. */}
-      <Box sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', px: isTeam ? '196px' : 0 }}>
+      <Box sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', px: isTeam ? '212px' : 0 }}>
         {isTeam && project?.path && <TeamStrip root={project.path} projectName={project.name} leadName={master?.name ?? null} leadColor={projectColor(project)} />}
         {isTeam && project?.path && <ProjectTools root={project.path} />}
         {project?.path && teammate ? (
