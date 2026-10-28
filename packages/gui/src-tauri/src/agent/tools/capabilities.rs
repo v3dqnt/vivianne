@@ -242,9 +242,9 @@ pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Show things in the app's UI",
         when: "Surfacing something visually instead of describing it in prose.",
-        tools: &["set_panel", "present_snippet", "generate_image"],
+        tools: &["present_snippet", "generate_image"],
         how: None,
-        triggers: &["show me", "open the panel", "display", "preview", "snippet", "example of"],
+        triggers: &["show me", "display", "preview", "snippet", "example of"],
     },
     CapabilityGroup {
         name: "Ask the user",

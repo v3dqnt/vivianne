@@ -705,18 +705,6 @@ When you hit a login wall: call browser_session_status first, and if there is ge
             "parameters": { "type": "object", "properties": {} }
         }),
         serde_json::json!({
-            "name": "set_panel",
-            "description": "Open or close a GUI panel, so the user can actually see what you're doing (e.g. the browser while you work on a web page, or the terminal while you run a long command) instead of it only ever reacting to clicks. Purely advisory — always succeeds regardless of whether the panel is currently visible on screen.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "panel": { "type": "string", "enum": ["files", "browser", "terminal"], "description": "Which panel to open: the file tree, the browser, or the terminal." },
-                    "action": { "type": "string", "enum": ["open", "close"] }
-                },
-                "required": ["panel", "action"]
-            }
-        }),
-        serde_json::json!({
             "name": "get_goal",
             "description": "Get this session's current goal (the durable objective you're working toward), if one is set. Distinct from todo_write's checklist — the goal is the point of the steps, not the steps themselves.",
             "parameters": { "type": "object", "properties": {} }

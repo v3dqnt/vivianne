@@ -19,20 +19,17 @@ import { startAutoReadAloud } from './modules/ai/lib/readAloud'
 import { WorkflowConfirm } from './modules/automation/WorkflowConfirm'
 import { Quickstart } from './modules/hackathon/Quickstart'
 import { useLayoutPrefs } from './modules/settings/store/layoutPrefsStore'
-import { useSavedLayouts } from './modules/workspace/layout'
 
 function App() {
   const sidebarCollapsed = useSidebarStore((s) => s.collapsed)
   const sidebarSide = useLayoutPrefs((s) => s.sidebarSide)
   const showRail = useLayoutPrefs((s) => s.showRail)
-  const savedLayouts = useSavedLayouts((s) => s.saved)
   const view = useAppView((s) => s.view)
 
-  // Every app shortcut, rebindable in Settings → Layout & shortcuts. Saved
-  // layouts are actions too, so the list is rebuilt when they change.
+  // Every app shortcut, rebindable in Settings → Layout & shortcuts.
   useEffect(() => {
     registerShortcuts(appShortcuts())
-  }, [savedLayouts])
+  }, [])
   useEffect(() => installShortcuts(), [])
   // Scheduled and folder-triggered workflows run their steps in a thread of their own.
   useEffect(() => startWorkflowRunner(), [])

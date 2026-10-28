@@ -1,24 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Stack, Typography, Divider, Box, Button, TextField, Select, MenuItem, Switch, ToggleButtonGroup, ToggleButton, IconButton, Tooltip, Alert, ButtonBase } from '../../../ui'
-import { TrashLinear, UndoLinear } from '../../../icons'
+import { Stack, Typography, Divider, Box, Button, Switch, ToggleButtonGroup, ToggleButton, IconButton, Tooltip, Alert, ButtonBase } from '../../../ui'
+import { UndoLinear } from '../../../icons'
 import { call, hasTauri } from '../../../ipc'
 import { isMac } from '../../../lib/platform'
 import { INSTANT_ENABLED } from '../../instant/enabled'
-import {
-  PRESET_LABELS,
-  applyPreset,
-  applySavedLayout,
-  deleteSavedLayout,
-  renameSavedLayout,
-  resetLayout,
-  saveCurrentLayout,
-  setStartupLayout,
-  useSavedLayouts,
-  type Preset,
-  setChatSide,
-  useWorkspace,
-  type ChatSide,
-} from '../../workspace/layout'
 import {
   clashes,
   comboFromEvent,
@@ -31,7 +16,6 @@ import {
   type ShortcutAction,
 } from '../../../lib/shortcuts'
 import { useLayoutPrefs } from '../store/layoutPrefsStore'
-import { useSettingsUi } from '../store/uiStore'
 import { DEFAULT_PREFS, type NotchPrefs } from '../../instant/components/RestingNotch'
 
 function Row({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
@@ -272,133 +256,24 @@ function NotchRows() {
 
 /** Settings → Layout & shortcuts. */
 export function LayoutSection() {
-  const closeSettings = useSettingsUi((s) => s.closeSettings)
-  const saved = useSavedLayouts((s) => s.saved)
-  const startup = useSavedLayouts((s) => s.startup)
   const sidebarSide = useLayoutPrefs((s) => s.sidebarSide)
-  const chatSide = useWorkspace((s) => s.chatSide)
   const showRail = useLayoutPrefs((s) => s.showRail)
   const updatePrefs = useLayoutPrefs((s) => s.update)
   const resetAll = useShortcutStore((s) => s.resetAll)
   const overrides = useShortcutStore((s) => s.overrides)
-  const [name, setName] = useState('')
-  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
 
-  // Closing Settings on the way out: a layout rearranges exactly what the
-  // dialog covers, so a working button would look dead behind it.
-  const apply = (fn: () => void) => {
-    fn()
-    closeSettings()
-  }
 
   const groups = useMemo(() => {
     const out = new Map<string, ShortcutAction[]>()
     for (const a of shortcutActions()) out.set(a.group, [...(out.get(a.group) ?? []), a])
     return [...out.entries()]
-    // Rebuilt with the saved layouts (they're actions too).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saved])
+  }, [])
 
   return (
     <Stack sx={{ gap: 1.5 }}>
       <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-        Layouts
-      </Typography>
-      <Typography variant="caption" color="text.secondary">
-        Drag any panel, the chat included, onto another to share its tabs or onto an edge to split beside it. Start from one of
-        these, or save your own arrangement.
-      </Typography>
-      <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}>
-        {(Object.keys(PRESET_LABELS) as Preset[]).map((p) => (
-          <Button key={p} size="small" variant="outlined" onClick={() => apply(() => applyPreset(p))} sx={{ textTransform: 'none' }}>
-            {PRESET_LABELS[p]}
-          </Button>
-        ))}
-      </Stack>
-      {saved.length > 0 && (
-        <Stack sx={{ gap: 0.5 }}>
-          {saved.map((l) => (
-            <Stack key={l.id} direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.25, py: 0.5, borderRadius: 2, border: 1, borderColor: 'divider' }}>
-              {renaming?.id === l.id ? (
-                <TextField
-                  size="small"
-                  value={renaming.name}
-                  autoFocus
-                  onChange={(e) => setRenaming({ id: l.id, name: e.target.value })}
-                  onBlur={() => {
-                    renameSavedLayout(l.id, renaming.name)
-                    setRenaming(null)
-                  }}
-                  onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-                  sx={{ flex: 1 }}
-                />
-              ) : (
-                <Typography variant="body2" sx={{ flex: 1, cursor: 'text' }} onDoubleClick={() => setRenaming({ id: l.id, name: l.name })}>
-                  {l.name}
-                </Typography>
-              )}
-              <Button size="small" onClick={() => apply(() => applySavedLayout(l.id))} sx={{ textTransform: 'none' }}>
-                Apply
-              </Button>
-              <Tooltip title="Delete">
-                <IconButton size="small" onClick={() => deleteSavedLayout(l.id)}>
-                  <TrashLinear size={13} color="currentColor" />
-                </IconButton>
-              </Tooltip>
-            </Stack>
-          ))}
-        </Stack>
-      )}
-      <Stack direction="row" sx={{ gap: 1, alignItems: 'center' }}>
-        <TextField size="small" placeholder="Name this arrangement" value={name} onChange={(e) => setName(e.target.value)} sx={{ flex: 1 }} />
-        <Button
-          size="small"
-          variant="contained"
-          disabled={!name.trim()}
-          onClick={() => {
-            saveCurrentLayout(name)
-            setName('')
-          }}
-          sx={{ textTransform: 'none' }}
-        >
-          Save current layout
-        </Button>
-      </Stack>
-      <Row label="At launch">
-        <Select size="small" value={startup} onChange={(e) => setStartupLayout(String(e.target.value))} sx={{ minWidth: 220 }}>
-          <MenuItem value="last">Where I left off</MenuItem>
-          {(Object.keys(PRESET_LABELS) as Preset[]).map((p) => (
-            <MenuItem key={p} value={p}>
-              {PRESET_LABELS[p]}
-            </MenuItem>
-          ))}
-          {saved.map((l) => (
-            <MenuItem key={l.id} value={`saved:${l.id}`}>
-              {l.name}
-            </MenuItem>
-          ))}
-        </Select>
-      </Row>
-      <Box>
-        <Button size="small" color="inherit" onClick={() => apply(resetLayout)} sx={{ textTransform: 'none', color: 'text.secondary' }}>
-          Reset the arrangement
-        </Button>
-      </Box>
-
-      <Divider />
-      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
         Window
       </Typography>
-      <Row label="Chat position" hint="The side panel sits opposite">
-        <Segmented<ChatSide>
-          value={chatSide}
-          options={[
-            ['left', 'Left'],
-            ['right', 'Right'],
-          ]}
-          onChange={setChatSide}
-        />
-      </Row>
       <Row label="Sidebar side">
         <Segmented<'left' | 'right'>
           value={sidebarSide}

@@ -5,7 +5,6 @@ import { useModelStore } from './modelStore'
 import { useSubagentStore } from './subagentStore'
 import { useShellTaskStore, isShellTool } from '../../dock/store/shellTaskStore'
 import { usePanelStore } from '../../dock/store/panelStore'
-import type { PanelKind } from '../../workspace/registry'
 import { notifyFileChanged, resolveAgentPath } from '../../ide/lib/fileChangeBus'
 import { useWorkspaceStore } from './workspaceStore'
 import { activeThreadId, useActiveThread, PRIMARY_THREAD_ID } from './activeThread'
@@ -510,21 +509,13 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             })
             break
           }
-          case 'web_preview_requested': {
-            if (!isOnScreen(threadId)) break
-            // The camofox screenshot feed is gone: the Browser panel shows the
-            // same page in a real webview, so the event opens it there.
-            usePanelStore.getState().openUrl(event.payload.url)
+          // The agent browses in its own view; with no side panel there is
+          // nowhere in the window to show it.
+          case 'web_preview_requested':
             break
-          }
-          case 'panel_focus_requested': {
-            if (!isOnScreen(threadId)) break
-            const p = event.payload
-            const kinds: PanelKind[] = ['files', 'browser', 'terminal']
-            const kind = kinds.find((k) => k === p.panel)
-            if (kind && p.action === 'open') usePanelStore.getState().openRight(kind)
+          // No side panels: nothing to open.
+          case 'panel_focus_requested':
             break
-          }
           default:
             break
         }

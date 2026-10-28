@@ -1,16 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Box, ButtonBase, Stack, Typography, IconButton, Tooltip, Menu, MenuItem, Divider, ListItemIcon } from '../ui'
+import { Box, Stack, IconButton, Tooltip, Menu, MenuItem } from '../ui'
 import { call, hasTauri } from '../ipc'
 import { fileManagerName, terminalAppName } from '../lib/platform'
-import { FolderLinear, CommandSquareLinear, TickCircleLinear, PanelsLinear, LayoutLinear, SidebarLinear } from '../icons'
+import { FolderLinear, CommandSquareLinear, SidebarLinear } from '../icons'
 import { useSidebarStore } from '../modules/sessions/store/sidebarStore'
-import { CHAT_SIDE_LABELS, PRESET_LABELS, ZONE_LABELS, applyPreset, resetLayout, setChatSide, sideZone, togglePanel, toggleZone, useWorkspace, type ChatSide, type Preset } from '../modules/workspace/layout'
 
-const PANEL_ITEMS = [
-  { kind: 'files' as const, label: 'Files', shortcut: 'Ctrl+Shift+E' },
-  { kind: 'browser' as const, label: 'Browser', shortcut: 'Ctrl+Shift+B' },
-  { kind: 'terminal' as const, label: 'Terminal', shortcut: 'Ctrl+`' },
-]
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
 import { PairChip } from '../modules/multiplayer/components/PairChip'
 import { useAppView } from '../modules/git/components/GitView'
@@ -22,11 +16,6 @@ const TRAFFIC_LIGHT_SIZE = 12
  * used to be a permanent vertical icon rail pinned to the window's right
  * edge; moving them here gives that column back to actual content. */
 function TitleBarActions() {
-  const zones = useWorkspace((s) => s.zones)
-  const chatSide = useWorkspace((s) => s.chatSide)
-  const open = useWorkspace((s) => s.open)
-  const [panelsAnchor, setPanelsAnchor] = useState<HTMLElement | null>(null)
-  const [layoutAnchor, setLayoutAnchor] = useState<HTMLElement | null>(null)
   const openExternal = useProjectsStore((s) => s.openExternal)
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const projects = useProjectsStore((s) => s.projects)
@@ -79,113 +68,6 @@ function TitleBarActions() {
         </MenuItem>
       </Menu>
 
-      {/* Panels live wherever the user docks them now, so the title bar no
-          longer toggles "the right dock" — it shows or hides panels by name,
-          and offers starting arrangements. */}
-      <Tooltip title="Panels">
-        <IconButton size="small" aria-label="Panels" onClick={(e) => setPanelsAnchor(e.currentTarget)} sx={iconSx(!!panelsAnchor)}>
-          <PanelsLinear size={14} color="currentColor" />
-        </IconButton>
-      </Tooltip>
-      {/* Just the two panels. What goes IN them is chosen from each panel's
-          own "+" and its empty state, where you are already looking. */}
-      <Menu anchorEl={panelsAnchor} open={!!panelsAnchor} onClose={() => setPanelsAnchor(null)}>
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 2, pt: 0.5, pb: 0.5 }}>
-          Chat position
-        </Typography>
-        <Stack direction="row" sx={{ gap: 0.5, px: 1.5, pb: 1 }}>
-          {(['left', 'right'] as ChatSide[]).map((side) => (
-            <ButtonBase
-              key={side}
-              onClick={() => setChatSide(side)}
-              aria-pressed={chatSide === side}
-              sx={{
-                flex: 1,
-                height: 24,
-                borderRadius: '6px',
-                fontSize: '0.75rem',
-                fontWeight: chatSide === side ? 600 : 500,
-                color: chatSide === side ? 'text.primary' : 'text.secondary',
-                bgcolor: chatSide === side ? 'action.selected' : 'transparent',
-                border: 1,
-                borderColor: 'divider',
-                '&:hover': { bgcolor: 'action.hover' },
-              }}
-            >
-              {CHAT_SIDE_LABELS[side]}
-            </ButtonBase>
-          ))}
-        </Stack>
-        <Divider />
-        <MenuItem
-          onClick={() => {
-            toggleZone(sideZone())
-            setPanelsAnchor(null)
-          }}
-          sx={{ gap: 1, fontSize: '0.8125rem', minWidth: 210 }}
-        >
-          <Box sx={{ flex: 1 }}>{ZONE_LABELS[sideZone()]}</Box>
-          {zones[sideZone()] && (
-            <ListItemIcon sx={{ minWidth: 0, color: 'primary.main' }}>
-              <TickCircleLinear size={13} color="currentColor" />
-            </ListItemIcon>
-          )}
-        </MenuItem>
-        <Divider />
-        {PANEL_ITEMS.map((p) => (
-          <MenuItem
-            key={p.kind}
-            onClick={() => {
-              togglePanel(p.kind)
-              setPanelsAnchor(null)
-            }}
-            sx={{ gap: 1, fontSize: '0.8125rem', minWidth: 210 }}
-          >
-            <Box sx={{ flex: 1 }}>{p.label}</Box>
-            {open.includes(p.kind) && (
-              <ListItemIcon sx={{ minWidth: 0, color: 'primary.main' }}>
-                <TickCircleLinear size={13} color="currentColor" />
-              </ListItemIcon>
-            )}
-            <Typography variant="caption" color="text.disabled">
-              {p.shortcut}
-            </Typography>
-          </MenuItem>
-        ))}
-      </Menu>
-
-      <Tooltip title="Layout">
-        <IconButton size="small" aria-label="Layout" onClick={(e) => setLayoutAnchor(e.currentTarget)} sx={iconSx(!!layoutAnchor)}>
-          <LayoutLinear size={14} color="currentColor" />
-        </IconButton>
-      </Tooltip>
-      <Menu anchorEl={layoutAnchor} open={!!layoutAnchor} onClose={() => setLayoutAnchor(null)}>
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 2, pt: 0.5, pb: 0.75, maxWidth: 260 }}>
-          Start from an arrangement — then drag tabs anywhere to rearrange.
-        </Typography>
-        {(Object.keys(PRESET_LABELS) as Preset[]).map((preset) => (
-          <MenuItem
-            key={preset}
-            onClick={() => {
-              applyPreset(preset)
-              setLayoutAnchor(null)
-            }}
-            sx={{ fontSize: '0.8125rem' }}
-          >
-            {PRESET_LABELS[preset]}
-          </MenuItem>
-        ))}
-        <Divider />
-        <MenuItem
-          onClick={() => {
-            resetLayout()
-            setLayoutAnchor(null)
-          }}
-          sx={{ fontSize: '0.8125rem', color: 'text.secondary' }}
-        >
-          Reset to default
-        </MenuItem>
-      </Menu>
     </Stack>
   )
 }
