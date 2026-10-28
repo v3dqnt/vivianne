@@ -1,7 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { Alert, Box, useTheme } from '../../ui'
 import { hasTauri } from '../../ipc'
-import { SURFACE_RADIUS } from '../../theme'
+import { mainPane } from '../../theme'
 import { ChatView } from '../ai/components/ChatView'
 import { HireRequests } from '../team/components/HireRequests'
 import { useProjectsStore, modeOf } from '../sessions/store/projectsStore'
@@ -68,7 +68,6 @@ function Chat() {
  */
 export function Workspace() {
   const theme = useTheme()
-  const t = theme.palette.tokens
   return (
     <Box sx={{ flex: 1, minWidth: 0, height: '100%', bgcolor: 'background.chrome', pr: 1, pb: 1, pl: 0.5 }}>
       <Box
@@ -76,11 +75,7 @@ export function Workspace() {
           height: '100%',
           display: 'flex',
           flexDirection: 'column',
-          borderRadius: `${SURFACE_RADIUS}px`,
-          overflow: 'hidden',
-          bgcolor: t.background,
-          border: `1px solid ${t.border}`,
-          boxShadow: theme.elevation.pane,
+          ...mainPane(theme),
         }}
       >
         <Chat />

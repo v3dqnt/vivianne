@@ -7,6 +7,8 @@ import { useBotsStore, botKey } from '../team/store/botsStore'
 import { Avatar, faceOf } from '../team/components/bits'
 import { useBotFace } from '../team/components/AgentFace'
 import { NewAgentDialog } from '../team/components/NewAgentDialog'
+import { mainPane } from '../../theme'
+import { useTheme } from '../../ui'
 
 const TeamRoom = lazy(() => import('../team/components/TeamRoom').then((m) => ({ default: m.TeamRoom })))
 const NO_AGENTS: TeamAgent[] = []
@@ -22,6 +24,7 @@ function RowFace({ root, agent }: { root: string | null; agent: TeamAgent }) {
  * is for threads.
  */
 export function AgentsView() {
+  const theme = useTheme()
   const root = useGeneralAgents((s) => s.root)
   const ensure = useGeneralAgents((s) => s.ensure)
   const agents = useTeamStore((s) => (root ? (s.byRoot[root] ?? NO_AGENTS) : NO_AGENTS)).filter((a) => a.status === 'active')
@@ -47,7 +50,7 @@ export function AgentsView() {
 
   return (
     <Stack direction="row" sx={{ flex: 1, minWidth: 0, height: '100%', bgcolor: 'background.chrome', pb: 1, pr: 1, gap: 1 }}>
-      <Stack sx={{ width: 280, flexShrink: 0, borderRadius: '12px', bgcolor: 'background.paper', border: 1, borderColor: 'divider', overflow: 'hidden', ml: 1 }}>
+      <Stack sx={{ width: 280, flexShrink: 0, ...mainPane(theme), ml: 1 }}>
         <Stack sx={{ p: '12px', gap: '8px' }}>
           <Stack direction="row" sx={{ alignItems: 'center', height: 28, px: '4px' }}>
             <Typography sx={{ flex: 1, fontSize: '13px', fontWeight: 600, color: 'text.secondary' }}>24/7 agents</Typography>
@@ -90,7 +93,7 @@ export function AgentsView() {
         </Stack>
       </Stack>
 
-      <Box sx={{ flex: 1, minWidth: 0, borderRadius: '12px', bgcolor: 'background.paper', border: 1, borderColor: 'divider', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ flex: 1, minWidth: 0, ...mainPane(theme), display: 'flex', flexDirection: 'column' }}>
         {root && picked ? (
           <Suspense fallback={null}>
             <TeamRoom key={root} root={root} />

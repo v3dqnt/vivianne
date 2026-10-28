@@ -15,6 +15,8 @@ import type { BotMessage } from '../team/store/botsStore'
 import { NewProjectDialog } from '../sessions/components/NewProjectDialog'
 import { PairProjectDialog } from '../multiplayer/components/PairProjectDialog'
 import { useAppView } from '../git/components/GitView'
+import { mainPane } from '../../theme'
+import { useTheme } from '../../ui'
 
 const GENERAL = { id: GENERAL_PROJECT_ID, name: 'General', color: null } as const
 
@@ -65,6 +67,7 @@ const ROW_SX = {
  * a thread, or start one, and the chat opens on it.
  */
 export function HomeView() {
+  const theme = useTheme()
   const projects = useProjectsStore((s) => s.projects)
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const refresh = useProjectsStore((s) => s.refresh)
@@ -101,7 +104,7 @@ export function HomeView() {
 
   return (
     <Box sx={{ flex: 1, minWidth: 0, height: '100%', bgcolor: 'background.chrome', pr: 1, pb: 1, pl: 0.5 }}>
-      <Box sx={{ height: '100%', overflowY: 'auto', borderRadius: '12px', bgcolor: 'background.paper', border: 1, borderColor: 'divider' }}>
+      <Box sx={{ height: '100%', ...mainPane(theme), overflowY: 'auto' }}>
         <Stack sx={{ maxWidth: 1040, mx: 'auto', px: '32px', pt: '32px' }}>
           <Stack direction="row" role="tablist" sx={{ gap: '4px', p: '2px', borderRadius: '8px', bgcolor: 'action.hover', alignSelf: 'flex-start' }}>
             {([['projects', 'Projects'], ['agents', '24/7 agents']] as const).map(([id, label]) => (

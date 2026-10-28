@@ -339,3 +339,16 @@ export function glassSurface(mode: Mode) {
 export function surfaceCard(mode: Mode) {
   return { ...glassSurface(mode), borderRadius: `${SURFACE_RADIUS}px` } as const
 }
+
+/** The main area's pane: what the chat, Home and Agents views are drawn on,
+ * so all three follow the theme picked in Settings the same way. */
+export function mainPane(theme: Theme) {
+  const t = theme.palette.tokens
+  return {
+    borderRadius: `${SURFACE_RADIUS}px`,
+    overflow: 'hidden',
+    bgcolor: t.background,
+    border: `1px solid ${t.border}`,
+    boxShadow: theme.elevation.pane,
+  } as const
+}
