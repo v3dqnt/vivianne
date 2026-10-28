@@ -257,7 +257,6 @@ function NotchRows() {
 /** Settings → Layout & shortcuts. */
 export function LayoutSection() {
   const sidebarSide = useLayoutPrefs((s) => s.sidebarSide)
-  const showRail = useLayoutPrefs((s) => s.showRail)
   const updatePrefs = useLayoutPrefs((s) => s.update)
   const resetAll = useShortcutStore((s) => s.resetAll)
   const overrides = useShortcutStore((s) => s.overrides)
@@ -283,9 +282,6 @@ export function LayoutSection() {
           ]}
           onChange={(side) => updatePrefs({ sidebarSide: side })}
         />
-      </Row>
-      <Row label="Project rail" hint="The column of project icons">
-        <Switch size="small" checked={showRail} onChange={() => updatePrefs({ showRail: !showRail })} />
       </Row>
 
       <Divider />

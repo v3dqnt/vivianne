@@ -4,7 +4,6 @@ import type { AgentEvent, AgentMessage, ImageAttachment, MessageContent, Questio
 import { useModelStore } from './modelStore'
 import { useSubagentStore } from './subagentStore'
 import { useShellTaskStore, isShellTool } from '../../dock/store/shellTaskStore'
-import { usePanelStore } from '../../dock/store/panelStore'
 import { notifyFileChanged, resolveAgentPath } from '../../ide/lib/fileChangeBus'
 import { useWorkspaceStore } from './workspaceStore'
 import { activeThreadId, useActiveThread, PRIMARY_THREAD_ID } from './activeThread'

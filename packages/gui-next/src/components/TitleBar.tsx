@@ -224,7 +224,7 @@ function ViewSwitch() {
   const flag = useGitStatus((s) => attention(s.summary, s.pr))
   return (
     <Box role="tablist" aria-label="View" sx={{ display: 'flex', gap: 0.25, p: '2px', borderRadius: '8px', bgcolor: 'action.hover', pointerEvents: 'auto' }}>
-      {(['chat', 'git'] as const).map((v) => (
+      {(['home', 'chat', 'git'] as const).map((v) => (
         <Box
           key={v}
           component="button"
@@ -245,7 +245,7 @@ function ViewSwitch() {
             '&:hover': { color: 'text.primary' },
           }}
         >
-          {v === 'chat' ? 'Chat' : 'Git'}
+          {v === 'home' ? 'Home' : v === 'chat' ? 'Chat' : 'Git'}
           {v === 'git' && flag && (
             <Box component="span" aria-label={flag === 'red' ? 'Needs attention' : 'Uncommitted or unpushed work'} sx={{ display: 'inline-block', width: 6, height: 6, ml: 0.5, mb: '1px', borderRadius: '50%', bgcolor: flag === 'red' ? 'error.main' : 'warning.main' }} />
           )}

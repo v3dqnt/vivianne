@@ -86,7 +86,7 @@ export function isThreaded(scope: string | null): boolean {
 
 /** A scope's threads, newest first: General's are the ones assigned to no
  * project; a threads project's are the ones assigned to it. */
-function threadsOf(scope: string, all: SessionInfo[]): SessionInfo[] {
+export function threadsOf(scope: string, all: SessionInfo[]): SessionInfo[] {
   const map = useProjectsStore.getState().sessionProjectMap
   return all
     .filter((s) => (scope === GENERAL_SCOPE && s.id === LEGACY_GENERAL_CONVERSATION) || (!s.id.startsWith('conv--') && !s.id.startsWith('day--')))
