@@ -17,7 +17,6 @@ import { GitStatusChip } from '../../git/components/GitActions'
 import { OnboardingDialog } from './OnboardingDialog'
 import { useTeamStore } from '../../team/store/teamStore'
 import { TreeTeam } from '../../team/components/TreeTeam'
-import { GeneralAgents } from '../../team/components/GeneralAgents'
 import { useGeneralAgents } from '../../team/store/generalAgentsStore'
 import { useBotsStore } from '../../team/store/botsStore'
 
@@ -178,18 +177,19 @@ export function Sidebar() {
             {activeProject?.name ?? 'General'}
           </Typography>
         </Stack>
-        {/* The folder the agent works in; git and GitHub are in the title
-            bar's Git view. */}
+        {/* The folder the agent works in. General works across the whole
+            computer, so it shows none. */}
+        {!isGeneral && (
         <Stack direction="row" sx={{ ml: -0.75, alignItems: 'center', gap: 0.25, flexWrap: 'wrap' }}>
           <WorkspaceSelector />
           <GitStatusChip />
         </Stack>
+        )}
       </Stack>
 
 
       {threaded ? (
         <>
-          {isGeneral && <GeneralAgents labelSx={SECTION_LABEL_SX} />}
           <GeneralThreads onExport={exportCurrent} />
         </>
       ) : (

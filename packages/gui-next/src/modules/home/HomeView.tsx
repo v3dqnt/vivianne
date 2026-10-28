@@ -8,6 +8,9 @@ import type { SessionInfo } from '../sessions/lib/types'
 import { useTeamStore, type TeamAgent } from '../team/store/teamStore'
 import { useGeneralAgents } from '../team/store/generalAgentsStore'
 import { useBotsStore, botKey } from '../team/store/botsStore'
+import { NewAgentDialog } from '../team/components/NewAgentDialog'
+import { Avatar, faceOf } from '../team/components/bits'
+import { useBotFace } from '../team/components/AgentFace'
 import type { BotMessage } from '../team/store/botsStore'
 import { NewProjectDialog } from '../sessions/components/NewProjectDialog'
 import { PairProjectDialog } from '../multiplayer/components/PairProjectDialog'
@@ -262,6 +265,7 @@ function AlwaysOnAgents() {
   const agents = useTeamStore((s) => (root ? (s.byRoot[root] ?? NO_AGENTS) : NO_AGENTS))
   const statuses = useBotsStore((s) => s.status)
   const loadStatus = useBotsStore((s) => s.loadStatus)
+  const [creating, setCreating] = useState(false)
 
   useEffect(() => {
     void ensure().then((r) => r && void loadStatus(r))
@@ -277,9 +281,20 @@ function AlwaysOnAgents() {
 
   return (
     <Stack sx={{ maxWidth: 1040, mx: 'auto', px: '32px', py: '32px', gap: '16px' }}>
-      <Typography sx={{ fontSize: '13px', color: 'text.secondary' }}>
-        Agents that keep working on their own: on a schedule, when something arrives, or when you message them.
-      </Typography>
+      <Stack direction="row" sx={{ alignItems: 'center', gap: '16px' }}>
+        <Typography sx={{ flex: 1, fontSize: '13px', color: 'text.secondary' }}>
+          Agents that keep working on their own: on a schedule, when something arrives, or when you message them.
+        </Typography>
+        <ButtonBase
+          onClick={() => setCreating(true)}
+          disabled={!root}
+          sx={{ flexShrink: 0, whiteSpace: 'nowrap', gap: '8px', height: 32, px: '12px', borderRadius: '8px', bgcolor: 'text.primary', color: 'background.paper', fontSize: '13px', fontWeight: 600, '&:hover': { opacity: 0.85 } }}
+        >
+          <AddLinear size={14} color="currentColor" />
+          New agent
+        </ButtonBase>
+      </Stack>
+      {root && <NewAgentDialog root={root} open={creating} count={agents.length} onClose={() => setCreating(false)} />}
       {active.length === 0 ? (
         <Typography sx={{ fontSize: '13px', color: 'text.secondary' }}>No 24/7 agents yet.</Typography>
       ) : (
@@ -294,12 +309,15 @@ function AlwaysOnAgents() {
                 onClick={() => open(a.id)}
                 sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '8px', p: '16px', borderRadius: '12px', border: 1, borderColor: 'divider', textAlign: 'left', '&:hover': { bgcolor: 'action.hover' } }}
               >
-                <Stack direction="row" sx={{ alignItems: 'center', gap: '8px', width: '100%' }}>
-                  <Box sx={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, bgcolor: working ? 'success.main' : paused ? 'warning.main' : 'text.disabled' }} />
+                <Stack direction="row" sx={{ alignItems: 'center', gap: '12px', width: '100%' }}>
+                  <CardFace root={root} agent={a} />
                   <Box component="span" sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {a.name}
                   </Box>
-                  <Box component="span" sx={{ fontSize: '11px', color: 'text.disabled' }}>{working ? 'Working' : paused ? 'Paused' : 'Idle'}</Box>
+                  <Stack direction="row" sx={{ alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                    <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: working ? 'success.main' : paused ? 'warning.main' : 'text.disabled' }} />
+                    <Box component="span" sx={{ fontSize: '11px', color: 'text.disabled' }}>{working ? 'Working' : paused ? 'Paused' : 'Idle'}</Box>
+                  </Stack>
                 </Stack>
                 <Box component="span" sx={{ fontSize: '12px', color: 'text.secondary', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                   {working && st?.activity ? st.activity : a.role}
@@ -311,4 +329,10 @@ function AlwaysOnAgents() {
       )}
     </Stack>
   )
+}
+
+/** A card's avatar, live: it shows the agent working, thinking or idle. */
+function CardFace({ root, agent }: { root: string | null; agent: TeamAgent }) {
+  const face = useBotFace(root, agent.id)
+  return <Avatar {...faceOf(agent)} size={36} state={face} animate />
 }
