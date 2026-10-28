@@ -5,7 +5,9 @@ import { call } from '../../ipc'
 import { useProjectsStore, projectColor, projectInitial, modeOf, GENERAL_PROJECT_ID, type Project } from '../sessions/store/projectsStore'
 import { useDaysStore, threadsOf, GENERAL_SCOPE } from '../sessions/store/daysStore'
 import type { SessionInfo } from '../sessions/lib/types'
-import { useTeamStore } from '../team/store/teamStore'
+import { useTeamStore, type TeamAgent } from '../team/store/teamStore'
+import { useGeneralAgents } from '../team/store/generalAgentsStore'
+import { useBotsStore, botKey } from '../team/store/botsStore'
 import type { BotMessage } from '../team/store/botsStore'
 import { NewProjectDialog } from '../sessions/components/NewProjectDialog'
 import { PairProjectDialog } from '../multiplayer/components/PairProjectDialog'
@@ -68,6 +70,7 @@ export function HomeView() {
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
   const [pairing, setPairing] = useState(false)
+  const [tab, setTab] = useState<'projects' | 'agents'>('projects')
 
   useEffect(() => {
     void refresh()
@@ -96,7 +99,25 @@ export function HomeView() {
   return (
     <Box sx={{ flex: 1, minWidth: 0, height: '100%', bgcolor: 'background.chrome', pr: 1, pb: 1, pl: 0.5 }}>
       <Box sx={{ height: '100%', overflowY: 'auto', borderRadius: '12px', bgcolor: 'background.paper', border: 1, borderColor: 'divider' }}>
-        <Stack direction="row" sx={{ maxWidth: 1040, mx: 'auto', px: '32px', py: '48px', gap: '48px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <Stack sx={{ maxWidth: 1040, mx: 'auto', px: '32px', pt: '32px' }}>
+          <Stack direction="row" role="tablist" sx={{ gap: '4px', p: '2px', borderRadius: '8px', bgcolor: 'action.hover', alignSelf: 'flex-start' }}>
+            {([['projects', 'Projects'], ['agents', '24/7 agents']] as const).map(([id, label]) => (
+              <ButtonBase
+                key={id}
+                role="tab"
+                aria-selected={tab === id}
+                onClick={() => setTab(id)}
+                sx={{ height: 28, px: '12px', borderRadius: '6px', fontSize: '13px', fontWeight: tab === id ? 600 : 500, color: tab === id ? 'text.primary' : 'text.secondary', bgcolor: tab === id ? 'background.paper' : 'transparent', '&:hover': { color: 'text.primary' } }}
+              >
+                {label}
+              </ButtonBase>
+            ))}
+          </Stack>
+        </Stack>
+        {tab === 'agents' ? (
+          <AlwaysOnAgents />
+        ) : (
+        <Stack direction="row" sx={{ maxWidth: 1040, mx: 'auto', px: '32px', py: '32px', gap: '48px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <Stack sx={{ flex: '1 1 240px', maxWidth: 300, minWidth: 0, gap: '4px' }}>
             <Stack direction="row" sx={{ alignItems: 'center', height: 32, px: '12px', mb: '4px' }}>
               <Typography sx={{ flex: 1, fontSize: '13px', fontWeight: 600, color: 'text.secondary' }}>Projects</Typography>
@@ -162,6 +183,7 @@ export function HomeView() {
             )}
           </Stack>
         </Stack>
+        )}
       </Box>
       <NewProjectDialog
         open={creating}
@@ -226,6 +248,67 @@ function TeamActivity({ root, onOpen }: { root: string; onOpen: () => void }) {
           ))
         )}
       </Stack>
+    </Stack>
+  )
+}
+
+const NO_AGENTS: TeamAgent[] = []
+
+/** General's own agents: always on, each with its job, schedule, inbox and
+ * phone. Pick one to talk to it. */
+function AlwaysOnAgents() {
+  const root = useGeneralAgents((s) => s.root)
+  const ensure = useGeneralAgents((s) => s.ensure)
+  const agents = useTeamStore((s) => (root ? (s.byRoot[root] ?? NO_AGENTS) : NO_AGENTS))
+  const statuses = useBotsStore((s) => s.status)
+  const loadStatus = useBotsStore((s) => s.loadStatus)
+
+  useEffect(() => {
+    void ensure().then((r) => r && void loadStatus(r))
+  }, [ensure, loadStatus])
+
+  const open = (id: string) => {
+    if (!root) return
+    useProjectsStore.getState().setActiveProject(GENERAL_PROJECT_ID)
+    useBotsStore.getState().setChannel(root, id)
+    useAppView.setState({ view: 'chat' })
+  }
+  const active = agents.filter((a) => a.status === 'active')
+
+  return (
+    <Stack sx={{ maxWidth: 1040, mx: 'auto', px: '32px', py: '32px', gap: '16px' }}>
+      <Typography sx={{ fontSize: '13px', color: 'text.secondary' }}>
+        Agents that keep working on their own: on a schedule, when something arrives, or when you message them.
+      </Typography>
+      {active.length === 0 ? (
+        <Typography sx={{ fontSize: '13px', color: 'text.secondary' }}>No 24/7 agents yet.</Typography>
+      ) : (
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' }}>
+          {active.map((a) => {
+            const st = root ? statuses[botKey(root, a.id)] : undefined
+            const working = st?.state === 'working'
+            const paused = st?.state === 'paused'
+            return (
+              <ButtonBase
+                key={a.id}
+                onClick={() => open(a.id)}
+                sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '8px', p: '16px', borderRadius: '12px', border: 1, borderColor: 'divider', textAlign: 'left', '&:hover': { bgcolor: 'action.hover' } }}
+              >
+                <Stack direction="row" sx={{ alignItems: 'center', gap: '8px', width: '100%' }}>
+                  <Box sx={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, bgcolor: working ? 'success.main' : paused ? 'warning.main' : 'text.disabled' }} />
+                  <Box component="span" sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {a.name}
+                  </Box>
+                  <Box component="span" sx={{ fontSize: '11px', color: 'text.disabled' }}>{working ? 'Working' : paused ? 'Paused' : 'Idle'}</Box>
+                </Stack>
+                <Box component="span" sx={{ fontSize: '12px', color: 'text.secondary', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                  {working && st?.activity ? st.activity : a.role}
+                </Box>
+              </ButtonBase>
+            )
+          })}
+        </Box>
+      )}
     </Stack>
   )
 }
