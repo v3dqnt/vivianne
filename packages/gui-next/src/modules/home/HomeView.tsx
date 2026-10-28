@@ -273,9 +273,8 @@ function AlwaysOnAgents() {
 
   const open = (id: string) => {
     if (!root) return
-    useProjectsStore.getState().setActiveProject(GENERAL_PROJECT_ID)
     useBotsStore.getState().setChannel(root, id)
-    useAppView.setState({ view: 'chat' })
+    useAppView.setState({ view: 'agents' })
   }
   const active = agents.filter((a) => a.status === 'active')
 

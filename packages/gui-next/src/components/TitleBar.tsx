@@ -220,7 +220,7 @@ function ViewSwitch() {
   const view = useAppView((s) => s.view)
   return (
     <Box role="tablist" aria-label="View" sx={{ display: 'flex', gap: 0.25, p: '2px', borderRadius: '8px', bgcolor: 'action.hover', pointerEvents: 'auto' }}>
-      {(['home', 'chat'] as const).map((v) => (
+      {(['home', 'chat', 'agents'] as const).map((v) => (
         <Box
           key={v}
           component="button"
@@ -241,7 +241,7 @@ function ViewSwitch() {
             '&:hover': { color: 'text.primary' },
           }}
         >
-          {v === 'home' ? 'Home' : 'Chat'}
+          {v === 'home' ? 'Home' : v === 'chat' ? 'Chat' : 'Agents'}
         </Box>
       ))}
     </Box>

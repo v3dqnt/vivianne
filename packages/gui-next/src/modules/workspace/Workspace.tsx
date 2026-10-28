@@ -3,8 +3,7 @@ import { Alert, Box, useTheme } from '../../ui'
 import { hasTauri } from '../../ipc'
 import { SURFACE_RADIUS } from '../../theme'
 import { ChatView } from '../ai/components/ChatView'
-import { useProjectsStore, modeOf, GENERAL_PROJECT_ID } from '../sessions/store/projectsStore'
-import { useGeneralAgents } from '../team/store/generalAgentsStore'
+import { useProjectsStore, modeOf } from '../sessions/store/projectsStore'
 import { useBotsStore } from '../team/store/botsStore'
 import { LEAD_CHANNEL } from '../team/components/TreeTeam'
 
@@ -23,9 +22,6 @@ function Fill({ children }: { children: React.ReactNode }) {
 
 function Chat() {
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === s.activeProjectId))
-  const isGeneral = useProjectsStore((s) => s.activeProjectId === GENERAL_PROJECT_ID)
-  const generalRoot = useGeneralAgents((s) => s.root)
-  const generalChannel = useBotsStore((s) => (generalRoot ? s.channel[generalRoot] : undefined))
   const treeChannel = useBotsStore((s) => (project?.path ? s.channel[project.path] : undefined))
   if (!hasTauri()) {
     return (
@@ -36,14 +32,6 @@ function Chat() {
             desktop app for the real thing.
           </Alert>
         </Box>
-      </Fill>
-    )
-  }
-  // One of General's own agents, picked in the sidebar: its direct messages.
-  if (isGeneral && generalRoot && generalChannel && generalChannel !== 'room') {
-    return (
-      <Fill>
-        <TeamRoom key={generalRoot} root={generalRoot} />
       </Fill>
     )
   }

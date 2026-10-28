@@ -14,7 +14,7 @@ import { useGitStatus, changedCount } from '../store/gitStatusStore'
 
 /** What the main area shows, picked in the title bar: the chat and its
  * panels, or the repository. */
-export const useAppView = create<{ view: 'home' | 'chat' | 'git' }>(() => ({ view: 'home' }))
+export const useAppView = create<{ view: 'home' | 'chat' | 'agents' | 'git' }>(() => ({ view: 'home' }))
 
 function when(iso: string): string {
   const d = new Date(iso)

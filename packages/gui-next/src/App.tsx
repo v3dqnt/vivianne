@@ -3,6 +3,7 @@ import { ModsRuntime } from './modules/mods/components/ModsRuntime'
 import { Box, Stack } from './ui'
 import { TitleBar } from './components/TitleBar'
 import { HomeView } from './modules/home/HomeView'
+import { AgentsView } from './modules/home/AgentsView'
 import { Sidebar } from './modules/sessions/components/Sidebar'
 import { SettingsDialog } from './modules/settings/components/SettingsDialog'
 import { OptionalComponentsModal } from './modules/settings/components/OptionalComponentsModal'
@@ -37,7 +38,7 @@ function App() {
   useEffect(() => startGitStatus(), [])
 
   // Home lists the projects and threads itself; the sidebar is for working in one.
-  const sidebar = !sidebarCollapsed && view !== 'home' && <Sidebar />
+  const sidebar = !sidebarCollapsed && view === 'chat' && <Sidebar />
 
   return (
     <Stack sx={{ height: '100%' }}>
@@ -60,6 +61,7 @@ function App() {
           </Box>
           {view === 'git' && <GitView />}
           {view === 'home' && <HomeView />}
+          {view === 'agents' && <AgentsView />}
         </LayoutErrorBoundary>
         {sidebarSide === 'right' && sidebar}
       </Stack>
