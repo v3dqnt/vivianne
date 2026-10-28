@@ -42,8 +42,9 @@
 use serde::{Deserialize, Serialize};
 use tauri::{LogicalPosition, LogicalSize, Manager, WebviewUrl};
 
-/// Label for the single embedded browser view.
-const LABEL: &str = "live_browser";
+/// Label the agent's own view uses. The Browser panel passes its own label per
+/// tab, `live_browser_<id>`.
+pub const DEFAULT_LABEL: &str = "live_browser";
 
 /// Where the panel wants the view, in CSS pixels relative to the window.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -75,15 +76,15 @@ fn navigate_if_changed(view: &tauri::Webview, target: url::Url) -> Result<(), St
     Ok(())
 }
 
-fn find(app: &tauri::AppHandle) -> Option<tauri::Webview> {
-    app.webviews().get(LABEL).cloned()
+fn find(app: &tauri::AppHandle, label: &str) -> Option<tauri::Webview> {
+    app.webviews().get(label).cloned()
 }
 
 /// Create the view if absent, then position it and navigate.
 ///
 /// Idempotent on purpose: the panel calls this on mount, on every layout
 /// change, and after a navigation, and it must not accumulate webviews.
-pub fn show(app: &tauri::AppHandle, url: &str, rect: Rect) -> Result<(), String> {
+pub fn show(app: &tauri::AppHandle, label: &str, url: &str, rect: Rect) -> Result<(), String> {
     let window = app
         .get_window("main")
         .ok_or_else(|| "main window is gone".to_string())?;
@@ -92,9 +93,9 @@ pub fn show(app: &tauri::AppHandle, url: &str, rect: Rect) -> Result<(), String>
         .parse::<url::Url>()
         .map_err(|e| format!("not a usable URL ({e}): {url}"))?;
 
-    if let Some(view) = find(app) {
+    if let Some(view) = find(app, label) {
         if rect.is_degenerate() {
-            return hide(app);
+            return hide(app, label);
         }
         view.set_position(LogicalPosition::new(rect.x, rect.y))
             .map_err(|e| format!("couldn't move the browser view: {e}"))?;
@@ -120,7 +121,7 @@ pub fn show(app: &tauri::AppHandle, url: &str, rect: Rect) -> Result<(), String>
         .and_then(|w| w.additional_browser_args.clone());
     // External URL: the page is third-party content, so Tauri injects no
     // invoke surface into it.
-    let mut builder = tauri::webview::WebviewBuilder::new(LABEL, WebviewUrl::External(parsed));
+    let mut builder = tauri::webview::WebviewBuilder::new(label, WebviewUrl::External(parsed));
     if let Some(args) = browser_args {
         builder = builder.additional_browser_args(&args);
     }
@@ -155,8 +156,8 @@ pub fn show(app: &tauri::AppHandle, url: &str, rect: Rect) -> Result<(), String>
 /// every platform here, whereas hiding a child webview is not uniformly
 /// implemented, and a half-hidden view painting over the UI is a worse failure
 /// than an off-screen one.
-pub fn hide(app: &tauri::AppHandle) -> Result<(), String> {
-    if let Some(view) = find(app) {
+pub fn hide(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
+    if let Some(view) = find(app, label) {
         view.set_position(LogicalPosition::new(-20000.0, -20000.0))
             .map_err(|e| format!("couldn't hide the browser view: {e}"))?;
     }
@@ -164,8 +165,8 @@ pub fn hide(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 /// Tear it down entirely, releasing its process and memory.
-pub fn close(app: &tauri::AppHandle) -> Result<(), String> {
-    if let Some(view) = find(app) {
+pub fn close(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
+    if let Some(view) = find(app, label) {
         view.close().map_err(|e| format!("couldn't close the browser view: {e}"))?;
     }
     Ok(())
@@ -173,8 +174,8 @@ pub fn close(app: &tauri::AppHandle) -> Result<(), String> {
 
 /// The URL the view is currently showing — it changes on its own as the user
 /// clicks links, so the address bar has to read it back rather than assume.
-pub fn current_url(app: &tauri::AppHandle) -> Option<String> {
-    find(app).and_then(|v| v.url().ok()).map(|u| u.to_string())
+pub fn current_url(app: &tauri::AppHandle, label: &str) -> Option<String> {
+    find(app, label).and_then(|v| v.url().ok()).map(|u| u.to_string())
 }
 
 /// Run JS in the page and hand the JSON result back.
@@ -182,8 +183,8 @@ pub fn current_url(app: &tauri::AppHandle) -> Option<String> {
 /// This is how the agent reads or drives the live view when it is the active
 /// surface. `eval` alone returns nothing, so the callback form is required to
 /// get a value out at all.
-pub async fn eval_json(app: &tauri::AppHandle, js: &str) -> Result<serde_json::Value, String> {
-    let view = find(app).ok_or_else(|| "no live browser view is open".to_string())?;
+pub async fn eval_json(app: &tauri::AppHandle, label: &str, js: &str) -> Result<serde_json::Value, String> {
+    let view = find(app, label).ok_or_else(|| "no live browser view is open".to_string())?;
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
     let tx = std::sync::Mutex::new(Some(tx));
     view.eval_with_callback(js, move |raw| {
@@ -206,28 +207,28 @@ pub async fn eval_json(app: &tauri::AppHandle, js: &str) -> Result<serde_json::V
 // ── Commands ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn cmd_live_browser_show(app: tauri::AppHandle, url: String, rect: Rect) -> Result<(), String> {
-    show(&app, &url, rect)
+pub async fn cmd_live_browser_show(app: tauri::AppHandle, label: String, url: String, rect: Rect) -> Result<(), String> {
+    show(&app, &label, &url, rect)
 }
 
 #[tauri::command]
-pub async fn cmd_live_browser_hide(app: tauri::AppHandle) -> Result<(), String> {
-    hide(&app)
+pub async fn cmd_live_browser_hide(app: tauri::AppHandle, label: String) -> Result<(), String> {
+    hide(&app, &label)
 }
 
 #[tauri::command]
-pub async fn cmd_live_browser_close(app: tauri::AppHandle) -> Result<(), String> {
-    close(&app)
+pub async fn cmd_live_browser_close(app: tauri::AppHandle, label: String) -> Result<(), String> {
+    close(&app, &label)
 }
 
 #[tauri::command]
-pub async fn cmd_live_browser_url(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    Ok(current_url(&app))
+pub async fn cmd_live_browser_url(app: tauri::AppHandle, label: String) -> Result<Option<String>, String> {
+    Ok(current_url(&app, &label))
 }
 
 #[tauri::command]
-pub async fn cmd_live_browser_eval(app: tauri::AppHandle, js: String) -> Result<serde_json::Value, String> {
-    eval_json(&app, &js).await
+pub async fn cmd_live_browser_eval(app: tauri::AppHandle, label: String, js: String) -> Result<serde_json::Value, String> {
+    eval_json(&app, &label, &js).await
 }
 
 /// Make sure the view exists and is showing `url`, without needing the panel.
@@ -238,7 +239,7 @@ pub async fn cmd_live_browser_eval(app: tauri::AppHandle, js: String) -> Result<
 /// absent, and the panel's job reduces to moving it somewhere visible.
 pub fn ensure_at(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
     const OFFSCREEN: Rect = Rect { x: -20000.0, y: -20000.0, width: 1280.0, height: 800.0 };
-    match find(app) {
+    match find(app, DEFAULT_LABEL) {
         Some(view) => {
             let parsed = url
                 .parse::<url::Url>()
@@ -248,7 +249,7 @@ pub fn ensure_at(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
         // Sized like a real viewport even while off-screen: a page laid out at
         // 1x1 would report a mobile breakpoint and a snapshot of it would
         // describe a different site than the one the user eventually sees.
-        None => show(app, url, OFFSCREEN),
+        None => show(app, DEFAULT_LABEL, url, OFFSCREEN),
     }
 }
 

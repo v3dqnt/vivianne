@@ -27,7 +27,7 @@
 //! camofox already has, and the one the `camoufox-browser` skill already tells
 //! the model about, so nothing the model has learned changes.
 
-use crate::live_browser::eval_json;
+use crate::live_browser::{eval_json, DEFAULT_LABEL};
 
 /// Walks the DOM and returns a compact interactive-element listing.
 ///
@@ -110,7 +110,7 @@ const SNAPSHOT_JS: &str = r#"
 
 /// Snapshot the live page: interactive elements plus readable text.
 pub async fn snapshot(app: &tauri::AppHandle) -> Result<crate::camoufox::SnapshotResult, String> {
-    let v = eval_json(app, SNAPSHOT_JS).await?;
+    let v = eval_json(app, DEFAULT_LABEL, SNAPSHOT_JS).await?;
     // `eval_with_callback` serialises the JS return value, so a string return
     // arrives as a JSON string that still has to be parsed.
     let parsed: serde_json::Value = match v.as_str() {
@@ -160,7 +160,7 @@ pub async fn click(app: &tauri::AppHandle, r: &str) -> Result<String, String> {
 }})()"#,
         js_str(r)
     );
-    match eval_json(app, &js).await?.as_str() {
+    match eval_json(app, DEFAULT_LABEL, &js).await?.as_str() {
         Some("missing") => Err(format!(
             "no element {r} on the page — refs only last until the next snapshot, so call browser_snapshot again"
         )),
@@ -201,7 +201,7 @@ pub async fn type_text(app: &tauri::AppHandle, r: &str, text: &str, submit: bool
         js_str(text),
         if submit { "true" } else { "false" }
     );
-    match eval_json(app, &js).await?.as_str() {
+    match eval_json(app, DEFAULT_LABEL, &js).await?.as_str() {
         Some("missing") => Err(format!(
             "no element {r} on the page — refs only last until the next snapshot, so call browser_snapshot again"
         )),
@@ -220,7 +220,7 @@ pub async fn press_key(app: &tauri::AppHandle, key: &str) -> Result<String, Stri
 }})()"#,
         js_str(key)
     );
-    eval_json(app, &js).await?;
+    eval_json(app, DEFAULT_LABEL, &js).await?;
     Ok(format!("Pressed {key}."))
 }
 
@@ -232,7 +232,7 @@ pub async fn scroll(app: &tauri::AppHandle, direction: &str, amount: i64) -> Res
         "right" => (amount, 0),
         other => return Err(format!("unknown direction '{other}' — use up, down, left or right")),
     };
-    eval_json(app, &format!("(() => {{ window.scrollBy({dx}, {dy}); return 'ok'; }})()")).await?;
+    eval_json(app, DEFAULT_LABEL, &format!("(() => {{ window.scrollBy({dx}, {dy}); return 'ok'; }})()")).await?;
     Ok(format!("Scrolled {direction} {amount}px."))
 }
 
@@ -243,7 +243,7 @@ pub async fn scroll(app: &tauri::AppHandle, direction: &str, amount: i64) -> Res
 /// tracking a flag means a webview that was closed, crashed, or never opened
 /// all answer the same way.
 pub async fn is_live(app: &tauri::AppHandle) -> bool {
-    eval_json(app, "'ok'").await.is_ok()
+    eval_json(app, DEFAULT_LABEL, "'ok'").await.is_ok()
 }
 
 #[cfg(test)]
