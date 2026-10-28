@@ -54,55 +54,12 @@ pub struct CapabilityGroup {
 pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Browse and interact with the live web",
-        when: "Anything involving a real website: searching, reading a page, following links, filling a form, clicking through a flow, or checking how a page behaves.",
-        tools: &[
-            "browser_start",
-            "web_search",
-            "web_fetch",
-            "web_preview",
-            "browser_snapshot",
-            "browser_click",
-            "browser_type",
-            "browser_press_key",
-            "browser_scroll",
-            "browser_evaluate",
-            "browser_read_console",
-            "browser_read_network",
-            "browser_session_status",
-            "browser_import_cookies",
-        ],
+        when: "Anything involving a real website: searching, reading a page, following links, filling a form, clicking through a flow, checking how a page behaves, or anything in the user's own browser (their tabs, sites they're signed in to).",
+        tools: &["web_search", "web_fetch", "user_browser_driver"],
         how: Some(
-            "START: call browser_start first when a task involves the browser. The other tools do start it themselves, \
-             but a cold start can take minutes (npm install + a ~300MB engine download) and folded into a web_preview \
-             call that reads as a hang. It also reports which sites you are already signed in to. \
-             All of these run through camoufox — a real, local Firefox-based browser — so treat browsing as something you \
-             genuinely do, not something you approximate. You never need to ask the user to launch it, and 'the browser \
-             isn't running' is not a reason to refuse. \
-             If the user's own browser is connected (user_browser_driver), use that first for the web and keep this for when it is not. \
-             To SEARCH: web_search (it drives that same real browser, so it works on sites that block plain scrapers). \
-             To READ a page you already have the URL for: web_fetch. \
-             To actually USE a site — click, type, work through a flow — web_preview(url) opens it, \
-             then browser_snapshot returns the page's structure with an element ref (e1, e2, ...) for everything interactive, \
-             and browser_click/browser_type act on those refs. Re-run browser_snapshot after anything that changes the page: \
-             refs from a stale snapshot can point at the wrong element. If a snapshot reports it was truncated, call it again \
-             with the offset it gives you instead of assuming the rest of the page isn't there. \
-             LOGGED-OUT SITES: the browsing session persists across restarts, so check browser_session_status before assuming \
-             you need access — you may already be signed in from a previous day. If you genuinely are not, ask the user (with \
-             question) to export that site's cookies from the browser they are already signed in with, then import them with \
-             browser_import_cookies. Never type a password into a page, and never create an account: the user authenticates \
-             where their password manager and 2FA already are, and hands over the resulting session only. \
-             Read the `camoufox-browser` skill before your first browser_* call.",
+            "All browsing happens in the user's own browser through the Vivianne extension (Chrome, Edge, Brave, Arc, Opera, Vivaldi, Helium or any other Chromium browser), with their sign-ins: user_browser_driver.              open a url, snapshot to get [ref]s, then click/type by ref; snapshot again after the page changes. read gives the page text,              evaluate runs JavaScript, read_console shows the console. Say done when finished so the browser's debugging banner goes away.              web_search and web_fetch are for a quick lookup that needs no page.              Never type passwords or payment details; if a site needs a sign-in, ask the user to sign in themselves.              If it says the browser isn't connected, tell the user to open their browser with the extension (Settings, Web & browser).              With more than one browser connected, pass browser to pick one.",
         ),
-        triggers: &["google", "search the web", "search for", "look up", "look it up", "browse", "website", "web site", "web page", "webpage", "the internet", "online", "http://", "https://", ".com", ".org", ".io", "open a site", "go to "],
-    },
-    CapabilityGroup {
-        name: "The user's own browser",
-        when: "Anything in the browser the user actually uses (Chrome, Edge, Brave, Arc, Helium or another Chromium browser): their tabs, sites they're signed in to, or when they ask you to do it in their browser.",
-        tools: &["user_browser_driver"],
-        how: Some(
-            "user_browser_driver works in the user's real browser through the Vivianne extension (Chrome, Edge, Brave, Arc, Opera, Vivaldi, Helium or any other Chromium browser), with their sign-ins. When it is connected, lean on it for the web: to look something up, open a search page or the site itself and read it. Also prefer it for              their accounts (mail, docs, dashboards) and for anything they want to see happen. open a url, snapshot to get              [ref]s, then click/type by ref; snapshot again after the page changes. Say done when finished so the browser's              debugging banner goes away. Never type passwords or payment details; if a site needs a sign-in, ask the user to              sign in themselves. If it says the browser isn't connected, tell the user to open their browser with the extension (Settings → Web & browser). With more than one browser connected, pass browser to pick one.",
-        ),
-        triggers: &["helium", "chrome", "edge", "brave", "my browser", "my tabs", "in the browser", "signed in", "logged in", "my gmail", "my email", "my account"],
+        triggers: &["google", "search the web", "search for", "look up", "look it up", "browse", "website", "web site", "web page", "webpage", "the internet", "online", "http://", "https://", ".com", ".org", ".io", "open a site", "go to ", "helium", "chrome", "edge", "brave", "my browser", "my tabs", "in the browser", "signed in", "logged in", "my gmail", "my email", "my account"],
     },
     CapabilityGroup {
         name: "The user's vault",

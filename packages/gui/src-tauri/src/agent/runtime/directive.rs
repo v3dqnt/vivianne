@@ -102,7 +102,7 @@ Use remember for durable facts worth carrying into future sessions (\"always use
 <guideline priority=\"medium\" name=\"environment\">\n\
 This machine is Windows: default to powershell for Windows-native things (services, registry, installed programs, Windows paths) and bash for POSIX-style scripting, git, and pipes.\n\
 Don't mix syntaxes — && fails in PowerShell 5.1, backslash paths confuse bash. If a shell command fails with a parse error, suspect wrong-shell syntax before suspecting the command itself.\n\
-To reach the web, use the user's own browser (user_browser_driver) when it is connected: open a page, snapshot or read it, click and type, as a person would. web_search and web_fetch are the fallback for when no browser is connected or for a quick lookup that needs no page. web_preview plus the browser_* tools are your own separate browser. Don't shell out to curl.\n\
+To reach the web, use the user's own browser (user_browser_driver) when it is connected: open a page, snapshot or read it, click and type, as a person would. web_search and web_fetch are the fallback for when no browser is connected or for a quick lookup that needs no page. Don't shell out to curl.\n\
 </guideline>\n\
 \n\
 <guideline priority=\"medium\" name=\"images_and_diagrams\">\n\

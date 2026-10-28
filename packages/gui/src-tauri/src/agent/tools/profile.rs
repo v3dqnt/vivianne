@@ -71,9 +71,7 @@ pub const CORE_TOOLS: &[&str] = &[
 /// needs them (see the module doc). Rare, and big: the browser tools alone
 /// are a fifth of all schema text.
 pub const DEFERRED_TOOLS: &[&str] = &[
-    "web_preview", "browser_start", "browser_snapshot", "browser_click", "browser_type", "browser_press_key",
-    "browser_scroll", "browser_evaluate", "browser_read_console", "browser_read_network", "browser_session_status",
-    "browser_import_cookies",
+    "user_browser_driver",
     "dip",
     "create_automation", "list_automations", "delete_automation", "set_automation_enabled",
     "nebius_job", "create_tool", "list_custom_tools", "delete_tool", "connect_mcp_server",
@@ -318,12 +316,12 @@ mod tests {
         let out = select_tool_defs(&defs, &available, Profile::Cloud, &[user("fix the failing test")]);
         let names: HashSet<&str> = out.iter().filter_map(|d| d["name"].as_str()).collect();
         assert!(!names.contains("bash"), "a disabled tool must not be offered to the model");
-        assert!(!names.contains("browser_click") && !names.contains("dip"));
+        assert!(!names.contains("user_browser_driver") && !names.contains("dip"));
         assert!(names.contains("read") && names.contains("web_search") && names.contains(LOAD_TOOLS));
         assert!(bytes(&out) * 4 < bytes(&defs) * 3, "deferring should save at least a quarter of the schema text");
 
         let browsing = select_tool_defs(&defs, &available, Profile::Cloud, &[user("open https://example.com and sign up")]);
-        assert!(browsing.iter().any(|d| d["name"] == "browser_click"), "a trigger brings the browser in");
+        assert!(browsing.iter().any(|d| d["name"] == "user_browser_driver"), "a trigger brings the browser in");
         let loaded = select_tool_defs(&defs, &available, Profile::Cloud, &[called(LOAD_TOOLS, serde_json::json!({"groups": ["control this computer"]}))]);
         assert!(loaded.iter().any(|d| d["name"] == "dip"), "load_tools brings a deferred group in");
     }

@@ -452,27 +452,20 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
     tool!("submit_plan" => |cx| crate::agent::team::plans::execute_submit_plan(cx.args, cx.state.primary_workspace_folder().await, cx.app).await),
     tool!("assign_plan_steps" => |cx| crate::agent::team::plans::execute_assign_plan_steps(cx.args, cx.depth, cx.state, cx.app).await),
     tool!("present_snippet" => |cx| execute_present_snippet_tool(cx.args)),
-    tool!("web_preview" => |cx| execute_web_preview_tool(cx.args, cx.emit, cx.app).await),
-    tool!("browser_snapshot" => |cx| execute_browser_snapshot_tool(cx.args, cx.emit, cx.app).await),
-    tool!("browser_click" => |cx| execute_browser_click_tool(cx.args, cx.emit, cx.app).await),
-    tool!("browser_type" => |cx| execute_browser_type_tool(cx.args, cx.emit, cx.app).await),
-    tool!("browser_press_key" => |cx| execute_browser_press_key_tool(cx.args, cx.emit, cx.app).await),
-    tool!("browser_scroll" => |cx| execute_browser_scroll_tool(cx.args, cx.emit, cx.app).await),
-    tool!("browser_evaluate" => |cx| execute_browser_evaluate_tool(cx.args).await),
-    tool!("browser_read_console" => |cx| execute_browser_read_console_tool().await),
-    tool!("browser_read_network" => |cx| execute_browser_read_network_tool().await),
-    tool!("browser_start" => |cx| result_text(crate::browser_sessions::start_and_report().await)),
-    tool!("browser_session_status" => |cx| {
-        result_text(crate::browser_sessions::session_status().await.map(|v| serde_json::to_string_pretty(&v).unwrap_or_default()))
-    }),
-    tool!("browser_import_cookies" => |cx| {
-        let file = cx.args.get("file").and_then(|v| v.as_str()).unwrap_or("");
-        if file.is_empty() {
-            text_result("Error: 'file' is required.")
-        } else {
-            result_text(crate::browser_sessions::import_cookies(file).await)
-        }
-    }),
+    // The old Camoufox browser tools, kept as names only: every call goes to
+    // the user's own browser through the extension.
+    tool!("web_preview" => |cx| via_user_browser("open", cx.args, cx.vision).await),
+    tool!("browser_snapshot" => |cx| via_user_browser("snapshot", cx.args, cx.vision).await),
+    tool!("browser_click" => |cx| via_user_browser("click", cx.args, cx.vision).await),
+    tool!("browser_type" => |cx| via_user_browser("type", cx.args, cx.vision).await),
+    tool!("browser_press_key" => |cx| via_user_browser("key", cx.args, cx.vision).await),
+    tool!("browser_scroll" => |cx| via_user_browser("scroll", cx.args, cx.vision).await),
+    tool!("browser_evaluate" => |cx| via_user_browser("evaluate", cx.args, cx.vision).await),
+    tool!("browser_read_console" => |cx| via_user_browser("read_console", cx.args, cx.vision).await),
+    tool!("browser_read_network" => |cx| text_result("Network requests aren't available in the user's browser. Use user_browser_driver evaluate with performance.getEntriesByType('resource') instead.")),
+    tool!("browser_start" => |cx| via_user_browser("tabs", cx.args, cx.vision).await),
+    tool!("browser_session_status" => |cx| via_user_browser("tabs", cx.args, cx.vision).await),
+    tool!("browser_import_cookies" => |cx| text_result("The browser is the user's own, already signed in where they are. If a site needs a sign-in, ask the user to sign in there themselves.")),
     tool!("math" => |cx| crate::agent::tools::math::execute(cx.args, cx.state.primary_workspace_folder().await, cx.vision).await),
     tool!("task" => |cx| execute_task_tool(cx.args, cx.depth, cx.state, cx.app).await),
     tool!("list_subagent_profiles" => |cx| execute_list_subagent_profiles_tool(cx.state.primary_workspace_folder().await).await),
@@ -1235,7 +1228,7 @@ fn execute_present_snippet_tool(args: &serde_json::Value) -> AgentToolResult {
 
 /// Converts a bare local filesystem path (as the model would naturally
 /// write one, e.g. `C:\report.html` or `/home/user/notes.pdf`) into a
-/// `file://` URL Camoufox can navigate to. A no-op for anything that's
+/// `file://` URL a browser can open. A no-op for anything that's
 /// already `http(s)://` or `file://`.
 fn normalize_preview_url(url: &str) -> String {
     if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("file://") {
@@ -1248,6 +1241,26 @@ fn normalize_preview_url(url: &str) -> String {
         // Windows drive-letter path, e.g. "C:/Users/x/report.html".
         format!("file:///{forward}")
     }
+}
+
+/// An old browser_* call, as the matching `user_browser_driver` action.
+async fn via_user_browser(action: &str, args: &serde_json::Value, vision: bool) -> AgentToolResult {
+    let mut a = args.clone();
+    if let Some(o) = a.as_object_mut() {
+        o.insert("action".into(), action.into());
+        // Old refs were "e12"; the extension's are numbers.
+        if let Some(r) = o.get("ref").and_then(|r| r.as_str()).map(|r| r.trim_start_matches('e').to_string()) {
+            if let Ok(n) = r.parse::<u64>() {
+                o.insert("ref".into(), n.into());
+            }
+        }
+        if action == "open" {
+            if let Some(u) = o.get("url").and_then(|u| u.as_str()).map(normalize_preview_url) {
+                o.insert("url".into(), u.into());
+            }
+        }
+    }
+    tool_result_to_agent_result(crate::helium::execute_tool(&a).await, vision)
 }
 
 /// `web_preview` — navigates camoufox-browser's shared preview tab to

@@ -1035,12 +1035,6 @@ impl Tool for WebSearchTool {
             }
         }
 
-        if camoufox_available().await {
-            if let Ok(text) = crate::camoufox::search(&query).await {
-                return ok(format!("{api_note}{text}"));
-            }
-        }
-
         match duckduckgo(&query).await {
             Ok(results) if !results.is_empty() => ok(format!("{api_note}{}", format_hits(&query, &results, None))),
             Ok(_) => ok(format!("{api_note}No results found for: {query}")),
