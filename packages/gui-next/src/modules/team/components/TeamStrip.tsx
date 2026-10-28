@@ -1,7 +1,7 @@
-import type React from 'react'
 import { useEffect, useRef, useState } from 'react'
-import { Box, ButtonBase, Orb, Stack, Typography, alpha, useTheme } from '../../../ui'
+import { Box, ButtonBase, Orb, Stack, Typography, useTheme } from '../../../ui'
 import { call } from '../../../ipc'
+import type { SxObject } from '../../../ui/sx'
 import { contentToText, type AgentMessage } from '../../ai/lib/types'
 import { useTeamStore, type TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey } from '../store/botsStore'
@@ -61,94 +61,41 @@ function Preview({ root, agent }: { root: string; agent: TeamAgent }) {
   )
 }
 
+/** The project's name, top left of a team project's chat. Also where the
+ * team, the lead and their status are loaded for the chat. */
+export function TeamStrip({ root, projectName }: { root: string; projectName: string }) {
+  useEffect(() => {
+    void useTeamStore.getState().load(root)
+    void useMasterStore.getState().load(root)
+    void useBotsStore.getState().loadStatus(root)
+  }, [root])
+  return (
+    <Box sx={{ position: 'absolute', left: 12, top: 12, width: 192, zIndex: 3 }}>
+      <Typography noWrap title={projectName} sx={{ fontSize: '14px', fontWeight: 600, letterSpacing: '-0.01em', px: '8px' }}>
+        {projectName}
+      </Typography>
+    </Box>
+  )
+}
+
 /**
- * A team project's people, down the chat's left edge: the lead, then each
- * teammate with its face and name. Hover one for its live transcript in a
- * small card; click to show it in the middle. The lead is where you talk.
+ * The hired specialists, as the right column's rows: face, name, and a glow
+ * while working. Hover one for its live transcript in a card beside the
+ * column; click to show its work in the middle (read only).
  */
-export function TeamStrip({ root, projectName, leadName, leadColor }: { root: string; projectName: string; leadName: string | null; leadColor: string }) {
+export function Specialists({ root, rowSx, labelSx }: { root: string; rowSx: SxObject; labelSx: SxObject }) {
   const theme = useTheme()
   const team = useTeamStore((s) => s.byRoot[root] ?? NONE).filter((a) => a.status === 'active')
   const status = useBotsStore((s) => s.status)
   const channel = useBotsStore((s) => s.channel[root] ?? LEAD_CHANNEL)
-  const { setChannel, loadStatus } = useBotsStore.getState()
+  const setChannel = useBotsStore((s) => s.setChannel)
   const [hover, setHover] = useState<{ agent: TeamAgent; top: number } | null>(null)
   const hideTimer = useRef<number | undefined>(undefined)
-  const stripRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    void useTeamStore.getState().load(root)
-    void useMasterStore.getState().load(root)
-    void loadStatus(root)
-  }, [root, loadStatus])
-
-  const onLead = channel === LEAD_CHANNEL || channel === 'room' || channel.startsWith('group:')
-  const row = (active: boolean) =>
-    ({
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'flex-start',
-      gap: '8px',
-      width: '100%',
-      height: 36,
-      px: '8px',
-      borderRadius: '8px',
-      textAlign: 'left',
-      bgcolor: active ? 'action.selected' : 'transparent',
-      '&:hover': { bgcolor: active ? 'action.selected' : 'action.hover' },
-    }) as const
-
-  // The org chart: everyone sits under whoever they report to, the lead's
-  // direct reports first, nested by a rail on the left.
-  const known = new Set(team.map((a) => a.id))
-  const bossOf = (a: TeamAgent) => (a.reportsTo && known.has(a.reportsTo) ? a.reportsTo : null)
-  const under = (id: string | null) =>
-    team.filter((a) => bossOf(a) === id).sort((x, y) => Number(!!y.lead) - Number(!!x.lead) || x.name.localeCompare(y.name))
-
-  const person = (a: TeamAgent) => {
-    const working = status[botKey(root, a.id)]?.state === 'working'
-    const active = channel === a.id
-    return (
-      <ButtonBase
-        onClick={() => setChannel(root, a.id)}
-        onMouseEnter={(e) => show(a, e.currentTarget as HTMLElement)}
-        onMouseLeave={hide}
-        aria-current={active ? 'true' : undefined}
-        sx={{ ...row(active), height: 32 }}
-      >
-        <LiveAvatar root={root} agent={a} size={20} animate />
-        <Box component="span" sx={{ flex: 1, minWidth: 0, fontSize: '13px', fontWeight: active ? 600 : 500, color: active ? 'text.primary' : 'text.secondary', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {a.name}
-        </Box>
-        {a.lead && <Box component="span" sx={{ fontSize: '10px', fontWeight: 700, color: 'warning.main', flexShrink: 0 }}>LEAD</Box>}
-        {working && <Orb state="working" px={12} label={`${a.name} is working`} />}
-      </ButtonBase>
-    )
-  }
-
-  const branch = (id: string | null, depth: number): React.ReactNode => {
-    const reports = under(id)
-    if (reports.length === 0) return null
-    return (
-      <Stack sx={{ position: 'relative', ml: leadName || depth > 0 ? '17px' : 0, pl: leadName || depth > 0 ? '8px' : 0, gap: '2px' }}>
-        {(leadName || depth > 0) && (
-          // The rail: from the parent down to the last child's middle.
-          <Box sx={{ position: 'absolute', left: 0, top: 0, bottom: 16, width: '1px', bgcolor: 'divider', opacity: 0.6 }} />
-        )}
-        {reports.map((a) => (
-          <Box key={a.id} sx={{ position: 'relative' }}>
-            {(leadName || depth > 0) && <Box sx={{ position: 'absolute', left: '-8px', top: 16, width: '6px', height: '1px', bgcolor: 'divider', opacity: 0.6 }} />}
-            {person(a)}
-            {branch(a.id, depth + 1)}
-          </Box>
-        ))}
-      </Stack>
-    )
-  }
+  const listRef = useRef<HTMLDivElement | null>(null)
 
   const show = (agent: TeamAgent, el: HTMLElement) => {
     window.clearTimeout(hideTimer.current)
-    const base = stripRef.current?.getBoundingClientRect().top ?? 0
+    const base = listRef.current?.getBoundingClientRect().top ?? 0
     setHover({ agent, top: el.getBoundingClientRect().top - base })
   }
   const hide = () => {
@@ -157,23 +104,32 @@ export function TeamStrip({ root, projectName, leadName, leadColor }: { root: st
   }
 
   return (
-    <Box ref={stripRef} sx={{ position: 'absolute', left: 12, top: 12, width: 192, zIndex: 3 }}>
-      <Typography noWrap title={projectName} sx={{ fontSize: '14px', fontWeight: 600, letterSpacing: '-0.01em', px: '8px', pb: '12px' }}>
-        {projectName}
-      </Typography>
-      <Stack sx={{ gap: '2px' }}>
-        {leadName && (
-          <ButtonBase onClick={() => setChannel(root, LEAD_CHANNEL)} aria-current={onLead ? 'true' : undefined} title="Where you talk to the team" sx={{ ...row(onLead), height: 32 }}>
-            <Box sx={{ width: 20, height: 20, borderRadius: '50%', flexShrink: 0, display: 'grid', placeItems: 'center', bgcolor: alpha(leadColor, 0.2), color: leadColor, fontSize: '10px', fontWeight: 700 }}>
-              {leadName.trim()[0]?.toUpperCase() ?? 'L'}
-            </Box>
-            <Box component="span" title={leadName} sx={{ flex: 1, minWidth: 0, fontSize: '13px', fontWeight: 600, color: onLead ? 'text.primary' : 'text.secondary', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              Lead
-            </Box>
-          </ButtonBase>
-        )}
-        {branch(null, 0)}
-      </Stack>
+    <Box ref={listRef} sx={{ position: 'relative' }}>
+      <Typography sx={labelSx}>Specialists</Typography>
+      {team.length === 0 ? (
+        <Typography sx={{ fontSize: '12px', color: 'text.disabled', px: '8px' }}>None hired yet.</Typography>
+      ) : (
+        team.map((a) => {
+          const working = status[botKey(root, a.id)]?.state === 'working'
+          const active = channel === a.id
+          return (
+            <ButtonBase
+              key={a.id}
+              onClick={() => setChannel(root, active ? LEAD_CHANNEL : a.id)}
+              onMouseEnter={(e) => show(a, e.currentTarget as HTMLElement)}
+              onMouseLeave={hide}
+              aria-current={active ? 'true' : undefined}
+              sx={{ ...rowSx, gap: '8px', bgcolor: active ? 'action.selected' : 'transparent', color: active ? 'text.primary' : 'text.secondary' }}
+            >
+              <LiveAvatar root={root} agent={a} size={18} animate />
+              <Box component="span" sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}>
+                {a.name}
+              </Box>
+              {working && <Orb state="working" px={12} label={`${a.name} is working`} />}
+            </ButtonBase>
+          )
+        })
+      )}
       {hover && (
         <Box
           onMouseEnter={() => window.clearTimeout(hideTimer.current)}
@@ -182,7 +138,7 @@ export function TeamStrip({ root, projectName, leadName, leadColor }: { root: st
             setChannel(root, hover.agent.id)
             setHover(null)
           }}
-          sx={{ position: 'absolute', left: 200, top: hover.top, width: 300, p: '12px', borderRadius: '12px', bgcolor: 'background.paper', border: 1, borderColor: 'divider', boxShadow: theme.elevation.lg, cursor: 'pointer' }}
+          sx={{ position: 'absolute', right: 'calc(100% + 8px)', top: hover.top, width: 300, p: '12px', borderRadius: '12px', bgcolor: 'background.paper', border: 1, borderColor: 'divider', boxShadow: theme.elevation.lg, cursor: 'pointer' }}
         >
           <Preview root={root} agent={hover.agent} />
         </Box>

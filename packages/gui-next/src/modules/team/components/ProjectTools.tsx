@@ -5,6 +5,7 @@ import { GitStatusChip, GitQuickActions } from '../../git/components/GitActions'
 import { useAppView } from '../../git/components/GitView'
 import { useMasterStore } from '../../sessions/store/masterStore'
 import { CharterDialog } from '../../sessions/components/CharterDialog'
+import { Specialists } from './TeamStrip'
 
 /** Every action in the column is the same row: left-aligned on one edge,
  * one line, muted until hovered. */
@@ -72,6 +73,8 @@ export function ProjectTools({ root }: { root: string }) {
             History and pull requests
           </ButtonBase>
         </Box>
+
+        <Specialists root={root} rowSx={ROW} labelSx={LABEL} />
 
         {master && (
           <Box>

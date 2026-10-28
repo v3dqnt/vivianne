@@ -4,8 +4,7 @@ import { hasTauri } from '../../ipc'
 import { SURFACE_RADIUS } from '../../theme'
 import { ChatView } from '../ai/components/ChatView'
 import { HireRequests } from '../team/components/HireRequests'
-import { useProjectsStore, modeOf, projectColor } from '../sessions/store/projectsStore'
-import { useMasterStore } from '../sessions/store/masterStore'
+import { useProjectsStore, modeOf } from '../sessions/store/projectsStore'
 import { TeamStrip } from '../team/components/TeamStrip'
 import { ProjectTools } from '../team/components/ProjectTools'
 import { useBotsStore } from '../team/store/botsStore'
@@ -27,7 +26,6 @@ function Fill({ children }: { children: React.ReactNode }) {
 function Chat() {
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === s.activeProjectId))
   const treeChannel = useBotsStore((s) => (project?.path ? s.channel[project.path] : undefined))
-  const master = useMasterStore((s) => (project?.path ? s.byRoot[project.path] : null))
   if (!hasTauri()) {
     return (
       <Fill>
@@ -48,7 +46,7 @@ function Chat() {
     <Fill>
       {/* The team's people sit on the left; the same space on the right keeps the chat centred. */}
       <Box sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', px: isTeam ? '212px' : 0 }}>
-        {isTeam && project?.path && <TeamStrip root={project.path} projectName={project.name} leadName={master?.name ?? null} leadColor={projectColor(project)} />}
+        {isTeam && project?.path && <TeamStrip root={project.path} projectName={project.name} />}
         {isTeam && project?.path && <ProjectTools root={project.path} />}
         {project?.path && teammate ? (
           <TeamRoom key={project.path} root={project.path} readOnly />
