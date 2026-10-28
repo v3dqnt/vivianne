@@ -1,62 +1,89 @@
 import { useState } from 'react'
 import { Box, ButtonBase, Stack, Typography } from '../../../ui'
-import { DocumentTextLinear, GithubLinear } from '../../../icons'
 import { WorkspaceSelector } from '../../ai/components/WorkspaceSelector'
 import { GitStatusChip, GitQuickActions } from '../../git/components/GitActions'
 import { useAppView } from '../../git/components/GitView'
 import { useMasterStore } from '../../sessions/store/masterStore'
 import { CharterDialog } from '../../sessions/components/CharterDialog'
 
-const LABEL_SX = { fontSize: '11px', fontWeight: 600, color: 'text.secondary', px: '8px' } as const
-const LINK_SX = {
+/** Every action in the column is the same row: left-aligned on one edge,
+ * one line, muted until hovered. */
+const ROW = {
+  display: 'flex',
+  width: '100%',
   justifyContent: 'flex-start',
-  gap: '8px',
+  alignItems: 'center',
   height: 28,
   px: '8px',
   borderRadius: '6px',
-  fontSize: '12px',
+  fontSize: '13px',
+  fontWeight: 400,
   color: 'text.secondary',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
   '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
 } as const
 
+const LABEL = { fontSize: '11px', fontWeight: 600, color: 'text.disabled', px: '8px', pb: '4px' } as const
+
 /** A team project's own tools, on the chat's right: the folder it works in,
- * its version control, and the charter. Mirrors the team on the left. */
+ * version control, and the charter. Mirrors the team on the left. */
 export function ProjectTools({ root }: { root: string }) {
   const master = useMasterStore((s) => s.byRoot[root])
   const [charter, setCharter] = useState(false)
   return (
     <Box sx={{ position: 'absolute', right: 12, top: 12, width: 180, zIndex: 3 }}>
-      <Stack sx={{ gap: '16px' }}>
-        <Stack sx={{ gap: '4px' }}>
-          <Typography sx={LABEL_SX}>Workspace</Typography>
-          <Box sx={{ px: '2px' }}>
+      <Stack sx={{ gap: '20px' }}>
+        <Box>
+          <Typography sx={LABEL}>Workspace</Typography>
+          <Box sx={{ ml: '-2px' }}>
             <WorkspaceSelector />
           </Box>
-        </Stack>
-        <Stack sx={{ gap: '4px' }}>
-          <Typography sx={LABEL_SX}>Version control</Typography>
-          <Box sx={{ px: '2px' }}>
+        </Box>
+
+        <Box>
+          <Typography sx={LABEL}>Version control</Typography>
+          <Box sx={{ ml: '-2px', mb: '4px' }}>
             <GitStatusChip />
           </Box>
-          <Box sx={{ px: '8px', '& > div': { flexDirection: 'column', alignItems: 'stretch' } }}>
+          {/* The quick actions (commit, sync, pull request, review), drawn as
+              the column's rows rather than as their own buttons. */}
+          <Box
+            sx={{
+              '& > div': { flexDirection: 'column', alignItems: 'stretch', gap: 0 },
+              '& > div > span:not(:has(button))': { display: 'none' },
+              '& .ui-Button': {
+                ...ROW,
+                border: 0,
+                bgcolor: 'transparent',
+                boxShadow: 'none',
+                transform: 'none',
+                '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+              },
+              '& .ui-Button:first-of-type': { color: 'text.primary', fontWeight: 500 },
+            }}
+          >
             <GitQuickActions />
           </Box>
-          <ButtonBase onClick={() => useAppView.setState({ view: 'git' })} sx={LINK_SX}>
-            <GithubLinear size={13} color="currentColor" />
-            Changes, PRs and history
+          <ButtonBase onClick={() => useAppView.setState({ view: 'git' })} sx={ROW}>
+            History and pull requests
           </ButtonBase>
-        </Stack>
+        </Box>
+
         {master && (
-          <ButtonBase
-            onClick={() => {
-              void useMasterStore.getState().load(root)
-              setCharter(true)
-            }}
-            sx={LINK_SX}
-          >
-            <DocumentTextLinear size={13} color="currentColor" />
-            Charter
-          </ButtonBase>
+          <Box>
+            <Typography sx={LABEL}>Project</Typography>
+            <ButtonBase
+              onClick={() => {
+                void useMasterStore.getState().load(root)
+                setCharter(true)
+              }}
+              sx={ROW}
+            >
+              Charter
+            </ButtonBase>
+          </Box>
         )}
       </Stack>
       {master && <CharterDialog master={master} open={charter} onClose={() => setCharter(false)} />}
