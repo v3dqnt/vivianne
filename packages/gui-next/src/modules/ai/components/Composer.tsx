@@ -167,6 +167,17 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
   }, [])
 
   // Files dropped on the notch land here as paths.
+  // An element comment from the Browser panel arrives as a draft: appended, not
+  // sent, so it can be edited or dropped.
+  useEffect(() => {
+    const off = on<string>('viv:comment', (text) => {
+      if (!text) return
+      setText((v) => `${v ? v + '\n\n' : ''}${text}`)
+      box.current?.focus()
+    })
+    return () => void off.then((f) => f())
+  }, [])
+
   useEffect(() => {
     const off = on<string[]>('viv:attach-paths', (paths) => {
       if (!paths?.length) return

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Box, Stack, Typography, IconButton, InputBase, Tooltip } from '../../../ui'
-import { ArrowLeftLinear, ArrowRightLinear, RefreshLinear, GlobalLinear } from '../../../icons'
+import { ArrowLeftLinear, ArrowRightLinear, RefreshLinear, GlobalLinear, MessageAddLinear } from '../../../icons'
 import { call, hasTauri } from '../../../ipc'
 import { useBrowserStore } from './browserStore'
 import type { BrowserTab } from './tabs'
@@ -120,7 +120,7 @@ export function WebTab({ tab, active }: { tab: WebTabModel; active: boolean }) {
 }
 
 /** The toolbar above the slot: history, reload, address, open externally. */
-export function WebToolbar({ tab }: { tab: WebTabModel }) {
+export function WebToolbar({ tab, picking, onPick }: { tab: WebTabModel; picking: boolean; onPick: () => void }) {
   const [draft, setDraft] = useState<string | null>(null)
   const setUrl = useBrowserStore((s) => s.setUrl)
 
@@ -165,6 +165,17 @@ export function WebToolbar({ tab }: { tab: WebTabModel }) {
         }}
         sx={{ fontSize: '0.75rem', fontFamily: '"Geist Mono", ui-monospace, monospace', bgcolor: 'action.hover', borderRadius: 999, px: 1.5, py: 0.375 }}
       />
+      <Tooltip title={picking ? 'Stop picking' : 'Comment on an element'}>
+        <IconButton
+          size="small"
+          aria-label="Comment on an element"
+          aria-pressed={picking}
+          onClick={onPick}
+          sx={{ width: 24, height: 24, color: picking ? 'primary.main' : 'text.secondary' }}
+        >
+          <MessageAddLinear size={13} color="currentColor" />
+        </IconButton>
+      </Tooltip>
       <Tooltip title="Open in your browser">
         <IconButton size="small" aria-label="Open externally" onClick={() => void call('cmd_open_path', { path: tab.url })} sx={{ width: 24, height: 24 }}>
           <GlobalLinear size={12} color="currentColor" />

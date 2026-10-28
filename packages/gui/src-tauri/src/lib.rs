@@ -319,6 +319,7 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::runtime::commands::cmd_submit_bug_report,
       // Updates / changelog / announcements
       crate::file_preview::cmd_read_file_preview,
+      crate::system::capture::cmd_capture_region,
       cmd_instant_shortcut_error,
       cmd_instant_shortcut_label,
       cmd_instant_chord,

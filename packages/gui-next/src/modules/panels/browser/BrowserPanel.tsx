@@ -1,4 +1,7 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { call } from '../../../ipc'
+import { PICK_CANCEL_JS, PICK_JS, PICK_READ_JS, type PickResult } from './picker'
+import { PickerComposer } from './PickerComposer'
 import { Box, Stack, Typography, IconButton, Tooltip, ButtonBase } from '../../../ui'
 import { AddLinear, CloseLinear, DocumentLinear, GlobalLinear } from '../../../icons'
 import { usePanelStore } from '../../dock/store/panelStore'
@@ -34,6 +37,46 @@ export function BrowserPanel() {
   }, [openUrl, openFile])
 
   const active = tabs.find((t) => t.id === activeId) ?? null
+
+  const [picking, setPicking] = useState(false)
+  const [pick, setPick] = useState<PickResult | null>(null)
+  const pollRef = useRef<number | undefined>(undefined)
+
+  const stopPicking = useCallback((label: string | null) => {
+    window.clearInterval(pollRef.current)
+    pollRef.current = undefined
+    setPicking(false)
+    if (label) void call('cmd_live_browser_eval', { label, js: PICK_CANCEL_JS }).catch(() => {})
+  }, [])
+
+  const startPicking = useCallback(
+    async (label: string) => {
+      if (picking) return stopPicking(label)
+      const started = await call<string>('cmd_live_browser_eval', { label, js: PICK_JS }).catch(() => null)
+      if (!started) return
+      setPicking(true)
+      pollRef.current = window.setInterval(() => {
+        void call<PickResult | null>('cmd_live_browser_eval', { label, js: PICK_READ_JS })
+          .then((p) => {
+            if (!p) return
+            window.clearInterval(pollRef.current)
+            pollRef.current = undefined
+            setPicking(false)
+            setPick(p)
+          })
+          .catch(() => {})
+      }, 200)
+    },
+    [picking, stopPicking],
+  )
+
+  // A pick belongs to the tab it was made in.
+  useEffect(() => {
+    setPicking(false)
+    setPick(null)
+    window.clearInterval(pollRef.current)
+    pollRef.current = undefined
+  }, [activeId])
 
   return (
     <Stack sx={{ flex: 1, minHeight: 0, minWidth: 0 }}>
@@ -98,7 +141,14 @@ export function BrowserPanel() {
         </Stack>
       ) : (
         <>
-        {active.kind === 'web' && <WebToolbar key={active.id} tab={active as WebTabModel} />}
+        {active.kind === 'web' && (
+          <WebToolbar
+            key={active.id}
+            tab={active as WebTabModel}
+            picking={picking}
+            onPick={() => void startPicking((active as WebTabModel).webviewLabel)}
+          />
+        )}
         <Box sx={{ position: 'relative', flex: 1, minHeight: 0, bgcolor: 'background.default' }}>
           {/* Every web tab stays mounted: its webview is an OS-level view that
               only this component can park. Inactive ones are off-screen. */}
@@ -107,6 +157,7 @@ export function BrowserPanel() {
           ))}
           {active.kind === 'file' && <Box sx={{ position: 'absolute', inset: 0 }}><FileTab path={active.path} /></Box>}
         </Box>
+        {pick && active.kind === 'web' && <PickerComposer pick={pick} label={active.title} onDone={() => setPick(null)} />}
         </>
       )}
     </Stack>
