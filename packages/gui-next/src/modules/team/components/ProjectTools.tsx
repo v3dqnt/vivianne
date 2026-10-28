@@ -43,10 +43,12 @@ export function ProjectTools({ root }: { root: string }) {
         </Box>
 
         <Box>
-          <Typography sx={LABEL}>Version control</Typography>
-          <Box sx={{ ml: '-2px', mb: '4px' }}>
-            <GitStatusChip />
-          </Box>
+          <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: '8px', pb: '4px' }}>
+            <Typography sx={{ ...LABEL, pb: 0 }}>Version control</Typography>
+            <Box sx={{ minWidth: 0, '& .ui-ButtonBase': { height: 20, px: '4px' } }}>
+              <GitStatusChip />
+            </Box>
+          </Stack>
           {/* The quick actions (commit, sync, pull request, review), drawn as
               the column's rows rather than as their own buttons. */}
           <Box
