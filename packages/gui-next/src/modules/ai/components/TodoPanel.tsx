@@ -57,7 +57,8 @@ export const TodoPanel = memo(function TodoPanel({ messages }: { messages?: Agen
   const { todos, doneAt } = messages ? latestPlan(messages) : fromChat
   const doneCount = todos.filter((t) => t.status === 'completed').length
 
-  if (todos.length === 0) return null
+  // A finished plan has nothing left to track; the checklist stays in the transcript.
+  if (todos.length === 0 || doneCount === todos.length) return null
 
   return (
     <Box sx={{ position: 'absolute', top: 10, right: 10, zIndex: 20, width: 272, userSelect: 'none' }}>
