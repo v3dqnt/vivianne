@@ -430,3 +430,15 @@ pub fn add_multiplayer_project_to(
 pub fn list_all() -> Vec<Project> {
     load().map(|d| d.projects).unwrap_or_default()
 }
+
+/// Open a file, folder or URL with the system's default handler.
+#[tauri::command]
+pub async fn cmd_open_path(path: String) -> Result<(), String> {
+    #[cfg(windows)]
+    let spawned = std::process::Command::new("explorer").arg(&path).spawn();
+    #[cfg(target_os = "macos")]
+    let spawned = std::process::Command::new("open").arg(&path).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let spawned = std::process::Command::new("xdg-open").arg(&path).spawn();
+    spawned.map(|_| ()).map_err(|e| format!("couldn't open {path}: {e}"))
+}
