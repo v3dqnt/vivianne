@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { AgentMessage } from '../../ai/lib/types'
 import { usePlanStore } from '../../plan/store/planStore'
-import { ButtonBase, Stack, Tooltip, Typography } from '../../../ui'
+import { Button, ButtonBase, Stack, Tooltip, Typography } from '../../../ui'
+import { LEAD_CHANNEL } from './TreeTeam'
+import { NewAgentDialog } from './NewAgentDialog'
 import { call } from '../../../ipc'
 import { ModelPicker } from '../../ai/components/ModelPicker'
 import { useTeamStore, type TeamAgent } from '../store/teamStore'
@@ -40,7 +42,7 @@ export function BotChip({ root, agent, onOpen }: { root: string; agent: TeamAgen
  * `@everyone`. Bots hand work to each other here, post routine results and
  * check-ins, and ask for decisions.
  */
-export function TeamRoom({ root }: { root: string }) {
+export function TeamRoom({ root, readOnly = false }: { root: string; readOnly?: boolean }) {
   const channel = useBotsStore((s) => s.channel[root] ?? 'room')
   const team = useTeamStore((s) => (s.byRoot[root] ?? EMPTY_AGENTS)).filter((a) => a.status === 'active')
   const groups = useBotsStore((s) => s.groups[root])
@@ -50,7 +52,7 @@ export function TeamRoom({ root }: { root: string }) {
     return <Room key={channel} root={root} team={members} channel={channel} name={group?.name ?? 'Group'} />
   }
   const bot = channel !== 'room' ? team.find((a) => a.id === channel) : undefined
-  if (bot) return <DirectMessage key={bot.id} root={root} bot={bot} team={team} />
+  if (bot) return <DirectMessage key={bot.id} root={root} bot={bot} team={team} readOnly={readOnly} />
   return <Room root={root} team={team} />
 }
 
@@ -58,11 +60,12 @@ export function TeamRoom({ root }: { root: string }) {
  * the bot's own thread, shown in the chat view with everything the chat has
  * (tool calls, plans, to-dos, checkpoints, approvals, cards); sending goes
  * through the bot. */
-function DirectMessage({ root, bot }: { root: string; bot: TeamAgent; team: TeamAgent[] }) {
+function DirectMessage({ root, bot, readOnly }: { root: string; bot: TeamAgent; team: TeamAgent[]; readOnly: boolean }) {
   const st = useBotsStore((s) => s.status[botKey(root, bot.id)])
   const { loadStatus, sendDm } = useBotsStore.getState()
   const save = useTeamStore((s) => s.save)
   const thread = `bot:${root}:${bot.id}`
+  const [editing, setEditing] = useState(false)
   const state = st?.state ?? 'idle'
   // What compaction folded away, and its DM from before bots were threads.
   const [archive, setArchive] = useState<{ messages: AgentMessage[]; start: number }>({ messages: [], start: 0 })
@@ -117,11 +120,27 @@ function DirectMessage({ root, bot }: { root: string; bot: TeamAgent; team: Team
             {state === 'working' ? (st?.activity ?? 'Working…') : state === 'paused' ? 'Paused' : bot.role}
           </Typography>
         </Stack>
+        <Tooltip title="Name, look, job, model and instructions">
+          <Button size="small" variant="outlined" onClick={() => setEditing(true)}>
+            Edit
+          </Button>
+        </Tooltip>
       </Stack>
+      {editing && <NewAgentDialog root={root} open agent={bot} onClose={() => setEditing(false)} />}
       <ChatView
         own={{
           toolbar: <ModelPicker mode="agent" value={bot.model} onChange={(model) => void save(root, { ...bot, model }, bot.id)} />,
           onRevertTo: revertTo,
+          readOnly: readOnly ? (
+            <Stack direction="row" sx={{ alignItems: 'center', gap: 1, mx: 2, mb: 2, px: 1.5, py: 1, borderRadius: '10px', border: 1, borderColor: 'divider', bgcolor: 'action.hover' }}>
+              <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+                {bot.name}'s live work. To direct it, message the lead.
+              </Typography>
+              <Button size="small" variant="outlined" onClick={() => useBotsStore.getState().setChannel(root, LEAD_CHANNEL)}>
+                Message the lead
+              </Button>
+            </Stack>
+          ) : undefined,
           earlier: archive.messages,
           earlierStart: archive.start,
           loadingOlder,

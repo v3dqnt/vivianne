@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Box, Collapse, CircularProgress, Typography, Stack, alpha, useTheme } from '../../../ui'
+import { Box, Button, Collapse, CircularProgress, Typography, Stack, alpha, useTheme } from '../../../ui'
 import {
   CommandLinear,
   EditLinear,
@@ -23,6 +23,7 @@ import { DiffView } from './DiffView'
 import { CodeBlock } from './CodeBlock'
 import { FileLink, filePathArg } from './FileLink'
 import { TOOL_BODY_SX, TOOL_ROW_SX } from '../lib/chatStyle'
+import { usePlanStore } from '../../plan/store/planStore'
 
 type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
 
@@ -411,6 +412,36 @@ function BodyLine({ children }: { children: React.ReactNode }) {
   )
 }
 
+/** A plan waiting on you, approved where it was proposed: Approve sends it
+ * back to be carried out; to change it, reply in the chat. */
+function PlanApproval({ planId, version, title }: { planId: string; version: number | null; title: string }) {
+  const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
+  const approve = async () => {
+    setState('busy')
+    try {
+      const plans = usePlanStore.getState()
+      await plans.open(planId, version ?? undefined)
+      await plans.approve()
+      setState(usePlanStore.getState().error ? 'error' : 'done')
+    } catch {
+      setState('error')
+    }
+  }
+  return (
+    <BodyLine>
+      <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0 }}>
+        {title}
+        {version ? ` · v${version}` : ''} — {state === 'done' ? 'approved' : state === 'error' ? "couldn't approve it" : 'ready for your review. To change it, reply below.'}
+      </Typography>
+      {state !== 'done' && (
+        <Button size="small" variant="contained" disableElevation disabled={state === 'busy'} onClick={() => void approve()} sx={{ flexShrink: 0 }}>
+          {state === 'busy' ? 'Approving…' : 'Approve'}
+        </Button>
+      )}
+    </BodyLine>
+  )
+}
+
 /** The view that replaces a tool's raw result, when there is one. */
 function specialBody(message: ToolResultMessage): React.ReactNode | null {
   const details = (message.details ?? {}) as Record<string, unknown>
@@ -421,14 +452,7 @@ function specialBody(message: ToolResultMessage): React.ReactNode | null {
       const version = typeof details.version === 'number' ? details.version : null
       if (!planId) return null
       const title = typeof args.title === 'string' ? args.title : 'The plan'
-      return (
-        <BodyLine>
-          <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0 }}>
-            {title}
-            {version ? ` · v${version}` : ''} — ready for your review
-          </Typography>
-        </BodyLine>
-      )
+      return <PlanApproval planId={planId} version={version} title={title} />
     }
     case 'message_agent': {
       const to = typeof args.to === 'string' ? args.to : ''

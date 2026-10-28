@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from 'zustand'
 import { Box, Stack, Typography, IconButton, InputBase, ButtonBase, Tooltip, Collapse, Orb, alpha, useTheme } from '../../../ui'
-import { ExportLinear, AddLinear, TrashLinear } from '../../../icons'
+import { ExportLinear, AddLinear, TrashLinear, ArrowDownLinear, DocumentTextLinear } from '../../../icons'
 import { useProjectsStore, projectColor, modeOf, GENERAL_PROJECT_ID } from '../store/projectsStore'
 import { SidebarMods } from '../../mods/components/SidebarMods'
 import { useDaysStore, holderOf } from '../store/daysStore'
@@ -110,17 +110,9 @@ export function Sidebar() {
   useEffect(() => {
     if (root) void loadTeam(root)
   }, [root, loadTeam])
-  const pendingHires = team?.filter((a) => a.status === 'proposed').length ?? 0
   const activeTeam = useMemo(() => team?.filter((a) => a.status === 'active') ?? [], [team])
-  const focusAgent = useTeamStore((s) => s.focus)
-  const openAgent = (id: string | null) => {
-    if (!root) return
-    focusAgent(root, id)
-    // The Agents panel is gone; picking an agent opens its conversation in
-    // the chat instead.
-    if (id) useBotsStore.getState().setChannel(root, id)
-  }
   const [charterOpen, setCharterOpen] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const [briefOpen, setBriefOpen] = useState(false)
 
   // Re-read on every project switch rather than caching forever: the master
@@ -164,26 +156,45 @@ export function Sidebar() {
   return (
     <Stack component="nav" sx={SIDEBAR_CARD_SX}>
       <Stack sx={{ px: 2, pt: 2, pb: 1.5, gap: 0.5, flexShrink: 0 }}>
-        <Stack direction="row" sx={{ alignItems: 'center', gap: 1, minWidth: 0 }}>
-          {activeProject && (
-            <Box sx={{ width: 6, height: 18, borderRadius: '3px', flexShrink: 0, bgcolor: projectColor(activeProject) }} />
-          )}
-          <Typography
-            variant="subtitle2"
-            sx={{ fontWeight: 700, minWidth: 0, letterSpacing: '-0.01em' }}
-            noWrap
-            title={activeProject?.name ?? 'General'}
-          >
+        {/* The project's name; its folder, git and charter fold under it.
+            General works across the whole computer, so it has none. */}
+        <ButtonBase
+          onClick={() => !isGeneral && setDetailsOpen((v) => !v)}
+          disabled={isGeneral}
+          aria-expanded={isGeneral ? undefined : detailsOpen}
+          sx={{ alignSelf: 'flex-start', maxWidth: '100%', gap: 0.5, ml: -0.5, px: 0.5, py: 0.25, borderRadius: '6px', '&:hover': { bgcolor: isGeneral ? 'transparent' : 'action.hover' } }}
+        >
+          <Typography variant="subtitle2" sx={{ fontWeight: 700, minWidth: 0, letterSpacing: '-0.01em' }} noWrap title={activeProject?.name ?? 'General'}>
             {activeProject?.name ?? 'General'}
           </Typography>
-        </Stack>
-        {/* The folder the agent works in. General works across the whole
-            computer, so it shows none. */}
+          {!isGeneral && (
+            <Box sx={{ display: 'flex', color: 'text.secondary', transform: detailsOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
+              <ArrowDownLinear size={12} color="currentColor" />
+            </Box>
+          )}
+        </ButtonBase>
         {!isGeneral && (
-        <Stack direction="row" sx={{ ml: -0.75, alignItems: 'center', gap: 0.25, flexWrap: 'wrap' }}>
-          <WorkspaceSelector />
-          <GitStatusChip />
-        </Stack>
+          <Collapse in={detailsOpen}>
+            <Stack sx={{ gap: 0.5, pt: 0.5 }}>
+              <Stack direction="row" sx={{ ml: -0.75, alignItems: 'center', gap: 0.25, flexWrap: 'wrap' }}>
+                <WorkspaceSelector />
+                <GitStatusChip />
+              </Stack>
+              {master && root && (
+                <ButtonBase
+                  onClick={() => {
+                    // The lead may have edited the charter since it was loaded.
+                    void loadMaster(root)
+                    setCharterOpen(true)
+                  }}
+                  sx={{ alignSelf: 'flex-start', gap: 0.75, ml: -0.25, px: 0.5, height: 24, borderRadius: '6px', fontSize: '0.75rem', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } }}
+                >
+                  <DocumentTextLinear size={13} color="currentColor" />
+                  Charter
+                </ButtonBase>
+              )}
+            </Stack>
+          </Collapse>
         )}
       </Stack>
 
@@ -200,13 +211,6 @@ export function Sidebar() {
             root={root}
             team={activeTeam}
             master={master ? { name: master.name, color: projectColor(activeProject) } : null}
-            pendingHires={pendingHires}
-            onHire={() => openAgent(null)}
-            onCharter={() => {
-              // The master may have edited the charter since it was loaded.
-              void loadMaster(root)
-              setCharterOpen(true)
-            }}
           />
         )}
       </Box>

@@ -3,6 +3,7 @@ import { Alert, Box, useTheme } from '../../ui'
 import { hasTauri } from '../../ipc'
 import { SURFACE_RADIUS } from '../../theme'
 import { ChatView } from '../ai/components/ChatView'
+import { HireRequests } from '../team/components/HireRequests'
 import { useProjectsStore, modeOf } from '../sessions/store/projectsStore'
 import { useBotsStore } from '../team/store/botsStore'
 import { LEAD_CHANNEL } from '../team/components/TreeTeam'
@@ -35,17 +36,20 @@ function Chat() {
       </Fill>
     )
   }
-  // A tree shows the circle or DM picked in the sidebar, or its master
-  // lead's conversation.
-  if (project?.path && modeOf(project) === 'tree' && treeChannel !== LEAD_CHANNEL) {
+  // A team project: a teammate picked in the sidebar shows its work, read
+  // only; otherwise the lead's conversation, where you talk to the team.
+  const teammate = project?.path && modeOf(project) === 'tree' && treeChannel && treeChannel !== LEAD_CHANNEL && treeChannel !== 'room' && !treeChannel.startsWith('group:')
+  if (project?.path && teammate) {
     return (
       <Fill>
-        <TeamRoom key={project.path} root={project.path} />
+        <TeamRoom key={project.path} root={project.path} readOnly />
       </Fill>
     )
   }
   return (
     <Fill>
+      {/* A team project's lead asks to hire here, where you talk to it. */}
+      {project?.path && modeOf(project) === 'tree' && <HireRequests root={project.path} />}
       <ChatView />
     </Fill>
   )

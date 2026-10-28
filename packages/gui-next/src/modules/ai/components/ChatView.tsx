@@ -17,6 +17,9 @@ export interface OwnThread {
   earlierStart: number
   onLoadOlder: () => void
   loadingOlder: boolean
+  /** Shown in place of the composer: the thread can be watched, not
+   * written to. */
+  readOnly?: ReactNode
 }
 
 /** The conversation on screen. A bot's DM passes `own`: no project archive
@@ -50,7 +53,7 @@ export function ChatView({ own }: { own?: OwnThread } = {}) {
           ) : (
             <MessageList earlier={earlier} earlierStart={earlierStart} onLoadOlder={() => void loadOlder()} loadingOlder={loadingOlder} />
           )}
-          <Composer toolbar={own?.toolbar} />
+          {own?.readOnly ?? <Composer toolbar={own?.toolbar} />}
         </>
       )}
       {/* Mounted either way: a permission prompt from the running turn must

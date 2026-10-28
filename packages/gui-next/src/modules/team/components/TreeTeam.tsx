@@ -1,34 +1,25 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Box,
-  Button,
   ButtonBase,
-  Checkbox,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  FormControlLabel,
   IconButton,
   Orb,
   Stack,
-  TextField,
   Tooltip,
   Typography,
   alpha,
   useTheme,
 } from '../../../ui'
-import { AddLinear, DocumentTextLinear, EditLinear, StarLinear, TrashLinear } from '../../../icons'
+import { StarLinear } from '../../../icons'
 import { useTeamStore, type TeamAgent } from '../store/teamStore'
-import { useBotsStore, botKey, GROUP_PREFIX, type BotGroup } from '../store/botsStore'
+import { useBotsStore, botKey } from '../store/botsStore'
 import { LiveAvatar } from './bits'
-import { ChannelRow, SECTION_LABEL_SX, preview } from './TeamConversations'
+import { SECTION_LABEL_SX } from './TeamConversations'
 
 /** The channel a tree's lead conversation shows in, when its lead is the
  * project's master (a project made as a company). */
 export const LEAD_CHANNEL = '__lead'
 
-const EMPTY_GROUPS: BotGroup[] = []
 
 /** Rows hanging off a trunk, each joined to it by a rounded branch; a branch
  * draws itself in the accent colour while that row is working. Measured from
@@ -107,95 +98,6 @@ function Branches({ rows, indent, rowHeight }: { rows: Array<{ key: string; lit:
   )
 }
 
-/** Make or edit a group: a name, and who is in it. */
-function GroupDialog({ root, team, group, onClose }: { root: string; team: TeamAgent[]; group: BotGroup | 'new'; onClose: () => void }) {
-  const saveGroup = useBotsStore((s) => s.saveGroup)
-  const setChannel = useBotsStore((s) => s.setChannel)
-  const base = group === 'new' ? { id: '', name: '', members: [] } : group
-  const [name, setName] = useState(base.name)
-  const [members, setMembers] = useState<Set<string>>(new Set(base.members))
-  const [error, setError] = useState<string | null>(null)
-  const submit = async () => {
-    if (!name.trim()) return setError('Give the group a name.')
-    try {
-      const saved = await saveGroup(root, { ...base, name: name.trim(), members: [...members] })
-      if (saved) setChannel(root, `${GROUP_PREFIX}${saved.id}`)
-      onClose()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    }
-  }
-  return (
-    <Dialog open onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle sx={{ fontSize: '1rem', fontWeight: 700, pb: 0.5 }}>{group === 'new' ? 'New group' : 'Edit group'}</DialogTitle>
-      <DialogContent>
-        <Stack sx={{ gap: 1.5, pt: 1 }}>
-          <TextField
-            size="small"
-            autoFocus
-            label="Name"
-            placeholder="Frontend crew"
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value)
-              setError(null)
-            }}
-            onKeyDown={(e) => e.key === 'Enter' && void submit()}
-          />
-          <Stack>
-            <Typography variant="caption" color="text.secondary" sx={{ ...SECTION_LABEL_SX, pb: 0.5 }}>
-              Who's in it
-            </Typography>
-            {team.map((a) => (
-              <FormControlLabel
-                key={a.id}
-                control={
-                  <Checkbox
-                    size="small"
-                    checked={members.has(a.id)}
-                    onChange={(e) =>
-                      setMembers((m) => {
-                        const next = new Set(m)
-                        if (e.target.checked) next.add(a.id)
-                        else next.delete(a.id)
-                        return next
-                      })
-                    }
-                  />
-                }
-                label={
-                  <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
-                    <LiveAvatar root={root} agent={a} size={20} />
-                    <Typography variant="body2">{a.name}</Typography>
-                  </Stack>
-                }
-              />
-            ))}
-            {team.length === 0 && (
-              <Typography variant="caption" color="text.secondary">
-                Hire someone first: a group is you and some of the team.
-              </Typography>
-            )}
-          </Stack>
-          {error && (
-            <Typography variant="caption" color="error">
-              {error}
-            </Typography>
-          )}
-        </Stack>
-      </DialogContent>
-      <DialogActions>
-        <Button size="small" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button size="small" variant="contained" disableElevation onClick={() => void submit()}>
-          {group === 'new' ? 'Create' : 'Save'}
-        </Button>
-      </DialogActions>
-    </Dialog>
-  )
-}
-
 /**
  * A tree project in the sidebar: its groups, and the team as an org chart.
  * The head of the tree is the lead (the master, for a project made as a
@@ -206,29 +108,18 @@ export function TreeTeam({
   root,
   team,
   master,
-  pendingHires,
-  onHire,
-  onCharter,
 }: {
   root: string
   team: TeamAgent[]
   /** The project conversation's lead, when the tree was made as a company. */
   master: { name: string; color: string } | null
-  pendingHires: number
-  onHire: () => void
-  onCharter: () => void
 }) {
   const theme = useTheme()
-  const room = useBotsStore((s) => s.room[root])
-  const dm = useBotsStore((s) => s.dm)
   const status = useBotsStore((s) => s.status)
-  const unread = useBotsStore((s) => s.unread)
   const channel = useBotsStore((s) => s.channel[root] ?? 'room')
   const approvals = useBotsStore((s) => s.approvals)
-  const groups = useBotsStore((s) => s.groups[root] ?? EMPTY_GROUPS)
   const save = useTeamStore((s) => s.save)
-  const { setChannel, loadRoom, loadDm, loadStatus, loadGroups, deleteGroup } = useBotsStore.getState()
-  const [editing, setEditing] = useState<BotGroup | 'new' | null>(null)
+  const { setChannel, loadRoom, loadDm, loadStatus, loadGroups } = useBotsStore.getState()
 
   useEffect(() => {
     void loadRoom(root)
@@ -239,7 +130,6 @@ export function TreeTeam({
   }, [root, team.map((a) => a.id).join(',')])
 
   const isWorking = (id: string) => status[botKey(root, id)]?.state === 'working'
-  const working = team.filter((a) => isWorking(a.id))
   const known = new Set(team.map((a) => a.id))
   const boss = (a: TeamAgent) => (a.reportsTo && known.has(a.reportsTo) ? a.reportsTo : null)
   const under = (id: string | null) =>
@@ -357,96 +247,17 @@ export function TreeTeam({
       <Stack sx={{ gap: 0.25 }}>
         <Stack direction="row" sx={{ alignItems: 'center', px: 0.5, pb: 0.25 }}>
           <Typography variant="caption" color="text.secondary" sx={{ ...SECTION_LABEL_SX, flex: 1 }}>
-            Groups
-          </Typography>
-          <Tooltip title="New group">
-            <IconButton size="small" aria-label="New group" onClick={() => setEditing('new')}>
-              <AddLinear size={13} color="currentColor" />
-            </IconButton>
-          </Tooltip>
-        </Stack>
-        <ChannelRow
-          active={channel === 'room'}
-          onClick={() => setChannel(root, 'room')}
-          icon={<GroupMark />}
-          title="Everyone"
-          subtitle={working.length ? `${working.map((a) => a.name).join(', ')} working…` : (preview(room?.[room.length - 1], team) ?? 'The whole team')}
-          subtitleTone={working.length ? 'success.main' : undefined}
-          unread={unread[botKey(root, 'room')] ?? 0}
-        />
-        {groups.map((g) => {
-          const ch = `${GROUP_PREFIX}${g.id}`
-          const msgs = dm[botKey(root, ch)]
-          const names = team.filter((a) => g.members.includes(a.id)).map((a) => a.name)
-          return (
-            <Box key={g.id} sx={{ position: 'relative', '&:hover .group-actions': { opacity: 1 } }}>
-              <ChannelRow
-                active={channel === ch}
-                onClick={() => setChannel(root, ch)}
-                icon={<GroupMark />}
-                title={g.name}
-                subtitle={preview(msgs?.[msgs.length - 1], team) ?? (names.length ? names.join(', ') : 'No one yet')}
-                unread={unread[botKey(root, ch)] ?? 0}
-              />
-              <Stack direction="row" className="group-actions" sx={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', opacity: 0, transition: 'opacity 0.12s', bgcolor: 'background.paper', borderRadius: '6px' }}>
-                <Tooltip title="Edit">
-                  <IconButton size="small" aria-label={`Edit ${g.name}`} onClick={() => setEditing(g)}>
-                    <EditLinear size={12} color="currentColor" />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip title="Delete">
-                  <IconButton size="small" aria-label={`Delete ${g.name}`} onClick={() => void deleteGroup(root, g.id)}>
-                    <TrashLinear size={12} color="currentColor" />
-                  </IconButton>
-                </Tooltip>
-              </Stack>
-            </Box>
-          )
-        })}
-      </Stack>
-
-      <Stack sx={{ gap: 0.25 }}>
-        <Stack direction="row" sx={{ alignItems: 'center', px: 0.5, pb: 0.25 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ ...SECTION_LABEL_SX, flex: 1 }}>
             Team{team.length ? ` · ${team.length}` : ''}
           </Typography>
-          {master && (
-            <Tooltip title="Charter">
-              <IconButton size="small" aria-label="Open the charter" onClick={onCharter}>
-                <DocumentTextLinear size={13} color="currentColor" />
-              </IconButton>
-            </Tooltip>
-          )}
-          <Tooltip title="Hire a specialist">
-            <IconButton size="small" aria-label="Hire a specialist" onClick={onHire}>
-              <AddLinear size={13} color="currentColor" />
-            </IconButton>
-          </Tooltip>
         </Stack>
-        {pendingHires > 0 && (
-          <ButtonBase onClick={onHire} sx={{ justifyContent: 'flex-start', px: 1, py: 0.5, mb: 0.5, borderRadius: '8px', bgcolor: alpha(theme.palette.primary.main, 0.1), color: 'primary.main' }}>
-            <Typography variant="caption" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>
-              {pendingHires} proposed hire{pendingHires === 1 ? '' : 's'} to approve
-            </Typography>
-          </ButtonBase>
-        )}
         {head}
         {branchesUnder(null, 0)}
         {team.length === 0 && (
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 1, py: 0.5, lineHeight: 1.45 }}>
-            No one on the team yet. Hire with + — each bot gets its own role, model, tools and memory.
+            No one on the team yet. Ask the lead to hire someone.
           </Typography>
         )}
       </Stack>
-      {editing && <GroupDialog root={root} team={team} group={editing} onClose={() => setEditing(null)} />}
     </Stack>
-  )
-}
-
-function GroupMark() {
-  return (
-    <Box sx={{ width: 24, height: 24, borderRadius: '7px', display: 'grid', placeItems: 'center', bgcolor: 'action.hover', color: 'text.secondary', flexShrink: 0, fontWeight: 700, fontSize: '0.8125rem' }}>
-      #
-    </Box>
   )
 }

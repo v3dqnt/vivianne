@@ -22,14 +22,31 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 /** Make a 24/7 agent: its name and job, how it looks, its model, and the
  * standing instructions it works from. Schedules, inbox and phone are set on
  * its page once it exists. */
-export function NewAgentDialog({ root, open, count, onClose, onCreated }: { root: string; open: boolean; count: number; onClose: () => void; onCreated?: (agent: TeamAgent) => void }) {
+export function NewAgentDialog({
+  root,
+  open,
+  count = 0,
+  agent = null,
+  title = 'New 24/7 agent',
+  onClose,
+  onCreated,
+}: {
+  root: string
+  open: boolean
+  count?: number
+  /** Given, the dialog edits this agent instead of making a new one. */
+  agent?: TeamAgent | null
+  title?: string
+  onClose: () => void
+  onCreated?: (agent: TeamAgent) => void
+}) {
   const save = useTeamStore((s) => s.save)
-  const [name, setName] = useState('')
-  const [role, setRole] = useState('')
-  const [color, setColor] = useState<string>(SUBAGENT_COLORS[count % SUBAGENT_COLORS.length])
-  const [face, setFace] = useState<FaceStyle | null>(null)
-  const [model, setModel] = useState<TeamAgent['model']>(null)
-  const [instructions, setInstructions] = useState('')
+  const [name, setName] = useState(agent?.name ?? '')
+  const [role, setRole] = useState(agent?.role ?? '')
+  const [color, setColor] = useState<string>(agent?.color ?? SUBAGENT_COLORS[count % SUBAGENT_COLORS.length])
+  const [face, setFace] = useState<FaceStyle | null>(agent?.face ?? null)
+  const [model, setModel] = useState<TeamAgent['model']>(agent?.model ?? null)
+  const [instructions, setInstructions] = useState(agent?.instructions ?? '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -38,10 +55,14 @@ export function NewAgentDialog({ root, open, count, onClose, onCreated }: { root
     setSaving(true)
     setError(null)
     try {
-      const made = await save(root, { ...blankAgent(), name: name.trim(), role: role.trim(), color, face, model, instructions, status: 'active', proposedBy: 'user' }, null)
-      setName('')
-      setRole('')
-      setInstructions('')
+      const made = agent
+        ? await save(root, { ...agent, name: name.trim(), role: role.trim(), color, face, model, instructions }, agent.id)
+        : await save(root, { ...blankAgent(), name: name.trim(), role: role.trim(), color, face, model, instructions, status: 'active', proposedBy: 'user' }, null)
+      if (!agent) {
+        setName('')
+        setRole('')
+        setInstructions('')
+      }
       onCreated?.(made)
       onClose()
     } catch (e) {
@@ -55,7 +76,7 @@ export function NewAgentDialog({ root, open, count, onClose, onCreated }: { root
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '16px', fontWeight: 600 }}>
         <Avatar name={name || '?'} color={colorOf({ color })} face={face} size={32} />
-        New 24/7 agent
+        {agent ? `Edit ${agent.name}` : title}
       </DialogTitle>
       <DialogContent>
         <Stack sx={{ gap: '16px', pt: '4px' }}>
@@ -90,7 +111,7 @@ export function NewAgentDialog({ root, open, count, onClose, onCreated }: { root
           Cancel
         </Button>
         <Button variant="contained" disableElevation disabled={saving || !name.trim()} onClick={() => void create()}>
-          {saving ? <CircularProgress size={14} /> : 'Create agent'}
+          {saving ? <CircularProgress size={14} /> : agent ? 'Save' : 'Create agent'}
         </Button>
       </DialogActions>
     </Dialog>
