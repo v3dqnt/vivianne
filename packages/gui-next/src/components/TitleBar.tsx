@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Box, Stack, IconButton, Tooltip, Menu, MenuItem } from '../ui'
 import { call, hasTauri } from '../ipc'
 import { fileManagerName, terminalAppName } from '../lib/platform'
-import { FolderLinear, CommandSquareLinear, SidebarLinear } from '../icons'
+import { FolderLinear, CommandSquareLinear, SidebarLinear, SettingsLinear } from '../icons'
+import { useSettingsUi } from '../modules/settings/store/uiStore'
 import { useSidebarStore } from '../modules/sessions/store/sidebarStore'
 
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
@@ -66,7 +67,11 @@ function TitleBarActions() {
           Open in {terminalAppName}
         </MenuItem>
       </Menu>
-
+      <Tooltip title="Settings">
+        <IconButton size="small" onClick={() => useSettingsUi.getState().openSettings()} aria-label="Settings" sx={iconSx(false)}>
+          <SettingsLinear size={14} color="currentColor" />
+        </IconButton>
+      </Tooltip>
     </Stack>
   )
 }
