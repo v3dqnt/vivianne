@@ -70,7 +70,7 @@ export function TeamStrip({ root, projectName }: { root: string; projectName: st
     void useBotsStore.getState().loadStatus(root)
   }, [root])
   return (
-    <Box sx={{ position: 'absolute', left: 12, top: 12, width: 192, zIndex: 3 }}>
+    <Box sx={{ position: 'absolute', left: 24, top: 24, width: 184, zIndex: 3 }}>
       <Typography noWrap title={projectName} sx={{ fontSize: '14px', fontWeight: 600, letterSpacing: '-0.01em', px: '8px' }}>
         {projectName}
       </Typography>

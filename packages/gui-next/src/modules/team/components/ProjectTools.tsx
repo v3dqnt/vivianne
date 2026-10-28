@@ -34,7 +34,7 @@ export function ProjectTools({ root }: { root: string }) {
   const master = useMasterStore((s) => s.byRoot[root])
   const [charter, setCharter] = useState(false)
   return (
-    <Box sx={{ position: 'absolute', right: 12, top: 12, width: 180, zIndex: 3 }}>
+    <Box sx={{ position: 'absolute', right: 24, top: 24, width: 184, zIndex: 3 }}>
       <Stack sx={{ gap: '20px' }}>
         <Box>
           <Typography sx={LABEL}>Workspace</Typography>
