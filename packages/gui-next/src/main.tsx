@@ -12,6 +12,7 @@ import { initNotchDelegate } from './modules/instant/lib/notchDelegate'
 import { initNotificationReply } from './modules/ai/lib/notificationReply'
 import { initDiagramCheck } from './modules/ai/lib/diagramCheck'
 import App from './App.tsx'
+import { OpenUIDevtools } from '@openuidev/devtools'
 import './tailwind.css'
 
 // Registered at app entry, before the first render. This one listener
@@ -59,6 +60,8 @@ function ThemedApp() {
       <CssBaseline extra={baselineExtras(mode)} />
       <AppearanceEffects />
       <App />
+      {/* OpenUI mounts its own inspector in dev builds; this one wins and keeps it off. */}
+      <OpenUIDevtools enabled={false} />
     </ThemeProvider>
   )
 }
