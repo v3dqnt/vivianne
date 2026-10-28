@@ -66,7 +66,7 @@ function Preview({ root, agent }: { root: string; agent: TeamAgent }) {
  * teammate with its face and name. Hover one for its live transcript in a
  * small card; click to show it in the middle. The lead is where you talk.
  */
-export function TeamStrip({ root, leadName, leadColor }: { root: string; leadName: string | null; leadColor: string }) {
+export function TeamStrip({ root, projectName, leadName, leadColor }: { root: string; projectName: string; leadName: string | null; leadColor: string }) {
   const theme = useTheme()
   const team = useTeamStore((s) => s.byRoot[root] ?? NONE).filter((a) => a.status === 'active')
   const status = useBotsStore((s) => s.status)
@@ -158,6 +158,9 @@ export function TeamStrip({ root, leadName, leadColor }: { root: string; leadNam
 
   return (
     <Box ref={stripRef} sx={{ position: 'absolute', left: 12, top: 12, width: 180, zIndex: 3 }}>
+      <Typography noWrap title={projectName} sx={{ fontSize: '15px', fontWeight: 700, letterSpacing: '-0.01em', px: '8px', pb: '8px' }}>
+        {projectName}
+      </Typography>
       <Stack sx={{ gap: '2px' }}>
         {leadName && (
           <ButtonBase onClick={() => setChannel(root, LEAD_CHANNEL)} aria-current={onLead ? 'true' : undefined} sx={{ ...row(onLead), height: 44 }}>
