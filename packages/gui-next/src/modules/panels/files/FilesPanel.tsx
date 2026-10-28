@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Box, Stack, Typography, IconButton, Tooltip, CircularProgress, InputBase, useTheme } from '../../../ui'
+import { Box, ButtonBase, Stack, Typography, IconButton, Tooltip, CircularProgress, InputBase, useTheme } from '../../../ui'
 import {
   FolderLinear, DocumentLinear, ChevronRightLinear, FolderOpenLinear,
-  CloseCircleLinear, SearchNormalLinear, RefreshLinear,
+  CloseCircleLinear, SearchNormalLinear, RefreshLinear, CopyLinear,
 } from '../../../icons'
 import { call } from '../../../ipc'
 import { useActiveWorkspace } from '../../dock/useActiveWorkspace'
 import { FileContent } from '../../dock/components/FilePreview'
-import { basename, filterTree, type TreeNode } from './fileTree'
+import { basename, changeFor, filterTree, isVisualFile, type TreeNode } from './fileTree'
+import { useFileChanges } from './useChanges'
+import { ChangedFileView } from './ChangedFileView'
+import { usePanelStore } from '../../dock/store/panelStore'
 import { useFilesStore } from './store'
 
 interface RootTree {
@@ -49,6 +52,7 @@ export function FilesPanel() {
   const toggleFolder = useFilesStore((s) => s.toggleFolder)
   const setOpenFile = useFilesStore((s) => s.setOpenFile)
   const flashFile = useFilesStore((s) => s.flashFile)
+  const changes = useFileChanges(folders)
 
   const foldersKey = folders.join(' ')
 
@@ -91,7 +95,7 @@ export function FilesPanel() {
     return trees.map((t) => ({ ...t, nodes: t.nodes ? filterTree(t.nodes, q) : null }))
   }, [trees, q])
 
-  const renderNodes = (nodes: TreeNode[], depth: number): React.ReactNode[] =>
+  const renderNodes = (nodes: TreeNode[], depth: number, root: string): React.ReactNode[] =>
     nodes.map((node) => {
       const isDir = node.type === 'directory'
       // While filtering, folders default to open so matches deep in the tree
@@ -137,13 +141,58 @@ export function FilesPanel() {
             >
               {node.name}
             </Typography>
+            {!isDir && (() => {
+              const c = changeFor(changes, node.path)
+              if (!c) return null
+              return (
+                <Stack direction="row" sx={{ gap: 0.5, flexShrink: 0, fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.6875rem', lineHeight: 1 }}>
+                  <Box component="span" sx={{ color: 'success.main' }}>+{c.additions}</Box>
+                  {c.status !== '??' && <Box component="span" sx={{ color: 'error.main' }}>−{c.deletions}</Box>}
+                </Stack>
+              )
+            })()}
           </Stack>
           {!isDir && isOpen && (
-            <Box sx={{ ml: `${8 + depth * 14 + 7}px`, mr: 0.75, mt: 0.25, mb: 0.75, maxHeight: 420, overflow: 'auto' }}>
-              <FileContent path={node.path} full fresh />
+            <Box sx={{ ml: `${8 + depth * 14 + 7}px`, mr: 0.75, mt: 0.25, mb: 0.75 }}>
+              <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, px: 1, py: 0.25, mb: 0.25 }}>
+                <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0, fontSize: '0.625rem', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
+                  {node.path.slice(root.length + 1)}
+                </Typography>
+                {isVisualFile(node.path) && (
+                  <ButtonBase
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      usePanelStore.getState().openDocument(node.path)
+                    }}
+                    sx={{ px: 0.75, height: 20, borderRadius: '6px', fontSize: '0.625rem', fontWeight: 600, color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } }}
+                  >
+                    Open in Browser
+                  </ButtonBase>
+                )}
+                <Tooltip title="Copy path">
+                  <IconButton
+                    size="small"
+                    aria-label="Copy path"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void navigator.clipboard.writeText(node.path)
+                    }}
+                    sx={{ width: 18, height: 18 }}
+                  >
+                    <CopyLinear size={11} color="currentColor" />
+                  </IconButton>
+                </Tooltip>
+              </Stack>
+              {changeFor(changes, node.path)
+                ? <ChangedFileView path={node.path} root={root} />
+                : (
+                  <Box sx={{ maxHeight: 420, overflow: 'auto' }}>
+                    <FileContent path={node.path} full fresh />
+                  </Box>
+                )}
             </Box>
           )}
-          {isDir && isOpen && node.children && renderNodes(node.children, depth + 1)}
+          {isDir && isOpen && node.children && renderNodes(node.children, depth + 1, root)}
         </Box>
       )
     })
@@ -186,6 +235,11 @@ export function FilesPanel() {
             <RefreshLinear size={13} color="currentColor" />
           </IconButton>
         </Tooltip>
+        {changes.size > 0 && (
+          <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0, fontSize: '0.6875rem' }}>
+            {changes.size} changed
+          </Typography>
+        )}
       </Stack>
 
       <Box ref={bodyRef} sx={{ px: 1, pb: 1, overflowY: 'auto', flex: 1, minHeight: 0, minWidth: 0 }}>
@@ -226,7 +280,7 @@ export function FilesPanel() {
                           ? hint(`Couldn’t read this folder — ${t.error}`)
                           : t.nodes && t.nodes.length === 0
                             ? hint('Empty folder.')
-                            : t.nodes && renderNodes(t.nodes, 0))}
+                            : t.nodes && renderNodes(t.nodes, 0, t.root))}
                     </Box>
                   )
                 })}

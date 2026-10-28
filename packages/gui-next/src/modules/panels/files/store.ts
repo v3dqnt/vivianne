@@ -1,3 +1,6 @@
+import { openPanel } from '../../workspace/layout'
+import { useWorkspaceStore } from '../../ai/store/workspaceStore'
+import { ancestorsOf, normalizePath } from './fileTree'
 import { create } from 'zustand'
 
 interface FilesState {
@@ -33,3 +36,17 @@ export const useFilesStore = create<FilesState>((set) => ({
   setOpenFile: (openFile) => set({ openFile }),
   flashFile: (flash) => set({ flash }),
 }))
+
+/**
+ * Show a file in the Files panel: open the panel, expand the folders above it,
+ * expand the file itself, and flash its row. What a chat file link does.
+ */
+export function revealFile(path: string) {
+  openPanel('files')
+  const roots = useWorkspaceStore.getState().folders
+  const root = roots.find((r) => normalizePath(path).startsWith(normalizePath(r)))
+  const s = useFilesStore.getState()
+  if (root) s.expandFolders(ancestorsOf(path, root))
+  s.setOpenFile(path)
+  s.flashFile(path)
+}

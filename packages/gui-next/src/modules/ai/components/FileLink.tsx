@@ -1,7 +1,7 @@
 import { Box } from '../../../ui'
 import { call } from '../../../ipc'
 import { dirName } from '../lib/filePaths'
-import { usePanelStore } from '../../dock/store/panelStore'
+import { revealFile } from '../../panels/files/store'
 import { useWorkspaceStore } from '../store/workspaceStore'
 
 const ABSOLUTE = /^(?:[a-zA-Z]:[\\/]|[\\/]{1,2})/
@@ -30,20 +30,20 @@ export function filePathArg(args: Record<string, unknown> | undefined): string |
 
 /**
  * A file named by what a reader recognises (its name, not its path),
- * highlighted, and opening in the Preview panel on click. The full path is
+ * highlighted, and revealing the file in the Files panel on click. The full path is
  * on hover.
  */
 export function FileLink({ path, label, prose = false }: { path: string; label?: string; prose?: boolean }) {
   const root = useWorkspaceStore((s) => s.folders[0] ?? null)
   const full = resolvePath(path, root)
-  const open = () => usePanelStore.getState().openDocument(full)
+  const open = () => revealFile(full)
   const reveal = () => void call('cmd_open_external', { path: dirName(full), target: 'explorer' })
   return (
     <Box
       component="span"
       role="link"
       tabIndex={0}
-      title={`${full}\nClick to open in Preview. Ctrl+click or right-click to show in the folder.`}
+      title={`${full}\nClick to show in the Files panel. Ctrl+click or right-click to show in the folder.`}
       onClick={(e) => {
         // Inside a card header that toggles on click: open, don't toggle.
         e.stopPropagation()
