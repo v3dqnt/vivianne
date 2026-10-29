@@ -35,9 +35,9 @@ pub fn effect(tool: &str) -> Option<Effect> {
         | "web_fetch" | "recall" | "read_skill" | "list_tools" | "load_tools" | "list_subagent_profiles" | "get_current_time"
         | "get_goal" | "github" | "guide" | "check_diagram" | "math" | "task_output" | "team_read" | "list_automations"
         | "list_custom_tools" | "sleep" => Read,
-        "question" | "confirm_action" | "todo_write" | "submit_plan" | "present_snippet" | "set_panel" | "message_agent"
+        "question" | "confirm_action" | "todo_write" | "submit_plan" | "present_snippet" | "message_agent"
         | "team_post" | "pair_activity" => Talk,
-        "task" | "team_run" | "kill_task" | "hire_agent" | "assign_plan_steps" => Delegate,
+        "task" | "team_run" | "kill_task" | "hire_agent" | "assign_plan_steps" | "ask_agent" => Delegate,
         "write" | "edit" | "apply_patch" | "notebook_edit" | "create_document" | "edit_document" | "generate_image" | "remember"
         | "create_goal" | "update_goal" | "create_automation" | "delete_automation" | "set_automation_enabled" | "create_tool"
         | "delete_tool" | "repo_clone" => Change,
