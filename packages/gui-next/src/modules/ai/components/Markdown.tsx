@@ -45,7 +45,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   // parse cost grows with message length. Throttling the actual parse to
   // ~100ms keeps the visible text live-feeling while cutting redundant
   // full-message reparses during long replies.
-  const throttledText = useThrottledValue(text, 100)
+  const throttledText = useThrottledValue(text, 50)
   // Re-render when mods load or change: a fence may have gained a renderer.
   const mods = useModsStore((s) => s.mods)
   const healed = normalizeMath(remend(throttledText))

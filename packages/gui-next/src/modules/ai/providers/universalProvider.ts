@@ -102,9 +102,11 @@ function buildRequestSetup(req: ProviderStreamRequest, apiKey: string, maxOutput
       })
       const transformed = transformMessages(req.context.messages, {
         supportsImages: true,
-        targetProvider: '',
+        // The model this request goes to, so its own earlier signed thinking
+        // is replayed as thinking blocks rather than downgraded to text.
+        targetProvider: req.provider,
         targetApi: 'anthropic-messages',
-        targetModelId: '',
+        targetModelId: req.modelId,
         normalizeToolCallId: normalizeAnthropicToolCallId,
       })
       const messages = toModelMessages(transformed)
