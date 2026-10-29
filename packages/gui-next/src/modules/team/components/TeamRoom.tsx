@@ -14,6 +14,7 @@ import { BotChat } from './BotChat'
 import { ChatView } from '../../ai/components/ChatView'
 import { agentStoreFor, sendThrough, setActiveThread } from '../../ai/store/agentStore'
 import { activeThreadId } from '../../ai/store/activeThread'
+import { AgentMessenger } from './AgentMessenger'
 
 const EMPTY_AGENTS: TeamAgent[] = []
 const EMPTY_MSGS: never[] = []
@@ -42,7 +43,7 @@ export function BotChip({ root, agent, onOpen }: { root: string; agent: TeamAgen
  * `@everyone`. Bots hand work to each other here, post routine results and
  * check-ins, and ask for decisions.
  */
-export function TeamRoom({ root, readOnly = false }: { root: string; readOnly?: boolean }) {
+export function TeamRoom({ root, readOnly = false, messenger = false }: { root: string; readOnly?: boolean; messenger?: boolean }) {
   const channel = useBotsStore((s) => s.channel[root] ?? 'room')
   const team = useTeamStore((s) => (s.byRoot[root] ?? EMPTY_AGENTS)).filter((a) => a.status === 'active')
   const groups = useBotsStore((s) => s.groups[root])
@@ -52,7 +53,7 @@ export function TeamRoom({ root, readOnly = false }: { root: string; readOnly?: 
     return <Room key={channel} root={root} team={members} channel={channel} name={group?.name ?? 'Group'} />
   }
   const bot = channel !== 'room' ? team.find((a) => a.id === channel) : undefined
-  if (bot) return <DirectMessage key={bot.id} root={root} bot={bot} team={team} readOnly={readOnly} />
+  if (bot) return <DirectMessage key={bot.id} root={root} bot={bot} team={team} readOnly={readOnly} messenger={messenger} />
   return <Room root={root} team={team} />
 }
 
@@ -60,7 +61,7 @@ export function TeamRoom({ root, readOnly = false }: { root: string; readOnly?: 
  * the bot's own thread, shown in the chat view with everything the chat has
  * (tool calls, plans, to-dos, checkpoints, approvals, cards); sending goes
  * through the bot. */
-function DirectMessage({ root, bot, readOnly }: { root: string; bot: TeamAgent; team: TeamAgent[]; readOnly: boolean }) {
+function DirectMessage({ root, bot, readOnly, messenger }: { root: string; bot: TeamAgent; team: TeamAgent[]; readOnly: boolean; messenger: boolean }) {
   const st = useBotsStore((s) => s.status[botKey(root, bot.id)])
   const { loadStatus, sendDm } = useBotsStore.getState()
   const save = useTeamStore((s) => s.save)
@@ -101,6 +102,16 @@ function DirectMessage({ root, bot, readOnly }: { root: string; bot: TeamAgent; 
     await call('cmd_bots_revert', { root, botId: bot.id, index })
     const messages = (await call<AgentMessage[]>('cmd_bots_thread', { root, botId: bot.id })) ?? []
     agentStoreFor(thread).setState({ messages, streamingIndex: null })
+  }
+
+  if (messenger) {
+    const line = state === 'working' ? (st?.activity ?? 'Working…') : state === 'paused' ? 'Paused' : bot.role || 'Here for you'
+    return (
+      <>
+        <AgentMessenger root={root} agent={bot} status={line} onEdit={() => setEditing(true)} />
+        {editing && <NewAgentDialog root={root} open agent={bot} onClose={() => setEditing(false)} />}
+      </>
+    )
   }
 
   return (

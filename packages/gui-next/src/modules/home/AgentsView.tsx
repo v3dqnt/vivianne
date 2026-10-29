@@ -96,7 +96,7 @@ export function AgentsView() {
       <Box sx={{ flex: 1, minWidth: 0, ...mainPane(theme), display: 'flex', flexDirection: 'column' }}>
         {root && picked ? (
           <Suspense fallback={null}>
-            <TeamRoom key={root} root={root} />
+            <TeamRoom key={root} root={root} messenger />
           </Suspense>
         ) : (
           <Stack sx={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>

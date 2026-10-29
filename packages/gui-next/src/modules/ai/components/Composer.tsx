@@ -6,6 +6,7 @@ import { useDaysStore } from '../../sessions/store/daysStore'
 import { call, on } from '../../../ipc'
 import type { FileAttachment } from '../lib/types'
 import { ModelPicker } from './ModelPicker'
+import { ErrorsButton } from './ErrorsButton'
 import { ChatComposer, type ChatComposerHandle, type ComposerAttachments } from './ChatComposer'
 import { ThinkingLevelControl as ThinkingLevelControlImpl } from './ThinkingLevelControl'
 import { ModePill as ModePillImpl } from './ModePill'
@@ -357,6 +358,7 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
           }
           right={
             <>
+              <ErrorsButton />
               <ContextUsageBar />
               <ThinkingLevelControl />
               {toolbar ?? <ChatModelPicker />}
