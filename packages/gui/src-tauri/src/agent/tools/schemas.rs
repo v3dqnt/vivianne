@@ -141,24 +141,24 @@ pub(crate) fn static_tool_definitions() -> Vec<serde_json::Value> {
         }),
         serde_json::json!({
             "name": "write",
-            "description": "Write content to a file, creating it if it doesn't exist.",
+            "description": "Write content to a file, creating it if it doesn't exist. This REPLACES the file's entire content — use it to create new files or to rewrite a file wholesale. To change part of an existing file, use edit instead. A backup of the prior content is captured so the change can be reverted.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Relative path of the file" },
-                    "content": { "type": "string", "description": "Content to write" }
+                    "content": { "type": "string", "description": "Content to write (always the complete file, UTF-8)" }
                 },
                 "required": ["path", "content"]
             }
         }),
         serde_json::json!({
             "name": "edit",
-            "description": "Replace a specific substring in a file with new text.",
+            "description": "Replace a specific substring in a file with new text — the surgical way to change part of an existing file (use write for new files or full rewrites). old_string must match the file's content EXACTLY, including indentation, and must appear exactly once: include enough surrounding lines to make it unique, since ambiguous or missing matches fail the call. Line endings are preserved.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Relative path of the file" },
-                    "old_string": { "type": "string", "description": "Sub-string to be replaced" },
+                    "old_string": { "type": "string", "description": "Exact existing text to replace (must be unique in the file)" },
                     "new_string": { "type": "string", "description": "New content to insert" }
                 },
                 "required": ["path", "old_string", "new_string"]
@@ -178,7 +178,7 @@ pub(crate) fn static_tool_definitions() -> Vec<serde_json::Value> {
         }),
         serde_json::json!({
             "name": "ls",
-            "description": "List a directory; set depth for a tree.",
+            "description": "List a directory's entries; set depth to see it as a gitignore-aware tree. Output is capped at 1500 entries — narrow the path or use glob/grep when a folder is huge.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -191,7 +191,7 @@ pub(crate) fn static_tool_definitions() -> Vec<serde_json::Value> {
         }),
         serde_json::json!({
             "name": "grep",
-            "description": "Search for a regex pattern in files recursively.",
+            "description": "Search files for a regex pattern (Rust syntax, e.g. '\\bfn\\s+\\w+'), recursively and gitignore-aware. Returns at most 100 matching lines and stops scanning after 4000 files — results say when they were cut off, and a capped scan is PARTIAL, not proof something is absent: narrow with `path` or a more specific pattern and search the rest separately.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -329,7 +329,7 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
         }),
         serde_json::json!({
             "name": "glob",
-            "description": "Find files by name pattern or wildcard (e.g. '**/*.ts', 'src/*.rs').",
+            "description": "Find files by name pattern or wildcard (e.g. '**/*.ts', 'src/*.rs'), gitignore-aware, searched from `path` (default: the workspace). Returns at most 100 matches; anything beyond that reported as 'Results truncated' — narrow the pattern and search again.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -707,6 +707,18 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
                     "run_in_background": { "type": "boolean", "description": "false to wait for the result", "default": true }
                 },
                 "required": ["description"]
+            }
+        }),
+        serde_json::json!({
+            "name": "ask_agent",
+            "description": "Message another 24/7 agent and get its answer: for something it is better placed to do or knows about (its job, its sites, its memory). It answers in its own conversation; the answer arrives back in yours as a message from it, so carry on meanwhile. 'to' is its @id or name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": { "type": "string", "description": "The other agent's @id or name" },
+                    "text": { "type": "string", "description": "What you need from it, with the context it needs to answer" }
+                },
+                "required": ["to", "text"]
             }
         }),
         serde_json::json!({

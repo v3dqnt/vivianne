@@ -61,7 +61,13 @@ export interface BotSettings {
   alwaysOn: boolean
   checkinHours: number
   lastCheckin: number | null
+  /** Where it does hands-on work (`bots::Workplace`). */
+  workplace?: Workplace
+  /** A folder the user chose for it; absent = its own private folder. */
+  folder?: string | null
 }
+
+export type Workplace = 'auto' | 'this_pc' | 'browser' | 'private_desktop' | 'cloud_desktop' | 'off'
 
 export interface Routine {
   id: string
@@ -71,6 +77,8 @@ export interface Routine {
   enabled: boolean
   nextRun: number | null
   runs: { at: number; ok: boolean; summary: string }[]
+  /** Runs once at the next time its schedule names, then turns itself off. */
+  once?: boolean
 }
 
 export interface PendingApproval {

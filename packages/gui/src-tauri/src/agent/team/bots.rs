@@ -157,6 +157,7 @@ pub struct BotPolicy {
     /// Where the bot lives and which it is, for its own email and phone.
     pub root: String,
     pub bot_id: String,
+    pub workplace: Workplace,
 }
 
 pub enum Decision {
@@ -166,6 +167,9 @@ pub enum Decision {
 }
 
 pub fn decide(policy: &BotPolicy, tool: &str) -> Decision {
+    if let Some(why) = outside_workplace(policy, tool) {
+        return Decision::Refuse(why);
+    }
     let Some(c) = category(tool) else { return Decision::Run };
     // A check-in nobody asked for may look, never touch (OpenAI's proactive
     // research rule). Reading the web is looking.
@@ -183,6 +187,23 @@ pub fn decide(policy: &BotPolicy, tool: &str) -> Decision {
         Level::HandOff => Decision::Refuse(format!(
             "Your rules say to hand '{tool}' to the user rather than do it. Start your reply with \"NEEDS YOU:\" and say exactly what you need them to do."
         )),
+    }
+}
+
+/// Where it was told to work rules out this tool: the screen when it works
+/// in the browser, both when it works in neither.
+fn outside_workplace(policy: &BotPolicy, tool: &str) -> Option<String> {
+    let screen = matches!(tool, "dip" | "computer");
+    let browser = tool == "user_browser_driver";
+    let name = &policy.bot_name;
+    match policy.workplace {
+        Workplace::Auto | Workplace::ThisPc => None,
+        Workplace::Browser if screen => Some(format!("{name} works in the browser only, so '{tool}' (this computer's screen) is off. Use user_browser_driver.")),
+        Workplace::PrivateDesktop | Workplace::CloudDesktop if screen || browser => {
+            Some(format!("{name}'s desktop isn't set up yet, so '{tool}' can't run. Tell the user, and do the rest without it."))
+        }
+        Workplace::Off if screen || browser => Some(format!("{name} is set not to use a screen or a browser, so '{tool}' is off. Use web_search and web_fetch, or tell the user.")),
+        _ => None,
     }
 }
 
@@ -289,6 +310,32 @@ pub struct BotSettings {
     pub checkin_hours: u32,
     #[serde(default)]
     pub last_checkin: Option<u64>,
+    /// Where it may work: a screen, the browser, or neither.
+    #[serde(default)]
+    pub workplace: Workplace,
+    /// A folder the user chose for it to keep and edit files in. `None`: its
+    /// own private folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+}
+
+/// Where a bot does hands-on work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Workplace {
+    /// Whatever the task needs: the browser, or this computer's screen.
+    #[default]
+    Auto,
+    /// This computer's screen (and its browser).
+    ThisPc,
+    /// The user's browser only, never the screen.
+    Browser,
+    /// A desktop of its own on this computer. Not available yet.
+    PrivateDesktop,
+    /// A desktop in the cloud. Not available yet.
+    CloudDesktop,
+    /// Neither: no screen and no browser.
+    Off,
 }
 
 fn default_checkin_hours() -> u32 {
@@ -297,7 +344,7 @@ fn default_checkin_hours() -> u32 {
 
 impl Default for BotSettings {
     fn default() -> Self {
-        Self { rules: BotRules::default(), paused: false, always_on: false, checkin_hours: 4, last_checkin: None }
+        Self { rules: BotRules::default(), paused: false, always_on: false, checkin_hours: 4, last_checkin: None, workplace: Workplace::Auto, folder: None }
     }
 }
 
@@ -335,6 +382,9 @@ pub struct Routine {
     pub next_run: Option<u64>,
     #[serde(default)]
     pub runs: Vec<RoutineRun>,
+    /// Runs at the next time its schedule names, then turns itself off.
+    #[serde(default)]
+    pub once: bool,
 }
 
 fn yes() -> bool {
@@ -675,12 +725,50 @@ fn emit_message(app: &tauri::AppHandle, root: &str, channel: &str, msg: &ChatMes
 enum Target {
     Group { channel: String, hops: u32 },
     Dm,
+    /// In its own thread, like a DM, asked by another agent (or mentioned in
+    /// its chat): the answer is sent back to `reply_to`'s thread.
+    Relay { reply_to: String, hops: u32 },
 }
 
 impl Target {
     fn everyone(hops: u32) -> Self {
         Target::Group { channel: ROOM.into(), hops }
     }
+
+    /// Runs in the bot's own thread (a DM or a relay), not in a group.
+    fn in_thread(&self) -> bool {
+        matches!(self, Target::Dm | Target::Relay { .. })
+    }
+}
+
+/// How many agent-to-agent hops led to each bot's current run, so a relay
+/// it starts carries the count on and a loop of agents stops.
+fn relay_hops() -> std::sync::MutexGuard<'static, HashMap<(String, String), u32>> {
+    static HOPS: std::sync::LazyLock<Mutex<HashMap<(String, String), u32>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    HOPS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// `ask_agent`: one 24/7 agent asks another, by id or name. The other
+/// answers in its own thread; its answer arrives back in the asker's thread
+/// as a message from it.
+pub fn ask_agent(app: &tauri::AppHandle, root: &str, from: &str, to: &str, text: &str) -> Result<String, String> {
+    let team = active_bots(Path::new(root));
+    let wanted = to.trim().trim_start_matches('@').to_lowercase();
+    let other = team
+        .iter()
+        .find(|a| a.id.to_lowercase() == wanted || a.name.to_lowercase() == wanted || a.name.to_lowercase().replace(' ', "") == wanted)
+        .ok_or_else(|| format!("No agent called '{to}'. Agents here: {}", team.iter().map(|a| format!("@{} ({})", a.id, a.name)).collect::<Vec<_>>().join(", ")))?;
+    if other.id == from {
+        return Err("That's you.".into());
+    }
+    let hops = relay_hops().get(&(root.to_string(), from.to_string())).copied().unwrap_or(0) + 1;
+    if hops > MAX_HOPS {
+        return Err(format!("This has gone back and forth between agents {MAX_HOPS} times already. Answer with what you have, or ask the user."));
+    }
+    let name = team.iter().find(|a| a.id == from).map(|a| a.name.clone()).unwrap_or_else(|| from.to_string());
+    let request = format!("{name} (@{from}), another agent, asks you:\n\n{text}\n\nYour answer is sent back to {name}. Answer it directly.");
+    dispatch(app, root, &other.id, Origin::Inbound, request, Target::Relay { reply_to: from.to_string(), hops });
+    Ok(format!("Sent to {} (@{}). Their answer will arrive in this conversation as a message from them; carry on meanwhile.", other.name, other.id))
 }
 
 const MAX_HOPS: u32 = 4;
@@ -809,7 +897,14 @@ fn dispatch_with(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, r
         }
         l.running.insert(key.clone(), Arc::new(AtomicBool::new(false)));
         l.steps.remove(&key);
-        l.channel.insert(key.clone(), if target == Target::Dm { id.to_string() } else { "room".to_string() });
+        l.channel.insert(key.clone(), if target.in_thread() { id.to_string() } else { "room".to_string() });
+    }
+    {
+        let hops = match &target {
+            Target::Relay { hops, .. } | Target::Group { hops, .. } => *hops,
+            Target::Dm => 0,
+        };
+        relay_hops().insert(key.clone(), hops);
     }
     emit_status(app, root, id);
     // Tells the chat where this run will show, before its first step.
@@ -882,7 +977,9 @@ async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, 
             state.set_model(model).await
         }
     }
-    state.set_workspace(vec![root.to_string()], crate::agent::runtime::state::WorkspaceAccessMode::Full).await;
+    // Its own folder, or the one the user chose for it (if it still exists).
+    let folder = settings.folder.clone().filter(|f| Path::new(f).is_dir()).unwrap_or_else(|| root.to_string());
+    state.set_workspace(vec![folder], crate::agent::runtime::state::WorkspaceAccessMode::Full).await;
     // Its own email and phone come with having them, whatever tools were picked.
     let contact = crate::agent::team::contact::load(root, id);
     let mut allowed = bot.allowed_tools.clone();
@@ -901,6 +998,7 @@ async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, 
         request: request.to_string(),
         root: root.to_string(),
         bot_id: id.to_string(),
+        workplace: settings.workplace,
     };
     let mut profile = crate::agent::profiles::AgentProfile::bot(policy, allowed);
     profile.lead = bot.lead;
@@ -1046,6 +1144,19 @@ fn finish(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request:
                 if let Target::Group { channel, .. } = &target {
                     post_with_steps(app, root, channel, id, &text, kind, mentions.clone(), steps);
                 }
+                // A relay's answer goes back to the agent that asked (or whose
+                // chat it was mentioned in), as a message from this one.
+                if let Target::Relay { reply_to, hops } = target.clone() {
+                    let (reply_to, hops) = (&reply_to, &hops);
+                    if reply_to.is_empty() {
+                        // The asker taking an answer in: nothing more to send on.
+                    } else {
+                    let note = format!(
+                        "<agent_message from=\"{id}\" name=\"{name}\">\n{text}\n</agent_message>\n\n{name} answered. Use it for what you are doing; tell the user if it matters to them. Don't reply to {name} unless you need more."
+                    );
+                    dispatch(app, root, reply_to, Origin::Inbound, note, Target::Relay { reply_to: String::new(), hops: *hops });
+                    }
+                }
                 if needs || origin != Origin::User {
                     let title = if needs { format!("{name} needs you") } else { format!("{name} posted") };
                     crate::agent::system::notifications::notify_text(app, &title, &text.chars().take(140).collect::<String>());
@@ -1065,11 +1176,11 @@ fn finish(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, request:
                 }
             }
         }
-        Err(e) if target == Target::Dm => log::info!("[bots] @{id}'s turn failed: {e}"), // the thread shows it
+        Err(e) if target.in_thread() => log::info!("[bots] @{id}'s turn failed: {e}"), // the thread shows it
         Err(e) => {
             let channel = match &target {
                 Target::Group { channel, .. } => channel.clone(),
-                Target::Dm => ROOM.to_string(),
+                Target::Dm | Target::Relay { .. } => ROOM.to_string(),
             };
             // A provider's limit is something the user can fix in one click:
             // say so, rather than leaving a bare HTTP error.
@@ -1189,7 +1300,12 @@ fn tick(app: &tauri::AppHandle, root: &str) {
         for r in routines.iter_mut().filter(|r| r.enabled) {
             match r.next_run {
                 Some(at) if at <= now => {
-                    r.next_run = next_run(&r.cron);
+                    if r.once {
+                        r.enabled = false;
+                        r.next_run = None;
+                    } else {
+                        r.next_run = next_run(&r.cron);
+                    }
                     changed = true;
                     let request = format!("{}\n\n{}", r.title, r.prompt);
                     dispatch(app, root, &bot.id, Origin::Routine, request, Target::everyone(MAX_HOPS));
@@ -1440,7 +1556,7 @@ pub async fn cmd_bots_dm_send(
     find_bot(Path::new(&root), &bot_id).ok_or("That agent isn't active.")?;
     // The agent gets the files' contents inline, as the main chat does.
     let request = if files.is_empty() {
-        text
+        text.clone()
     } else {
         let blocks = files
             .iter()
@@ -1449,6 +1565,14 @@ pub async fn cmd_bots_dm_send(
             .join("\n\n");
         format!("{text}\n\nAttached files:\n{blocks}")
     };
+    // Another agent @mentioned here hears it, and its answer comes back to this chat.
+    let team = active_bots(Path::new(&root));
+    let (mentioned, _) = mentions_in(&text, &team);
+    let here = team.iter().find(|a| a.id == bot_id).map(|a| a.name.clone()).unwrap_or_else(|| bot_id.clone());
+    for other in mentioned.into_iter().filter(|o| *o != bot_id) {
+        let ask = format!("The user mentioned you in {here}'s chat:\n\n{text}\n\nYour answer goes into that chat, to the user and {here}.");
+        dispatch(&app, &root, &other, Origin::User, ask, Target::Relay { reply_to: bot_id.clone(), hops: 1 });
+    }
     dispatch_with(&app, &root, &bot_id, Origin::User, request, Target::Dm, images, None);
     Ok(())
 }
@@ -1579,7 +1703,7 @@ mod tests {
     use super::*;
 
     fn policy(rules: BotRules, origin: Origin, request: &str) -> BotPolicy {
-        BotPolicy { bot_name: "Ada".into(), rules, origin, request: request.into(), root: String::new(), bot_id: "ada".into() }
+        BotPolicy { bot_name: "Ada".into(), rules, origin, request: request.into(), root: String::new(), bot_id: "ada".into(), workplace: Workplace::Auto }
     }
 
     #[test]

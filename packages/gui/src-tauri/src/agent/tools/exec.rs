@@ -506,6 +506,15 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
         let path = cx.args.get("path").and_then(|p| p.as_str()).unwrap_or("");
         text_result(crate::agent::tools::guides::read(path).await.unwrap_or_else(|e| e))
     }),
+    tool!("ask_agent" => |cx| {
+        let to = cx.args.get("to").and_then(|v| v.as_str()).unwrap_or("");
+        let text = cx.args.get("text").and_then(|v| v.as_str()).unwrap_or("");
+        result_text(match cx.state.bot_policy().await {
+            Some(p) if !to.is_empty() && !text.trim().is_empty() => crate::agent::team::bots::ask_agent(cx.app, &p.root, &p.bot_id, to, text),
+            Some(_) => Err("'to' and 'text' are required.".to_string()),
+            None => Err("Only a 24/7 agent can message another agent.".to_string()),
+        })
+    }),
     // A bot's own address and number (`agent::team::contact`).
     tool!("email", "phone" => |cx| {
         let text = match cx.state.bot_policy().await {
@@ -3297,6 +3306,7 @@ mod gate_tests {
             request: request.into(),
             root: root(),
             bot_id: "goa".into(),
+            workplace: crate::agent::team::bots::Workplace::Auto,
         };
         Agent { bot: Some(policy), ..chat() }
     }

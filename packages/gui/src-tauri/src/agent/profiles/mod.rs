@@ -117,6 +117,7 @@ mod tests {
             request: String::new(),
             root: ".".into(),
             bot_id: "goa".into(),
+            workplace: crate::agent::team::bots::Workplace::Auto,
         }
     }
 

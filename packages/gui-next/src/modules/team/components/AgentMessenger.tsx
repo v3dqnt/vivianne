@@ -22,7 +22,7 @@ type Image = ReturnType<typeof contentImages>[number]
 
 /** One thing drawn in the conversation, in order. */
 type Item =
-  | { kind: 'bubble'; from: 'you' | 'agent'; key: string; text: string; images: Image[]; ts: number }
+  | { kind: 'bubble'; from: 'you' | 'agent'; key: string; text: string; images: Image[]; ts: number; by?: string }
   | { kind: 'activity'; key: string; tools: ToolResult[] }
   | { kind: 'note'; key: string; text: string }
   | { kind: 'day'; key: string; label: string }
@@ -40,6 +40,13 @@ function dayLabel(ts: number): string {
 }
 
 const clock = (ts: number) => new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+
+/** Another agent's words, as the app delivers them into this thread: an
+ * answer (`<agent_message from=…>`), a question it asked, or the user
+ * mentioning this agent elsewhere. */
+const AGENT_MESSAGE = /^\s*<agent_message from="([^"]+)"[^>]*>\n?([\s\S]*?)\n?<\/agent_message>/
+const ASKED = /^(.+?) \(@([\w-]+)\), another agent, asks you:\n\n([\s\S]*?)\n\nYour answer is sent back to/
+const MENTIONED = /^The user mentioned you in (.+?)'s chat:\n\n([\s\S]*?)\n\nYour answer goes into that chat/
 
 /** The transcript as a messenger reads it: what each side said, the agent's
  * tool work folded into one line between messages, reasoning left out. */
@@ -68,8 +75,15 @@ function toItems(messages: AgentMessage[]): Item[] {
     if (m.type === 'user') {
       flushTools()
       day(m.timestamp)
+      // Another agent speaking here: its bubble, with its face.
+      const answer = AGENT_MESSAGE.exec(text)
+      const asked = ASKED.exec(text)
+      const mentioned = MENTIONED.exec(text)
+      if (answer) items.push({ kind: 'bubble', from: 'agent', by: answer[1], key: `m${i}`, text: answer[2].trim(), images: [], ts: m.timestamp })
+      else if (asked) items.push({ kind: 'bubble', from: 'agent', by: asked[2], key: `m${i}`, text: asked[3].trim(), images: [], ts: m.timestamp })
+      else if (mentioned) items.push({ kind: 'note', key: `n${i}`, text: `You mentioned ${'this agent'} in ${mentioned[1]}'s chat` })
       // The app's own notes ride in user messages: shown as a quiet line, never as your bubble.
-      if (isPlanNoteText(text)) items.push({ kind: 'note', key: `n${i}`, text: 'You answered the plan' })
+      else if (isPlanNoteText(text)) items.push({ kind: 'note', key: `n${i}`, text: 'You answered the plan' })
       else if (isSummaryText(text)) items.push({ kind: 'note', key: `n${i}`, text: 'Earlier messages were summarised' })
       else if (isAppText(text) || text.startsWith('<system-reminder>')) return
       else items.push({ kind: 'bubble', from: 'you', key: `m${i}`, text, images, ts: m.timestamp })
@@ -140,17 +154,21 @@ function Activity({ tools, color }: { tools: ToolResult[]; color: string }) {
 
 function Bubble({
   item,
-  agent,
+  agent: self,
+  team,
   color,
   first,
   last,
 }: {
   item: Extract<Item, { kind: 'bubble' }>
   agent: TeamAgent
+  team: TeamAgent[]
   color: string
   first: boolean
   last: boolean
 }) {
+  const other = item.by ? team.find((a) => a.id === item.by) : undefined
+  const agent = other ?? self
   const theme = useTheme()
   const mine = item.from === 'you'
   const wide = WIDE.test(item.text)
@@ -174,10 +192,12 @@ function Bubble({
             ))}
           </Stack>
         )}
+        {other && first && <Typography sx={{ fontSize: '11px', fontWeight: 600, color: colorOf(other), mb: '3px', px: '6px' }}>{other.name}</Typography>}
         {item.text && (
           <Box
             sx={{
               ...radius,
+              ...(other && { boxShadow: `inset 3px 0 0 ${colorOf(other)}` }),
               px: '14px',
               py: '9px',
               minWidth: 0,
@@ -212,7 +232,7 @@ function Bubble({
  * it did folded into one line between them, and dots while it is typing.
  * Built for talking to someone, not for reading a coding session.
  */
-export function AgentMessenger({ root, agent, status, onEdit }: { root: string; agent: TeamAgent; status: string; onEdit?: () => void }) {
+export function AgentMessenger({ root, agent, team = [], status, onEdit }: { root: string; agent: TeamAgent; team?: TeamAgent[]; status: string; onEdit?: () => void }) {
   const theme = useTheme()
   const color = colorOf(agent)
   const messages = useAgentStore((s) => s.messages)
@@ -221,7 +241,19 @@ export function AgentMessenger({ root, agent, status, onEdit }: { root: string; 
   const abort = useAgentStore((s) => s.abort)
   const face = useBotFace(root, agent.id)
   const [text, setText] = useState('')
+  const [pick, setPick] = useState(0)
   const scroller = useRef<HTMLDivElement | null>(null)
+  // `@par` at the caret: the other agents it could be.
+  const query = /(^|\s)@([\w-]*)$/.exec(text)?.[2]
+  const options = useMemo(() => {
+    if (query === undefined) return []
+    const q = query.toLowerCase()
+    return team.filter((a) => a.id !== agent.id && (a.id.toLowerCase().startsWith(q) || a.name.toLowerCase().startsWith(q))).slice(0, 6)
+  }, [query, team, agent.id])
+  const complete = (id: string) => {
+    setText((t) => t.replace(/@([\w-]*)$/, `@${id} `))
+    setPick(0)
+  }
   const items = useMemo(() => toItems(messages), [messages])
 
   // Stay at the newest message while you are near it.
@@ -297,8 +329,8 @@ export function AgentMessenger({ root, agent, status, onEdit }: { root: string; 
               if (item.kind === 'activity') return <Activity key={item.key} tools={item.tools} color={color} />
               const prev = items[i - 1]
               const next = items[i + 1]
-              const same = (o: Item | undefined) => o?.kind === 'bubble' && o.from === item.from
-              return <Bubble key={item.key} item={item} agent={agent} color={color} first={!same(prev)} last={!same(next)} />
+              const same = (o: Item | undefined) => o?.kind === 'bubble' && o.from === item.from && o.by === item.by
+              return <Bubble key={item.key} item={item} agent={agent} team={team} color={color} first={!same(prev)} last={!same(next)} />
             })}
           </FollowUpContext.Provider>
           {typing && (
@@ -310,7 +342,33 @@ export function AgentMessenger({ root, agent, status, onEdit }: { root: string; 
         </Box>
       </Box>
 
-      <Box sx={{ px: '20px', pb: '16px', pt: '4px' }}>
+      <Box sx={{ px: '20px', pb: '16px', pt: '4px', position: 'relative' }}>
+        {options.length > 0 && (
+          <Stack sx={{ position: 'absolute', bottom: 'calc(100% + 4px)', left: '50%', transform: 'translateX(-50%)', width: 'min(360px, calc(100% - 40px))', p: '6px', borderRadius: '16px', bgcolor: 'background.paper', border: 1, borderColor: 'divider', boxShadow: theme.elevation.lg, zIndex: 2 }}>
+            {options.map((o, i) => (
+              <ButtonBase
+                key={o.id}
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  complete(o.id)
+                }}
+                onMouseEnter={() => setPick(i)}
+                sx={{ justifyContent: 'flex-start', gap: '10px', px: '10px', py: '8px', borderRadius: '10px', bgcolor: i === pick ? alpha(colorOf(o), 0.16) : 'transparent' }}
+              >
+                <Avatar {...faceOf(o)} size={26} />
+                <Stack sx={{ minWidth: 0, textAlign: 'left' }}>
+                  <Typography sx={{ fontSize: '13px', fontWeight: 600 }} noWrap>
+                    {o.name}
+                  </Typography>
+                  <Typography sx={{ fontSize: '11px', color: 'text.secondary' }} noWrap>
+                    @{o.id}
+                    {o.role ? ` · ${o.role}` : ''}
+                  </Typography>
+                </Stack>
+              </ButtonBase>
+            ))}
+          </Stack>
+        )}
         <Stack
           direction="row"
           sx={{
@@ -333,14 +391,27 @@ export function AgentMessenger({ root, agent, status, onEdit }: { root: string; 
             multiline
             maxRows={6}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value)
+              setPick(0)
+            }}
             onKeyDown={(e) => {
+              if (options.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                e.preventDefault()
+                setPick((p) => (e.key === 'ArrowDown' ? (p + 1) % options.length : (p - 1 + options.length) % options.length))
+                return
+              }
+              if (options.length && (e.key === 'Enter' || e.key === 'Tab')) {
+                e.preventDefault()
+                complete(options[pick].id)
+                return
+              }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
                 send()
               }
             }}
-            placeholder={`Message ${agent.name}`}
+            placeholder={team.length > 1 ? `Message ${agent.name}, or @ another agent` : `Message ${agent.name}`}
             sx={{ flex: 1, fontSize: '14px', py: '7px' }}
           />
           <ErrorsButton sx={{ height: 36, borderRadius: '18px' }} />
