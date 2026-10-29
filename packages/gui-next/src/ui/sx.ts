@@ -80,6 +80,10 @@ const COLORS = new Set([
 ])
 const BORDERS = new Set(['border', 'borderTop', 'borderRight', 'borderBottom', 'borderLeft', 'outline'])
 const BREAKPOINTS: Breakpoint[] = ['xs', 'sm', 'md', 'lg', 'xl']
+/** The UI face (General Sans) is variable and reads a touch light at its
+ * nominal weights, so every weight sits this much heavier: 400 draws at 450,
+ * 500 at 550. */
+export const WEIGHT_NUDGE = 50
 const FONT_WEIGHTS: Record<string, number> = { fontWeightLight: 300, fontWeightRegular: 400, fontWeightMedium: 500, fontWeightBold: 700 }
 
 const isPlainObject = (v: unknown): v is SxObject => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -150,7 +154,7 @@ function property(key: string, value: SxValue, theme: Theme): SxObject {
     // Terax uses two weights: 400 and 500. Anything heavier is capped, so
     // emphasis comes from weight 500 and tone, never bold.
     const w = typeof value === 'string' ? (FONT_WEIGHTS[value] ?? (value === 'bold' ? 700 : Number(value))) : value
-    return { [key]: typeof w === 'number' && w > 500 ? 500 : (w ?? value) }
+    return { [key]: typeof w === 'number' ? Math.min(w, 500) + WEIGHT_NUDGE : (w ?? value) }
   }
   if (key === 'fontFamily' && value === 'monospace') return { [key]: '"Geist Mono", ui-monospace, monospace' }
   return { [key]: value }

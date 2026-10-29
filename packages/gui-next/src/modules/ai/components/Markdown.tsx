@@ -3,8 +3,7 @@ import type React from 'react'
 import { ChatImage } from './ImageBlock'
 import { InteractiveBlock } from './InteractiveBlock'
 import { WidgetBlock } from './WidgetBlock'
-import { OpenUIBlock } from './OpenUIBlock'
-import { Box, Link, alpha } from '../../../ui'
+import { Box, Link } from '../../../ui'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
@@ -59,24 +58,24 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
         // modest steps above it, and every gap a multiple of 4.
         fontSize: CHAT_FONT.text,
         lineHeight: 1.6,
-        '& > *:first-of-type': { mt: 0 },
-        '& > *:last-of-type': { mb: 0 },
-        '& p': { m: 0, mb: '8px', fontSize: 'inherit', lineHeight: 'inherit' },
-        '& ul, & ol': { mt: 0, mb: '8px', pl: '20px', fontSize: 'inherit', lineHeight: 'inherit' },
-        '& li': { mb: '2px', pl: '4px' },
+        '& > :first-child': { mt: 0 },
+        '& > :last-child': { mb: 0 },
+        '& p': { m: 0, mb: '12px', fontSize: 'inherit', lineHeight: 'inherit' },
+        '& ul, & ol': { mt: 0, mb: '12px', pl: '20px', fontSize: 'inherit', lineHeight: 'inherit' },
+        '& li': { mb: '4px', pl: '4px' },
         '& li::marker': { color: 'text.secondary' },
         '& li > p': { mb: 0 },
         '& li > ul, & li > ol': { mt: '4px', mb: 0 },
-        '& h1, & h2, & h3, & h4': { mt: '16px', mb: '8px', fontWeight: 600, letterSpacing: '-0.01em', color: 'text.primary' },
-        '& h1': { fontSize: '1.286em', lineHeight: 1.35 },
-        '& h2': { fontSize: '1.143em', lineHeight: 1.4 },
+        '& h1, & h2, & h3, & h4': { mt: '20px', mb: '8px', fontWeight: 700, letterSpacing: '-0.01em', color: 'text.primary' },
+        '& h1': { fontSize: '1.428em', lineHeight: 1.3 },
+        '& h2': { fontSize: '1.214em', lineHeight: 1.35 },
         '& h3': { fontSize: '1.071em', lineHeight: 1.45 },
         '& h4': { fontSize: '0.857em', lineHeight: 1.5, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.04em' },
         '& strong': { fontWeight: 600, color: 'text.primary' },
         '& em': { fontStyle: 'italic' },
         '& blockquote': {
           m: 0,
-          mb: '8px',
+          mb: '12px',
           py: '4px',
           pl: '12px',
           borderLeft: '2px solid',
@@ -85,18 +84,17 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
           '& p': { mb: '4px' },
         },
         '& hr': { border: 0, borderTop: 1, borderColor: 'divider', my: '24px' },
-        '& table': { borderCollapse: 'collapse', mb: '8px', fontSize: '0.929em', lineHeight: 1.5, display: 'block', overflowX: 'auto' },
-        '& th, & td': { border: 1, borderColor: 'divider', px: '8px', py: '4px', textAlign: 'left' },
-        '& th': { bgcolor: 'action.hover', fontWeight: 600 },
+        '& table': { borderCollapse: 'separate', borderSpacing: 0, mb: '12px', fontSize: '0.929em', lineHeight: 1.5, display: 'block', overflowX: 'auto', border: 1, borderColor: 'divider', borderRadius: '8px', width: 'fit-content', maxWidth: '100%' },
+        '& th, & td': { px: '12px', py: '8px', textAlign: 'left' },
+        '& tr + tr td, & tbody tr:first-of-type td': { borderTop: 1, borderColor: 'divider' },
+        '& th': { bgcolor: 'action.hover', fontWeight: 600, color: 'text.secondary' },
         // Inline code reads as code at a glance: the accent colour on a
         // tint of it, not prose grey.
         '& code:not(pre code)': {
           fontFamily: '"Geist Mono", ui-monospace, monospace',
           fontSize: '0.857em',
-          color: 'primary.main',
-          bgcolor: (t: { palette: { primary: { main: string } } }) => alpha(t.palette.primary.main, 0.12),
-          border: '1px solid',
-          borderColor: (t: { palette: { primary: { main: string } } }) => alpha(t.palette.primary.main, 0.2),
+          color: 'text.primary',
+          bgcolor: 'action.hover',
           borderRadius: '4px',
           px: '4px',
           py: '1px',
@@ -155,7 +153,6 @@ Click: open in Preview · Ctrl-click: open in your browser` : undefined} onClick
             if (match[1] === 'chart') return <ChartBlock code={code} />
             if (match[1] === 'ui') return <InteractiveBlock code={code} />
             if (match[1] === 'widget') return <WidgetBlock code={code} />
-            if (match[1] === 'openui-lang' || match[1] === 'openui') return <OpenUIBlock code={code} />
             if (match[1] === 'model3d') return <Model3DBlock code={code} />
             if (match[1] === 'chem') return <ChemBlock code={code} />
             if (match[1] === 'bio') return <BioBlock code={code} />

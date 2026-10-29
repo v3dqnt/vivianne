@@ -721,11 +721,9 @@ fn identity(root: &Path, bot: &TeamAgent, settings: &BotSettings, team: &[TeamAg
          ## How you answer\n\n\
          Chat and quick answers are plain, short text. When a result has shape (the weather, a comparison, a trip or a \
          plan, search results, a status or a routine's results, options to pick from, a form) answer with one plain \
-         sentence and then an OpenUI card: openui-lang in a ```openui-lang fence, which the chat draws as a live, \
-         interactive card. This replaces the ```ui summary cards described elsewhere: in this conversation use OpenUI. \
-         Read the `openui` guide (guide tool) before your first card, for the language and its components. Every number, \
-         name, price and date in a card comes from what you looked up in this conversation: never invent data to fill a \
-         layout. Buttons with @ToAssistant send their message back to you here.\n\n\
+         sentence and then a ```ui card (the interactive-answers guide has its blocks). Every number, name, price \
+         and date in a card comes from what you looked up in this conversation: never invent data to fill a layout. \
+         Buttons send their message back to you here.\n\n\
          ## Delivering work\n\n\
          When the user asks for a thing (a PDF, a document, a sheet, an image), make it with your tools, read it back to \
          check it has what it should, and only then say it's done, naming the file: the chat shows it. Don't hand the \
@@ -916,7 +914,7 @@ async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, 
         Origin::Routine => format!("(Routine) {request}"),
         Origin::User | Origin::Proactive | Origin::Inbound => request.to_string(),
     };
-    let turn = crate::agent::runtime::commands::Turn { main: false, source_tag: Some("bot".into()), on_event: Some(Arc::new(on_event)) };
+    let turn = crate::agent::runtime::commands::Turn { main: false, source_tag: Some("bot".into()), on_event: Some(Arc::new(on_event)), forced_routing: false };
     let new_messages = Box::pin(crate::agent::runtime::commands::run_turn(app, thread.clone(), &thread_id(root, id), framed, images, turn)).await?;
 
     if thread.abort_flag.load(Ordering::SeqCst) {

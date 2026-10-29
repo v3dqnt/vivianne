@@ -31,7 +31,7 @@ export const DEFAULT_APPEARANCE: Appearance = {
   modePref: 'dark',
   paletteId: 'nvidia',
   accent: null,
-  font: 'geist',
+  font: 'general',
   uiScale: 1,
   radius: 10,
   density: 'comfortable',
@@ -78,6 +78,8 @@ function resolve(pref: ModePref): ThemeMode {
 /** The NVIDIA edition opens in its own theme once, whatever was saved before;
  * a later pick sticks. */
 const EDITION_THEMED_KEY = 'viv.hackathon.themed'
+/** General Sans became the default face in the better-newer update: everyone moves to it once, then their choice stands. */
+const DEFAULT_FONT_KEY = 'viv.font.general'
 
 function initial(): Appearance {
   const saved = loadPersisted<Partial<Appearance> | null>(STORAGE_KEY, null)
@@ -89,6 +91,11 @@ function initial(): Appearance {
     if (!old) return { ...DEFAULT_APPEARANCE }
     return { ...DEFAULT_APPEARANCE, modePref: old.mode, paletteId: old.paletteId === 'vivianne' ? DEFAULT_APPEARANCE.paletteId : old.paletteId }
   })()
+  if (!loadPersisted<boolean>(DEFAULT_FONT_KEY, false)) {
+    savePersisted(DEFAULT_FONT_KEY, true)
+    base.font = 'general'
+    persist(base)
+  }
   if (!loadPersisted<boolean>(EDITION_THEMED_KEY, false)) {
     savePersisted(EDITION_THEMED_KEY, true)
     const themed = { ...base, paletteId: DEFAULT_APPEARANCE.paletteId }

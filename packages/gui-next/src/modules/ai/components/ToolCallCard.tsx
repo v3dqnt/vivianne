@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Box, Button, Collapse, CircularProgress, Typography, Stack, alpha, useTheme } from '../../../ui'
+import { Box, Button, Collapse, CircularProgress, Typography, Stack } from '../../../ui'
 import {
   CommandLinear,
   EditLinear,
@@ -22,7 +22,7 @@ import { ImageBlock } from './ImageBlock'
 import { DiffView } from './DiffView'
 import { CodeBlock } from './CodeBlock'
 import { FileLink, filePathArg } from './FileLink'
-import { TOOL_BODY_SX, TOOL_ROW_SX } from '../lib/chatStyle'
+import { TOOL_BODY_SX, TOOL_ROW_SX, TOOL_WELL_SX } from '../lib/chatStyle'
 import { usePlanStore } from '../../plan/store/planStore'
 
 type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
@@ -313,7 +313,7 @@ export function ToolCallCard({
         // card is actually expanded.
         <Collapse in={open}>
           {open && (
-            <Stack sx={{ ...TOOL_BODY_SX, gap: '8px', pb: '4px' }}>
+            <Stack sx={{ ...TOOL_BODY_SX, gap: '8px' }}>
               {diffs.map((d, i) => (
                 <Box key={i}>
                   <Box sx={{ display: 'flex', pb: 0.5 }}>
@@ -353,7 +353,7 @@ function TodoOutput({ text }: { text: string }) {
   const items = lines.map((l) => TODO_LINE.exec(l)).filter((m): m is RegExpExecArray => !!m)
   const footer = lines.filter((l) => l.trim() && !TODO_LINE.test(l) && !/^todo list updated:?$/i.test(l.trim())).join(' ')
   return (
-    <Stack sx={{ gap: '2px', px: '12px', py: '8px', borderRadius: '8px', bgcolor: 'action.hover', minWidth: 0 }}>
+    <Stack sx={{ ...TOOL_WELL_SX, gap: '2px' }}>
       {items.map((m, i) => {
         const state = m[1].toLowerCase()
         const done = state === 'x'
@@ -393,10 +393,9 @@ function TodoOutput({ text }: { text: string }) {
 }
 
 function ToolOutput({ code, lang }: { code: string; lang: string }) {
-  const theme = useTheme()
   if (code.split(/\r?\n/).filter((l) => TODO_LINE.test(l)).length >= 2) return <TodoOutput text={code} />
   return (
-    <Box sx={{ borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.035), px: '12px', py: '8px', color: 'text.secondary', minWidth: 0 }}>
+    <Box sx={{ ...TOOL_WELL_SX, color: 'text.secondary' }}>
       <CodeBlock code={code} lang={lang} wrap bare dense collapsible />
     </Box>
   )
@@ -406,7 +405,7 @@ function ToolOutput({ code, lang }: { code: string; lang: string }) {
  * something rather than text to read. */
 function BodyLine({ children }: { children: React.ReactNode }) {
   return (
-    <Stack direction="row" sx={{ ...TOOL_BODY_SX, alignItems: 'center', gap: '8px', px: '12px', py: '8px', borderRadius: '8px', bgcolor: 'action.hover', minWidth: 0 }}>
+    <Stack direction="row" sx={{ ...TOOL_BODY_SX, ...TOOL_WELL_SX, alignItems: 'center', gap: '8px' }}>
       {children}
     </Stack>
   )

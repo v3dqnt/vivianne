@@ -1,4 +1,4 @@
-import { spacePx } from './sx'
+import { spacePx, WEIGHT_NUDGE } from './sx'
 import { alpha, darken, getContrastRatio, lighten } from './color'
 
 /**
@@ -244,7 +244,7 @@ export function createTheme({ mode, tokens: t0, fontFamily, monoFamily, radius =
   const pxToRem = (px: number) => `${px / 16}rem`
   const v = (weight: number, size: number, lineHeight: number, extra?: Pick<TypeStyle, 'textTransform' | 'letterSpacing'>): TypeStyle => ({
     fontFamily,
-    fontWeight: weight,
+    fontWeight: weight + WEIGHT_NUDGE,
     fontSize: pxToRem(size),
     lineHeight,
     ...extra,

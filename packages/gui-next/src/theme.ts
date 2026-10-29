@@ -180,10 +180,12 @@ export const PALETTES: PaletteDef[] = [
 export const FONT_FAMILY = '"Geist", system-ui, -apple-system, "Segoe UI", sans-serif'
 export const MONO_FAMILY = '"Geist Mono", ui-monospace, "Cascadia Code", monospace'
 
-export type FontChoice = 'geist' | 'inter' | 'system' | 'serif' | 'mono'
+export type FontChoice = 'general' | 'satoshi' | 'geist' | 'inter' | 'system' | 'serif' | 'mono'
 
 /** The UI font stacks offered in Settings → Appearance. */
 export const FONTS: Record<FontChoice, { label: string; family: string }> = {
+  general: { label: 'General Sans', family: '"General Sans", system-ui, -apple-system, "Segoe UI", sans-serif' },
+  satoshi: { label: 'Satoshi', family: '"Satoshi", system-ui, -apple-system, "Segoe UI", sans-serif' },
   geist: { label: 'Geist', family: FONT_FAMILY },
   inter: { label: 'Inter', family: '"Inter", system-ui, -apple-system, "Segoe UI", sans-serif' },
   system: { label: 'System', family: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif' },
@@ -249,7 +251,7 @@ export function buildTheme(mode: Mode, paletteId: string, opts: ThemeOptions = {
   const theme = createTheme({
     mode,
     tokens: themeTokens(mode, paletteId, opts),
-    fontFamily: FONTS[opts.font ?? 'geist'].family,
+    fontFamily: FONTS[opts.font ?? 'general'].family,
     monoFamily: MONO_FAMILY,
     radius: opts.radius ?? 10,
   })

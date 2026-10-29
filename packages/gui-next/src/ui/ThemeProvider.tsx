@@ -2,7 +2,7 @@ import { createContext, useContext, type ReactNode } from 'react'
 import { Global, ThemeProvider as EmotionThemeProvider } from '@emotion/react'
 import { Tooltip as RadixTooltip } from 'radix-ui'
 import type { Theme } from './theme'
-import { resolve, type SxProps } from './sx'
+import { resolve, WEIGHT_NUDGE, type SxProps } from './sx'
 
 const ThemeContext = createContext<Theme | null>(null)
 
@@ -68,7 +68,7 @@ export function CssBaseline({ extra }: { extra?: Record<string, unknown> }) {
           },
           '*, *::before, *::after': { boxSizing: 'inherit' },
           // Emphasis inside content (chat, docs) only; chrome never goes bold.
-          'strong, b': { fontWeight: 600 },
+          'strong, b': { fontWeight: 600 + WEIGHT_NUDGE },
           body: {
             margin: 0,
             color: p.text.primary,
