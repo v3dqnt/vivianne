@@ -5,6 +5,7 @@ import { useTeamStore, blankAgent, type TeamAgent } from '../store/teamStore'
 import type { FaceStyle } from '../store/faceStore'
 import { ModelPicker } from '../../ai/components/ModelPicker'
 import { FaceControls, FaceStage, randomLook, shellHex } from './FaceEditor'
+import { AgentSettingsPanel } from './AgentSettingsPanel'
 
 /** One field style for the whole form: a soft well, ringed in the agent's
  * colour while you type in it. */
@@ -64,6 +65,7 @@ export function NewAgentDialog({
   const [instructions, setInstructions] = useState(agent?.instructions ?? '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [tab, setTab] = useState<'profile' | 'agent' | 'environment'>('profile')
   const hex = shellHex(color)
   const onHex = theme.palette.getContrastText(hex)
 
@@ -129,6 +131,31 @@ export function NewAgentDialog({
         <Stack sx={{ minHeight: 0 }}>
           <Stack sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: '28px', pt: '24px', pb: '8px', gap: '20px' }}>
             <Typography sx={{ fontSize: '18px', fontWeight: 600 }}>{agent ? `Edit ${agent.name}` : title}</Typography>
+            {agent && (
+              // Underline tabs in the agent's colour: who it is, how it behaves, where it works.
+              <Stack direction="row" sx={{ gap: '20px', borderBottom: 1, borderColor: 'divider', mt: '-8px' }}>
+                {(
+                  [
+                    ['profile', 'Profile'],
+                    ['agent', 'Behaviour'],
+                    ['environment', 'Environment'],
+                  ] as const
+                ).map(([id, label]) => (
+                  <ButtonBase
+                    key={id}
+                    onClick={() => setTab(id)}
+                    aria-selected={tab === id}
+                    sx={{ pb: '10px', fontSize: '13px', fontWeight: tab === id ? 600 : 500, color: tab === id ? 'text.primary' : 'text.secondary', borderBottom: 2, borderColor: tab === id ? hex : 'transparent', mb: '-1px', '&:hover': { color: 'text.primary' } }}
+                  >
+                    {label}
+                  </ButtonBase>
+                ))}
+              </Stack>
+            )}
+            {agent && tab !== 'profile' ? (
+              <AgentSettingsPanel root={root} agent={agent} section={tab} />
+            ) : (
+            <>
             <Field label="Name">
               <InputBase autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Inbox Assistant" sx={fieldSx(hex)} />
             </Field>
@@ -152,6 +179,8 @@ export function NewAgentDialog({
                 sx={{ ...fieldSx(hex), alignItems: 'flex-start', lineHeight: 1.5 }}
               />
             </Field>
+            </>
+            )}
           </Stack>
           <Stack direction="row" sx={{ alignItems: 'center', gap: '8px', px: '28px', py: '16px', borderTop: 1, borderColor: 'divider' }}>
             <Typography sx={{ flex: 1, minWidth: 0, fontSize: '12px', color: 'error.main' }} noWrap title={error ?? undefined}>

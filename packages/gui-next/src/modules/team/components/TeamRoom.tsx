@@ -15,7 +15,6 @@ import { ChatView } from '../../ai/components/ChatView'
 import { agentStoreFor, sendThrough, setActiveThread } from '../../ai/store/agentStore'
 import { activeThreadId } from '../../ai/store/activeThread'
 import { AgentMessenger } from './AgentMessenger'
-import { AgentSettingsPanel } from './AgentSettingsPanel'
 
 const EMPTY_AGENTS: TeamAgent[] = []
 const EMPTY_MSGS: never[] = []
@@ -68,7 +67,6 @@ function DirectMessage({ root, bot, team, readOnly, messenger }: { root: string;
   const save = useTeamStore((s) => s.save)
   const thread = `bot:${root}:${bot.id}`
   const [editing, setEditing] = useState(false)
-  const [panel, setPanel] = useState(false)
   const state = st?.state ?? 'idle'
   // What compaction folded away, and its DM from before bots were threads.
   const [archive, setArchive] = useState<{ messages: AgentMessage[]; start: number }>({ messages: [], start: 0 })
@@ -110,8 +108,7 @@ function DirectMessage({ root, bot, team, readOnly, messenger }: { root: string;
     const line = state === 'working' ? (st?.activity ?? 'Working…') : state === 'paused' ? 'Paused' : bot.role || 'Here for you'
     return (
       <Stack direction="row" sx={{ flex: 1, minHeight: 0 }}>
-        <AgentMessenger root={root} agent={bot} team={team} status={line} onEdit={() => setPanel((v) => !v)} />
-        {panel && <AgentSettingsPanel root={root} agent={bot} onClose={() => setPanel(false)} onEditProfile={() => setEditing(true)} />}
+        <AgentMessenger root={root} agent={bot} team={team} status={line} onEdit={() => setEditing(true)} />
         {editing && <NewAgentDialog root={root} open agent={bot} onClose={() => setEditing(false)} />}
       </Stack>
     )

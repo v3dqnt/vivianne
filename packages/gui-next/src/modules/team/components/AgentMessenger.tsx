@@ -39,6 +39,16 @@ function dayLabel(ts: number): string {
   return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
 }
 
+/** `@id` / `@Name` of a teammate, as a link Markdown draws: the chip style
+ * below picks it out (`a[href^="#agent:"]`) in that agent's colour. */
+function highlightMentions(text: string, team: TeamAgent[]): string {
+  if (!team.length || !text.includes('@')) return text
+  return text.replace(/(^|[\s(])@([\w-]+)/g, (all, pre: string, tag: string) => {
+    const a = team.find((x) => x.id.toLowerCase() === tag.toLowerCase() || x.name.replace(/\s+/g, '').toLowerCase() === tag.toLowerCase())
+    return a ? `${pre}[@${a.name}](#agent:${a.id})` : all
+  })
+}
+
 const clock = (ts: number) => new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 
 /** Another agent's words, as the app delivers them into this thread: an
@@ -213,9 +223,14 @@ function Bubble({
                 : { bgcolor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.08 : 0.05) }),
               // A message's own text: tighter than a document's.
               '& p:last-child, & ul:last-child, & ol:last-child': { mb: 0 },
+              // A mentioned agent: a chip in its colour (not a link to follow).
+              '& a[href^="#agent:"]': { pointerEvents: 'none', textDecoration: 'none', fontWeight: 600, px: '5px', py: '1px', borderRadius: '6px' },
+              ...Object.fromEntries(
+                team.map((a) => [`& a[href="#agent:${a.id}"]`, mine ? { color: `${onColor} !important`, bgcolor: alpha(onColor, 0.2) } : { color: `${colorOf(a)} !important`, bgcolor: alpha(colorOf(a), 0.16) }]),
+              ),
             }}
           >
-            <Markdown text={item.text} />
+            <Markdown text={highlightMentions(item.text, team)} />
           </Box>
         )}
         {last && (

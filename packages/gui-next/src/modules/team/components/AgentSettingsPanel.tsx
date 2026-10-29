@@ -148,10 +148,27 @@ const when = (ms: number | null) => (ms ? new Date(ms).toLocaleString(undefined,
  * works, its routines, its memory, its folder). A row opens its own page in
  * the panel.
  */
-export function AgentSettingsPanel({ root, agent, onClose, onEditProfile }: { root: string; agent: TeamAgent; onClose: () => void; onEditProfile: () => void }) {
+export function AgentSettingsPanel({
+  root,
+  agent,
+  onClose,
+  onEditProfile,
+  section,
+}: {
+  root: string
+  agent: TeamAgent
+  onClose?: () => void
+  onEditProfile?: () => void
+  /** Drawn inside the agent dialog, as one of its tabs: just that section's
+   * controls, without the panel's own frame, profile, model or instructions
+   * (the dialog's Profile tab has those). */
+  section?: Tab
+}) {
   const color = colorOf(agent)
   const save = useTeamStore((s) => s.save)
-  const [tab, setTab] = useState<Tab>('agent')
+  const [ownTab, setTab] = useState<Tab>('agent')
+  const tab = section ?? ownTab
+  const embedded = !!section
   const [sheet, setSheet] = useState<Sheet>(null)
   const [settings, setSettings] = useState<BotSettings | null>(null)
   const [routines, setRoutines] = useState<Routine[]>([])
@@ -334,6 +351,7 @@ export function AgentSettingsPanel({ root, agent, onClose, onEditProfile }: { ro
     if (tab === 'agent')
       return (
         <Stack sx={{ gap: '16px' }}>
+          {!embedded && (
           <Stack sx={card}>
             <ButtonBase onClick={onEditProfile} sx={{ ...rowSx, minHeight: 72, '&:hover': { bgcolor: 'action.hover' } }}>
               <Avatar {...faceOf(agent)} size={40} />
@@ -350,7 +368,10 @@ export function AgentSettingsPanel({ root, agent, onClose, onEditProfile }: { ro
               </Box>
             </ButtonBase>
           </Stack>
+          )}
           <Stack sx={card}>
+            {!embedded && (
+            <>
             <Stack direction="row" sx={{ ...rowSx, justifyContent: 'space-between' }}>
               <IconTile Icon={SparklesLinear} />
               <Typography sx={{ flex: 1, fontSize: '14px', fontWeight: 500 }}>Model</Typography>
@@ -359,6 +380,8 @@ export function AgentSettingsPanel({ root, agent, onClose, onEditProfile }: { ro
               </Box>
             </Stack>
             <Row Icon={RepeatLinear} title="Instructions" sub={agent.instructions ? agent.instructions.split('\n')[0] : `Tell ${agent.name} how to work for you`} onClick={() => setSheet('instructions')} />
+            </>
+            )}
             {settings && (
               <Stack sx={{ ...rowSx, flexDirection: 'column', alignItems: 'stretch', gap: '10px', py: '14px' }}>
                 <Typography sx={{ fontSize: '14px', fontWeight: 500 }}>Before {agent.name} acts</Typography>
@@ -446,6 +469,14 @@ export function AgentSettingsPanel({ root, agent, onClose, onEditProfile }: { ro
       </Stack>
     )
   })()
+
+  if (embedded)
+    return (
+      <>
+        {body}
+        {editing && <RoutineDialog agent={agent} initial={editing} onClose={() => setEditing(null)} onSave={saveRoutine} />}
+      </>
+    )
 
   return (
     <Stack sx={{ width: 400, flexShrink: 0, height: '100%', borderLeft: 1, borderColor: 'divider', bgcolor: 'background.paper', minHeight: 0 }}>
