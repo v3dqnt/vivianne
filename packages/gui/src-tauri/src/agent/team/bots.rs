@@ -229,7 +229,8 @@ pub fn general_root() -> Option<String> {
 
 /// What a 24/7 agent (General's) works with: apps, the browser, the screen,
 /// the web, its own mail and phone, documents, memory and other agents. No
-/// coding tools: no shell, no source edits, no repo or code search. Fewer
+/// coding tools: no source edits, no repo or code search, no subagents; a
+/// shell is enough for the files it reads and writes. Fewer
 /// tools to choose from is a sharper agent; a team project's specialists
 /// keep the coder's set.
 const ASSISTANT_TOOLS: &[&str] = &[
@@ -237,6 +238,8 @@ const ASSISTANT_TOOLS: &[&str] = &[
     "user_browser_driver", "dip", "computer", "vault",
     // The web.
     "web_search", "web_fetch", "generate_image",
+    // A shell, for reading and writing files and small jobs.
+    "bash", "powershell",
     // Its own contact.
     "email", "phone",
     // Documents it makes and reads, and files it's handed.
@@ -1748,7 +1751,8 @@ mod tests {
         for t in ["user_browser_driver", "dip", "web_search", "email", "ask_agent", "mcp__gmail__send", "create_document"] {
             assert!(assistant_tool(t), "{t} should be in");
         }
-        for t in ["bash", "powershell", "write", "edit", "apply_patch", "grep", "code_search", "repo_clone", "github_act", "task", "team_run"] {
+        assert!(assistant_tool("bash") && assistant_tool("powershell"));
+        for t in ["write", "edit", "apply_patch", "grep", "code_search", "repo_clone", "github_act", "task", "team_run"] {
             assert!(!assistant_tool(t), "{t} should be out");
         }
     }
