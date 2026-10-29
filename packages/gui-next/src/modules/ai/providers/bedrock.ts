@@ -35,7 +35,9 @@ function mapStopReason(reason: string): string {
 // ── AWS binary event-stream frame parsing ───────────────────────────────────
 // [total_len:4][headers_len:4][prelude_crc:4][headers...][payload...][msg_crc:4]
 
-function parseEventFrames(data: Uint8Array): Array<Map<string, string>> {
+/** The whole frames at the start of `data`, and how many bytes they took, so a
+ * partly arrived frame can wait for the rest. */
+function parseEventFrames(data: Uint8Array): { frames: Array<Map<string, string>>; consumed: number } {
   const frames: Array<Map<string, string>> = []
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
   const decoder = new TextDecoder()
@@ -80,7 +82,7 @@ function parseEventFrames(data: Uint8Array): Array<Map<string, string>> {
     pos += totalLen
   }
 
-  return frames
+  return { frames, consumed: pos }
 }
 
 function makeErrorMessage(modelId: string, msg: string): AssistantMessage {
@@ -124,15 +126,6 @@ export async function streamBedrock(req: ProviderStreamRequest): Promise<void> {
     return
   }
 
-  let bytes: Uint8Array
-  try {
-    const buf = await resp.arrayBuffer()
-    bytes = new Uint8Array(buf)
-  } catch (e) {
-    emitDone(makeErrorMessage(req.modelId, `Failed to read response: ${e instanceof Error ? e.message : String(e)}`))
-    return
-  }
-
   const output: AssistantMessage = {
     role: 'assistant',
     content: [],
@@ -146,7 +139,6 @@ export async function streamBedrock(req: ProviderStreamRequest): Promise<void> {
     diagnostics: null,
   }
 
-  const frames = parseEventFrames(bytes)
   let fullText = ''
   let fullThinking = ''
   const toolPartial = new Map<number, string>()
@@ -155,7 +147,7 @@ export async function streamBedrock(req: ProviderStreamRequest): Promise<void> {
   // once more than one tool call is in flight — this keeps them distinct.
   const toolContentIndexByBlock = new Map<number, number>()
 
-  for (const frame of frames) {
+  const handle = (frame: Map<string, string>) => {
     const eventType = frame.get(':event-type') ?? ''
     const payloadStr = frame.get(':payload') ?? '{}'
     let payload: Record<string, unknown>
@@ -238,6 +230,33 @@ export async function streamBedrock(req: ProviderStreamRequest): Promise<void> {
       output.stopReason = 'error'
       output.errorMessage = `${eventType}: ${errMsg}`
     }
+  }
+
+  // Frames are handled as they arrive, so the first token shows when it is
+  // sent instead of after the whole answer has been generated.
+  try {
+    const reader = resp.body?.getReader()
+    if (!reader) {
+      for (const f of parseEventFrames(new Uint8Array(await resp.arrayBuffer())).frames) handle(f)
+    } else {
+      let pending = new Uint8Array(0)
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (value) {
+          const joined = new Uint8Array(pending.length + value.length)
+          joined.set(pending)
+          joined.set(value, pending.length)
+          pending = joined
+        }
+        const { frames, consumed } = parseEventFrames(pending)
+        for (const f of frames) handle(f)
+        pending = pending.slice(consumed)
+        if (done) break
+      }
+    }
+  } catch (e) {
+    emitDone(makeErrorMessage(req.modelId, `Failed to read response: ${e instanceof Error ? e.message : String(e)}`))
+    return
   }
 
   if (fullText && !output.content.some((c) => c.type === 'text')) {

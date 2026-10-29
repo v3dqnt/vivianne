@@ -192,7 +192,11 @@ function buildRequestSetup(req: ProviderStreamRequest, apiKey: string, maxOutput
         system: req.context.systemPrompt ?? undefined,
         tools: toSdkTools(req.context.tools, false),
         maxOutputTokens,
-        providerOptions: {},
+        // The cache key is OpenAI's (and OpenRouter's) parameter; other
+        // compatible hosts can reject a field they don't know.
+        providerOptions: req.cacheKey && /(^|\.)(api\.openai\.com|openrouter\.ai)(\/|:|$)/.test(req.baseUrl.replace(/^https?:\/\//, ''))
+          ? { openai: { promptCacheKey: req.cacheKey } }
+          : {},
       }
     }
     case 'openAiResponses': {

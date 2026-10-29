@@ -1,3 +1,4 @@
+pub mod http;
 pub mod types;
 pub mod models;
 pub mod auth;

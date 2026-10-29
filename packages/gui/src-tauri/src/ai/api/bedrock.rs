@@ -3,7 +3,6 @@
 // Uses manual AWS SigV4 signing (no aws-sdk crate), reqwest for HTTP.
 #![allow(dead_code, unused_variables)]
 
-use reqwest::Client;
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -569,7 +568,7 @@ pub async fn stream_bedrock(
             }
         }
 
-        let client = Client::new();
+        let client = crate::ai::http::client();
         let mut builder = client
             .post(&url)
             .header("content-type", "application/json")

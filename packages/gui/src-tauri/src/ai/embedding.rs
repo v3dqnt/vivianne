@@ -282,7 +282,7 @@ async fn embed_for(auth: Option<&AuthState>, texts: &[String], purpose: super::l
 /// doesn't hold the cache lock across the network round trip.
 async fn fetch_embeddings(provider: &str, model: &str, api_key: &str, texts: &[String], purpose: super::local_onnx::Purpose) -> Result<Vec<Vec<f32>>, String> {
     let (url, body) = embeddings_request(provider, model, texts, purpose)?;
-    let client = reqwest::Client::new();
+    let client = crate::ai::http::client();
     let resp = client
         .post(url)
         .bearer_auth(api_key)
@@ -351,7 +351,7 @@ pub async fn cmd_list_embedding_models(app: tauri::AppHandle, provider: String) 
     let auth = crate::ai::auth::wait_for_state(&app).await;
     let mut out: Vec<String> = Vec::new();
     if let Some(key) = resolve_key(&auth, &provider).await {
-        let resp = reqwest::Client::new()
+        let resp = crate::ai::http::client()
             .get(format!("{}/models", base.trim_end_matches('/')))
             .bearer_auth(key)
             .send()

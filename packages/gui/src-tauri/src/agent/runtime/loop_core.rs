@@ -1649,9 +1649,14 @@ async fn call_provider_with_retry(
     emit: &EventSender,
     source_tag: &str,
     abort_flag: &Arc<std::sync::atomic::AtomicBool>,
+    attempt_cap: u32,
 ) -> Result<AgentMessage, String> {
     let auto_retry = read_auto_retry_enabled().await;
-    let max_attempts = if auto_retry { MAX_RETRY_ATTEMPTS } else { 1 };
+    let max_attempts = if auto_retry { MAX_RETRY_ATTEMPTS.min(attempt_cap.max(1)) } else { 1 };
+    // Retries, key rotation and fallback models multiply; this bounds the
+    // backing-off part of one model's turn so a bad provider fails over in
+    // about a minute and a half rather than minutes.
+    let started = std::time::Instant::now();
 
     for attempt in 1..=max_attempts {
         let result = call_provider_stream_and_await(
@@ -1683,7 +1688,7 @@ async fn call_provider_with_retry(
             _ => (false, String::new()),
         };
 
-        if !retryable || is_last_attempt {
+        if !retryable || is_last_attempt || started.elapsed() > std::time::Duration::from_secs(90) {
             return result;
         }
 
@@ -1781,23 +1786,32 @@ async fn call_provider_with_pool_rotation(
     let Some((first, rest)) = candidates.split_first() else {
         // No usable candidate at all (no primary key, no pool, or every
         // candidate is cooling down) — same as today's "no key" path.
-        return call_provider_with_retry(app, model, context, primary_key, thinking_level, emit, source_tag, abort_flag).await;
+        return call_provider_with_retry(app, model, context, primary_key, thinking_level, emit, source_tag, abort_flag, u32::MAX).await;
     };
 
     if rest.is_empty() {
         // Exactly one candidate — the overwhelmingly common case (no pool
         // configured beyond the primary key). Skip the rotation machinery
         // entirely.
-        let result = call_provider_with_retry(app, model, context, Some(first.api_key.clone()), thinking_level, emit, source_tag, abort_flag).await;
+        let result = call_provider_with_retry(app, model, context, Some(first.api_key.clone()), thinking_level, emit, source_tag, abort_flag, u32::MAX).await;
         let succeeded = matches!(&result, Ok(AgentMessage::Assistant { stop_reason, .. }) if stop_reason != "error");
-        pool.mark_result(&model.provider, &first.id, if succeeded { crate::ai::auth::CredentialStatus::Ok } else { crate::ai::auth::CredentialStatus::Other }).await;
+        // Bookkeeping, not part of the answer: it rewrites the credential file,
+        // so it is done off the response path.
+        let (pool, provider, id) = (pool.inner().clone(), model.provider.clone(), first.id.clone());
+        tokio::spawn(async move {
+            pool.mark_result(&provider, &id, if succeeded { crate::ai::auth::CredentialStatus::Ok } else { crate::ai::auth::CredentialStatus::Other }).await;
+        });
         return result;
     }
 
     let mut current = first;
     let mut remaining = rest;
     loop {
-        let result = call_provider_with_retry(app, model, context.clone(), Some(current.api_key.clone()), thinking_level.clone(), emit, source_tag, abort_flag).await;
+        // A key with another behind it is tried once: if it is the one that is
+        // limited, the next key is the quick fix; the last key gets the full
+        // retry schedule.
+        let cap = if remaining.is_empty() { u32::MAX } else { 1 };
+        let result = call_provider_with_retry(app, model, context.clone(), Some(current.api_key.clone()), thinking_level.clone(), emit, source_tag, abort_flag, cap).await;
 
         if abort_flag.load(std::sync::atomic::Ordering::SeqCst) {
             return result;
@@ -1951,7 +1965,9 @@ async fn call_provider_stream_and_await(
         })?
         .to_string();
 
-    let (tx, mut rx) = mpsc::channel::<(StreamTokenEvent, crate::agent::tools::speculation::Streamed)>(100);
+    // Unbounded: a full bounded channel used to drop tokens silently, and a
+    // dropped token is a hole in the answer.
+    let (tx, mut rx) = mpsc::unbounded_channel::<(StreamTokenEvent, crate::agent::tools::speculation::Streamed)>();
     let (final_tx, mut final_rx) = oneshot::channel::<crate::ai::types::AssistantMessage>();
     
     let stream_id = uuid::Uuid::new_v4().to_string();
@@ -1986,7 +2002,7 @@ async fn call_provider_stream_and_await(
             } else if let Ok(tx_guard) = tx_holder.try_lock() {
                 if let Some(ref tx) = *tx_guard {
                     let streamed = serde_json::from_str(event.payload()).unwrap_or_default();
-                    let _ = tx.try_send((token_event, streamed));
+                    let _ = tx.send((token_event, streamed));
                 }
             }
         }

@@ -13,7 +13,6 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
-use reqwest::Client;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 
@@ -443,7 +442,7 @@ pub async fn stream_chat_completions(
     }
 
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let client = Client::new();
+    let client = crate::ai::http::client();
 
     // OpenRouter's low-credit 402 tells you exactly how many tokens you can
     // afford ("You requested up to 4096 tokens, but can only afford 38.") —
@@ -453,7 +452,11 @@ pub async fn stream_chat_completions(
     let mut retried_for_credits = false;
     let (status, response) = loop {
         let body = build_request_body(model_id, &context, &attempt_options);
-        let request = client.post(&url).headers(header_map.clone()).json(&body).build();
+        let mut rb = client.post(&url).headers(header_map.clone()).json(&body);
+        if let Some(ms) = attempt_options.timeout_ms {
+            rb = rb.timeout(std::time::Duration::from_millis(ms));
+        }
+        let request = rb.build();
         let request = match request {
             Ok(r) => r,
             Err(e) => return emit_err(&e.to_string()),

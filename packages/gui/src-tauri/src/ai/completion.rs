@@ -71,7 +71,7 @@ pub async fn complete_text(app: &AppHandle, model: &ModelRef, system_prompt: &st
         .await
         .ok_or_else(|| format!("No API key configured for provider '{}'.", model.provider))?;
 
-    let client = reqwest::Client::new();
+    let client = crate::ai::http::client();
 
     match spec.api_kind {
         // Direct OpenAI still fully supports the legacy Chat Completions
