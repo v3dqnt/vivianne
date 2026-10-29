@@ -30,7 +30,7 @@ const MASK_BATCH_BYTES: usize = 80_000;
 /// small and are what it navigates by.
 const NEVER_MASK: &[&str] = &[
     "todo_write", "submit_plan", "assign_plan_steps", "recall", "remember", "question", "create_goal", "update_goal",
-    "pair_activity", "list_custom_tools", "message_agent", "task_output",
+    "pair_activity", "list_custom_tools", "message_agent",
 ];
 const MASK_MARKER: &str = "[Earlier output elided";
 

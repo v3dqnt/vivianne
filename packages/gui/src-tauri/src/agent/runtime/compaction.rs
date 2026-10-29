@@ -55,7 +55,7 @@ pub(crate) fn message_char_len(msg: &AgentMessage) -> usize {
     // than `.to_string().len()`, which allocates and formats a full JSON
     // string just to throw it away — on this function's actual hot path
     // (`calculate_context_tokens_incremental`, called twice per loop
-    // iteration on tool args/details) that's a real allocation per call, not
+    // iteration on tool args) that's a real allocation per call, not
     // a one-off.
     use crate::agent::runtime::loop_core::estimate_json_value_raw_str_len as json_len;
     fn content_len(content: &[crate::agent::runtime::types::MessageContent]) -> usize {
@@ -63,21 +63,26 @@ pub(crate) fn message_char_len(msg: &AgentMessage) -> usize {
         use crate::agent::runtime::types::MessageContent;
         content.iter().map(|c| match c {
             MessageContent::Text { text } => text.len(),
-            MessageContent::Thinking { thinking } => thinking.len(),
-            MessageContent::Image { .. } => 0, // images aren't text tokens; not this estimate's job
+            MessageContent::Thinking { thinking, .. } => thinking.len(),
+            // A screenshot costs on the order of 1,500 tokens whatever its bytes; counted
+            // as that, so image-heavy sessions compact before the provider refuses them.
+            MessageContent::Image { .. } => 6_000,
             MessageContent::ToolCall(tc) => tc.name.len() + json_len(&tc.arguments),
-            MessageContent::ToolResult(tr) => content_len(&tr.content) + tr.details.as_ref().map(json_len).unwrap_or(0),
+            MessageContent::ToolResult(tr) => content_len(&tr.content), // details dropped at send time, not counted
         }).sum()
     }
+    // `details` is deliberately NOT counted: it is dropped when the transcript
+    // is converted into a provider request (loop_core.rs), so counting it made
+    // the model's real context look bigger than what is actually sent, which
+    // triggered compaction earlier than needed. `arguments` ARE counted — they
+    // travel with every replayed tool call.
     match msg {
         AgentMessage::User { content, .. } => content_len(content),
         AgentMessage::Assistant { content, error_message, .. } => {
             content_len(content) + error_message.as_ref().map(|e| e.len()).unwrap_or(0)
         }
-        AgentMessage::ToolResult { content, details, arguments, .. } => {
-            content_len(content)
-                + details.as_ref().map(json_len).unwrap_or(0)
-                + arguments.as_ref().map(json_len).unwrap_or(0)
+        AgentMessage::ToolResult { content, arguments, .. } => {
+            content_len(content) + arguments.as_ref().map(json_len).unwrap_or(0)
         }
         AgentMessage::Custom { payload, .. } => json_len(payload),
     }
@@ -320,11 +325,11 @@ impl From<&crate::agent::runtime::types::MessageContent> for crate::ai::types::M
                     media_type: media_type.clone(),
                 }
             }
-            crate::agent::runtime::types::MessageContent::Thinking { thinking } => {
+            crate::agent::runtime::types::MessageContent::Thinking { thinking, signature, redacted, .. } => {
                 crate::ai::types::MessageContent::Thinking {
                     thinking: thinking.clone(),
-                    thinking_signature: None,
-                    redacted: false,
+                    thinking_signature: signature.clone(),
+                    redacted: *redacted,
                 }
             }
             crate::agent::runtime::types::MessageContent::ToolCall(tc) => {

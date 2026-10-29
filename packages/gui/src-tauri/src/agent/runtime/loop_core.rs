@@ -68,6 +68,12 @@ fn system_reminder(text: &str) -> AgentMessage {
     }
 }
 
+/// Whether a message is one of the run's own `system_reminder` nudges.
+fn is_system_reminder(m: &AgentMessage) -> bool {
+    matches!(m, AgentMessage::User { content, .. } if matches!(content.first(),
+        Some(crate::agent::runtime::types::MessageContent::Text { text }) if text.starts_with("<system-reminder>")))
+}
+
 /// Said to a long task's model when it has looped on the same call: step
 /// back and change approach, rather than be stopped.
 const REFLECTION_PROMPT: &str = "You have repeated the same tool call several times without progress. Stop and think before acting again: say in one or two sentences why this approach is not working, list two or three materially different ways forward, then take the most promising one. If the current todo item is truly impossible right now, mark it blocked in your todo list with the reason and move on to the next item.";
@@ -277,7 +283,7 @@ mod truncation_tests {
         AgentMessage::Assistant { content, stop_reason: stop.into(), error_message: None, timestamp: 0, usage: None }
     }
     fn thinking() -> MessageContent {
-        MessageContent::Thinking { thinking: "Let me work this out...".into() }
+        MessageContent::Thinking { thinking: "Let me work this out...".into(), signature: None, redacted: false, origin: None }
     }
 
     #[test]
@@ -539,7 +545,7 @@ pub async fn run_agent_loop_continue(
     // success), whether this step already compacted to fit the window, and
     // the fallback that last rescued the run (tried first for a while).
     let mut failure_waits: u32 = 0;
-    let mut overflow_compacted = false;
+    let mut overflow_passes: u8 = 0;
     let mut sticky_model: Option<(ModelRef, std::time::Instant)> = None;
     // Long-task mode: doom-loop reflections so far, and turns in a row that
     // ended without doing anything while the goal was still open.
@@ -707,6 +713,10 @@ pub async fn run_agent_loop_continue(
         // clean token-budget win. The replacement text makes the eviction
         // visible to the model, so it won't hallucinate still seeing it.
         if crate::agent::runtime::context_shaping::shape_history(&mut context.messages, state.image_keep_last_n().await as usize) {
+            // Masking shrinks messages in place; the running token total only
+            // notices a shorter list, so recount rather than compact early.
+            context.token_cache_len = 0;
+            context.token_cache_sum = 0;
             trace.event("history_shaped", serde_json::json!({ "messages": context.messages.len() }));
         }
 
@@ -799,6 +809,9 @@ pub async fn run_agent_loop_continue(
             if estimate_messages_json_size(&converted) > MAX_REQUEST_BYTES {
                 let keep_from = context.messages.len() / 2;
                 context.messages.drain(..keep_from);
+                // The cut can land between a tool call and its result: a
+                // result without its call is refused outright by OpenAI.
+                drop_orphaned_tool_results(&mut context.messages);
                 llm_context.messages = convert_agent_messages_to_ai(&context.messages);
             } else {
                 llm_context.messages = converted;
@@ -857,8 +870,8 @@ pub async fn run_agent_loop_continue(
             if let Ok(partial) = &outcome {
                 emit.emit(AgentEvent::MessageEnd { message: partial.clone() });
             }
-            if kind == crate::agent::runtime::recovery::Failure::ContextOverflow && !overflow_compacted {
-                overflow_compacted = true;
+            if kind == crate::agent::runtime::recovery::Failure::ContextOverflow && overflow_passes < 2 {
+                overflow_passes += 1;
                 log::warn!("[loop] request no longer fits the context window; compacting and retrying");
                 maybe_compact_context(context, state, app, &model, true).await;
                 crate::agent::runtime::context_shaping::evict_old_images(&mut context.messages, 1);
@@ -913,7 +926,7 @@ pub async fn run_agent_loop_continue(
             });
         } else if failure.is_none() {
             failure_waits = 0;
-            overflow_compacted = false;
+            overflow_passes = 0;
             // Remember a fallback that rescued the run, keeping the time it
             // first did so the run's own model is retried on schedule;
             // forget it once the run's own model answers again.
@@ -1431,13 +1444,21 @@ pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &Ag
         explicit => explicit,
     };
 
-    let current_tokens = calculate_context_tokens_incremental(&context.messages, &mut context.token_cache_len, &mut context.token_cache_sum);
+    // The standing part of every request (system prompt, tool schemas) takes
+    // room too: counted, capped to a third of the window so a small model
+    // can't be left with no budget at all.
+    static TOOL_SCHEMA_TOKENS: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    let tool_tokens = *TOOL_SCHEMA_TOKENS.get_or_init(|| {
+        (serde_json::to_string(&crate::agent::tools::schemas::static_tool_definitions()).map(|j| j.len()).unwrap_or(0) / 4) as u32
+    });
+    let overhead = ((context.system_prompt.len() / 4) as u32 + tool_tokens).min(model.context_window / 3);
+    let current_tokens = calculate_context_tokens_incremental(&context.messages, &mut context.token_cache_len, &mut context.token_cache_sum) + overhead;
     let budget = model.context_window.saturating_sub(reserve_tokens);
     if !force && current_tokens <= budget {
         return false;
     }
 
-    let config = CompactionConfig { enabled: true, threshold_tokens: keep_recent_tokens.saturating_mul(2), min_messages: 10 };
+    let config = CompactionConfig { enabled: true, threshold_tokens: keep_recent_tokens.saturating_mul(2), min_messages: if force { 4 } else { 10 } };
     let cut_point = find_cut_point(&context.messages, &config);
     if cut_point == 0 || cut_point >= context.messages.len() {
         return false;
@@ -1468,7 +1489,10 @@ pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &Ag
         timestamp: now_ms(),
     });
 
-    state.set_messages(context.messages.clone()).await;
+    // The run's own `<system-reminder>` nudges live in `context` only; syncing
+    // them into the saved transcript re-seeded stale ones on every later turn.
+    let persisted: Vec<AgentMessage> = context.messages.iter().filter(|m| !is_system_reminder(m)).cloned().collect();
+    state.set_messages(persisted).await;
     #[cfg(debug_assertions)]
     eprintln!(
         "[DEBUG] compacted {} messages ({} tokens -> budget {}), 1 summary message inserted",
@@ -2007,7 +2031,6 @@ async fn call_provider_stream_and_await(
                 // — this just asks the frontend to do it and hands back
                 // control; `ai-stream-token` events land the same way they
                 // always have, so nothing downstream of this changes.
-                let thinking_enabled = !matches!(thinking_level_clone, ThinkingLevel::Off);
                 let thinking_budget_tokens = match thinking_level_clone {
                     ThinkingLevel::Minimal => 1024,
                     ThinkingLevel::Low     => 2048,
@@ -2015,6 +2038,10 @@ async fn call_provider_stream_and_await(
                     ThinkingLevel::High | ThinkingLevel::XHigh => 16384,
                     ThinkingLevel::Off     => 0,
                 };
+                // Anthropic refuses a thinking budget that is not below the
+                // reply cap (and under 1,024): clamp it, or go without thinking.
+                let thinking_budget_tokens = thinking_budget_tokens.min(model_clone.max_tokens.saturating_sub(1024));
+                let thinking_enabled = !matches!(thinking_level_clone, ThinkingLevel::Off) && thinking_budget_tokens >= 1024;
                 if crate::cli::native() {
                     crate::ai::api::anthropic::stream(
                         app_clone,
@@ -2384,6 +2411,9 @@ async fn call_provider_stream_and_await(
         if !batch.thinking.is_empty() {
             let content = crate::agent::runtime::types::MessageContent::Thinking {
                 thinking: batch.thinking.clone(),
+                signature: None,
+                redacted: false,
+                origin: None,
             };
             let update_message = AgentMessage::Assistant {
                 content: vec![content],
@@ -2422,7 +2452,7 @@ async fn call_provider_stream_and_await(
     // no upper bound on real inactivity, only the 50ms flush cadence, which
     // fires regardless of whether anything is actually happening. Reset only
     // on genuine token/final-message activity, never on the flush tick.
-    const STREAM_IDLE_TIMEOUT_SECS: u64 = 120;
+    const STREAM_IDLE_TIMEOUT_SECS: u64 = 300;
     let mut last_activity = tokio::time::Instant::now();
 
     // Drain streaming delta tokens until the done=true oneshot fires
@@ -2863,9 +2893,19 @@ pub(crate) fn convert_agent_messages_to_ai(msgs: &[AgentMessage]) -> Vec<Message
         };
 
         match msg {
-            AgentMessage::Assistant { stop_reason, error_message, .. } => {
+            AgentMessage::Assistant { content, stop_reason, error_message, .. } => {
                 out.stop_reason = Some(stop_reason.clone());
                 out.error_message = error_message.clone();
+                // Whoever signed this message's reasoning is who it is replayed to.
+                let origin = content.iter().find_map(|c| match c {
+                    crate::agent::runtime::types::MessageContent::Thinking { origin: Some(o), .. } => Some(o.as_str()),
+                    _ => None,
+                });
+                if let Some([provider, api, model]) = origin.map(|o| o.splitn(3, '|').collect::<Vec<_>>()).as_deref() {
+                    out.provider = Some(provider.to_string());
+                    out.api = Some(api.to_string());
+                    out.model_id = Some(model.to_string());
+                }
             }
             AgentMessage::ToolResult { tool_call_id, tool_name, is_error, .. } => {
                 out.tool_call_id = Some(tool_call_id.clone());
@@ -2892,11 +2932,11 @@ fn convert_content_blocks(blocks: &[crate::agent::runtime::types::MessageContent
                     media_type: media_type.clone(),
                 }
             }
-            crate::agent::runtime::types::MessageContent::Thinking { thinking } => {
+            crate::agent::runtime::types::MessageContent::Thinking { thinking, signature, redacted, .. } => {
                 AiMessageContent::Thinking {
                     thinking: thinking.clone(),
-                    thinking_signature: None,
-                    redacted: false,
+                    thinking_signature: signature.clone(),
+                    redacted: *redacted,
                 }
             }
             crate::agent::runtime::types::MessageContent::ToolCall(tc) => {
@@ -2920,7 +2960,7 @@ fn convert_content_blocks(blocks: &[crate::agent::runtime::types::MessageContent
 
 fn convert_ai_assistant_message_to_agent(msg: crate::ai::types::AssistantMessage) -> AgentMessage {
     AgentMessage::Assistant {
-        content: convert_ai_content_blocks(&msg.content),
+        content: convert_ai_content_blocks(&msg.content, &format!("{}|{}|{}", msg.provider, msg.api, msg.model)),
         stop_reason: msg.stop_reason,
         error_message: msg.error_message,
         timestamp: msg.timestamp,
@@ -2928,7 +2968,7 @@ fn convert_ai_assistant_message_to_agent(msg: crate::ai::types::AssistantMessage
     }
 }
 
-fn convert_ai_content_blocks(blocks: &[AiMessageContent]) -> Vec<crate::agent::runtime::types::MessageContent> {
+fn convert_ai_content_blocks(blocks: &[AiMessageContent], origin: &str) -> Vec<crate::agent::runtime::types::MessageContent> {
     blocks.iter().map(|block| {
         match block {
             AiMessageContent::Text { text } => {
@@ -2941,9 +2981,12 @@ fn convert_ai_content_blocks(blocks: &[AiMessageContent]) -> Vec<crate::agent::r
                     media_type: media_type.clone(),
                 }
             }
-            AiMessageContent::Thinking { thinking, .. } => {
+            AiMessageContent::Thinking { thinking, thinking_signature, redacted } => {
                 crate::agent::runtime::types::MessageContent::Thinking {
                     thinking: thinking.clone(),
+                    signature: thinking_signature.clone(),
+                    redacted: *redacted,
+                    origin: Some(origin.to_string()),
                 }
             }
             AiMessageContent::ToolCall(tc) => {
@@ -2958,7 +3001,7 @@ fn convert_ai_content_blocks(blocks: &[AiMessageContent]) -> Vec<crate::agent::r
                 crate::agent::runtime::types::MessageContent::ToolResult(crate::agent::runtime::types::ToolResult {
                     tool_call_id: tool_call_id.clone(),
                     tool_name: String::new(),
-                    content: convert_ai_content_blocks(content),
+                    content: convert_ai_content_blocks(content, origin),
                     is_error: *is_error,
                     details: Some(serde_json::Value::Null),
                 })

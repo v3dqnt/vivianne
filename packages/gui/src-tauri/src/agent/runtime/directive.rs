@@ -177,18 +177,6 @@ pub(crate) async fn assemble_capability_blocks(
         _ => {}
     }
 
-    // Whether the user's own browser is there to use, so the web guidance
-    // above is not a promise the tools can't keep.
-    let browsers = crate::helium::status();
-    if browsers.connected {
-        prompt.push_str(&format!(
-            "\n\n<vivianne_browser>The user's browser is connected: {}. Lean on it for the web (user_browser_driver: open, snapshot, read, click, type). It is their real, signed-in browser, so it sees what they see. Use web_search/web_fetch only for a quick lookup or when the browser cannot do it.</vivianne_browser>",
-            browsers.browsers.join(", ")
-        ));
-    } else {
-        prompt.push_str("\n\n<vivianne_browser>No browser is connected, so use web_search and web_fetch. If a task needs the user's signed-in sites, say that connecting a Chromium browser (Settings → Web & browser) would let you work in it.</vivianne_browser>");
-    }
-
     // Re-stated every turn, not just left to whatever's still in scrollback —
     // a goal set several turns ago (or before a compaction summarized away
     // the tool call that set it) needs to still be visible for get_goal/
@@ -281,6 +269,23 @@ pub(crate) async fn assemble_capability_blocks(
     // The blocks that change within a conversation go last, so the stable
     // prefix before them stays cached: directive, mode, capabilities,
     // workspace, project instructions, charter and core memory first.
+    // Changes when a browser connects, so it rides with the other moving parts.
+    let mut browser_block = String::new();
+    {
+        let prompt = &mut browser_block;
+        // Whether the user's own browser is there to use, so the web guidance
+        // above is not a promise the tools can't keep.
+        let browsers = crate::helium::status();
+        if browsers.connected {
+            prompt.push_str(&format!(
+                "\n\n<vivianne_browser>The user's browser is connected: {}. Lean on it for the web (user_browser_driver: open, snapshot, read, click, type). It is their real, signed-in browser, so it sees what they see. Use web_search/web_fetch only for a quick lookup or when the browser cannot do it.</vivianne_browser>",
+                browsers.browsers.join(", ")
+            ));
+        } else {
+            prompt.push_str("\n\n<vivianne_browser>No browser is connected, so use web_search and web_fetch. If a task needs the user's signed-in sites, say that connecting a Chromium browser (Settings → Web & browser) would let you work in it.</vivianne_browser>");
+        }
+    }
+    prompt.push_str(&browser_block);
     if let Some(goal) = goal_block {
         prompt.push_str(&goal);
     }

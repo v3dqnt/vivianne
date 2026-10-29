@@ -32,6 +32,15 @@ fn s<'a>(args: Option<&'a serde_json::Value>, key: &str) -> Option<&'a str> {
     args.and_then(|a| a.get(key)).and_then(|v| v.as_str())
 }
 
+/// A command that only looks (`git status`, `ls`, `cat`…) exercises nothing,
+/// so it doesn't count as having checked the changes.
+fn reads_only(cmd: &str) -> bool {
+    let c = cmd.trim_start().to_ascii_lowercase();
+    ["git status", "git diff", "git log", "git show", "git branch", "ls", "dir", "pwd", "cat ", "type ", "echo ", "get-childitem", "get-content", "get-location"]
+        .iter()
+        .any(|p| c == p.trim_end() || c.starts_with(p))
+}
+
 impl Verification {
     /// Record one finished tool call.
     pub fn observe(&mut self, tool: &str, args: Option<&serde_json::Value>, failed: bool, output: &str) {
@@ -52,6 +61,7 @@ impl Verification {
             }
             // Running anything (a build, the tests, the program) exercises
             // the changes made so far.
+            ("bash" | "powershell", _) if !failed && s(args, "command").map_or(false, reads_only) => {}
             ("bash" | "powershell" | "run_script" | "diagnostics" | "sandbox_execute", _) if !failed => self.clear(Domain::Files),
             ("dip" | "computer", "read_text" | "snapshot" | "screenshot" | "find" | "zoom") if !failed => self.clear(Domain::Desktop),
             ("user_browser_driver", "snapshot" | "read" | "screenshot" | "find" | "read_console") if !failed => self.clear(Domain::Browser),

@@ -175,14 +175,14 @@ fn normalize_tool_call_id(id: &str) -> String {
     normalized.chars().take(64).collect()
 }
 
-fn convert_messages(context: &Context) -> Vec<Value> {
+fn convert_messages(context: &Context, provider: &str, model_id: &str) -> Vec<Value> {
     use crate::ai::api::transform_messages::{transform_messages, TransformOptions};
 
     let opts = TransformOptions {
         supports_images: true,
-        target_provider: String::new(),
+        target_provider: provider.to_string(),
         target_api: "anthropic-messages".to_string(),
-        target_model_id: String::new(),
+        target_model_id: model_id.to_string(),
         normalize_tool_call_id: Some(Box::new(|id: &str| normalize_tool_call_id(id))),
     };
 
@@ -420,7 +420,7 @@ async fn stream_inner(
     let base = base_url.as_deref().unwrap_or("https://api.anthropic.com");
     let url = format!("{}/v1/messages", base.trim_end_matches('/'));
 
-    let messages = convert_messages(&context);
+    let messages = convert_messages(&context, &provider, &model_id);
     let tools = convert_tools(&context);
 
     // System prompt — marked as a cache breakpoint: it's the largest, most

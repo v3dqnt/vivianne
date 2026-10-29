@@ -46,7 +46,18 @@ pub struct ToolResult {
 pub enum MessageContent {
     Text { text: String },
     Image { url: Option<String>, base64: Option<String>, media_type: Option<String> },
-    Thinking { thinking: String },
+    /// `signature` and `redacted` are what Anthropic needs to take its own
+    /// reasoning back as reasoning; `origin` ("provider|api|model") is who
+    /// signed it, so it is only replayed to that same model.
+    Thinking {
+        thinking: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        redacted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<String>,
+    },
     ToolCall(ToolCall),
     ToolResult(ToolResult),
 }
@@ -553,4 +564,8 @@ pub struct PrepareNextTurnContext {
     pub tool_results: Vec<AgentMessage>,
     pub context: AgentContext,
     pub new_messages: Vec<AgentMessage>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }

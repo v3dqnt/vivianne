@@ -208,7 +208,7 @@ fn brief(task: &str, me: &Member, roster: &[Member], upstream: &[(String, String
     let before = if upstream.is_empty() {
         String::new()
     } else {
-        let reports: Vec<String> = upstream.iter().map(|(n, o)| format!("### {n}\n{o}")).collect();
+        let reports: Vec<String> = upstream.iter().map(|(n, o)| format!("### {n}\n{}", crate::agent::tools::exec::clip_tool_text(o, 8_000))).collect();
         format!("These teammates finished before you started; build on their reports:\n\n{}\n\n", reports.join("\n\n"))
     };
     format!(
@@ -614,6 +614,8 @@ pub async fn execute_team_run(
              Don't just paste the reports.",
         );
     }
+    // One tool result, whatever the team wrote: the full reports stay on the run.
+    let report = crate::agent::tools::exec::clip_tool_text(&report, crate::agent::tools::exec::MAX_UNBOUNDED_TOOL_CHARS);
     AgentToolResult {
         content: vec![MessageContent::Text { text: report }],
         details: serde_json::json!({ "teamRun": run.id }),
