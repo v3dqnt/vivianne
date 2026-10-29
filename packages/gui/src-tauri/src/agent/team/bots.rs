@@ -227,6 +227,35 @@ pub fn general_root() -> Option<String> {
     Some(dir.display().to_string())
 }
 
+/// What a 24/7 agent (General's) works with: apps, the browser, the screen,
+/// the web, its own mail and phone, documents, memory and other agents. No
+/// coding tools: no shell, no source edits, no repo or code search. Fewer
+/// tools to choose from is a sharper agent; a team project's specialists
+/// keep the coder's set.
+const ASSISTANT_TOOLS: &[&str] = &[
+    // Apps and the screen.
+    "user_browser_driver", "dip", "computer", "vault",
+    // The web.
+    "web_search", "web_fetch", "generate_image",
+    // Its own contact.
+    "email", "phone",
+    // Documents it makes and reads, and files it's handed.
+    "create_document", "inspect_document", "edit_document", "read", "ls", "glob",
+    // Memory, planning, conversation.
+    "remember", "recall", "todo_write", "question", "confirm_action", "present_snippet",
+    "create_goal", "update_goal", "get_goal",
+    // Other agents, guides, small helpers.
+    "ask_agent", "guide", "read_skill", "list_tools", "load_tools", "math", "get_current_time", "sleep", "check_diagram",
+    // Its own schedule.
+    "create_automation", "list_automations", "delete_automation", "set_automation_enabled",
+];
+
+/// Whether a 24/7 agent gets this tool: the set above, plus every connected
+/// app (MCP server) the user added.
+fn assistant_tool(name: &str) -> bool {
+    ASSISTANT_TOOLS.contains(&name) || name.starts_with("mcp__")
+}
+
 /// Every folder whose agents run on their own: General's, and team projects.
 pub fn bot_roots() -> Vec<String> {
     let mut roots: Vec<String> = general_root().into_iter().collect();
@@ -983,6 +1012,18 @@ async fn run_turn(app: &tauri::AppHandle, root: &str, id: &str, origin: Origin, 
     // Its own email and phone come with having them, whatever tools were picked.
     let contact = crate::agent::team::contact::load(root, id);
     let mut allowed = bot.allowed_tools.clone();
+    // General's agents, unless the user picked their tools: the assistant set.
+    if allowed.is_none() && general_root().as_deref() == Some(root) {
+        allowed = Some(
+            crate::agent::tools::exec::get_agent_tool_definitions()
+                .await
+                .iter()
+                .filter_map(|d| d.get("name").and_then(|n| n.as_str()))
+                .filter(|n| assistant_tool(n))
+                .map(String::from)
+                .collect(),
+        );
+    }
     if let Some(list) = allowed.as_mut() {
         if contact.email.is_some() && !list.iter().any(|t| t == "email") {
             list.push("email".into());
@@ -1701,6 +1742,16 @@ pub async fn cmd_bots_run_routine(app: tauri::AppHandle, root: String, bot_id: S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assistants_get_apps_not_code() {
+        for t in ["user_browser_driver", "dip", "web_search", "email", "ask_agent", "mcp__gmail__send", "create_document"] {
+            assert!(assistant_tool(t), "{t} should be in");
+        }
+        for t in ["bash", "powershell", "write", "edit", "apply_patch", "grep", "code_search", "repo_clone", "github_act", "task", "team_run"] {
+            assert!(!assistant_tool(t), "{t} should be out");
+        }
+    }
 
     fn policy(rules: BotRules, origin: Origin, request: &str) -> BotPolicy {
         BotPolicy { bot_name: "Ada".into(), rules, origin, request: request.into(), root: String::new(), bot_id: "ada".into(), workplace: Workplace::Auto }
