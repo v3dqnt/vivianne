@@ -144,7 +144,10 @@ interface AgentStoreState {
   /** Pause, stop, raise the caps of, or resume the long task. */
   controlLongTask: (action: 'pause' | 'stop' | 'extend' | 'resume', add?: { usd?: number; hours?: number }) => Promise<void>
   init: () => Promise<void>
-  sendMessage: (text: string, images?: ImageAttachment[]) => Promise<void>
+  /** `opts.automation` marks the turn an unattended automation step: the
+   * backend then forces model routing regardless of the selected chat model
+   * instead of running (at full cost) on whatever model was selected. */
+  sendMessage: (text: string, images?: ImageAttachment[], opts?: { automation?: boolean }) => Promise<void>
   /** Fold older history into a summary. Returns how many messages were folded (0 = nothing to compact). */
   compactNow: () => Promise<number>
   respondPermission: (approved: boolean) => Promise<void>
@@ -159,7 +162,7 @@ interface AgentStoreState {
   /** Queue a message to run after the current turn finishes. */
   queueFollowUp: (text: string) => Promise<void>
   /** Interrupt the running turn and redirect it with this message now. */
-  steer: (text: string) => Promise<void>
+  steer: (text: string, images?: ImageAttachment[]) => Promise<void>
   /** Stop the current turn (end the task). */
   abort: () => Promise<void>
   /** Revert the transcript to a message index (checkpoint). */
@@ -208,12 +211,15 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
       if (s.streamingIndex === null) return s
       const current = s.messages[s.streamingIndex]
       if (!current || current.type !== 'assistant') return s
-      // Thinking and text stream as separate blocks; each delta extends its own.
-      const prevText = current.content.find((c): c is Extract<MessageContent, { type: 'text' }> => c.type === 'text')
-      const prevThinking = current.content.find((c): c is Extract<MessageContent, { type: 'thinking' }> => c.type === 'thinking')
-      const content: MessageContent[] = []
-      if (prevThinking || thinking) content.push({ type: 'thinking', thinking: (prevThinking?.thinking ?? '') + thinking })
-      if (prevText || text) content.push({ type: 'text', text: (prevText?.text ?? '') + text })
+      // Thinking and text stream as separate blocks; each delta extends its
+      // own, and any other block the message started with is left as it is.
+      let content: MessageContent[] = current.content.map((c) => {
+        if (c.type === 'thinking' && thinking) return { ...c, thinking: c.thinking + thinking }
+        if (c.type === 'text' && text) return { ...c, text: c.text + text }
+        return c
+      })
+      if (thinking && !content.some((c) => c.type === 'thinking')) content = [{ type: 'thinking', thinking }, ...content]
+      if (text && !content.some((c) => c.type === 'text')) content = [...content, { type: 'text', text }]
       const messages = [...s.messages]
       messages[s.streamingIndex] = { ...current, content }
       return { messages }
@@ -521,14 +527,14 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
       })
     },
 
-    sendMessage: async (text: string, images) => {
+    sendMessage: async (text: string, images, opts) => {
       const trimmed = text.trim()
       if (!trimmed && !images?.length) return
       // Sending while a turn is already running no longer blocks — the message
       // goes to the steering queue instead, so typing and submitting mid-task
       // doesn't end the current run (mirrors the old app's steer-while-busy).
       if (get().isBusy) {
-        await call('cmd_agent_steering_queue', { text: trimmed, threadId })
+        await call('cmd_agent_steering_queue', { text: trimmed, images: images?.length ? images : null, threadId })
         await get().refreshQueues()
         return
       }
@@ -548,7 +554,12 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
         return
       }
       try {
-        await call('cmd_agent_prompt', { text: trimmed, images: images?.length ? images : null, threadId })
+        await call('cmd_agent_prompt', {
+          text: trimmed,
+          images: images?.length ? images : null,
+          threadId,
+          ...opts,
+        })
       } catch (err) {
         console.error('[agent] send failed:', err)
         set({ isBusy: false })
@@ -587,12 +598,12 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
       await get().refreshQueues()
     },
 
-    steer: async (text) => {
+    steer: async (text, images) => {
       const trimmed = text.trim()
       if (!trimmed) return
       set({ isBusy: true })
       try {
-        await call('cmd_agent_steer', { text: trimmed, threadId })
+        await call('cmd_agent_steer', { text: trimmed, images: images?.length ? images : null, threadId })
       } catch (err) {
         console.error('[agent] steer failed:', err)
         set({ isBusy: false })

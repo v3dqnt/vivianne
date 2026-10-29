@@ -153,11 +153,15 @@ pub async fn cmd_agent_prompt(
     text: String,
     images: Option<Vec<ImageInput>>,
     #[allow(non_snake_case)] threadId: Option<String>,
+    // Automations (`workflowRunner` steps) pass `automation: true`: the turn
+    // is unattended, so it must run model routing even when the UI has a
+    // specific model selected — it never chose that model itself.
+    automation: Option<bool>,
     app: tauri::AppHandle,
     registry: State<'_, AgentRegistry>,
 ) -> Result<Vec<AgentMessage>, String> {
     let state = registry.resolve(threadId.as_deref()).await;
-    let turn = Turn { main: true, source_tag: None, on_event: None };
+    let turn = Turn { main: true, source_tag: None, on_event: None, forced_routing: automation.unwrap_or(false) };
     run_turn(&app, state, threadId.as_deref().unwrap_or_default(), text, images.unwrap_or_default(), turn).await?;
     Ok(Vec::new())
 }
@@ -171,6 +175,10 @@ pub struct Turn {
     pub source_tag: Option<String>,
     /// Sees every event of the turn too (a bot's face and steps).
     pub on_event: Option<Arc<dyn Fn(&crate::agent::runtime::events::AgentEvent) + Send + Sync>>,
+    /// The caller insists this turn goes through model routing regardless of
+    /// the currently selected model — automations, which run unattended and
+    /// must not silently pay for whatever the user happened to leave selected.
+    pub forced_routing: bool,
 }
 
 /// One turn of a thread, the way the chat runs one: the system prompt rebuilt,
@@ -338,8 +346,15 @@ pub async fn run_turn(
     };
     // The "Auto" model: this turn runs on whichever model the request's
     // difficulty calls for, and the selection goes back to Auto afterwards.
+    // Forced routing (`turn.forced_routing`, set by automations) routes even
+    // without Auto: the automation step is unattended and never chose the
+    // selected model, so paying for it isn't fair to the user either. When
+    // routing fails, only a forced-only turn meanwhile falls back to the
+    // selected model (an automation shouldn't wedge because its resolver
+    // hiccuped); an interactive Auto selection gets and shows the error.
     let selected = agent.state.model().await;
-    let routed_from = if crate::agent::models::routing::is_router(&selected) {
+    let forced_only = turn.forced_routing && !crate::agent::models::routing::is_router(&selected);
+    let routed_from = if crate::agent::models::routing::is_router(&selected) || turn.forced_routing {
         match crate::agent::models::routing::resolve_router(&request_text).await {
             Ok((model, verdict)) => {
                 let _ = app.emit(
@@ -354,7 +369,13 @@ pub async fn run_turn(
                 agent.state.set_model(model).await;
                 Some(selected)
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                if forced_only {
+                    None
+                } else {
+                    return Err(e);
+                }
+            }
         }
     } else {
         None
@@ -494,6 +515,7 @@ pub async fn cmd_agent_reset(
 #[tauri::command]
 pub async fn cmd_agent_steering_queue(
     text: String,
+    images: Option<Vec<ImageInput>>,
     #[allow(non_snake_case)] threadId: Option<String>,
     registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
@@ -502,10 +524,11 @@ pub async fn cmd_agent_steering_queue(
     // for the full duration of an in-flight prompt/continue run, so routing
     // this through it would block until the run finishes, making mid-run
     // steering impossible.
-    let message = AgentMessage::User {
-        content: vec![MessageContent::Text { text }],
-        timestamp: now_ms(),
-    };
+    let mut content = vec![MessageContent::Text { text }];
+    for img in images.unwrap_or_default() {
+        content.push(MessageContent::Image { url: None, base64: Some(img.base64), media_type: Some(img.media_type) });
+    }
+    let message = AgentMessage::User { content, timestamp: now_ms() };
     state.steering_queue.write().await.push(message);
     Ok(())
 }

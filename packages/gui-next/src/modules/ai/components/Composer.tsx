@@ -340,7 +340,7 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
           value={text}
           onChange={setText}
           onSubmit={submit}
-          onSteer={(typed, a) => void steer(typed + formatFilesForPrompt(a.files))}
+          onSteer={(typed, a) => void steer(typed + formatFilesForPrompt(a.files), a.images)}
           busy={isBusy}
           stopping={stopping}
           onStop={() => void abort()}
