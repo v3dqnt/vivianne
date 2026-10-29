@@ -173,6 +173,9 @@ async fn serve(app: Option<tauri::AppHandle>, stream: tokio::net::TcpStream) {
         let tokio_tungstenite::tungstenite::Message::Text(text) = msg else { continue };
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
         if v.get("type").and_then(|t| t.as_str()) == Some("hello") {
+            if let Some(n) = v.get("browser").and_then(|b| b.as_str()) {
+                remember_seen(n);
+            }
             let name = v.get("browser").and_then(|b| b.as_str()).map(String::from);
             if let Some(c) = bridge().conns.iter_mut().find(|c| c.id == conn_id) {
                 c.browser = name;
@@ -242,7 +245,182 @@ pub async fn call(method: &str, params: serde_json::Value, timeout: Duration, br
 }
 
 fn not_connected() -> String {
-    "The user's browser isn't connected. Ask them to open a Chromium browser (Chrome, Edge, Brave, Arc, Helium…) with the Vivianne extension installed (Settings → Web & browser shows how), then try again.".into()
+    "The user's browser isn't connected. Call user_browser_driver with action launch to open the browser that has the Vivianne extension, then try again. If launch finds none, ask the user to install the extension (Settings, Web & browser).".into()
+}
+
+/// Browsers that have connected before, by `hello` name, kept in
+/// `~/.viv/helium-seen.json`: proof the extension is in them.
+fn seen_path() -> Option<std::path::PathBuf> {
+    crate::agent::system::paths::viv_home().ok().map(|h| h.join("helium-seen.json"))
+}
+
+fn seen() -> Vec<String> {
+    seen_path().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+fn remember_seen(name: &str) {
+    let name = name.to_lowercase();
+    let mut all = seen();
+    if !all.contains(&name) {
+        all.push(name);
+        if let (Some(p), Ok(json)) = (seen_path(), serde_json::to_string(&all)) {
+            let _ = std::fs::write(p, json);
+        }
+    }
+}
+
+/// Where a browser keeps its profiles.
+fn profile_roots(id: &str) -> Vec<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let mut out = Vec::new();
+    #[cfg(windows)]
+    {
+        let local = std::env::var("LOCALAPPDATA").ok().map(PathBuf::from);
+        let roaming = std::env::var("APPDATA").ok().map(PathBuf::from);
+        let (base, rel): (Option<PathBuf>, &str) = match id {
+            "chrome" => (local, "Google\\Chrome\\User Data"),
+            "edge" => (local, "Microsoft\\Edge\\User Data"),
+            "brave" => (local, "BraveSoftware\\Brave-Browser\\User Data"),
+            "vivaldi" => (local, "Vivaldi\\User Data"),
+            "helium" => (local, "imput\\Helium\\User Data"),
+            "chromium" => (local, "Chromium\\User Data"),
+            "opera" => (roaming, "Opera Software\\Opera Stable"),
+            "operagx" => (roaming, "Opera Software\\Opera GX Stable"),
+            _ => (None, ""),
+        };
+        if let Some(b) = base {
+            out.push(b.join(rel));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = std::env::var("HOME").ok().map(PathBuf::from) {
+            let rel = match id {
+                "chrome" => "Google/Chrome",
+                "edge" => "Microsoft Edge",
+                "brave" => "BraveSoftware/Brave-Browser",
+                "vivaldi" => "Vivaldi",
+                "helium" => "net.imput.helium",
+                "chromium" => "Chromium",
+                "opera" => "com.operasoftware.Opera",
+                "operagx" => "com.operasoftware.OperaGX",
+                "arc" => "Arc/User Data",
+                _ => "",
+            };
+            if !rel.is_empty() {
+                out.push(home.join("Library/Application Support").join(rel));
+            }
+        }
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        if let Some(home) = std::env::var("HOME").ok().map(PathBuf::from) {
+            let rel = match id {
+                "chrome" => "google-chrome",
+                "edge" => "microsoft-edge",
+                "brave" => "BraveSoftware/Brave-Browser",
+                "vivaldi" => "vivaldi",
+                "chromium" => "chromium",
+                "opera" => "opera",
+                "helium" => "net.imput.helium",
+                _ => "",
+            };
+            if !rel.is_empty() {
+                out.push(home.join(".config").join(rel));
+            }
+        }
+    }
+    out
+}
+
+/// Whether the Vivianne extension is installed in this browser: any profile's
+/// preferences name its id (an unpacked extension is listed there), or it has
+/// connected from this browser before.
+fn has_extension(id: &str, word: &str) -> bool {
+    if seen().iter().any(|n| n.contains(word) && (id != "opera" || !n.contains("opera gx"))) {
+        return true;
+    }
+    for root in profile_roots(id) {
+        let mut dirs = vec![root.clone()];
+        if let Ok(entries) = std::fs::read_dir(&root) {
+            dirs.extend(entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()));
+        }
+        for dir in dirs {
+            for file in ["Secure Preferences", "Preferences"] {
+                if std::fs::read_to_string(dir.join(file)).is_ok_and(|t| t.contains(EXTENSION_ID)) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Start a browser, plain (no page): the extension connects by itself.
+fn spawn_browser(b: &InstalledBrowser) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let spawned = std::process::Command::new("open").arg("-a").arg(&b.path).spawn();
+    #[cfg(not(target_os = "macos"))]
+    let spawned = std::process::Command::new(&b.path).spawn();
+    spawned.map(|_| ()).map_err(|e| format!("Couldn't open {}: {e}", b.name))
+}
+
+/// `browsers`: what is installed, which have the extension, which are connected.
+fn browsers_report() -> String {
+    let list = installed_browsers();
+    if list.is_empty() {
+        return "No Chromium browser found on this computer.".into();
+    }
+    let lines: Vec<String> = list
+        .iter()
+        .map(|b| {
+            let state = if b.connected {
+                "connected"
+            } else if b.has_extension {
+                "has the extension, not open"
+            } else {
+                "no extension"
+            };
+            format!("- {} (browser: \"{}\"): {state}", b.name, b.id)
+        })
+        .collect();
+    lines.join("\n")
+}
+
+/// `launch`: open the browser that has the extension (or the one named) and
+/// wait for it to connect.
+async fn launch(requested: Option<&str>) -> ToolResult {
+    let list = installed_browsers();
+    let want = requested.map(|r| r.to_lowercase());
+    if let Some(b) = list.iter().find(|b| b.connected && want.as_deref().is_none_or(|w| b.id == w || b.name.to_lowercase().contains(w))) {
+        return ok(format!("{} is already connected. Go ahead.", b.name));
+    }
+    let pick = match &want {
+        Some(w) => list.iter().find(|b| b.id == *w || b.name.to_lowercase().contains(w.as_str())),
+        None => list.iter().find(|b| b.has_extension),
+    };
+    let Some(b) = pick else {
+        return err(match want {
+            Some(w) => format!("'{w}' isn't installed here. Installed:\n{}", browsers_report()),
+            None => format!(
+                "No browser here has the Vivianne extension yet:\n{}\nAsk the user to install it (Settings, Web & browser, Set up).",
+                browsers_report()
+            ),
+        });
+    };
+    if let Err(e) = spawn_browser(b) {
+        return err(e);
+    }
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if status().connected {
+            return ok(format!("Opened {} and it's connected. Go ahead.", b.name));
+        }
+    }
+    err(format!(
+        "Opened {} but the extension didn't connect within 20s. It may be turned off in that browser: ask the user to check its extensions page.",
+        b.name
+    ))
 }
 
 fn ok(text: String) -> ToolResult {
@@ -273,6 +451,13 @@ pub fn looks_like_card_number(text: &str) -> bool {
 /// The `user_browser_driver` tool.
 pub async fn execute_tool(args: &serde_json::Value) -> ToolResult {
     let action = args.get("action").and_then(|a| a.as_str()).unwrap_or("");
+    // These two don't go to a browser: they find and open one.
+    if action == "browsers" {
+        return ok(browsers_report());
+    }
+    if action == "launch" {
+        return launch(args.get("browser").and_then(|b| b.as_str())).await;
+    }
     if action == "type" {
         let text = args.get("text").and_then(|t| t.as_str()).unwrap_or("");
         if looks_like_card_number(text) {
@@ -392,12 +577,13 @@ pub fn schema() -> serde_json::Value {
     serde_json::json!({
         "name": "user_browser_driver",
         "description": "Use the user's own browser (any Chromium browser with the Vivianne extension: Chrome, Edge, Brave, Arc, Opera, Vivaldi, Helium…): their tabs, with their sign-ins. Prefer it over web_search/web_fetch whenever it is connected: for looking things up, reading pages and doing things on the web, as well as for anything the user is logged into. Tabs you open are grouped as \"Vivianne\".\n\
+Start here: if the browser isn't connected, launch (opens the browser that has the extension and waits for it; pass browser to pick one) · browsers (which browsers are installed, which have the extension, which are connected).\n\
 Actions: tabs (list) · open{url} (new tab, becomes current) · select_tab{tabId} · close_tab · navigate{url} · back · forward · reload · snapshot (the page's interactive elements as [ref] lines — do this before clicking or typing) · read (page text) · find{query} · click{ref, double?} · type{ref?, text, clear?, submit?} · select{ref, value} · key{key, repeat?} (enter, tab, escape, ctrl+a, arrowdown…) · scroll{direction, amount?} · screenshot · wait{ms} · evaluate{expression} (run JavaScript in the page and get the value back; awaits promises) · read_console{limit?, clear?} (the page's console messages and errors) · done (finished with the browser).\n\
 Refs come from the latest snapshot and change when the page changes: snapshot again after anything that changes the page. Every action works on the current tab unless you pass tabId. With several browsers connected, actions go to the one opened most recently unless you pass browser.",
         "parameters": {
             "type": "object",
             "properties": {
-                "action": { "type": "string", "enum": ["tabs", "open", "select_tab", "close_tab", "navigate", "back", "forward", "reload", "snapshot", "read", "find", "click", "type", "select", "key", "scroll", "screenshot", "wait", "done", "evaluate", "read_console"] },
+                "action": { "type": "string", "enum": ["launch", "browsers", "tabs", "open", "select_tab", "close_tab", "navigate", "back", "forward", "reload", "snapshot", "read", "find", "click", "type", "select", "key", "scroll", "screenshot", "wait", "done", "evaluate", "read_console"] },
                 "url": { "type": "string" },
                 "tabId": { "type": "number", "description": "Act on this tab instead of the current one." },
                 "ref": { "type": "number", "description": "An element from the latest snapshot." },
@@ -450,6 +636,8 @@ pub struct InstalledBrowser {
     pub extensions_url: String,
     /// The extension is installed and connected in it right now.
     pub connected: bool,
+    /// The extension is installed in it (open or not).
+    pub has_extension: bool,
 }
 
 /// (id, display name, extensions-page scheme, word its `hello` name contains)
@@ -545,6 +733,7 @@ pub fn installed_browsers() -> Vec<InstalledBrowser> {
                 extensions_url: format!("{scheme}://extensions"),
                 // "opera gx" also contains "opera": match the longer word first.
                 connected: connected.iter().any(|c| c.contains(word) && (*id != "opera" || !c.contains("opera gx"))),
+                has_extension: has_extension(id, word),
             })
         })
         .collect()

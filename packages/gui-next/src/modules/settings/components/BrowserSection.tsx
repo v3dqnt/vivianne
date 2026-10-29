@@ -17,6 +17,8 @@ interface InstalledBrowser {
   path: string
   extensionsUrl: string
   connected: boolean
+  /** The extension is installed in it, open or not. */
+  hasExtension: boolean
 }
 
 /**
@@ -91,9 +93,9 @@ export function BrowserSection() {
                   {b.name}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
-                  {b.connected ? 'Connected' : 'Extension not installed'}
+                  {b.connected ? 'Connected' : b.hasExtension ? 'Installed, not open' : 'Extension not installed'}
                 </Typography>
-                {!b.connected && (
+                {!b.connected && !b.hasExtension && (
                   <Button
                     size="small"
                     variant="outlined"

@@ -57,7 +57,14 @@ pub const GROUPS: &[CapabilityGroup] = &[
         when: "Anything involving a real website: searching, reading a page, following links, filling a form, clicking through a flow, checking how a page behaves, or anything in the user's own browser (their tabs, sites they're signed in to).",
         tools: &["web_search", "web_fetch", "user_browser_driver"],
         how: Some(
-            "All browsing happens in the user's own browser through the Vivianne extension (Chrome, Edge, Brave, Arc, Opera, Vivaldi, Helium or any other Chromium browser), with their sign-ins: user_browser_driver.              open a url, snapshot to get [ref]s, then click/type by ref; snapshot again after the page changes. read gives the page text,              evaluate runs JavaScript, read_console shows the console. Say done when finished so the browser's debugging banner goes away.              web_search and web_fetch are for a quick lookup that needs no page.              Never type passwords or payment details; if a site needs a sign-in, ask the user to sign in themselves.              If it says the browser isn't connected, tell the user to open their browser with the extension (Settings, Web & browser).              With more than one browser connected, pass browser to pick one.",
+            "First, make sure the browser is there: if it isn't connected, call user_browser_driver with action launch. It opens the browser that has the Vivianne extension (Chrome, Edge, Brave, Arc, Opera, Vivaldi, Helium or another Chromium browser) and waits for it to connect; pass browser to choose one. action browsers lists which browsers are installed, which have the extension and which are connected. \
+             Then all browsing happens there, in the user's own browser with their sign-ins: open a url, snapshot to get [ref]s, then click/type by ref; snapshot again after the page changes. \
+             read gives the page text, evaluate runs JavaScript, read_console shows the console. Say done when finished so the browser's debugging banner goes away. \
+             web_search and web_fetch are for a quick lookup that needs no page. \
+             Never type passwords or payment details; if a site needs a sign-in, ask the user to sign in themselves. \
+             If launch finds no browser with the extension, tell the user to install it (Settings, Web & browser, Set up). \
+             With more than one browser connected, pass browser to pick one.",
+
         ),
         triggers: &["google", "search the web", "search for", "look up", "look it up", "browse", "website", "web site", "web page", "webpage", "the internet", "online", "http://", "https://", ".com", ".org", ".io", "open a site", "go to ", "helium", "chrome", "edge", "brave", "my browser", "my tabs", "in the browser", "signed in", "logged in", "my gmail", "my email", "my account"],
     },

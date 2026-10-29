@@ -282,7 +282,17 @@ pub(crate) async fn assemble_capability_blocks(
                 browsers.browsers.join(", ")
             ));
         } else {
-            prompt.push_str("\n\n<vivianne_browser>No browser is connected, so use web_search and web_fetch. If a task needs the user's signed-in sites, say that connecting a Chromium browser (Settings → Web & browser) would let you work in it.</vivianne_browser>");
+            // Which browsers could be opened for it, so the model knows launch will work.
+            let ready: Vec<String> = crate::helium::installed_browsers().into_iter().filter(|b| b.has_extension).map(|b| b.name).collect();
+            if ready.is_empty() {
+                prompt.push_str("\n\n<vivianne_browser>No browser has the Vivianne extension yet, so use web_search and web_fetch. If a task needs the user's signed-in sites, say that installing the extension in their browser (Settings, Web & browser) would let you work in it.</vivianne_browser>");
+            } else {
+                prompt.push_str(&format!(
+                    "\n\n<vivianne_browser>No browser is open right now, but {} {} the Vivianne extension. When a task needs the web or a site, call user_browser_driver with action launch first: it opens it and waits for it to connect.</vivianne_browser>",
+                    ready.join(", "),
+                    if ready.len() == 1 { "has" } else { "have" }
+                ));
+            }
         }
     }
     prompt.push_str(&browser_block);
