@@ -5,39 +5,23 @@ import { useAgentStore } from '../../ai/store/agentStore'
 import { Markdown } from '../../ai/components/Markdown'
 import { ImageBlock } from '../../ai/components/ImageBlock'
 import { FollowUpContext } from '../../ai/components/InteractiveBlock'
-import { PermissionDialog } from '../../ai/components/PermissionDialog'
 import { AskQuestionDialog } from '../../ai/components/AskQuestionDialog'
 import { ConfirmationDialog } from '../../ai/components/ConfirmationDialog'
-import { isAppText, isPlanNoteText, isSummaryText } from '../../ai/components/HandoffDivider'
 import { summarizeTools } from '../../ai/lib/toolGroups'
-import { contentImages, contentToText, type AgentMessage } from '../../ai/lib/types'
 import type { TeamAgent } from '../store/teamStore'
+import { composerButton, toItems, type Item, type ToolResult } from '../lib/messenger'
+import { describeApproval, type ApprovalWidget as Widget } from '../lib/widgets'
+import type { WidgetState } from '../lib/widgetLab'
+import { useBotsStore, botKey } from '../store/botsStore'
+import { ApprovalWidget } from './ApprovalWidget'
+import { call } from '../../../ipc'
 import { Avatar, colorOf, faceOf } from './bits'
 import { useBotFace } from './AgentFace'
 import { ErrorsButton } from '../../ai/components/ErrorsButton'
 import { EditLinear } from '../../../icons'
 
-type ToolResult = Extract<AgentMessage, { type: 'toolResult' }>
-type Image = ReturnType<typeof contentImages>[number]
-
-/** One thing drawn in the conversation, in order. */
-type Item =
-  | { kind: 'bubble'; from: 'you' | 'agent'; key: string; text: string; images: Image[]; ts: number; by?: string }
-  | { kind: 'activity'; key: string; tools: ToolResult[] }
-  | { kind: 'note'; key: string; text: string }
-  | { kind: 'day'; key: string; label: string }
-
 /** Blocks that need room: drawn at full width, not squeezed into a bubble. */
 const WIDE = /```(ui|chart|widget|mermaid|plot|model3d|mol3d|chem|bio|physics)\b/
-
-function dayLabel(ts: number): string {
-  const d = new Date(ts)
-  const today = new Date()
-  const yesterday = new Date(Date.now() - 86_400_000)
-  if (d.toDateString() === today.toDateString()) return 'Today'
-  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
-  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
-}
 
 /** `@id` / `@Name` of a teammate, as a link Markdown draws: the chip style
  * below picks it out (`a[href^="#agent:"]`) in that agent's colour. */
@@ -50,65 +34,6 @@ function highlightMentions(text: string, team: TeamAgent[]): string {
 }
 
 const clock = (ts: number) => new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-
-/** Another agent's words, as the app delivers them into this thread: an
- * answer (`<agent_message from=…>`), a question it asked, or the user
- * mentioning this agent elsewhere. */
-const AGENT_MESSAGE = /^\s*<agent_message from="([^"]+)"[^>]*>\n?([\s\S]*?)\n?<\/agent_message>/
-const ASKED = /^(.+?) \(@([\w-]+)\), another agent, asks you:\n\n([\s\S]*?)\n\nYour answer is sent back to/
-const MENTIONED = /^The user mentioned you in (.+?)'s chat:\n\n([\s\S]*?)\n\nYour answer goes into that chat/
-
-/** The transcript as a messenger reads it: what each side said, the agent's
- * tool work folded into one line between messages, reasoning left out. */
-function toItems(messages: AgentMessage[]): Item[] {
-  const items: Item[] = []
-  let tools: ToolResult[] = []
-  let lastDay = ''
-  const flushTools = () => {
-    if (tools.length) items.push({ kind: 'activity', key: `a${items.length}`, tools })
-    tools = []
-  }
-  const day = (ts: number) => {
-    const label = dayLabel(ts)
-    if (ts && label !== lastDay) {
-      lastDay = label
-      items.push({ kind: 'day', key: `d${items.length}`, label })
-    }
-  }
-  messages.forEach((m, i) => {
-    if (m.type === 'toolResult') {
-      tools.push(m)
-      return
-    }
-    const text = contentToText(m.content).trim()
-    const images = contentImages(m.content)
-    if (m.type === 'user') {
-      flushTools()
-      day(m.timestamp)
-      // Another agent speaking here: its bubble, with its face.
-      const answer = AGENT_MESSAGE.exec(text)
-      const asked = ASKED.exec(text)
-      const mentioned = MENTIONED.exec(text)
-      if (answer) items.push({ kind: 'bubble', from: 'agent', by: answer[1], key: `m${i}`, text: answer[2].trim(), images: [], ts: m.timestamp })
-      else if (asked) items.push({ kind: 'bubble', from: 'agent', by: asked[2], key: `m${i}`, text: asked[3].trim(), images: [], ts: m.timestamp })
-      else if (mentioned) items.push({ kind: 'note', key: `n${i}`, text: `You mentioned ${'this agent'} in ${mentioned[1]}'s chat` })
-      // The app's own notes ride in user messages: shown as a quiet line, never as your bubble.
-      else if (isPlanNoteText(text)) items.push({ kind: 'note', key: `n${i}`, text: 'You answered the plan' })
-      else if (isSummaryText(text)) items.push({ kind: 'note', key: `n${i}`, text: 'Earlier messages were summarised' })
-      else if (isAppText(text) || text.startsWith('<system-reminder>')) return
-      else items.push({ kind: 'bubble', from: 'you', key: `m${i}`, text, images, ts: m.timestamp })
-      return
-    }
-    // Failed turns are listed behind the errors icon by the composer.
-    if (m.stopReason === 'error') return
-    if (!text && images.length === 0) return
-    flushTools()
-    day(m.timestamp)
-    items.push({ kind: 'bubble', from: 'agent', key: `m${i}`, text, images, ts: m.timestamp })
-  })
-  flushTools()
-  return items
-}
 
 const bounce = keyframes({ '0%, 80%, 100%': { transform: 'translateY(0)', opacity: 0.45 }, '40%': { transform: 'translateY(-4px)', opacity: 1 } })
 
@@ -254,7 +179,39 @@ export function AgentMessenger({ root, agent, team = [], status, onEdit }: { roo
   const isBusy = useAgentStore((s) => s.isBusy)
   const sendMessage = useAgentStore((s) => s.sendMessage)
   const abort = useAgentStore((s) => s.abort)
+  const pendingPermission = useAgentStore((s) => s.pendingPermission)
+  const respondPermission = useAgentStore((s) => s.respondPermission)
   const face = useBotFace(root, agent.id)
+  // Working from anywhere: this chat, a routine, a check-in, another agent.
+  const agentState = useBotsStore((s) => s.status[botKey(root, agent.id)]?.state ?? 'idle')
+  const allApprovals = useBotsStore((s) => s.approvals)
+  const respondApproval = useBotsStore((s) => s.respond)
+  const busy = isBusy || agentState === 'working'
+  // What it is waiting on you for, as cards: its rules' approvals, and a
+  // permission its model asked for. Answered ones stay, stamped.
+  const asks = useMemo(() => {
+    const out: { id: string; widget: Widget; answer: (yes: boolean) => Promise<void> }[] = allApprovals
+      .filter((a) => a.root === root && a.botId === agent.id)
+      .map((a) => ({ id: a.requestId, widget: describeApproval(a, agent.name), answer: (yes: boolean) => respondApproval(a.requestId, yes) }))
+    if (pendingPermission && !out.some((o) => o.id === pendingPermission.requestId)) {
+      out.push({
+        id: pendingPermission.requestId,
+        widget: describeApproval({ toolName: pendingPermission.toolName, args: (pendingPermission.args ?? {}) as Record<string, unknown>, reason: pendingPermission.reason ?? null }, agent.name),
+        answer: (yes: boolean) => respondPermission(yes),
+      })
+    }
+    return out
+  }, [allApprovals, pendingPermission, root, agent.id, agent.name, respondApproval, respondPermission])
+  const [answered, setAnswered] = useState<{ id: string; widget: Widget; state: WidgetState }[]>([])
+  useEffect(() => setAnswered([]), [agent.id])
+  const answer = (ask: (typeof asks)[number]) => async (yes: boolean) => {
+    await ask.answer(yes)
+    setAnswered((a) => [...a, { id: ask.id, widget: ask.widget, state: yes ? 'approved' : 'denied' }])
+  }
+  const stop = () => {
+    void call('cmd_bots_stop', { root, botId: agent.id })
+    void abort()
+  }
   const [text, setText] = useState('')
   const [pick, setPick] = useState(0)
   const scroller = useRef<HTMLDivElement | null>(null)
@@ -275,7 +232,7 @@ export function AgentMessenger({ root, agent, team = [], status, onEdit }: { roo
   useLayoutEffect(() => {
     const el = scroller.current
     if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 280) el.scrollTop = el.scrollHeight
-  }, [items, isBusy])
+  }, [items, busy, asks.length])
   useEffect(() => {
     const el = scroller.current
     if (el) el.scrollTop = el.scrollHeight
@@ -289,7 +246,7 @@ export function AgentMessenger({ root, agent, team = [], status, onEdit }: { roo
   }
 
   const lastBubble = [...items].reverse().find((i) => i.kind === 'bubble')
-  const typing = isBusy && !(lastBubble?.kind === 'bubble' && lastBubble.from === 'agent' && items[items.length - 1] === lastBubble)
+  const typing = busy && asks.length === 0 && !(lastBubble?.kind === 'bubble' && lastBubble.from === 'agent' && items[items.length - 1] === lastBubble)
 
   return (
     <Stack
@@ -348,6 +305,12 @@ export function AgentMessenger({ root, agent, team = [], status, onEdit }: { roo
               return <Bubble key={item.key} item={item} agent={agent} team={team} color={color} first={!same(prev)} last={!same(next)} />
             })}
           </FollowUpContext.Provider>
+          {[...answered.map((a) => ({ ...a, live: null as null | (typeof asks)[number] })), ...asks.filter((a) => !answered.some((x) => x.id === a.id)).map((a) => ({ id: a.id, widget: a.widget, state: 'pending' as WidgetState, live: a }))].map((c) => (
+            <Stack key={c.id} direction="row" sx={{ alignItems: 'flex-end', gap: '8px', mt: '12px' }}>
+              <Avatar {...faceOf(agent)} size={36} state={face} animate />
+              <ApprovalWidget widget={c.widget} state={c.state} accent={color} onAnswer={c.live ? answer(c.live) : undefined} />
+            </Stack>
+          ))}
           {typing && (
             <Stack direction="row" sx={{ alignItems: 'flex-end', gap: '8px', mt: '12px' }}>
               <Avatar {...faceOf(agent)} size={36} state={face} animate />
@@ -430,8 +393,8 @@ export function AgentMessenger({ root, agent, team = [], status, onEdit }: { roo
             sx={{ flex: 1, fontSize: '14px', py: '7px' }}
           />
           <ErrorsButton sx={{ height: 36, borderRadius: '18px' }} />
-          {isBusy && !text.trim() ? (
-            <ButtonBase onClick={() => void abort()} aria-label="Stop" sx={{ width: 36, height: 36, borderRadius: '50%', bgcolor: alpha(color, 0.16), color }}>
+          {composerButton({ chatBusy: isBusy, agentState, typed: text }) === 'stop' ? (
+            <ButtonBase onClick={stop} aria-label="Stop" sx={{ width: 36, height: 36, borderRadius: '50%', bgcolor: alpha(color, 0.16), color }}>
               <StopLinear size={16} color="currentColor" />
             </ButtonBase>
           ) : (
@@ -447,7 +410,6 @@ export function AgentMessenger({ root, agent, team = [], status, onEdit }: { roo
         </Stack>
       </Box>
 
-      <PermissionDialog />
       <AskQuestionDialog />
       <ConfirmationDialog />
     </Stack>

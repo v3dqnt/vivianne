@@ -10,6 +10,7 @@ import { NewAgentDialog } from '../team/components/NewAgentDialog'
 import { mainPane } from '../../theme'
 import { useTheme } from '../../ui'
 
+const WidgetLab = lazy(() => import('../team/components/WidgetLab').then((m) => ({ default: m.WidgetLab })))
 const TeamRoom = lazy(() => import('../team/components/TeamRoom').then((m) => ({ default: m.TeamRoom })))
 const NO_AGENTS: TeamAgent[] = []
 
@@ -34,6 +35,8 @@ export function AgentsView() {
   const loadStatus = useBotsStore((s) => s.loadStatus)
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
+  // The Widget Lab, a debugger agent for how agents' cards look (dev builds).
+  const [lab, setLab] = useState(false)
 
   useEffect(() => {
     void ensure().then((r) => r && void loadStatus(r))
@@ -74,9 +77,12 @@ export function AgentsView() {
             return (
               <ButtonBase
                 key={a.id}
-                onClick={() => root && setChannel(root, a.id)}
-                aria-current={on ? 'true' : undefined}
-                sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '12px', p: '8px', borderRadius: '8px', textAlign: 'left', bgcolor: on ? 'action.selected' : 'transparent', '&:hover': { bgcolor: on ? 'action.selected' : 'action.hover' } }}
+                onClick={() => {
+                  setLab(false)
+                  if (root) setChannel(root, a.id)
+                }}
+                aria-current={on && !lab ? 'true' : undefined}
+                sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '12px', p: '8px', borderRadius: '8px', textAlign: 'left', bgcolor: on && !lab ? 'action.selected' : 'transparent', '&:hover': { bgcolor: on && !lab ? 'action.selected' : 'action.hover' } }}
               >
                 <RowFace root={root} agent={a} />
                 <Stack sx={{ flex: 1, minWidth: 0 }}>
@@ -90,11 +96,28 @@ export function AgentsView() {
               </ButtonBase>
             )
           })}
+          {import.meta.env.DEV && (
+            <ButtonBase
+              onClick={() => setLab(true)}
+              aria-current={lab ? 'true' : undefined}
+              sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '12px', p: '8px', mt: '8px', borderRadius: '8px', textAlign: 'left', borderTop: 1, borderColor: 'divider', bgcolor: lab ? 'action.selected' : 'transparent', '&:hover': { bgcolor: lab ? 'action.selected' : 'action.hover' } }}
+            >
+              <Box sx={{ width: 32, height: 32, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: 'action.selected', fontSize: '16px' }}>🧪</Box>
+              <Stack sx={{ flex: 1, minWidth: 0 }}>
+                <Box component="span" sx={{ fontSize: '14px', fontWeight: 600 }}>Widget Lab</Box>
+                <Box component="span" sx={{ fontSize: '12px', color: 'text.secondary' }}>Every card, every state</Box>
+              </Stack>
+            </ButtonBase>
+          )}
         </Stack>
       </Stack>
 
       <Box sx={{ flex: 1, minWidth: 0, ...mainPane(theme), display: 'flex', flexDirection: 'column' }}>
-        {root && picked ? (
+        {lab ? (
+          <Suspense fallback={null}>
+            <WidgetLab />
+          </Suspense>
+        ) : root && picked ? (
           <Suspense fallback={null}>
             <TeamRoom key={root} root={root} messenger />
           </Suspense>

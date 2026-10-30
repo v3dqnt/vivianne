@@ -1,0 +1,55 @@
+import { useState } from 'react'
+import { Box, ButtonBase, Stack, Typography } from '../../../ui'
+import { WIDGET_LAB, type WidgetState } from '../lib/widgetLab'
+import { describeApproval } from '../lib/widgets'
+import { ApprovalWidget } from './ApprovalWidget'
+
+const LAB_COLOR = '#7c9cff'
+
+/**
+ * The Widget Lab: a debugger agent whose chat is every card an agent can
+ * show, in every state and edge case, laid out as its messenger would. The
+ * pending ones answer for real (locally), so the stamped states can be seen
+ * arriving too. Dev builds only.
+ */
+export function WidgetLab() {
+  const [states, setStates] = useState<Record<number, WidgetState>>({})
+  const reset = () => setStates({})
+  return (
+    <Stack sx={{ flex: 1, minHeight: 0, background: `radial-gradient(120% 60% at 0% 0%, ${LAB_COLOR}22, transparent 60%)` }}>
+      <Stack direction="row" sx={{ alignItems: 'center', gap: '12px', px: '20px', py: '14px' }}>
+        <Box sx={{ width: 44, height: 44, borderRadius: '14px', display: 'grid', placeItems: 'center', bgcolor: `${LAB_COLOR}33`, fontSize: '20px' }}>🧪</Box>
+        <Stack sx={{ flex: 1, minWidth: 0 }}>
+          <Typography sx={{ fontSize: '16px', fontWeight: 600 }}>Widget Lab</Typography>
+          <Typography sx={{ fontSize: '12px', color: 'text.secondary' }}>Every card an agent can show, in every state</Typography>
+        </Stack>
+        <ButtonBase onClick={reset} sx={{ height: 30, px: '12px', borderRadius: '999px', fontSize: '12px', bgcolor: 'action.hover' }}>
+          Reset
+        </ButtonBase>
+      </Stack>
+      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: '20px', pb: '24px' }}>
+        <Stack sx={{ maxWidth: 760, mx: 'auto', gap: '20px' }}>
+          {WIDGET_LAB.map((card, i) => {
+            const state = states[i] ?? card.state
+            return (
+              <Stack key={i} sx={{ gap: '6px' }}>
+                <Typography sx={{ fontSize: '11px', fontWeight: 600, color: 'text.disabled', pl: '44px' }}>
+                  {card.label} · {card.state}
+                </Typography>
+                <Stack direction="row" sx={{ alignItems: 'flex-end', gap: '8px' }}>
+                  <Box sx={{ width: 36, height: 36, borderRadius: '50%', bgcolor: `${LAB_COLOR}33`, flexShrink: 0 }} />
+                  <ApprovalWidget
+                    widget={describeApproval(card.approval, 'Lab')}
+                    state={state}
+                    accent={LAB_COLOR}
+                    onAnswer={(yes) => setStates((s) => ({ ...s, [i]: yes ? 'approved' : 'denied' }))}
+                  />
+                </Stack>
+              </Stack>
+            )
+          })}
+        </Stack>
+      </Box>
+    </Stack>
+  )
+}
