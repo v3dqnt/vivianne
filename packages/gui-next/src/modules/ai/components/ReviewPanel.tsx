@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { codeToTokens } from 'shiki'
 import { Dialog, Box, Stack, Typography, Button, IconButton, Tooltip, ButtonBase, alpha, useTheme } from '../../../ui'
-import { CloseLinear, MaximizeLinear, MinimizeLinear, UndoLinear } from '../../../icons'
+import { ChevronRightLinear, CloseLinear, FolderLinear, MaximizeLinear, MinimizeLinear, UndoLinear } from '../../../icons'
 import { displayPath, totals, type FileChange, type Hunk } from '../lib/review'
 
 const MONO = '"Geist Mono", ui-monospace, Consolas, monospace'
@@ -55,8 +56,44 @@ export function undoBlocker(f: FileChange, readOnly: boolean): string | null {
   return null
 }
 
+/** A file's language for the highlighter, from its extension. */
+function langOf(path: string): string {
+  const ext = path.split('.').pop()?.toLowerCase() ?? ''
+  const map: Record<string, string> = { mjs: 'js', cjs: 'js', yml: 'yaml', htm: 'html', h: 'c', hpp: 'cpp', rs: 'rust', py: 'python', rb: 'ruby', sh: 'bash', ps1: 'powershell', md: 'markdown' }
+  return map[ext] ?? (ext || 'text')
+}
+
+type Tok = { content: string; color?: string; fontStyle?: number }
+
+/** Each hunk's lines, tokenised by the same highlighter the chat's code
+ * blocks use, so a diff reads as code rather than as plain text. A hunk is
+ * highlighted as one block, so a string or comment that spans lines keeps
+ * its colour. */
+function useHunkTokens(file: FileChange, dark: boolean): Tok[][][] | null {
+  const [tokens, setTokens] = useState<Tok[][][] | null>(null)
+  useEffect(() => {
+    let live = true
+    setTokens(null)
+    const lang = langOf(file.path)
+    const theme = dark ? 'github-dark-default' : 'github-light'
+    void Promise.all(
+      file.hunks.map((h) =>
+        codeToTokens(h.lines.map((l) => l.text).join('\n'), { lang: lang as never, theme })
+          .then((r) => r.tokens as Tok[][])
+          .catch(() => h.lines.map((l) => [{ content: l.text }])),
+      ),
+    ).then((t) => live && setTokens(t))
+    return () => {
+      live = false
+    }
+  }, [file, dark])
+  return tokens
+}
+
 function DiffView({ file }: { file: FileChange }) {
   const theme = useTheme()
+  const dark = theme.palette.mode === 'dark'
+  const tokens = useHunkTokens(file, dark)
 
   if (file.binary || file.tooLarge || file.status === 'unchanged') {
     return (
@@ -65,69 +102,154 @@ function DiffView({ file }: { file: FileChange }) {
           {file.status === 'unchanged'
             ? 'This file ends the assignment exactly as it started, so there is nothing to show.'
             : file.binary
-              ? 'Binary file — its contents can’t be shown as text. Undo still restores it.'
+              ? 'Binary file: its contents can’t be shown as text. Undo still restores it.'
               : 'Too large to show a diff for. Undo still restores it.'}
         </Typography>
       </Box>
     )
   }
 
-  const addBg = alpha(theme.palette.success.main, theme.palette.mode === 'dark' ? 0.13 : 0.1)
-  const delBg = alpha(theme.palette.error.main, theme.palette.mode === 'dark' ? 0.13 : 0.09)
+  const green = theme.palette.success.main
+  const red = theme.palette.error.main
+  const addBg = alpha(green, dark ? 0.1 : 0.08)
+  const delBg = alpha(red, dark ? 0.1 : 0.07)
 
   return (
-    <Box sx={{ fontFamily: MONO, fontSize: '0.75rem', lineHeight: 1.6, minWidth: 'fit-content' }}>
-      {file.hunks.map((h: Hunk, hi) => (
-        <Box key={hi}>
-          <Box
-            sx={{
-              px: 1.5,
-              py: 0.25,
-              color: 'text.secondary',
-              bgcolor: alpha(theme.palette.info.main, 0.08),
-              borderTop: hi > 0 ? 1 : 0,
-              borderBottom: 1,
-              borderColor: 'divider',
-              position: 'sticky',
-              left: 0,
-            }}
-          >
-            {`@@ −${h.oldStart} +${h.newStart} @@`}
-          </Box>
-          {h.lines.map((l, li) => (
-            <Box
-              key={li}
-              sx={{
-                display: 'grid',
-                gridTemplateColumns: '3.5em 3.5em 1.5em 1fr',
-                bgcolor: l.kind === 'add' ? addBg : l.kind === 'del' ? delBg : 'transparent',
-              }}
+    <Box sx={{ fontFamily: MONO, fontSize: '12.5px', lineHeight: '20px', minWidth: 'fit-content', pb: '16px' }}>
+      {file.hunks.map((h: Hunk, hi) => {
+        const last = h.lines.reduce((n, l) => Math.max(n, l.newNo ?? 0), h.newStart)
+        return (
+          <Box key={hi} sx={{ mt: hi ? '12px' : 0 }}>
+            {/* Where this part of the file is, as a quiet band. */}
+            <Stack
+              direction="row"
+              sx={{ alignItems: 'center', gap: '10px', px: '16px', height: 32, position: 'sticky', left: 0, color: 'text.secondary', bgcolor: alpha(theme.palette.text.primary, 0.035), borderTop: hi ? 1 : 0, borderBottom: 1, borderColor: 'divider' }}
             >
-              {/* Line numbers are not selectable, so copying a block from the
-                  diff copies code rather than gutter numbers. */}
-              <Box sx={{ textAlign: 'right', pr: 1, color: 'text.disabled', userSelect: 'none' }}>{l.oldNo ?? ''}</Box>
-              <Box sx={{ textAlign: 'right', pr: 1, color: 'text.disabled', userSelect: 'none' }}>{l.newNo ?? ''}</Box>
-              <Box
-                sx={{
-                  userSelect: 'none',
-                  textAlign: 'center',
-                  color: l.kind === 'add' ? 'success.main' : l.kind === 'del' ? 'error.main' : 'text.disabled',
-                }}
-              >
-                {l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ''}
-              </Box>
-              <Box component="pre" sx={{ m: 0, pr: 2, whiteSpace: 'pre', font: 'inherit' }}>
-                {l.text || ' '}
-              </Box>
-            </Box>
-          ))}
-        </Box>
-      ))}
+              <Typography component="span" sx={{ fontSize: '12px', fontWeight: 600, color: 'text.secondary', fontFamily: 'inherit' }}>
+                Lines {h.newStart}–{last}
+              </Typography>
+              <Typography component="span" sx={{ fontSize: '11px', color: 'text.disabled', fontFamily: 'inherit' }}>
+                {`@@ -${h.oldStart} +${h.newStart} @@`}
+              </Typography>
+            </Stack>
+            {h.lines.map((l, li) => {
+              const kind = l.kind
+              const bar = kind === 'add' ? green : kind === 'del' ? red : 'transparent'
+              const line = tokens?.[hi]?.[li]
+              return (
+                <Box
+                  key={li}
+                  sx={{
+                    display: 'grid',
+                    gridTemplateColumns: '3px 48px 48px 24px 1fr',
+                    bgcolor: kind === 'add' ? addBg : kind === 'del' ? delBg : 'transparent',
+                    '&:hover': { bgcolor: kind === 'add' ? alpha(green, dark ? 0.16 : 0.12) : kind === 'del' ? alpha(red, dark ? 0.16 : 0.11) : alpha(theme.palette.text.primary, 0.03) },
+                  }}
+                >
+                  <Box sx={{ bgcolor: bar }} />
+                  {/* Line numbers are not selectable, so copying a block
+                      copies code rather than gutter numbers. */}
+                  <Box sx={{ textAlign: 'right', pr: '10px', color: kind === 'del' ? alpha(red, 0.8) : 'text.disabled', userSelect: 'none', fontSize: '11px' }}>{l.oldNo ?? ''}</Box>
+                  <Box sx={{ textAlign: 'right', pr: '10px', color: kind === 'add' ? alpha(green, 0.85) : 'text.disabled', userSelect: 'none', fontSize: '11px' }}>{l.newNo ?? ''}</Box>
+                  <Box sx={{ userSelect: 'none', textAlign: 'center', fontWeight: 700, color: kind === 'add' ? green : kind === 'del' ? red : 'transparent' }}>{kind === 'add' ? '+' : kind === 'del' ? '−' : ''}</Box>
+                  <Box component="pre" sx={{ m: 0, pr: '24px', whiteSpace: 'pre', font: 'inherit', color: 'text.primary', opacity: kind === 'ctx' ? 0.78 : 1 }}>
+                    {line ? line.map((t, ti) => (
+                      <span key={ti} style={{ color: t.color, fontStyle: t.fontStyle && t.fontStyle & 1 ? 'italic' : undefined }}>
+                        {t.content}
+                      </span>
+                    )) : l.text || ' '}
+                  </Box>
+                </Box>
+              )
+            })}
+          </Box>
+        )
+      })}
       {file.truncated && (
-        <Box sx={{ p: 1.5, color: 'text.secondary', fontFamily: 'inherit' }}>
-          Diff cut short here — it is too long to show in full. Undo still restores the whole file.
+        <Box sx={{ p: '16px', color: 'text.secondary', fontFamily: 'inherit' }}>
+          Diff cut short here: it is too long to show in full. Undo still restores the whole file.
         </Box>
       )}
+    </Box>
+  )
+}
+
+/** The changed files grouped by folder: a folder line with its counts, its
+ * files under it. */
+function FileTree({ files, root, selected, onSelect }: { files: FileChange[]; root: string | null; selected: string | null; onSelect: (path: string) => void }) {
+  const theme = useTheme()
+  const [closed, setClosed] = useState<Set<string>>(new Set())
+  const groups = useMemo(() => {
+    const by = new Map<string, FileChange[]>()
+    for (const f of files) {
+      const rel = displayPath(f.path, root)
+      const slash = rel.lastIndexOf('/')
+      const dir = slash > 0 ? rel.slice(0, slash) : ''
+      by.set(dir, [...(by.get(dir) ?? []), f])
+    }
+    return [...by.entries()].sort(([a], [b]) => a.localeCompare(b))
+  }, [files, root])
+
+  return (
+    <Box sx={{ py: '8px' }}>
+      {groups.map(([dir, list]) => {
+        const open = !closed.has(dir)
+        const t = totals(list)
+        return (
+          <Box key={dir || '.'}>
+            {dir && (
+              <ButtonBase
+                onClick={() => setClosed((c) => { const n = new Set(c); if (n.has(dir)) n.delete(dir); else n.add(dir); return n })}
+                title={dir}
+                sx={{ display: 'flex', width: '100%', justifyContent: 'flex-start', gap: '6px', px: '12px', height: 30, color: 'text.secondary', '&:hover': { color: 'text.primary', bgcolor: 'action.hover' } }}
+              >
+                <Box sx={{ display: 'flex', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.12s', opacity: 0.7 }}>
+                  <ChevronRightLinear size={11} color="currentColor" />
+                </Box>
+                <FolderLinear size={14} color="currentColor" />
+                <Typography sx={{ flex: 1, minWidth: 0, textAlign: 'left', fontSize: '12px', fontWeight: 500, direction: 'rtl' }} noWrap>
+                  {dir}
+                </Typography>
+                <Counts additions={t.additions} deletions={t.deletions} />
+              </ButtonBase>
+            )}
+            {open &&
+              list.map((f) => {
+                const rel = displayPath(f.path, root)
+                const name = rel.slice(rel.lastIndexOf('/') + 1)
+                const active = f.path === selected
+                return (
+                  <ButtonBase
+                    key={f.path}
+                    onClick={() => onSelect(f.path)}
+                    aria-current={active ? 'true' : undefined}
+                    title={rel}
+                    sx={{
+                      display: 'flex',
+                      width: '100%',
+                      justifyContent: 'flex-start',
+                      gap: '8px',
+                      pl: dir ? '36px' : '12px',
+                      pr: '12px',
+                      height: 30,
+                      position: 'relative',
+                      bgcolor: active ? alpha(theme.palette.text.primary, 0.08) : 'transparent',
+                      opacity: f.status === 'unchanged' ? 0.55 : 1,
+                      '&::before': active ? { content: '""', position: 'absolute', left: 0, top: 6, bottom: 6, width: 2, borderRadius: 2, bgcolor: 'text.primary' } : {},
+                      '&:hover': { bgcolor: active ? alpha(theme.palette.text.primary, 0.1) : 'action.hover' },
+                    }}
+                  >
+                    <StatusMark status={f.status} />
+                    <Typography sx={{ flex: 1, minWidth: 0, textAlign: 'left', fontFamily: MONO, fontSize: '12px', fontWeight: active ? 600 : 400 }} noWrap>
+                      {name}
+                    </Typography>
+                    <Counts additions={f.additions} deletions={f.deletions} />
+                  </ButtonBase>
+                )
+              })}
+          </Box>
+        )
+      })}
     </Box>
   )
 }
@@ -160,7 +282,6 @@ export function ReviewPanel({
   /** Status after an undo, rendered in the toolbar. */
   note: React.ReactNode
 }) {
-  const theme = useTheme()
   const [maximized, setMaximized] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
 
@@ -196,24 +317,27 @@ export function ReviewPanel({
       <Stack sx={{ height: '100%', minHeight: 0 }}>
         <Stack
           direction="row"
-          sx={{ alignItems: 'center', gap: 1.5, px: 2, py: 1.25, borderBottom: 1, borderColor: 'divider', flexWrap: 'wrap' }}
+          sx={{ alignItems: 'center', gap: '12px', px: '20px', py: '14px', borderBottom: 1, borderColor: 'divider', flexWrap: 'wrap' }}
         >
-          <Typography sx={{ fontWeight: 700, fontSize: '0.9375rem' }}>Review changes</Typography>
-          <Typography variant="caption" color="text.secondary">
-            {changed.length} file{changed.length === 1 ? '' : 's'}
-          </Typography>
-          <Counts additions={additions} deletions={deletions} />
+          <Stack sx={{ gap: '2px' }}>
+            <Typography sx={{ fontWeight: 600, fontSize: '15px', lineHeight: 1.3 }}>Review changes</Typography>
+            <Stack direction="row" sx={{ alignItems: 'center', gap: '8px' }}>
+              <Typography sx={{ fontSize: '12px', color: 'text.secondary' }}>
+                {changed.length} file{changed.length === 1 ? '' : 's'} changed
+              </Typography>
+              <Counts additions={additions} deletions={deletions} />
+            </Stack>
+          </Stack>
           <Box sx={{ flex: 1 }} />
           {note}
           {!readOnly && (
             <Button
               size="small"
               color="error"
-              variant="outlined"
               startIcon={<UndoLinear size={13} color="currentColor" />}
               disabled={busy || undoable.length === 0}
               onClick={() => onUndo(undoable)}
-              sx={{ textTransform: 'none' }}
+              sx={{ textTransform: 'none', borderRadius: '8px', bgcolor: (t) => alpha(t.palette.error.main, 0.1), '&:hover': { bgcolor: (t) => alpha(t.palette.error.main, 0.18) } }}
             >
               Undo all
             </Button>
@@ -233,64 +357,26 @@ export function ReviewPanel({
         <Stack direction={{ xs: 'column', md: 'row' }} sx={{ flex: 1, minHeight: 0 }}>
           <Box
             sx={{
-              width: { xs: '100%', md: 300 },
+              width: { xs: '100%', md: 280 },
               maxHeight: { xs: 180, md: 'none' },
               flexShrink: 0,
               overflowY: 'auto',
               borderRight: { md: 1 },
               borderBottom: { xs: 1, md: 0 },
               borderColor: 'divider',
-              py: 0.5,
             }}
           >
-            {files.map((f) => {
-              const rel = displayPath(f.path, root)
-              const slash = rel.lastIndexOf('/')
-              const active = f.path === selected
-              return (
-                <ButtonBase
-                  key={f.path}
-                  onClick={() => setSelected(f.path)}
-                  aria-current={active ? 'true' : undefined}
-                  sx={{
-                    display: 'flex',
-                    width: '100%',
-                    alignItems: 'center',
-                    gap: 1,
-                    px: 1.5,
-                    py: 0.625,
-                    justifyContent: 'flex-start',
-                    textAlign: 'left',
-                    bgcolor: active ? alpha(theme.palette.primary.main, 0.12) : 'transparent',
-                    opacity: f.status === 'unchanged' ? 0.6 : 1,
-                    '&:hover': { bgcolor: active ? alpha(theme.palette.primary.main, 0.16) : 'action.hover' },
-                  }}
-                >
-                  <StatusMark status={f.status} />
-                  <Stack sx={{ minWidth: 0, flex: 1 }}>
-                    <Typography sx={{ fontFamily: MONO, fontSize: '0.75rem', fontWeight: 600 }} noWrap title={rel}>
-                      {rel.slice(slash + 1)}
-                    </Typography>
-                    {slash > 0 && (
-                      <Typography sx={{ fontFamily: MONO, fontSize: '0.6875rem', color: 'text.secondary' }} noWrap title={rel}>
-                        {rel.slice(0, slash)}
-                      </Typography>
-                    )}
-                  </Stack>
-                  <Counts additions={f.additions} deletions={f.deletions} />
-                </ButtonBase>
-              )
-            })}
+            <FileTree files={files} root={root} selected={selected} onSelect={setSelected} />
           </Box>
 
           <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0 }}>
             {file && (
               <Stack
                 direction="row"
-                sx={{ alignItems: 'center', gap: 1, px: 2, py: 0.75, borderBottom: 1, borderColor: 'divider' }}
+                sx={{ alignItems: 'center', gap: '10px', px: '16px', height: 44, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}
               >
                 <StatusMark status={file.status} />
-                <Typography sx={{ fontFamily: MONO, fontSize: '0.75rem', minWidth: 0, flex: 1 }} noWrap title={file.path}>
+                <Typography sx={{ fontFamily: MONO, fontSize: '12.5px', fontWeight: 500, minWidth: 0, flex: 1 }} noWrap title={file.path}>
                   {displayPath(file.path, root)}
                 </Typography>
                 {file.modifiedSince && (
