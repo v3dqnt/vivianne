@@ -2,13 +2,52 @@
   "fps": 30,
   "width": 1920,
   "height": 1080,
+  "captures": [
+    "chrome"
+  ],
   "scenes": [
-    { "id": "s1-intro", "src": "compositions/s1-intro.html", "duration": 7, "footage": "assets/footage/city.mp4" },
-    { "id": "s2-laptop", "src": "compositions/s2-laptop.html", "duration": 6, "footage": "assets/footage/laptop.mp4" },
-    { "id": "s3-agents", "src": "compositions/s3-agents.html", "duration": 17 },
-    { "id": "s4-title-work", "src": "compositions/title-card.html", "duration": 4, "variables": { "line": "Now let's get to work, shall we?" } },
-    { "id": "s5-code", "src": "compositions/s5-code.html", "duration": 18 },
-    { "id": "s6-title-buddies", "src": "compositions/title-card.html", "duration": 4, "variables": { "line": "Wanna destroy some bugs with your buddies?" } },
-    { "id": "s7-multiplayer", "src": "compositions/s7-multiplayer.html", "duration": 14 }
+    {
+      "id": "s1-intro",
+      "src": "compositions/s1-intro.html",
+      "duration": 7,
+      "footage": "assets/footage/city.mp4"
+    },
+    {
+      "id": "s2-laptop",
+      "src": "compositions/s2-laptop.html",
+      "duration": 6,
+      "footage": "assets/footage/laptop.mp4"
+    },
+    {
+      "id": "s3-agents",
+      "src": "compositions/s3-agents.html",
+      "duration": 17
+    },
+    {
+      "id": "s4-title-work",
+      "src": "compositions/title-card.html",
+      "duration": 4,
+      "variables": {
+        "line": "Now let's get to work, shall we?"
+      }
+    },
+    {
+      "id": "s5-code",
+      "src": "compositions/s5-code.html",
+      "duration": 18
+    },
+    {
+      "id": "s6-title-buddies",
+      "src": "compositions/title-card.html",
+      "duration": 4,
+      "variables": {
+        "line": "Wanna destroy some bugs with your buddies?"
+      }
+    },
+    {
+      "id": "s7-multiplayer",
+      "src": "compositions/s7-multiplayer.html",
+      "duration": 14
+    }
   ]
 }

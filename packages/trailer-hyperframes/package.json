@@ -10,6 +10,8 @@
     "dev": "npm run build && npx --yes hyperframes@0.9.2 preview",
     "check": "npm run build && npx --yes hyperframes@0.9.2 check",
     "snapshot": "npx --yes hyperframes@0.9.2 snapshot",
-    "render": "npm run build && npx --yes hyperframes@0.9.2 render -o out/vivianne-trailer.mp4"
+    "render": "npm run build && npx --yes hyperframes@0.9.2 render -o out/vivianne-trailer.mp4",
+    "tokens": "node scripts/tokens.mjs",
+    "capture": "node tools/capture/capture.cjs"
   }
 }

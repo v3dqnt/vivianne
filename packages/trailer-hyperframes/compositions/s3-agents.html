@@ -1,13 +1,12 @@
 <template id="s3-agents-template">
   <div data-composition-id="s3-agents" data-width="1920" data-height="1080" data-duration="17">
-    <div class="stub">s3-agents</div>
-    <style>
-      [data-composition-id="s3-agents"] .stub { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #0b0b0b; color: #fff; font: 600 64px sans-serif; }
-    </style>
+    <div class="app-stage"></div>
     <script>
       (() => {
+        const root = document.querySelector('[data-composition-id="s3-agents"]');
+        HF.mount(root.querySelector('.app-stage'), 'chrome-home');
         const tl = gsap.timeline({ paused: true });
-        tl.fromTo('[data-composition-id="s3-agents"] .stub', { opacity: 0 }, { opacity: 1, duration: 0.5 }, 0);
+        tl.fromTo(root.querySelector('.app-stage'), { opacity: 0.6 }, { opacity: 1, duration: 1 }, 0);
         window.__timelines = window.__timelines || {};
         window.__timelines["s3-agents"] = tl;
       })();

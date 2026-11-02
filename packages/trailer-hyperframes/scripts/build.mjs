@@ -45,6 +45,11 @@ export function buildIndex(manifest, { exists }) {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=${width}, height=${height}" />
     <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+    <link rel="stylesheet" href="assets/tokens.css" />
+    <link rel="stylesheet" href="assets/app.css" />
+    <script src="assets/motion.js"></script>
+    <script src="assets/story.js"></script>
+${(manifest.captures ?? []).map((c) => `    <script src="captures/${c}.js"></script>`).join('\n')}
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { width: ${width}px; height: ${height}px; overflow: hidden; background: #000; }
