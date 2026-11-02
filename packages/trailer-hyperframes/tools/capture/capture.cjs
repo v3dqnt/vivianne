@@ -65,6 +65,16 @@ async function snapshot(page) {
     // app showed.
     document.querySelectorAll('[data-cap-scroll]').forEach((n) => n.removeAttribute('data-cap-scroll'))
     for (const el of document.body.querySelectorAll('*')) if (el.scrollTop > 0 && el.firstElementChild) el.setAttribute('data-cap-scroll', String(Math.round(el.scrollTop)))
+    // Where things are, measured now with the app's real fonts, so scenes
+    // can aim the cursor and camera without measuring before fonts load.
+    document.querySelectorAll('[data-cap-rect]').forEach((n) => n.removeAttribute('data-cap-rect'))
+    const aim = 'button, textarea, input, li, .dv-tab, [role="menuitem"], [data-cap-item], [data-issue], [data-fix], [aria-label]'
+    for (const el of document.body.querySelectorAll('*')) {
+      const leafText = el.childElementCount <= 2 && el.textContent.trim().length > 0 && el.textContent.trim().length < 80
+      if (!el.matches(aim) && !leafText) continue
+      const r = el.getBoundingClientRect()
+      if (r.width && r.height) el.setAttribute('data-cap-rect', [r.left, r.top, r.width, r.height].map((v) => Math.round(v)).join(','))
+    }
     const body = document.body.cloneNode(true)
     // Inputs keep their typed value only as a property; make it markup.
     // (Before any pruning below, so live and cloned fields still pair up.)

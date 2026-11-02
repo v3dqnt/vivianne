@@ -60,5 +60,38 @@
     return box
   }
 
-  globalThis.HF = { rng, typeText, moveCursor, click, centerOf, mount }
+  /** Camera offset (transform-origin 0 0 on a 1920x1080 frame) that centres
+   * app point `p` (1600x900 app px) at `scale`, clamped so the frame edge
+   * never shows. */
+  function focusXY(p, scale) {
+    const clamp = (v, lo) => Math.min(0, Math.max(lo, v))
+    return {
+      x: clamp(960 - scale * p.x * 1.2, 1920 - 1920 * scale),
+      y: clamp(540 - scale * p.y * 1.2, 1080 - 1080 * scale),
+    }
+  }
+
+  /** Camera move to app point `p` at `scale` (scale 1 = the whole frame). */
+  function focus(tl, cam, p, at, scale = 1.6, dur = 0.6, ease = 'power3.inOut') {
+    tl.to(cam, { ...focusXY(p, scale), scale, duration: dur, ease }, at)
+    return at + dur
+  }
+
+  /** Centre of `el` in app px (1600x900). Prefers the rect the capture tool
+   * recorded with the app's real fonts (data-cap-rect="x,y,w,h"); otherwise
+   * measures with `layer` (a mounted capture) briefly shown. */
+  function at(layer, el) {
+    const rec = el.getAttribute && el.getAttribute('data-cap-rect')
+    if (rec) {
+      const [x, y, w, h] = rec.split(',').map(Number)
+      return { x: x + w / 2, y: y + h / 2 }
+    }
+    const was = layer.style.display
+    layer.style.display = 'block'
+    const r = el.getBoundingClientRect(), s = layer.getBoundingClientRect(), k = s.width / 1600
+    layer.style.display = was
+    return { x: (r.left - s.left + r.width / 2) / k, y: (r.top - s.top + r.height / 2) / k }
+  }
+
+  globalThis.HF = { rng, typeText, moveCursor, click, centerOf, mount, focusXY, focus, at }
 })()

@@ -51,13 +51,8 @@
         const q = (n, sel) => layer(n).querySelector(sel);
         const byText = (n, text) => [...layer(n).querySelectorAll('*')].find((e) => e.textContent.trim() === text && e.childElementCount <= 2);
         const items = (n) => { const l = q(n, '[data-cap-list]'); return l ? [...l.children] : []; };
-        const at = (n, el) => {
-          const ly = layer(n), was = ly.style.display;
-          ly.style.display = 'block';
-          const r = el.getBoundingClientRect(), s = ly.getBoundingClientRect(), k = s.width / 1600;
-          ly.style.display = was;
-          return { x: (r.left - s.left + r.width / 2) / k, y: (r.top - s.top + r.height / 2) / k };
-        };
+        // Centre of an element in app px, from the capture's real-font layout.
+        const at = (n, el) => HF.at(layer(n), el);
         const mainBox = (n) => q(n, 'textarea[placeholder="Do anything"]');
         const sendOf = (n) => { let c = mainBox(n); while (c && !c.querySelector('[aria-label^="Model:"]')) c = c.parentElement; const b = c.querySelectorAll('button'); return b[b.length - 1]; };
         // A chat row in the Multiplayer panel, found by its text.
@@ -132,9 +127,25 @@
         tl.to(cursor, { opacity: 0, duration: 0.3 }, t2 + 0.3);
 
         // Camera: steady drift; widen to hold both people's work at the end.
+        // Camera: in on every click, out for the invite card, onto Leo arriving
+        // in the Multiplayer chat, in on Sam's composer while he types, then wide.
         const cam = $('.cam');
-        tl.fromTo(cam, { scale: 1.0, x: 0, y: 0 }, { scale: 1.02, x: -10, y: -8, duration: t2, ease: 'none' }, 0);
-        tl.to(cam, { scale: 1.04, x: 960 - 1.04 * 960, y: 540 - 1.04 * 540, duration: 14 - t2, ease: 'power1.inOut' }, t2);
+        const Z = 1.7;
+        const leoIn = row('mp-live', 'in 🔥');
+        const chatP = leoIn ? at('mp-live', leoIn) : { x: 1390, y: 260 };
+        const boxP = at('mp-typing', box);
+        tl.set(cam, { x: 0, y: 0, scale: 1 }, 0);
+        HF.focus(tl, cam, P.plus, 0.2, 1.9, 0.8);
+        HF.focus(tl, cam, P.multi, 1.3, 1.6, 0.6);
+        HF.focus(tl, cam, P.copy, 2.4, Z, 0.6);
+        HF.focus(tl, cam, { x: 800, y: 450 }, 3.35, 1, 0.45, 'power2.out');
+        HF.focus(tl, cam, P.create, 6.0, 1.6, 0.6);
+        HF.focus(tl, cam, { x: 800, y: 450 }, 6.8, 1, 0.5, 'power2.out');
+        HF.focus(tl, cam, { x: chatP.x - 60, y: chatP.y + 80 }, 7.4, 1.6, 0.8);
+        HF.focus(tl, cam, { x: boxP.x - 200, y: boxP.y - 20 }, 8.6, 2.2, 0.6);
+        HF.focus(tl, cam, P.send, typed, 2.2, 0.45);
+        HF.focus(tl, cam, { x: 800, y: 450 }, t2 + 0.05, 1, 0.7, 'power3.out');
+        HF.focus(tl, cam, { x: 800, y: 450 }, t2 + 0.8, 1.04, 14.07 - t2 - 0.8, 'none');
         window.__timelines = window.__timelines || {};
         window.__timelines["s7-multiplayer"] = tl;
       })();

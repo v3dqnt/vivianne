@@ -42,3 +42,24 @@ test('mount injects a capture once and wraps it in the app scope', () => {
   assert.equal(box.innerHTML, '<div class="viv-app"><div class="viv-body"><p>hi</p></div></div>')
   assert.throws(() => globalThis.HF.mount(box, 'nope'), /nope/)
 })
+
+test('focusXY centres an app point at the given zoom', () => {
+  // app (800, 450) is stage (960, 540): already centred, so no shift.
+  assert.deepEqual(globalThis.HF.focusXY({ x: 800, y: 450 }, 2), { x: 960 - 2 * 960, y: 540 - 2 * 540 })
+})
+
+test('focusXY never shows past the frame edge', () => {
+  const top = globalThis.HF.focusXY({ x: 0, y: 0 }, 1.8)
+  assert.deepEqual(top, { x: 0, y: 0 })
+  const bottom = globalThis.HF.focusXY({ x: 1600, y: 900 }, 1.8)
+  assert.deepEqual(bottom, { x: 1920 - 1920 * 1.8, y: 1080 - 1080 * 1.8 })
+})
+
+test('focus at zoom 1 is the full frame', () => {
+  assert.deepEqual(globalThis.HF.focusXY({ x: 300, y: 700 }, 1), { x: 0, y: 0 })
+})
+
+test('at() uses the rect recorded at capture time (real fonts) when present', () => {
+  const el = { getAttribute: (k) => (k === 'data-cap-rect' ? '100,200,40,20' : null) }
+  assert.deepEqual(globalThis.HF.at(null, el), { x: 120, y: 210 })
+})
