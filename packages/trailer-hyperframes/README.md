@@ -65,7 +65,8 @@ markup and CSS (`captures/*.js`) and then animated. To re-capture after the
 app or the copy changes:
 
 ```bash
-npm install --workspace gui-next          # once, from the repo root
+npm install                               # once, from the repo root (gui-next deps + playwright)
+npx playwright install chromium           # once, if this machine has no Playwright browser
 (cd ../gui-next && npx vite --port 5199)  # in another terminal
 npm run capture -- agents                 # also: code, multiplayer, chrome
 npm run build

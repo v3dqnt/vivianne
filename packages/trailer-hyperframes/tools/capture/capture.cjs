@@ -6,7 +6,7 @@
 //   { init: [scripts injected before load], states: [{ name, run: async (page) => {} }] }
 // Each state is captured after its `run`, in order, into captures/<scenario>.js
 // as window.CAPTURES[<state name>] = { css, html }. The CSS is the page's
-// stylesheet with html/body/#root rewritten to .viv-app so it cannot leak.
+// stylesheet with every selector confined to .viv-app (see scope.cjs).
 const { chromium } = require('playwright')
 const fs = require('fs')
 const path = require('path')
@@ -16,13 +16,11 @@ const APP = process.env.APP_URL || 'http://localhost:5199/'
 const W = 1600
 const H = 900
 
+const { scopeSelector } = require('./scope.cjs')
+
 async function snapshot(page) {
-  return page.evaluate(() => {
-    const scope = (sel) =>
-      sel
-        .split(',')
-        .map((s) => s.trim().replace(/^(html|:root)(?=$|[\s>:.[])/, '.viv-app').replace(/^body(?=$|[\s>:.[])/, '.viv-body'))
-        .join(', ')
+  return page.evaluate((scopeSrc) => {
+    const scope = (0, eval)(`(${scopeSrc})`)
     const out = []
     for (const sheet of document.styleSheets) {
       let rules
@@ -54,8 +52,12 @@ async function snapshot(page) {
     for (const el of document.body.querySelectorAll('div')) {
       const mw = getComputedStyle(el).maxWidth
       if ((mw === '820px' || mw === '880px') && el.children.length && el.closest('[class*="dv-"]')) {
-        el.setAttribute('data-cap-list', '')
-        ;[...el.children].forEach((c, i) => c.setAttribute('data-cap-item', String(i)))
+        // Code chat wraps its transcript in single-child boxes; the list is
+        // the first box below them that actually holds the messages.
+        let list = el
+        while (list.children.length === 1 && list.firstElementChild.children.length >= 2) list = list.firstElementChild
+        list.setAttribute('data-cap-list', '')
+        ;[...list.children].forEach((c, i) => c.setAttribute('data-cap-item', String(i)))
       }
     }
     // Scroll offsets are not markup; bake each into the clone as a negative
@@ -64,24 +66,24 @@ async function snapshot(page) {
     document.querySelectorAll('[data-cap-scroll]').forEach((n) => n.removeAttribute('data-cap-scroll'))
     for (const el of document.body.querySelectorAll('*')) if (el.scrollTop > 0 && el.firstElementChild) el.setAttribute('data-cap-scroll', String(Math.round(el.scrollTop)))
     const body = document.body.cloneNode(true)
+    // Inputs keep their typed value only as a property; make it markup.
+    // (Before any pruning below, so live and cloned fields still pair up.)
+    const twins = body.querySelectorAll('textarea, input')
+    document.body.querySelectorAll('textarea, input').forEach((el, i) => {
+      if (el.tagName === 'TEXTAREA') twins[i].textContent = el.value
+      else twins[i].setAttribute('value', el.value)
+    })
     body.querySelectorAll('[data-cap-scroll]').forEach((n) => {
       const first = n.firstElementChild
       first.style.marginTop = `${(parseFloat(first.style.marginTop) || 0) - Number(n.getAttribute('data-cap-scroll'))}px`
     })
     body.querySelectorAll('[data-cap-drop]').forEach((n) => n.replaceChildren())
     body.querySelectorAll('script, noscript, iframe').forEach((n) => n.remove())
-    // Inputs keep their typed value only as a property; make it markup.
-    document.querySelectorAll('textarea, input').forEach((el, i) => {
-      const twin = body.querySelectorAll('textarea, input')[i]
-      if (!twin) return
-      if (el.tagName === 'TEXTAREA') twin.textContent = el.value
-      else twin.setAttribute('value', el.value)
-    })
     // The app's root font-size is the rem base; the trailer's page differs, so pin it.
     const base = parseFloat(getComputedStyle(document.documentElement).fontSize)
     const px = (t) => t.replace(/(-?[\d.]+)rem\b/g, (_, n) => `${+(n * base).toFixed(3)}px`)
     return { css: px([...new Set(out)].join('\n')), html: px(body.innerHTML) }
-  })
+  }, scopeSelector.toString())
 }
 
 ;(async () => {
