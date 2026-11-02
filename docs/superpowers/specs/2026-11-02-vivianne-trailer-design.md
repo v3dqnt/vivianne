@@ -8,7 +8,7 @@ later, so there is no end card and adding a scene must be a one-file change.
 
 ## Format
 - Project: `packages/trailer-hyperframes` (the Remotion `packages/trailer` is untouched).
-- 1920x1080, 30fps, about 56s for the current cut, rendered to `out/vivianne-trailer.mp4`.
+- 1920x1080, 30fps, about 70s for the current cut, rendered to `out/vivianne-trailer.mp4`.
 - Root `index.html` sequences one sub-composition per scene. A scene is
   registered in a single scene list (file, start, duration); adding one means
   adding a scene file and one list entry.
