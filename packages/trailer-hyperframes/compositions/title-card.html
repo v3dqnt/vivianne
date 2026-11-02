@@ -1,15 +1,33 @@
 <template id="title-card-template">
   <div data-composition-id="title-card" data-width="1920" data-height="1080" data-duration="4"
        data-composition-variables='[{"id":"line","type":"string","label":"Line","default":"Title"},{"id":"hasFootage","type":"boolean","label":"Has footage","default":false}]'>
-    <div class="stub"></div>
+    <div class="card"><div class="glow"></div><h1 class="line"></h1></div>
     <style>
-      [data-composition-id="title-card"] .stub { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #000; color: #fff; font: 600 64px sans-serif; }
+      [data-composition-id="title-card"] .card { position: absolute; inset: 0; background: #050505; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+      [data-composition-id="title-card"] .glow { position: absolute; left: 50%; top: 50%; width: 1400px; height: 700px; margin: -350px 0 0 -700px; background: radial-gradient(50% 50% at 50% 50%, rgba(255, 255, 255, 0.06), transparent 70%); }
+      [data-composition-id="title-card"] .line { position: relative; max-width: 1500px; margin: 0; padding: 0 60px; text-align: center; color: #f7f7f7; font: 500 104px/1.12 var(--font-display); letter-spacing: -0.035em; text-wrap: balance; }
+      [data-composition-id="title-card"] .w { display: inline-block; white-space: pre; }
     </style>
     <script>
       (() => {
+        // Each mount of this card gets its own copy of this script; take the
+        // newest card that has no words yet, so two cards never share one.
+        const cards = [...document.querySelectorAll('[data-composition-id="title-card"] .line')];
+        const el = cards.filter((c) => !c.childElementCount).pop() || cards[cards.length - 1];
         const { line } = window.__hyperframes.getVariables();
-        document.querySelectorAll('[data-composition-id="title-card"] .stub').forEach((el) => (el.textContent = line));
+        const words = String(line).split(' ');
+        el.innerHTML = '';
+        words.forEach((w, i) => {
+          const span = document.createElement('span');
+          span.className = 'w';
+          span.textContent = i < words.length - 1 ? w + ' ' : w;
+          el.appendChild(span);
+        });
         const tl = gsap.timeline({ paused: true });
+        const ws = el.querySelectorAll('.w');
+        tl.fromTo(ws, { opacity: 0, y: 26, filter: 'blur(14px)' }, { opacity: 1, y: 0, filter: 'blur(0px)', duration: 0.7, ease: 'power3.out', stagger: 0.11 }, 0.25);
+        tl.fromTo(el, { scale: 0.98 }, { scale: 1.03, duration: 4, ease: 'none' }, 0);
+        tl.to(ws, { opacity: 0, y: -16, filter: 'blur(10px)', duration: 0.4, ease: 'power2.in', stagger: 0.03 }, 3.4);
         window.__timelines = window.__timelines || {};
         window.__timelines["title-card"] = tl;
       })();

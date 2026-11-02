@@ -10,7 +10,7 @@ const manifest = {
     { id: 's1-intro', src: 'compositions/s1-intro.html', duration: 7, footage: 'assets/footage/city.mp4' },
     { id: 's2-laptop', src: 'compositions/s2-laptop.html', duration: 6, footage: 'assets/footage/laptop.mp4' },
     { id: 's3-agents', src: 'compositions/s3-agents.html', duration: 17 },
-    { id: 's4-title-work', src: 'compositions/title-card.html', duration: 4, variables: { line: "Now let's get to work, shall we?" } },
+    { id: 's4-title-work', src: 'compositions/title-card.html', duration: 4, variables: { line: "Now let’s get to work, shall we?" } },
     { id: 's5-code', src: 'compositions/s5-code.html', duration: 18 },
     { id: 's6-title-buddies', src: 'compositions/title-card.html', duration: 4, variables: { line: 'Wanna destroy some bugs with your buddies?' } },
     { id: 's7-multiplayer', src: 'compositions/s7-multiplayer.html', duration: 14 },
@@ -48,7 +48,7 @@ test('missing composition file throws naming the file', () => {
 
 test('title-card hosts carry their line', () => {
   const html = buildIndex(manifest, { exists: compsExist })
-  assert.match(hostTag(html, 's4-title-work'), /Now let&#39;s get to work, shall we\?/)
+  assert.match(hostTag(html, 's4-title-work'), /Now let’s get to work, shall we\?/)
   assert.match(hostTag(html, 's6-title-buddies'), /Wanna destroy some bugs with your buddies\?/)
 })
 
