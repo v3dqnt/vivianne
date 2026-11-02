@@ -1,0 +1,15 @@
+{
+  "name": "trailer-hyperframes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Vivianne product trailer, made with HyperFrames",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test 'scripts/*.test.mjs'",
+    "dev": "npm run build && npx --yes hyperframes@0.9.2 preview",
+    "check": "npm run build && npx --yes hyperframes@0.9.2 check",
+    "snapshot": "npx --yes hyperframes@0.9.2 snapshot",
+    "render": "npm run build && npx --yes hyperframes@0.9.2 render -o out/vivianne-trailer.mp4"
+  }
+}
