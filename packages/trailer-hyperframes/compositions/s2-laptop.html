@@ -1,43 +1,18 @@
 <template id="s2-laptop-template">
   <div data-composition-id="s2-laptop" data-width="1920" data-height="1080" data-duration="6"
-       data-composition-variables='[{"id":"hasFootage","type":"boolean","label":"Has footage","default":false},{"id":"screen","type":"string","label":"Screen capture","default":"chrome-home"}]'>
-    <!-- Placeholder room: shown until assets/footage/laptop.mp4 exists. -->
-    <div class="room">
-      <div class="wall"></div>
-      <div class="lamp"></div>
-      <div class="desk"></div>
-      <div class="spill"></div>
-      <div class="rig">
-        <div class="laptop">
-          <div class="lid"><div class="bezel"><div class="screen"><div class="screen-app"><div class="app-stage"></div></div><div class="screen-glare"></div></div></div></div>
-          <div class="base"></div>
-        </div>
-      </div>
-      <div class="person"><div class="head"></div><div class="shoulders"></div></div>
+       data-composition-variables='[{"id":"hasFootage","type":"boolean","label":"Has footage","default":false},{"id":"screen","type":"string","label":"Screen capture","default":"chrome-home"},{"id":"duration","type":"number","label":"Duration","default":6}]'>
+    <!-- Placeholder slate until assets/footage/laptop.mp4 exists. -->
+    <div class="slate">
+      <div class="slate-label">SHOT · he opens his laptop</div>
+      <div class="slate-path">assets/footage/laptop.mp4</div>
     </div>
-    <!-- The landing frame: the full-size app, identical to the next scene's first frame. -->
+    <!-- Into the screen: the full-size app, identical to the next scene's first frame. -->
     <div class="full app-layer"><div class="app-stage"></div></div>
     <style>
       [data-composition-id="s2-laptop"] { overflow: hidden; }
-      [data-composition-id="s2-laptop"] .room { position: absolute; inset: 0; transform-origin: 960px 526.125px; }
-      [data-composition-id="s2-laptop"] .wall { position: absolute; inset: 0; background: radial-gradient(70% 60% at 55% 35%, #1b1d24 0%, #0c0d11 55%, #050506 100%); }
-      [data-composition-id="s2-laptop"] .lamp { position: absolute; right: 160px; top: 0; width: 520px; height: 640px; background: radial-gradient(50% 50% at 50% 20%, rgba(255, 190, 120, 0.07), transparent 70%); }
-      [data-composition-id="s2-laptop"] .desk { position: absolute; left: -100px; right: -100px; top: 760px; bottom: -100px; background: linear-gradient(180deg, #2a2119 0%, #17120d 40%, #0a0806 100%); box-shadow: 0 -2px 0 rgba(255, 220, 180, 0.08); }
-      /* Laptop: lid hinged on its bottom edge, opening toward the camera. */
-      [data-composition-id="s2-laptop"] .rig { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; perspective: 1700px; perspective-origin: 960px 300px; }
-      [data-composition-id="s2-laptop"] .laptop { position: absolute; left: 640px; top: 250px; width: 640px; height: 520px; transform-style: preserve-3d; }
-      [data-composition-id="s2-laptop"] .lid { position: absolute; left: 0; bottom: 30px; width: 640px; height: 400px; transform-origin: 50% 100%; transform-style: preserve-3d; }
-      [data-composition-id="s2-laptop"] .bezel { position: absolute; inset: 0; border-radius: 16px 16px 4px 4px; background: #0b0b0d; box-shadow: 0 0 0 2px #2b2c31, 0 30px 60px rgba(0, 0, 0, 0.6); padding: 14px 14px 22px; backface-visibility: hidden; }
-      [data-composition-id="s2-laptop"] .screen { position: relative; width: 612px; height: 344.25px; overflow: hidden; border-radius: 4px; background: #000; }
-      [data-composition-id="s2-laptop"] .screen-app { position: absolute; left: 0; top: 0; width: 1600px; height: 900px; transform-origin: 0 0; transform: scale(0.3825); }
-      [data-composition-id="s2-laptop"] .screen-app .app-stage { transform: none; }
-      [data-composition-id="s2-laptop"] .screen-glare { position: absolute; inset: 0; background: linear-gradient(115deg, rgba(255, 255, 255, 0.07), transparent 40%); }
-      [data-composition-id="s2-laptop"] .base { position: absolute; left: -40px; bottom: 0; width: 720px; height: 30px; border-radius: 4px 4px 14px 14px; background: linear-gradient(180deg, #4a4c53, #26272b 60%, #151518); }
-      [data-composition-id="s2-laptop"] .spill { position: absolute; left: 520px; top: 120px; width: 880px; height: 760px; background: radial-gradient(50% 50% at 50% 45%, rgba(150, 170, 220, 0.18), transparent 70%); opacity: 0; }
-      /* Over-the-shoulder silhouette in the foreground. */
-      [data-composition-id="s2-laptop"] .person { position: absolute; left: 90px; top: 360px; width: 760px; height: 800px; }
-      [data-composition-id="s2-laptop"] .head { position: absolute; left: 260px; top: 0; width: 250px; height: 310px; border-radius: 48% 48% 44% 44%; background: radial-gradient(70% 60% at 85% 40%, #1c1f27, #07080a 70%); }
-      [data-composition-id="s2-laptop"] .shoulders { position: absolute; left: 0; top: 250px; width: 760px; height: 600px; border-radius: 48% 52% 0 0; background: radial-gradient(60% 40% at 80% 10%, #1a1d24, #060608 70%); }
+      [data-composition-id="s2-laptop"] .slate { position: absolute; inset: 40px; border: 2px dashed rgba(255, 255, 255, 0.18); border-radius: 24px; background: #0c0c0e; display: flex; flex-direction: column; justify-content: flex-end; padding: 36px 44px; gap: 6px; }
+      [data-composition-id="s2-laptop"] .slate-label { font: 500 26px/1 var(--font-ui); letter-spacing: 0.14em; text-transform: uppercase; color: rgba(255, 255, 255, 0.45); }
+      [data-composition-id="s2-laptop"] .slate-path { font: 400 20px/1 var(--font-mono); color: rgba(255, 255, 255, 0.3); }
       [data-composition-id="s2-laptop"] .full { opacity: 0; }
     </style>
     <script>
@@ -45,29 +20,12 @@
         const root = document.querySelector('[data-composition-id="s2-laptop"]');
         const $ = (s) => root.querySelector(s);
         const { hasFootage, screen } = window.__hyperframes.getVariables();
-        HF.mount($('.screen-app .app-stage'), screen);
         HF.mount($('.full .app-stage'), screen);
-        if (hasFootage) $('.room').style.display = 'none';
+        if (hasFootage) $('.slate').style.display = 'none';
 
+        // The camera goes into the laptop: the app frame zooms up out of the shot.
         const tl = gsap.timeline({ paused: true });
-        if (!hasFootage) {
-          // Lid opens; the screen wakes; light spills on the room.
-          tl.fromTo($('.room'), { scale: 1.06 }, { scale: 1, duration: 3.2, ease: 'power2.out' }, 0);
-          tl.fromTo($('.lid'), { rotationX: -86 }, { rotationX: 0, duration: 1.9, ease: 'power3.inOut' }, 0.4);
-          tl.fromTo($('.screen-app'), { opacity: 0 }, { opacity: 1, duration: 0.6, ease: 'power1.out' }, 1.9);
-          tl.fromTo($('.spill'), { opacity: 0 }, { opacity: 1, duration: 0.8 }, 1.9);
-          tl.fromTo($('.person'), { x: -40 }, { x: 0, duration: 3.2, ease: 'power2.out' }, 0);
-          // Push in past the shoulder until the screen fills the frame.
-          // Screen rect at rest: left 654, top 354, 612 x 344.25.
-          const k = 1920 / 612;
-          tl.to($('.person'), { x: -900, y: 300, scale: 1.4, opacity: 0, duration: 1.6, ease: 'power3.in' }, 3.4);
-          // Screen centre: x 640+14+306 = 960, y 250 + (520-30-400) + 14 + 172.125 = 526.125. Scale about it, then drop it 13.875px to the frame centre.
-          tl.to($('.room'), { scale: k, y: 540 - 526.125, duration: 2.0, ease: 'power3.inOut' }, 3.4);
-          tl.fromTo($('.full'), { opacity: 0 }, { opacity: 1, duration: 0.35, ease: 'none' }, 5.25);
-        } else {
-          // With real footage: the app frame zooms up out of the shot.
-          tl.fromTo($('.full'), { opacity: 0, scale: 0.4 }, { opacity: 1, scale: 1, duration: 1.8, ease: 'power3.inOut', transformOrigin: '50% 50%' }, 3.6);
-        }
+        tl.fromTo($('.full'), { opacity: 0, scale: 0.4 }, { opacity: 1, scale: 1, duration: 1.8, ease: 'power3.inOut', transformOrigin: '50% 50%' }, 3.6);
         window.__timelines = window.__timelines || {};
         window.__timelines["s2-laptop"] = tl;
       })();

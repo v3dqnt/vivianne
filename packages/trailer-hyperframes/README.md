@@ -5,8 +5,8 @@ The Vivianne product trailer, written as HTML and rendered to MP4 with
 
 | # | Scene | File | What happens |
 |---|---|---|---|
-| 1 | Intro | `compositions/s1-intro.html` | "Introducing Vivianne" over the city |
-| 2 | Laptop | `compositions/s2-laptop.html` | A laptop opens; the camera pushes into the app |
+| 1 | Intro | `compositions/s1-intro.html` | "Introducing Vivianne" over city b-roll (placeholder slate) |
+| 2 | Laptop | `compositions/s2-laptop.html` | Laptop shot (placeholder slate); the app zooms up out of it |
 | 3 | 24/7 agents | `compositions/s3-agents.html` | Ava, an always-on agent, briefs Sam on email, Slack and WhatsApp, and makes Maya's grocery list |
 | 4 | Title | `compositions/title-card.html` | "Now let's get to work, shall we?" |
 | 5 | Code mode | `compositions/s5-code.html` | New thread → Issues → #142 → prompt → Opus → send; subagents fix it |
@@ -28,14 +28,14 @@ npm run render     # → out/vivianne-trailer.mp4
 
 ## Swapping in real footage
 
-Scenes 1 and 2 have footage slots. Until a clip exists they draw a placeholder
-(a night city; a laptop opening over someone's shoulder). Drop in:
+Scenes 1 and 2 have footage slots. Until a clip exists they show a labelled
+placeholder slate. Drop in:
 
 - `assets/footage/city.mp4`: busy city b-roll, under "Introducing Vivianne"
 - `assets/footage/laptop.mp4`: a person opening their laptop
 
 then run `npm run build`. The clip is trimmed to its scene, plays muted, and
-the placeholder hides itself. The titles and the push into the app play over it.
+the slate hides itself. The title and the zoom into the app play over it.
 
 ## Adding a scene
 
