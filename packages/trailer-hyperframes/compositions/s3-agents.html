@@ -1,12 +1,70 @@
 <template id="s3-agents-template">
   <div data-composition-id="s3-agents" data-width="1920" data-height="1080" data-duration="17">
-    <div class="app-stage"></div>
+    <!-- One layer per captured state (captures/agents.js); the timeline cuts
+         between them and animates only what each state adds. -->
+    <div class="cam">
+      <div class="app-stage st" data-state="ag-0"></div>
+      <div class="app-stage st" data-state="ag-1"></div>
+      <div class="app-stage st" data-state="ag-2"></div>
+      <div class="app-stage st" data-state="ag-3"></div>
+      <div class="app-stage st" data-state="ag-4"></div>
+    </div>
+    <style>
+      [data-composition-id="s3-agents"] { overflow: hidden; background: var(--frame); }
+      [data-composition-id="s3-agents"] .cam { position: absolute; inset: 0; transform-origin: 0 0; }
+      /* display, not visibility: dockview panes force visibility:visible on themselves. */
+      [data-composition-id="s3-agents"] .st { display: none; }
+      [data-composition-id="s3-agents"] .st[data-state="ag-0"] { display: block; }
+    </style>
     <script>
       (() => {
         const root = document.querySelector('[data-composition-id="s3-agents"]');
-        HF.mount(root.querySelector('.app-stage'), 'chrome-home');
+        const layer = (name) => root.querySelector('.st[data-state="' + name + '"]');
+        const names = ['ag-0', 'ag-1', 'ag-2', 'ag-3', 'ag-4'];
+        names.forEach((n) => HF.mount(layer(n), n));
+        const items = (name) => layer(name).querySelector('[data-cap-list]').children;
+        const last = (name) => { const xs = items(name); return xs[xs.length - 1]; };
+        const S = window.STORY;
         const tl = gsap.timeline({ paused: true });
-        tl.fromTo(root.querySelector('.app-stage'), { opacity: 0.6 }, { opacity: 1, duration: 1 }, 0);
+        const cut = (name, at) => names.forEach((n) => tl.set(layer(n), { display: n === name ? 'block' : 'none' }, at));
+
+        // 0.5–2.1  Sam types his greeting into Ava's composer.
+        const box = layer('ag-0').querySelector('textarea');
+        box.textContent = '';
+        HF.typeText(tl, box, S.greeting, 0.5, 20);
+
+        // 2.3  Sent: his message lands, Ava starts working, her steps tick in.
+        cut('ag-1', 2.3);
+        const [mine, live] = items('ag-1');
+        tl.fromTo(mine, { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.35, ease: 'power2.out' }, 2.3);
+        tl.fromTo(live, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: 'power2.out' }, 2.7);
+        const rows = live.querySelectorAll('[class*="css-"] > div > div');
+        [...live.querySelectorAll('svg')].slice(-3).forEach((icon, i) => {
+          const row = icon.parentElement;
+          tl.fromTo(row, { opacity: 0, x: -8 }, { opacity: 1, x: 0, duration: 0.3, ease: 'power2.out' }, 2.95 + i * 0.5);
+        });
+
+        // 4.9  Her briefing streams in, top to bottom.
+        cut('ag-2', 4.9);
+        const brief = last('ag-2');
+        tl.fromTo(brief, { opacity: 0 }, { opacity: 1, duration: 0.25 }, 4.9);
+        tl.fromTo(brief, { clipPath: 'inset(0 0 100% 0)' }, { clipPath: 'inset(0 0 0% 0)', duration: 2.2, ease: 'none' }, 4.9);
+
+        // 8.4  WhatsApp from Maya: a "Needs you" card.
+        cut('ag-3', 8.4);
+        const needs = last('ag-3');
+        tl.fromTo(needs, { opacity: 0, y: 16, scale: 0.98 }, { opacity: 1, y: 0, scale: 1, duration: 0.45, ease: 'back.out(1.6)', transformOrigin: '0% 50%' }, 8.4);
+
+        // 10.8  Ava makes the grocery list, item by item.
+        cut('ag-4', 10.8);
+        const list = last('ag-4');
+        tl.fromTo(list, { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.35, ease: 'power2.out' }, 10.8);
+        [...list.querySelectorAll('li')].forEach((li, i) => tl.fromTo(li, { opacity: 0, x: -10 }, { opacity: 1, x: 0, duration: 0.3, ease: 'power2.out' }, 11.3 + i * 0.28));
+
+        // Camera: a slow drift, then a push toward the list to close the scene.
+        // The list sits around (600, 510) in app px → (720, 612) on the 1.2x stage.
+        tl.fromTo(root.querySelector('.cam'), { scale: 1, x: 0, y: 0 }, { scale: 1.02, x: -10, y: -6, duration: 12.6, ease: 'none' }, 0);
+        tl.to(root.querySelector('.cam'), { scale: 1.45, x: -0.45 * 720, y: -0.45 * 612, duration: 3.6, ease: 'power2.inOut' }, 13.2);
         window.__timelines = window.__timelines || {};
         window.__timelines["s3-agents"] = tl;
       })();

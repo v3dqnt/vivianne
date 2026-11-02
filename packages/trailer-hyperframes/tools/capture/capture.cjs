@@ -48,6 +48,16 @@ async function snapshot(page) {
       const r = el.getBoundingClientRect()
       if (r.width < 4 || r.height < 4) el.setAttribute('data-cap-drop', '')
     }
+    // Tag chat transcripts (bot chat: max-width 820px; code chat: 880px) and
+    // their items, so scenes can find "the newest message" without class hashes.
+    document.querySelectorAll('[data-cap-list]').forEach((n) => n.removeAttribute('data-cap-list'))
+    for (const el of document.body.querySelectorAll('div')) {
+      const mw = getComputedStyle(el).maxWidth
+      if ((mw === '820px' || mw === '880px') && el.children.length && el.closest('[class*="dv-"]')) {
+        el.setAttribute('data-cap-list', '')
+        ;[...el.children].forEach((c, i) => c.setAttribute('data-cap-item', String(i)))
+      }
+    }
     const body = document.body.cloneNode(true)
     body.querySelectorAll('[data-cap-drop]').forEach((n) => n.replaceChildren())
     body.querySelectorAll('script, noscript, iframe').forEach((n) => n.remove())
@@ -68,9 +78,13 @@ async function snapshot(page) {
 ;(async () => {
   const name = process.argv[2]
   if (!name) throw new Error('usage: capture.cjs <scenario>')
-  const scenario = require(path.join(__dirname, 'scenarios', `${name}.cjs`))
+  // Copy lives in assets/story.js (window.STORY); scenarios receive it.
+  const sandbox = { window: {} }
+  require('vm').runInNewContext(fs.readFileSync(path.join(ROOT, 'assets/story.js'), 'utf8'), sandbox)
+  const mod = require(path.join(__dirname, 'scenarios', `${name}.cjs`))
+  const scenario = typeof mod === 'function' ? mod(sandbox.window.STORY) : mod
   const browser = await chromium.launch()
-  const page = await browser.newPage({ viewport: { width: W, height: H } })
+  const page = await browser.newPage({ viewport: { width: W, height: H }, reducedMotion: 'reduce' })
   page.on('pageerror', (e) => console.log('pageerror:', e.message))
   await page.addInitScript({ path: path.join(__dirname, 'mock-ipc.js') })
   await page.addInitScript({ path: path.join(__dirname, 'demo-base.js') })

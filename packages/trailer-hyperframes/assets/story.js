@@ -3,6 +3,7 @@
 window.STORY = {
   user: 'Sam',
   agent: { name: 'Ava', role: 'Chief of staff' },
+  greeting: 'Morning Ava, what did I miss?',
   briefing: {
     intro: 'Morning, Sam. Here’s what came in overnight.',
     email: '3 emails need you: the Northwind contract is ready to sign, Priya moved Thursday’s review to 2pm, and your flight to Austin is confirmed.',

@@ -3,7 +3,8 @@
   "width": 1920,
   "height": 1080,
   "captures": [
-    "chrome"
+    "chrome",
+    "agents"
   ],
   "scenes": [
     {
@@ -16,7 +17,10 @@
       "id": "s2-laptop",
       "src": "compositions/s2-laptop.html",
       "duration": 6,
-      "footage": "assets/footage/laptop.mp4"
+      "footage": "assets/footage/laptop.mp4",
+      "variables": {
+        "screen": "ag-0"
+      }
     },
     {
       "id": "s3-agents",
