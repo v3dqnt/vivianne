@@ -4,7 +4,8 @@
   "height": 1080,
   "captures": [
     "chrome",
-    "agents"
+    "agents",
+    "code"
   ],
   "scenes": [
     {

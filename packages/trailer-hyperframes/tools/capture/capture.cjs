@@ -58,7 +58,16 @@ async function snapshot(page) {
         ;[...el.children].forEach((c, i) => c.setAttribute('data-cap-item', String(i)))
       }
     }
+    // Scroll offsets are not markup; bake each into the clone as a negative
+    // margin on the scrolled box's first child so the capture shows what the
+    // app showed.
+    document.querySelectorAll('[data-cap-scroll]').forEach((n) => n.removeAttribute('data-cap-scroll'))
+    for (const el of document.body.querySelectorAll('*')) if (el.scrollTop > 0 && el.firstElementChild) el.setAttribute('data-cap-scroll', String(Math.round(el.scrollTop)))
     const body = document.body.cloneNode(true)
+    body.querySelectorAll('[data-cap-scroll]').forEach((n) => {
+      const first = n.firstElementChild
+      first.style.marginTop = `${(parseFloat(first.style.marginTop) || 0) - Number(n.getAttribute('data-cap-scroll'))}px`
+    })
     body.querySelectorAll('[data-cap-drop]').forEach((n) => n.replaceChildren())
     body.querySelectorAll('script, noscript, iframe').forEach((n) => n.remove())
     // Inputs keep their typed value only as a property; make it markup.
@@ -96,7 +105,7 @@ async function snapshot(page) {
   for (const state of scenario.states) {
     await state.run(page)
     await page.waitForTimeout(400)
-    captures[state.name] = await snapshot(page)
+    if (!state.probe) captures[state.name] = await snapshot(page)
     await page.screenshot({ path: path.join(ROOT, `captures/ref/${state.name}.png`) })
     console.log('captured', state.name)
   }

@@ -1,13 +1,133 @@
 <template id="s5-code-template">
   <div data-composition-id="s5-code" data-width="1920" data-height="1080" data-duration="18">
-    <div class="stub">s5-code</div>
+    <!-- One layer per captured state (captures/code.js); the timeline cuts
+         between them, animates what each adds, and drives a cursor. -->
+    <div class="cam">
+      <div class="app-stage st" data-state="cm-0"></div>
+      <div class="app-stage st" data-state="cm-issues"></div>
+      <div class="app-stage st" data-state="cm-issue"></div>
+      <div class="app-stage st" data-state="cm-typed"></div>
+      <div class="app-stage st" data-state="cm-menu"></div>
+      <div class="app-stage st" data-state="cm-picked"></div>
+      <div class="app-stage st" data-state="cm-run-1"></div>
+      <div class="app-stage st" data-state="cm-run-2"></div>
+      <div class="app-stage st" data-state="cm-run-3"></div>
+      <div class="app-stage pointer-layer">
+        <div class="cursor">
+          <svg viewBox="0 0 22 22"><path d="M3 2l14.5 9.2-6.4 1.3 3.7 7.1-2.6 1.3-3.7-7.2L3.6 18z" fill="#fff" stroke="#111" stroke-width="1.2" stroke-linejoin="round"/></svg>
+          <div class="cursor-ring"></div>
+        </div>
+      </div>
+    </div>
     <style>
-      [data-composition-id="s5-code"] .stub { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #0b0b0b; color: #fff; font: 600 64px sans-serif; }
+      [data-composition-id="s5-code"] { overflow: hidden; background: var(--frame); }
+      [data-composition-id="s5-code"] .cam { position: absolute; inset: 0; transform-origin: 0 0; }
+      /* display, not visibility: dockview panes force visibility:visible on themselves. */
+      [data-composition-id="s5-code"] .st { display: none; }
+      [data-composition-id="s5-code"] .st[data-state="cm-0"] { display: block; }
+      [data-composition-id="s5-code"] .pointer-layer { pointer-events: none; overflow: visible; z-index: 5; }
     </style>
     <script>
       (() => {
+        const root = document.querySelector('[data-composition-id="s5-code"]');
+        const names = ['cm-0', 'cm-issues', 'cm-issue', 'cm-typed', 'cm-menu', 'cm-picked', 'cm-run-1', 'cm-run-2', 'cm-run-3'];
+        const layer = (n) => root.querySelector('.st[data-state="' + n + '"]');
+        names.forEach((n) => HF.mount(layer(n), n));
+        const S = window.STORY;
+        const q = (n, sel) => layer(n).querySelector(sel);
+        const byText = (n, text, tag) => [...layer(n).querySelectorAll(tag || '*')].find((e) => e.textContent.trim() === text);
+        const items = (n) => { const l = q(n, '[data-cap-list]'); return l ? [...l.children] : []; };
+
+        // Centre of `el` in app px, measured with its layer shown.
+        const at = (n, el) => {
+          const ly = layer(n), was = ly.style.display;
+          ly.style.display = 'block';
+          const r = el.getBoundingClientRect(), s = ly.getBoundingClientRect(), k = s.width / 1600;
+          ly.style.display = was;
+          return { x: (r.left - s.left + r.width / 2) / k, y: (r.top - s.top + r.height / 2) / k };
+        };
+        const composerOf = (n) => { let c = q(n, 'textarea'); while (c && !c.querySelector('[aria-label^="Model:"]')) c = c.parentElement; return c; };
+        const sendOf = (n) => { const b = composerOf(n).querySelectorAll('button'); return b[b.length - 1]; };
+
         const tl = gsap.timeline({ paused: true });
-        tl.fromTo('[data-composition-id="s5-code"] .stub', { opacity: 0 }, { opacity: 1, duration: 0.5 }, 0);
+        const cut = (name, t) => names.forEach((n) => tl.set(layer(n), { display: n === name ? 'block' : 'none' }, t));
+        const cursor = root.querySelector('.cursor');
+        const go = (p, t, d = 0.55) => { tl.to(cursor, { x: p.x, y: p.y, duration: d, ease: 'power2.inOut' }, t); return t + d; };
+        const press = (t) => HF.click(tl, cursor, t);
+
+        const P = {
+          newThread: at('cm-0', byText('cm-0', 'New thread', 'button') || byText('cm-0', 'New thread')),
+          issuesTab: at('cm-0', q('cm-0', '.dv-tab[data-tab-panel-id="issues"]')),
+          row: at('cm-issues', q('cm-issues', '[data-issue="142"]')),
+          fix: at('cm-issue', q('cm-issue', '[data-fix]')),
+          model: at('cm-typed', q('cm-typed', '[aria-label^="Model:"]')),
+          opus: at('cm-menu', [...layer('cm-menu').querySelectorAll('.ui-Menu-list *')].find((e) => e.childElementCount === 0 && e.textContent === S.model)),
+          send: at('cm-picked', sendOf('cm-picked')),
+        };
+
+        // 0.0  New thread.
+        tl.set(cursor, { x: 1180, y: 640 }, 0);
+        go(P.newThread, 0.2, 0.7); press(0.95);
+        tl.fromTo(q('cm-0', '[data-cap-list]') || layer('cm-0'), { opacity: 0.6 }, { opacity: 1, duration: 0.3 }, 1.0);
+
+        // 1.3  Issues tab → list.
+        go(P.issuesTab, 1.25); press(1.85);
+        cut('cm-issues', 1.95);
+        [...layer('cm-issues').querySelectorAll('[data-issue]')].forEach((r, i) => tl.fromTo(r, { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.3, ease: 'power2.out' }, 2.0 + i * 0.08));
+
+        // 2.5  Pick #142 → detail.
+        go(P.row, 2.45); press(3.05);
+        cut('cm-issue', 3.15);
+        tl.fromTo(q('cm-issue', '[data-issues-panel]'), { opacity: 0.4, x: 12 }, { opacity: 1, x: 0, duration: 0.3, ease: 'power2.out' }, 3.15);
+
+        // 3.6  Fix with Vivianne → Sam tells Vivianne what to do.
+        go(P.fix, 3.55); press(4.15);
+        const box = q('cm-issue', 'textarea');
+        box.textContent = '';
+        const typed = HF.typeText(tl, box, S.prompt, 4.4, 48);
+        cut('cm-typed', typed + 0.05);
+
+        // Pick the model.
+        const t1 = typed + 0.2;
+        go(P.model, t1); press(t1 + 0.6);
+        cut('cm-menu', t1 + 0.7);
+        tl.fromTo(q('cm-menu', '.ui-Menu-paper'), { opacity: 0, scale: 0.96, transformOrigin: '50% 100%' }, { opacity: 1, scale: 1, duration: 0.18, ease: 'power2.out' }, t1 + 0.7);
+        go(P.opus, t1 + 0.95); press(t1 + 1.55);
+        cut('cm-picked', t1 + 1.65);
+
+        // Send.
+        go(P.send, t1 + 1.8, 0.45); press(t1 + 2.3);
+        const t2 = t1 + 2.4;
+        cut('cm-run-1', t2);
+        const run1 = items('cm-run-1');
+        run1.forEach((el, i) => tl.fromTo(el, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.3, ease: 'power2.out' }, t2 + 0.15 + i * 0.35));
+        tl.to(cursor, { opacity: 0, duration: 0.3 }, t2 + 0.6);
+
+        // Subagents: their panel slides up, rows in one by one.
+        const subPanel = byText('cm-run-1', '3 subagents running');
+        if (subPanel) {
+          let p = subPanel; for (let i = 0; i < 3 && p.parentElement; i++) p = p.parentElement;
+          tl.fromTo(p, { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.4, ease: 'power2.out' }, t2 + 1.0);
+        }
+
+        // Work lands: the cause, the edit and its diff.
+        const t3 = t2 + 2.9;
+        cut('cm-run-2', t3);
+        const run2 = items('cm-run-2');
+        run2.slice(run1.length).forEach((el, i) => tl.fromTo(el, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.3, ease: 'power2.out' }, t3 + 0.1 + i * 0.3));
+
+        // Done: summary, tests pass, the issue closes.
+        const t4 = Math.min(t3 + 2.7, 16.0);
+        cut('cm-run-3', t4);
+        const run3 = items('cm-run-3');
+        const summary = run3[run3.length - 1];
+        if (summary) tl.fromTo(summary, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.35, ease: 'power2.out' }, t4 + 0.1);
+        tl.fromTo(q('cm-run-3', '[data-issues-panel]'), { opacity: 0.5 }, { opacity: 1, duration: 0.4 }, t4 + 0.4);
+
+        // Camera: steady drift; ease toward the chat while it works.
+        const cam = root.querySelector('.cam');
+        tl.fromTo(cam, { scale: 1, x: 0, y: 0 }, { scale: 1.015, x: -8, y: -6, duration: t2, ease: 'none' }, 0);
+        tl.to(cam, { scale: 1.07, x: 960 - 1.07 * 1010, y: 540 - 1.07 * 560, duration: 18 - t2, ease: 'power1.inOut' }, t2);
         window.__timelines = window.__timelines || {};
         window.__timelines["s5-code"] = tl;
       })();
