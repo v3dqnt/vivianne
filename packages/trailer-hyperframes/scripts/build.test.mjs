@@ -56,3 +56,27 @@ test('root duration is the sum of scene durations', () => {
   const html = buildIndex(manifest, { exists: compsExist })
   assert.match(hostTag(html, 'main'), /data-duration="70"/)
 })
+
+test('music: one audio clip spanning the whole cut, faded out', () => {
+  const html = buildIndex({ ...manifest, music: 'assets/audio/theme.mp3' }, { exists: () => true })
+  assert.equal(count(html, '<audio'), 1)
+  const audio = html.match(/<audio[^>]*>/)[0]
+  assert.match(audio, /src="assets\/audio\/theme.mp3"/)
+  assert.match(audio, /data-start="0"/)
+  assert.match(audio, /data-duration="70"/)
+  assert.match(audio, /data-fade-out="1.5"/)
+})
+
+test('no music configured: no audio clip', () => {
+  assert.equal(count(buildIndex(manifest, { exists: compsExist }), '<audio'), 0)
+})
+
+test('music file missing: build throws naming it', () => {
+  assert.throws(() => buildIndex({ ...manifest, music: 'assets/audio/nope.mp3' }, { exists: compsExist }), /assets\/audio\/nope\.mp3/)
+})
+
+test('every scene is told its own duration', () => {
+  const html = buildIndex(manifest, { exists: compsExist })
+  assert.match(hostTag(html, 's4-title-work'), /&quot;duration&quot;:4/)
+  assert.match(hostTag(html, 's5-code'), /&quot;duration&quot;:18/)
+})

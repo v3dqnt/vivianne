@@ -1,6 +1,6 @@
 <template id="title-card-template">
   <div data-composition-id="title-card" data-width="1920" data-height="1080" data-duration="4"
-       data-composition-variables='[{"id":"line","type":"string","label":"Line","default":"Title"},{"id":"hasFootage","type":"boolean","label":"Has footage","default":false}]'>
+       data-composition-variables='[{"id":"line","type":"string","label":"Line","default":"Title"},{"id":"hasFootage","type":"boolean","label":"Has footage","default":false},{"id":"duration","type":"number","label":"Duration","default":4}]'>
     <div class="card"><div class="glow"></div><h1 class="line"></h1></div>
     <style>
       [data-composition-id="title-card"] .card { position: absolute; inset: 0; background: #050505; display: flex; align-items: center; justify-content: center; overflow: hidden; }
@@ -14,7 +14,8 @@
         // newest card that has no words yet, so two cards never share one.
         const cards = [...document.querySelectorAll('[data-composition-id="title-card"] .line')];
         const el = cards.filter((c) => !c.childElementCount).pop() || cards[cards.length - 1];
-        const { line } = window.__hyperframes.getVariables();
+        const { line, duration } = window.__hyperframes.getVariables();
+        const end = Number(duration) || 4;
         const words = String(line).split(' ');
         el.innerHTML = '';
         words.forEach((w, i) => {
@@ -26,8 +27,8 @@
         const tl = gsap.timeline({ paused: true });
         const ws = el.querySelectorAll('.w');
         tl.fromTo(ws, { opacity: 0, y: 26, filter: 'blur(14px)' }, { opacity: 1, y: 0, filter: 'blur(0px)', duration: 0.7, ease: 'power3.out', stagger: 0.11 }, 0.25);
-        tl.fromTo(el, { scale: 0.98 }, { scale: 1.03, duration: 4, ease: 'none' }, 0);
-        tl.to(ws, { opacity: 0, y: -16, filter: 'blur(10px)', duration: 0.4, ease: 'power2.in', stagger: 0.03 }, 3.4);
+        tl.fromTo(el, { scale: 0.98 }, { scale: 1.03, duration: end, ease: 'none' }, 0);
+        tl.to(ws, { opacity: 0, y: -16, filter: 'blur(10px)', duration: 0.35, ease: 'power2.in', stagger: 0.025 }, end - 0.55);
         window.__timelines = window.__timelines || {};
         window.__timelines["title-card"] = tl;
       })();

@@ -2,6 +2,7 @@
   "fps": 30,
   "width": 1920,
   "height": 1080,
+  "music": "assets/audio/theme-cut.mp3",
   "captures": [
     "chrome",
     "agents",
@@ -12,13 +13,13 @@
     {
       "id": "s1-intro",
       "src": "compositions/s1-intro.html",
-      "duration": 7,
+      "duration": 6.77,
       "footage": "assets/footage/city.mp4"
     },
     {
       "id": "s2-laptop",
       "src": "compositions/s2-laptop.html",
-      "duration": 6,
+      "duration": 5.955,
       "footage": "assets/footage/laptop.mp4",
       "variables": {
         "screen": "ag-0"
@@ -27,12 +28,12 @@
     {
       "id": "s3-agents",
       "src": "compositions/s3-agents.html",
-      "duration": 17
+      "duration": 16.775
     },
     {
       "id": "s4-title-work",
       "src": "compositions/title-card.html",
-      "duration": 4,
+      "duration": 3.6,
       "variables": {
         "line": "Now let’s get to work, shall we?"
       }
@@ -40,12 +41,12 @@
     {
       "id": "s5-code",
       "src": "compositions/s5-code.html",
-      "duration": 18
+      "duration": 18.8
     },
     {
       "id": "s6-title-buddies",
       "src": "compositions/title-card.html",
-      "duration": 4,
+      "duration": 4.03,
       "variables": {
         "line": "Wanna destroy some bugs with your buddies?"
       }
@@ -53,7 +54,7 @@
     {
       "id": "s7-multiplayer",
       "src": "compositions/s7-multiplayer.html",
-      "duration": 14
+      "duration": 14.07
     }
   ]
 }
