@@ -95,6 +95,7 @@ async function snapshot(page) {
   const browser = await chromium.launch()
   const page = await browser.newPage({ viewport: { width: W, height: H }, reducedMotion: 'reduce' })
   page.on('pageerror', (e) => console.log('pageerror:', e.message))
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: APP })
   await page.addInitScript({ path: path.join(__dirname, 'mock-ipc.js') })
   await page.addInitScript({ path: path.join(__dirname, 'demo-base.js') })
   for (const s of scenario.init || []) await page.addInitScript(s)

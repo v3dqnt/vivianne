@@ -31,10 +31,11 @@ window.STORY = {
   ],
   fixSummary: 'Fixed #142. Safari never fired the button’s click because an invisible overlay sat above it on touch devices. I removed the overlay’s pointer capture, added a WebKit regression test, and all 48 tests pass.',
   elapsed: '3m 12s',
-  invite: { url: 'https://viv.sh/join/northwind-7Kq2', friendName: 'Leo' },
+  // Invites are the app's own `vivianne-invite:` codes (see gui-next multiplayer/lib/invite.ts).
+  invite: { friendName: 'Leo', sentWith: 'Join me on northwind-site 👇' },
   collabPrompts: [
-    { who: 'Sam', text: 'Leo, can you take the footer overlap (#139)? I’ll do dark mode.' },
-    { who: 'Leo', text: 'On it. @Vivianne fix the footer links overlapping on small screens.' },
-    { who: 'Sam', text: '@Vivianne add dark mode to the pricing page, match the site theme.' },
+    { who: 'Sam', text: 'Can you take the footer overlap (#139)? I’ll do dark mode.' },
+    { who: 'Leo', text: 'On it, got Vivianne on the footer 🛠️' },
+    { who: 'Sam', text: 'Add dark mode to the pricing page (#137), matching the site theme.' },
   ],
 }
