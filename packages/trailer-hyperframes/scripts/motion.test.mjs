@@ -31,7 +31,7 @@ test('mount injects a capture once and wraps it in the app scope', () => {
   globalThis.document = {
     head: { appendChild: (n) => appended.push(n) },
     createElement: (tag) => ({ tag, dataset: {}, textContent: '' }),
-    querySelector: (sel) => appended.find((n) => sel === `style[data-capture="${n.dataset.capture}"]`) ?? null,
+    querySelectorAll: (sel) => (sel === 'style[data-capture]' ? appended : []),
   }
   globalThis.CAPTURES = { home: { css: '.a{}', html: '<p>hi</p>' } }
   const box = { innerHTML: '' }

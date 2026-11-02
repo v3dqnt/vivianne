@@ -49,7 +49,8 @@
   function mount(box, name) {
     const cap = (globalThis.CAPTURES || {})[name]
     if (!cap) throw new Error(`capture not loaded: ${name}`)
-    if (!document.querySelector(`style[data-capture="${name}"]`)) {
+    const loaded = [...document.querySelectorAll('style[data-capture]')].some((n) => n.dataset.capture === name)
+    if (!loaded) {
       const style = document.createElement('style')
       style.dataset.capture = name
       style.textContent = cap.css

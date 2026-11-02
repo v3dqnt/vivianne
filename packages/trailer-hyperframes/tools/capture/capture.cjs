@@ -41,7 +41,15 @@ async function snapshot(page) {
         }
       }
     }
+    // A collapsed dock group (dockview keeps it ~0px tall) still holds its
+    // panel, overflowing under the next pane; it never shows, so drop it.
+    document.querySelectorAll('[data-cap-drop]').forEach((n) => n.removeAttribute('data-cap-drop'))
+    for (const el of document.body.querySelectorAll('.dv-groupview')) {
+      const r = el.getBoundingClientRect()
+      if (r.width < 4 || r.height < 4) el.setAttribute('data-cap-drop', '')
+    }
     const body = document.body.cloneNode(true)
+    body.querySelectorAll('[data-cap-drop]').forEach((n) => n.replaceChildren())
     body.querySelectorAll('script, noscript, iframe').forEach((n) => n.remove())
     // Inputs keep their typed value only as a property; make it markup.
     document.querySelectorAll('textarea, input').forEach((el, i) => {
