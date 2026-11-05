@@ -300,6 +300,7 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::runtime::commands::cmd_write_text_file,
       crate::agent::runtime::commands::cmd_read_file_raw,
       crate::agent::runtime::commands::cmd_load_session,
+      crate::agent::runtime::commands::cmd_thread_release,
       crate::agent::runtime::commands::cmd_save_current_session,
       crate::agent::runtime::commands::cmd_rename_session,
       crate::agent::runtime::commands::cmd_new_session,

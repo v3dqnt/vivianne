@@ -201,7 +201,6 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
         return
       }
       setActiveThread(PRIMARY_THREAD_ID)
-      forget(PRIMARY_THREAD_ID)
       const opened = await call<OpenedConversation>('cmd_open_conversation', { scope })
       if (!opened) return
       set({ scope, todayId: opened.id, viewing: null, earlier: [], earlierStart: 0, threads: [] })
@@ -278,7 +277,7 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
 
   deleteThread: async (id) => {
     await get().closeTab(id)
-    holders.delete(id)
+    await letGo(id)
     await call('cmd_delete_session', { id }).catch(() => undefined)
     await get().refreshThreads()
   },
@@ -325,17 +324,15 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
     const rest = tabs.filter((t) => t !== id)
     setTabs(rest)
     // A thread nothing was ever said in leaves nothing behind.
-    const holder = holders.get(id)
-    const state = holder === undefined ? null : agentStoreFor(holder).getState()
+    const state = opened.has(id) ? agentStoreFor(id).getState() : null
     const blank = !!state && !state.isBusy && state.messages.length === 0 && !useProjectsStore.getState().sessionProjectMap[id]
     if (todayId === id) {
       const next = rest[at] ?? rest[at - 1]
       await (next ? get().focusThread(next) : get().newBlankThread())
     }
-    if (blank) {
-      holders.delete(id)
-      await call('cmd_delete_session', { id }).catch(() => undefined)
-    }
+    if (blank) await call('cmd_delete_session', { id }).catch(() => undefined)
+    // Closed and idle: free it. A running one keeps going and stays reachable.
+    if (state && !state.isBusy) await letGo(id)
   },
 }))
 
@@ -370,30 +367,25 @@ function remember(id: string | null, messages: AgentMessage[]) {
   if (recent.size > RECENT_MAX) recent.delete(recent.keys().next().value!)
 }
 
-/** Which agent thread holds each open thread (session id -> thread id). A
- * thread runs on the one on screen unless that one is mid-turn; then it gets
- * its own (`s:<id>`) and the busy one keeps going. */
-const holders = new Map<string, string>()
+/** Threads open in this window. A thread's agent is keyed by its session id,
+ * so threads run side by side and switching never disturbs a running one. */
+const opened = new Set<string>()
 /** The agent thread a session is open on, if it is open. */
-export const holderOf = (sessionId: string) => holders.get(sessionId)
-function forget(threadId: string) {
-  for (const [session, holder] of holders) if (holder === threadId) holders.delete(session)
-}
+export const holderOf = (sessionId: string) => (opened.has(sessionId) ? sessionId : undefined)
 
-/** The agent thread to open a session on: the one on screen, or `beside`
- * while that one is busy. Whatever it held before is let go. */
-function placeFor(beside: string): string {
-  const here = activeThreadId()
-  const thread = agentStoreFor(here).getState().isBusy ? beside : here
-  forget(thread)
-  return thread
+/** Free a closed thread, unless it is still running. */
+async function letGo(id: string) {
+  const freed = await call<boolean>('cmd_thread_release', { threadId: id }).catch(() => false)
+  if (!freed) return
+  opened.delete(id)
+  agentStoreFor(id).setState({ messages: [], streamingIndex: null })
 }
 
 /** Put a session's thread on screen. `fresh`: it was just loaded, so it
  * needs the scope's workspace (an already-open one has it). */
-async function show(sessionId: string, threadId: string, fresh: boolean) {
-  holders.set(sessionId, threadId)
-  setActiveThread(threadId)
+async function show(sessionId: string, fresh: boolean) {
+  opened.add(sessionId)
+  setActiveThread(sessionId)
   useDaysStore.setState({ todayId: sessionId, viewing: null, earlier: [], earlierStart: 0 })
   const { tabs } = useDaysStore.getState()
   if (!tabs.includes(sessionId)) setTabs([...tabs, sessionId])
@@ -403,33 +395,25 @@ async function show(sessionId: string, threadId: string, fresh: boolean) {
 }
 
 async function loadThread(id: string) {
-  const holder = holders.get(id)
-  if (holder !== undefined) return show(id, holder, false) // already open, maybe still running
+  if (opened.has(id)) return show(id, false) // already open, maybe still running
   remember(useDaysStore.getState().todayId, useAgentStore.getState().messages)
-  const thread = placeFor(`s:${id}`)
   const cached = recent.get(id)
-  if (cached) agentStoreFor(thread).setState({ messages: cached, streamingIndex: null })
-  await call('cmd_load_session', { id, threadId: thread })
-  await show(id, thread, true)
+  if (cached) agentStoreFor(id).setState({ messages: cached, streamingIndex: null })
+  await call('cmd_load_session', { id, threadId: id, inheritFrom: activeThreadId() })
+  await show(id, true)
 }
 
 async function createThread() {
-  let thread = placeFor(`s:new-${Date.now()}`)
-  let id = await call<string>('cmd_new_session', { threadId: thread })
+  const { todayId, scope } = useDaysStore.getState()
+  const projects = useProjectsStore.getState()
+  // Already on a thread nothing was said in: use it, rather than leave a dead one behind.
+  const here = todayId && opened.has(todayId) ? agentStoreFor(todayId).getState() : null
+  const reuse = !!here && !here.isBusy && here.messages.length === 0 && !projects.sessionProjectMap[todayId!]
+  const id = reuse ? todayId! : await call<string>('cmd_new_session', { threadId: `session_${Date.now()}`, inheritFrom: activeThreadId() })
   if (!id) return
-  // The backend hands back the session an empty agent thread already holds. That
-  // is only "blank" if nothing was ever saved in it; after a reload it can be a
-  // real thread not yet loaded, so start on an agent thread of its own instead.
-  const saved = await call<AgentMessage[]>('cmd_read_session_messages', { id }).catch(() => null)
-  if (saved?.length) {
-    thread = `s:new-${Date.now()}`
-    id = await call<string>('cmd_new_session', { threadId: thread })
-    if (!id) return
-  }
   // A project's thread belongs to it.
-  const scope = useDaysStore.getState().scope
-  if (scope && scope !== GENERAL_SCOPE) await useProjectsStore.getState().assign(id, scope)
-  await show(id, thread, true)
+  if (scope && scope !== GENERAL_SCOPE) await projects.assign(id, scope)
+  await show(id, true)
   await useDaysStore.getState().refreshThreads()
 }
 

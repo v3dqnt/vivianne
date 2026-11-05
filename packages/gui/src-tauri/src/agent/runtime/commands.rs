@@ -101,6 +101,36 @@ impl AgentRegistry {
             }
         }
     }
+
+    /// The thread `thread_id`, taking settings from `parent` if this call creates it.
+    async fn resolve_from(&self, thread_id: Option<&str>, parent: Option<&str>) -> Arc<AppState> {
+        let existed = match thread_id {
+            None | Some("") => true,
+            Some(id) => self.extra.lock().await.contains_key(id),
+        };
+        let state = self.resolve(thread_id).await;
+        if !existed && parent.is_some_and(|p| Some(p) != thread_id) {
+            let parent = self.resolve(parent).await;
+            state.agent_state.inherit_from(&parent.agent_state).await;
+        }
+        state
+    }
+
+    /// Free an idle thread's memory; its session stays on disk and reopens later.
+    /// A running thread, or the primary, stays. Returns whether it was freed.
+    pub async fn release(&self, thread_id: &str) -> bool {
+        let mut extra = self.extra.lock().await;
+        match extra.get(thread_id) {
+            Some(state) if state.is_idle() => extra.remove(thread_id).is_some(),
+            _ => false,
+        }
+    }
+}
+
+/// Free a thread that is no longer open. See `AgentRegistry::release`.
+#[tauri::command]
+pub async fn cmd_thread_release(#[allow(non_snake_case)] threadId: String, registry: State<'_, AgentRegistry>) -> Result<bool, String> {
+    Ok(registry.release(&threadId).await)
 }
 
 /// A single image attached to a user prompt (frontend sends base64 + MIME type).
@@ -1684,6 +1714,7 @@ pub async fn cmd_delete_session(
     }
 
     state.close_if_open(&id).await;
+    registry.release(&id).await;
     crate::agent::sessions::title::forget(&id);
     Ok(())
 }
@@ -1724,9 +1755,15 @@ pub async fn cmd_read_file_raw(path: String) -> Result<String, String> {
 pub async fn cmd_load_session(
     id: String,
     #[allow(non_snake_case)] threadId: Option<String>,
+    #[allow(non_snake_case)] inheritFrom: Option<String>,
     registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
-    let state = registry.resolve(threadId.as_deref()).await;
+    let state = registry.resolve_from(threadId.as_deref(), inheritFrom.as_deref()).await;
+    // Already open here, maybe mid-turn (the window reloaded): reading the file
+    // again would replace the live transcript with an older one.
+    if state.is_session(&id).await {
+        return Ok(());
+    }
     let dir = get_session_dir()?;
     let path = dir.join(format!("{}.json", id));
     if !path.exists() {
@@ -1873,9 +1910,10 @@ async fn save_current_session_impl(name: Option<String>, state: &Arc<AppState>) 
 #[tauri::command]
 pub async fn cmd_new_session(
     #[allow(non_snake_case)] threadId: Option<String>,
+    #[allow(non_snake_case)] inheritFrom: Option<String>,
     registry: State<'_, AgentRegistry>,
 ) -> Result<String, String> {
-    let state = registry.resolve(threadId.as_deref()).await;
+    let state = registry.resolve_from(threadId.as_deref(), inheritFrom.as_deref()).await;
 
     // Already sitting on an untouched new thread? Reuse it. Without this,
     // every click writes another empty session file — clicking the button a
@@ -1885,10 +1923,11 @@ pub async fn cmd_new_session(
         return Ok(existing);
     }
 
-    let s_id = format!(
-        "session_{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()
-    );
+    // A thread named after its session keeps that id, so the two are one identity.
+    let s_id = match threadId.as_deref() {
+        Some(id) if id.starts_with("session_") => id.to_string(),
+        _ => format!("session_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()),
+    };
     // See `cmd_load_session`: a thread must not write into a project
     // conversation's archive, so it starts with none.
     state.start_fresh(&s_id, Vec::new(), None).await;
@@ -3177,5 +3216,34 @@ mod git_checkout_tests {
         // Nothing by that name anywhere.
         assert!(cmd_git_checkout(r.clone(), "nope".into(), None, None).await.is_err());
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod thread_release_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_thread_id_is_one_state_and_an_idle_one_can_be_freed() {
+        let registry = AgentRegistry::new(Arc::new(AppState::default()));
+        let a = registry.resolve(Some("session_a")).await;
+        let b = registry.resolve(Some("session_b")).await;
+        assert!(!Arc::ptr_eq(&a, &b));
+        assert!(Arc::ptr_eq(&a, &registry.resolve(Some("session_a")).await));
+        assert!(Arc::ptr_eq(&registry.resolve(None).await, &registry.resolve(Some("")).await));
+        assert!(registry.release("session_a").await);
+        assert!(!Arc::ptr_eq(&a, &registry.resolve(Some("session_a")).await), "reopened fresh");
+        assert!(!registry.release("").await, "the primary stays");
+        assert!(!registry.release("never-opened").await);
+    }
+
+    #[tokio::test]
+    async fn a_running_thread_is_not_freed() {
+        let registry = AgentRegistry::new(Arc::new(AppState::default()));
+        let a = registry.resolve(Some("session_a")).await;
+        let running = a.agent.lock().await;
+        assert!(!registry.release("session_a").await);
+        drop(running);
+        assert!(registry.release("session_a").await);
     }
 }

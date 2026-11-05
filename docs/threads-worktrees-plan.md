@@ -262,7 +262,7 @@ So B4.1 changes (below), and a new Phase B7 is added. Nothing else in the plan m
 |---|---|
 | A1 Sidebar and icon | done: banner header, icon-only new chat (the existing Mod+Shift+N shortcut stays), focus ring, empty state; verified in the app |
 | A2 Banner | done: field and commands (4 Rust tests), header and menu, picker with 8 presets, upload resized to 960x320 JPEG and stored as a file; verified in the app end to end |
-| B1 Thread identity | not started |
+| B1 Thread identity | B1.1 and B1.2 done (registry tests; two threads run at once and stop independently, checked in the app). B1.3 partly: agent stores are per session; `TeamRoom` still writes foreign `setState`s; older single-conversation projects stay on the primary |
 | B2 Titles | built: `sessions/title.rs` (8 tests), `title_source` on sessions, rename now sticks, title asked for alongside the first message; live check below |
 | B3 Worktrees | B3.1 done: `sessions/thread_worktree.rs` (6 tests on real temp repos: create, find again, collisions, project inside a repo, non-repo/empty repo, remove keeps dirty or unmerged work). B3.2 and B3.3 wait on B1.2, as planned |
 | B4 Messaging | not started |
