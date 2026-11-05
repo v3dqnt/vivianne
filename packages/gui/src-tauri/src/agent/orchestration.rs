@@ -65,6 +65,23 @@ const MIGRATIONS: &[&str] = &["
         pruned_to INTEGER NOT NULL
     );
     INSERT INTO event_log_state (id, pruned_to) VALUES (1, 0);
+", "
+    CREATE TABLE transcript_items (
+        session_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        at_ms INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        json TEXT NOT NULL,
+        PRIMARY KEY (session_id, ordinal)
+    ) WITHOUT ROWID;
+    CREATE TABLE transcript_sources (
+        session_id TEXT PRIMARY KEY,
+        file_len INTEGER NOT NULL,
+        file_mtime_ms INTEGER NOT NULL,
+        items INTEGER NOT NULL
+    );
+    CREATE VIRTUAL TABLE transcript_fts USING fts5(text, session_id UNINDEXED, ordinal UNINDEXED);
 "];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +149,10 @@ pub struct Store {
 }
 
 impl Store {
+    pub(crate) fn conn(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
+
     pub fn open(path: &Path) -> Result<Self, String> {
         let conn = Connection::open(path).map_err(err)?;
         conn.pragma_update(None, "journal_mode", "WAL").map_err(err)?;
@@ -325,7 +346,7 @@ fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-fn with_store<T>(f: impl FnOnce(&mut Store) -> Result<T, String>) -> Result<T, String> {
+pub(crate) fn with_store<T>(f: impl FnOnce(&mut Store) -> Result<T, String>) -> Result<T, String> {
     let cell = STORE.get_or_init(|| {
         let path = crate::agent::system::paths::viv_home_path(&["agent", "orchestration.db"]);
         if let Some(dir) = path.parent() {
@@ -377,6 +398,12 @@ pub async fn start(app: tauri::AppHandle) {
         }
         Err(e) => log::warn!("[orchestration] couldn't reconcile: {e}"),
     }
+    // Copy transcripts in, off the startup path. Session files stay the source of truth.
+    tokio::task::spawn_blocking(|| match crate::agent::transcripts::import_all() {
+        Ok(r) if r.imported > 0 => log::info!("[transcripts] imported {} sessions ({} unchanged, {} failed)", r.imported, r.unchanged, r.failed),
+        Ok(_) => {}
+        Err(e) => log::warn!("[transcripts] import failed: {e}"),
+    });
 }
 
 /// The light list behind tabs and Home.

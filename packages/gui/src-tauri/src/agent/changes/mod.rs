@@ -3,4 +3,5 @@
 
 pub mod checkpoints;
 pub mod git;
+pub mod git_checkpoints;
 pub mod review;
