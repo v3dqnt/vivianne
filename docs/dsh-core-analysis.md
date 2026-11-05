@@ -40,7 +40,7 @@ Four ideas carry it: event sourcing, a swappable driver behind a public `Agent` 
 | Arguments checked against the schema before running | None found: tools received raw arguments | missing, **built**: `tools/arg_check.rs` |
 | allow/deny/ask pipeline | `tools/exec.rs` verdicts, hooks (`runtime/hooks.rs`), bot policy, approvals | same |
 | Parallel-safe batches with ordered results | `FAST_PATH_PARALLELISM` for read-only tools in `exec.rs` | same |
-| Cooperative per-tool timeouts | Only particular tools (approval waits, bash); no general ceiling | missing, not built (see below) |
+| Cooperative per-tool timeouts | `tools/timeouts.rs`: ceilings on the read-only tools, `toolTimeouts` setting | built |
 | Tool presentation intents | The frontend tool cards (`ToolCallCard.tsx`) decide this themselves | partial |
 | PTC (`run_code` over an SDK) | `tools/ptc.rs`, `run_script`, `run_native` | same |
 | Durable inbox (nextTurn / nextStep) | Steering and follow-up queues exist in memory; they don't survive a restart | partial, not built (a separate rebuild is already planned) |

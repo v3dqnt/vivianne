@@ -40,6 +40,12 @@ struct AgentStateInner {
     pending_tool_calls: Vec<String>,
     error_message: Option<String>,
     compaction_enabled: bool,
+    /// Tools and cache key of the last request: a compaction summary replays the
+    /// conversation with exactly these, so the provider's prompt cache still hits.
+    request_tools: Vec<serde_json::Value>,
+    request_source: String,
+    /// The session this agent is saved as, for events about it.
+    session_tag: Option<String>,
     reserve_tokens: u32,
     keep_recent_tokens: u32,
     /// Whether compaction tries an LLM-authored structured summary
@@ -142,6 +148,9 @@ impl AgentState {
                 pending_tool_calls: Vec::new(),
                 error_message: None,
                 compaction_enabled: true,
+                request_tools: Vec::new(),
+                request_source: String::new(),
+                session_tag: None,
                 // 0 = derive from the selected model's context window (see
                 // `loop_core::context_budgets`). A non-zero value is an
                 // explicit override set in Settings.
@@ -219,6 +228,25 @@ impl AgentState {
 
     pub async fn keep_recent_tokens(&self) -> u32 {
         self.inner.read().await.keep_recent_tokens
+    }
+
+    pub async fn set_request_prefix(&self, tools: Vec<serde_json::Value>, source: &str) {
+        let mut inner = self.inner.write().await;
+        inner.request_tools = tools;
+        inner.request_source = source.to_string();
+    }
+
+    pub async fn request_prefix(&self) -> (Vec<serde_json::Value>, String) {
+        let inner = self.inner.read().await;
+        (inner.request_tools.clone(), inner.request_source.clone())
+    }
+
+    pub async fn set_session_tag(&self, tag: Option<String>) {
+        self.inner.write().await.session_tag = tag;
+    }
+
+    pub async fn session_tag(&self) -> Option<String> {
+        self.inner.read().await.session_tag.clone()
     }
 
     pub async fn llm_summary_enabled(&self) -> bool {

@@ -38,7 +38,7 @@ pub struct Config {
     pub tiers: [Option<ModelRef>; 3],
 }
 
-fn model_from_value(v: &serde_json::Value) -> Option<ModelRef> {
+pub(crate) fn model_from_value(v: &serde_json::Value) -> Option<ModelRef> {
     let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
     let n = |k: &str| v.get(k).and_then(|x| x.as_u64()).map(|x| x as u32);
     Some(ModelRef {

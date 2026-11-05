@@ -376,11 +376,11 @@ pub async fn cmd_long_task_control(
         "pause" => {
             ledger.set_status(RunStatus::Paused, Some("paused by you".to_string()));
             PAUSE_REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).push(ledger.key.clone());
-            state.abort_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            state.cancel(crate::agent::runtime::cancel::CancelKind::Paused, Some("paused by you".to_string())).await;
         }
         "stop" => {
             ledger.set_status(RunStatus::Stopped, None);
-            state.abort_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            state.cancel(crate::agent::runtime::cancel::CancelKind::Stopped, Some("stopped by you".to_string())).await;
             state.agent_state.set_long_task(None).await;
         }
         "extend" => ledger.extend(addUsd, addHours),

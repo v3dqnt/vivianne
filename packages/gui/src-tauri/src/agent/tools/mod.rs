@@ -16,6 +16,7 @@
 //! commands (`office`).
 
 pub mod arg_check;
+pub mod timeouts;
 pub mod builtin;
 pub mod code;
 pub mod commands;

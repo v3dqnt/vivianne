@@ -143,8 +143,12 @@ export function ContextBreakdown() {
   const { stats, colors, pct, accent, rows, accounted } = c
   void accent
   const runCompact = async () => {
-    const folded = await compactNow()
-    setToast(folded > 0 ? `Compacted ${folded} messages into a summary.` : 'Nothing to compact yet.')
+    try {
+      const folded = await compactNow()
+      setToast(folded > 0 ? `Compacted ${folded} messages into a summary.` : 'Nothing to compact yet.')
+    } catch (e) {
+      setToast(String(e instanceof Error ? e.message : e).replace(/^busy:\s*/, ''))
+    }
   }
   return (
     <>

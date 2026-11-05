@@ -28,17 +28,22 @@ impl AppState {
     /// This thread's session id, made by `make` and remembered when it has none yet.
     pub async fn session_id_or_else(&self, make: impl FnOnce() -> String) -> String {
         let mut id = self.session_id.lock().await;
-        id.get_or_insert_with(make).clone()
+        let made = id.get_or_insert_with(make).clone();
+        self.agent_state.set_session_tag(Some(made.clone())).await;
+        made
     }
 
     /// Forget the session id, leaving the transcript alone.
     pub async fn forget_session(&self) {
         *self.session_id.lock().await = None;
+        self.agent_state.set_session_tag(None).await;
     }
 
     /// Point this thread at a session without touching its transcript.
     pub async fn set_session(&self, id: impl Into<String>) {
-        *self.session_id.lock().await = Some(id.into());
+        let id = id.into();
+        self.agent_state.set_session_tag(Some(id.clone())).await;
+        *self.session_id.lock().await = Some(id);
     }
 
     /// The id of this thread's session when it is a new chat nobody has

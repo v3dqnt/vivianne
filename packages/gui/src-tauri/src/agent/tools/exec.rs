@@ -752,6 +752,15 @@ pub(crate) async fn ask_permission(emit: &EventSender, tc: &AgentToolCall, reaso
 /// Set in a result's `details` when the tool itself said it failed.
 const FAILED_KEY: &str = "toolFailed";
 
+/// The result of a call stopped for running past its limit.
+fn timed_out_result(tool: &str, limit: std::time::Duration) -> AgentToolResult {
+    AgentToolResult {
+        content: vec![MessageContent::Text { text: format!("Error: `{tool}` did not finish within {}s and was stopped. Try something smaller or more specific.", limit.as_secs()) }],
+        details: serde_json::json!({ FAILED_KEY: true }),
+        terminate: None,
+    }
+}
+
 /// Soft output cap for the tools with no budget of their own (sandboxed runs,
 /// subagent reports, script return values): head-and-tail, mirroring
 /// `math::clip` — long output keeps its start and its end, since the end is
@@ -803,6 +812,7 @@ pub async fn execute_tool_calls(
     app: &tauri::AppHandle,
 ) -> Vec<AgentMessage> {
     let total = tool_calls.len();
+    let timeout_settings = read_settings_json().await;
     let mut slots: Vec<Option<AgentMessage>> = (0..total).map(|_| None).collect();
     let workspace_folders = state.workspace_folders().await;
     let cwd = workspace_folders.first().cloned().unwrap_or_else(|| ".".to_string());
@@ -993,7 +1003,7 @@ pub async fn execute_tool_calls(
         // them. 8 in flight saturates I/O without stacking the whole batch.
         let permits = tokio::sync::Semaphore::new(FAST_PATH_PARALLELISM);
         let batch_futures = fast_path.iter().map(|(_, tc)| {
-            let (tools, cwd, permits) = (&tools, &cwd, &permits);
+            let (tools, cwd, permits, timeout_settings) = (&tools, &cwd, &permits, &timeout_settings);
             async move {
                 // Held for the call's whole body; only dropped (none taken) in
                 // the impossible closed case, since this batch owns the
@@ -1003,7 +1013,13 @@ pub async fn execute_tool_calls(
                     // Started while the model was still writing this call?
                     let res = match super::speculation::take(cwd, &tc.name, &tc.arguments).await {
                         Some(res) => res,
-                        None => tool.execute(&tc.arguments, ".").await,
+                        None => match super::timeouts::limit_for(&timeout_settings, &tc.name) {
+                            Some(limit) => match tokio::time::timeout(limit, tool.execute(&tc.arguments, ".")).await {
+                                Ok(res) => res,
+                                Err(_) => return timed_out_result(&tc.name, limit),
+                            },
+                            None => tool.execute(&tc.arguments, ".").await,
+                        },
                     };
                     tool_result_to_agent_result(res, vision_capable)
                 } else {
@@ -1081,7 +1097,8 @@ pub async fn execute_tool_calls(
 
         // Tools that need the agent (`AGENT_TOOLS`), then the ones that need
         // only their arguments (the `Tool` registry), then MCP servers.
-        let tool_result = if let Some(tool) = AGENT_TOOLS.iter().find(|t| t.names.contains(&tool_call.name.as_str())) {
+        let limit = super::timeouts::limit_for(&timeout_settings, &tool_call.name);
+        let dispatch = async { if let Some(tool) = AGENT_TOOLS.iter().find(|t| t.names.contains(&tool_call.name.as_str())) {
             let cx = ToolCtx {
                 call_id: &tool_call.id,
                 name: &tool_call.name,
@@ -1126,6 +1143,10 @@ pub async fn execute_tool_calls(
                 details: serde_json::json!({ FAILED_KEY: true }),
                 terminate: None,
             }
+        } };
+        let tool_result = match limit {
+            Some(limit) => tokio::time::timeout(limit, dispatch).await.unwrap_or_else(|_| timed_out_result(&tool_call.name, limit)),
+            None => dispatch.await,
         };
 
         // Again after: a read speculated while this ran saw it half-done.

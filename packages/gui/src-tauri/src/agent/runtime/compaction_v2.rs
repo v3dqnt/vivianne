@@ -17,8 +17,14 @@
 //! The frames around a summary (`<compacted_history>`) are unchanged: the
 //! conversation view, titles and the archive all key on them.
 
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use serde_json::Value;
+
 use crate::agent::runtime::compaction::{estimate_tokens, message_char_len};
-use crate::agent::runtime::types::{AgentMessage, MessageContent};
+use crate::agent::runtime::state::AgentState;
+use crate::agent::runtime::types::{AgentMessage, MessageContent, ModelRef, ThinkingLevel};
 
 pub const OPEN: &str = "<compacted_history>";
 pub const CLOSE: &str = "</compacted_history>";
@@ -151,13 +157,187 @@ pub fn render_transcript(messages: &[AgentMessage], preview_chars: usize) -> Str
     out
 }
 
-/// The summary framed as one message of established background.
-pub fn checkpoint(summary: &str) -> String {
-    format!("{OPEN}\nThis is a checkpoint condensing an earlier part of this conversation. Treat it as established background and carry on from the messages after it without acknowledging it.\n\n{}\n{CLOSE}", summary.trim())
+/// The summary framed as one message of established background, carrying the id of
+/// the compaction that wrote it.
+pub fn checkpoint(summary: &str, id: &str) -> String {
+    format!("{OPEN}\nThis is a checkpoint condensing an earlier part of this conversation (compaction {id}). Treat it as established background and carry on from the messages after it without acknowledging it.\n\n{}\n{CLOSE}", summary.trim())
 }
 
-/// Summarise `messages` with the model: a full-size transcript first, a shorter
-/// one if that fails. `None` means use the deterministic fallback.
+/// The compaction id inside a checkpoint message, if `text` is one made by v2.
+pub fn checkpoint_id(text: &str) -> Option<String> {
+    let t = text.trim_start();
+    if !t.starts_with(OPEN) {
+        return None;
+    }
+    let rest = &t[t.find("(compaction ")? + "(compaction ".len()..];
+    Some(rest[..rest.find(')')?].to_string())
+}
+
+// ── Per-model policy ─────────────────────────────────────────────────────────
+
+/// How compaction behaves for one model, from settings `compaction`: a `defaults`
+/// object and a `policies` list matched on `provider` and `model`, with the
+/// matching entry's fields replacing the defaults'.
+#[derive(Debug, Clone, Default)]
+pub struct Policy {
+    /// Share of the context window at which compaction starts (0 to 1).
+    pub threshold_ratio: Option<f64>,
+    /// Share of the usable window kept as the verbatim tail (below the threshold).
+    pub retain_ratio: Option<f64>,
+    /// Extra tries for the summary call before the deterministic fallback.
+    pub retries: u32,
+    /// A cheaper model to write the summary, as a full model object.
+    pub summarizer: Option<ModelRef>,
+}
+
+fn ratio(v: &Value, key: &str) -> Option<f64> {
+    v.get(key).and_then(Value::as_f64).filter(|r| *r > 0.0 && *r <= 1.0)
+}
+
+pub fn policy_for(settings: &Value, provider: &str, model: &str) -> Policy {
+    let Some(cfg) = settings.get("compaction") else { return Policy { retries: 1, ..Policy::default() } };
+    let exact = cfg.get("policies").and_then(Value::as_array).and_then(|l| {
+        l.iter().find(|p| p.get("provider").and_then(Value::as_str) == Some(provider) && p.get("model").and_then(Value::as_str) == Some(model))
+    });
+    let pick = |f: &dyn Fn(&Value) -> Option<f64>| exact.and_then(f).or_else(|| cfg.get("defaults").and_then(f));
+    let threshold_ratio = pick(&|v| ratio(v, "thresholdRatio"));
+    let mut retain_ratio = pick(&|v| ratio(v, "retainRatio"));
+    // A tail that is not smaller than the trigger would compact nothing.
+    if let (Some(t), Some(r)) = (threshold_ratio, retain_ratio) {
+        if r >= t {
+            retain_ratio = None;
+        }
+    }
+    let retries = exact
+        .and_then(|v| v.get("retries"))
+        .or_else(|| cfg.get("defaults").and_then(|d| d.get("retries")))
+        .and_then(Value::as_u64)
+        .map(|n| n.min(3) as u32)
+        .unwrap_or(1);
+    let summarizer = exact
+        .and_then(|v| v.get("summarizer"))
+        .or_else(|| cfg.get("defaults").and_then(|d| d.get("summarizer")))
+        .and_then(crate::agent::models::routing::model_from_value);
+    Policy { threshold_ratio, retain_ratio, retries, summarizer }
+}
+
+/// The token count that triggers compaction and the size of the tail that survives,
+/// for a window of `window` tokens with `reserve` held back for the reply. The
+/// trigger is capped by the room left after the reserve, so a high ratio can't let a
+/// request overflow.
+pub fn budgets(policy: &Policy, window: u32, reserve: u32, default_keep: u32) -> (u32, u32) {
+    let usable = window.saturating_sub(reserve);
+    let trigger = match policy.threshold_ratio {
+        Some(r) => ((window as f64 * r) as u32).min(usable),
+        None => usable,
+    };
+    let keep = match policy.retain_ratio {
+        Some(r) => ((usable as f64 * r) as u32).max(2_048),
+        None => default_keep,
+    };
+    (trigger, keep)
+}
+
+// ── One compaction at a time ─────────────────────────────────────────────────
+
+fn locks() -> &'static Mutex<HashSet<String>> {
+    static L: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    L.get_or_init(Default::default)
+}
+
+/// Held while a session is being compacted; released when dropped.
+pub struct Lock(String);
+
+pub fn try_lock(key: &str) -> Option<Lock> {
+    locks().lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string()).then(|| Lock(key.to_string()))
+}
+
+pub fn is_locked(key: &str) -> bool {
+    locks().lock().unwrap_or_else(|e| e.into_inner()).contains(key)
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        locks().lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
+}
+
+/// Record a compaction event on the session's thread, when the session is known.
+pub fn record(session: Option<&str>, kind: &str, payload: Value) {
+    if let Some(s) = session {
+        crate::agent::orchestration::record_new(s, kind, payload);
+    }
+}
+
+/// A finished summary: its text, how it was made and by which model.
+pub struct Done {
+    pub text: String,
+    pub how: &'static str,
+    pub model: String,
+}
+
+fn text_of_reply(reply: &AgentMessage) -> Option<String> {
+    let AgentMessage::Assistant { content, stop_reason, .. } = reply else { return None };
+    if stop_reason == "error" {
+        return None;
+    }
+    let text = content.iter().filter_map(|c| if let MessageContent::Text { text } = c { Some(text.trim()) } else { None }).collect::<Vec<_>>().join("\n");
+    (!text.trim().is_empty()).then_some(text)
+}
+
+/// The summary call that reuses the provider's prompt cache: the conversation as it
+/// was sent (same system prompt, same tools, same cache key), cut at the compaction
+/// point, with the instruction as the one new message at the end. Everything before
+/// it is a prefix of the last request, so only the instruction is new to the provider.
+pub async fn summarize_cached(app: &tauri::AppHandle, model: &ModelRef, state: &AgentState, messages: &[AgentMessage]) -> Option<String> {
+    let (tools, source) = state.request_prefix().await;
+    if source.is_empty() {
+        return None;
+    }
+    let mut wire = crate::agent::runtime::loop_core::convert_agent_messages_to_ai(messages);
+    wire.extend(crate::agent::runtime::loop_core::convert_agent_messages_to_ai(&[AgentMessage::User {
+        content: vec![MessageContent::Text { text: INSTRUCTION.to_string() }],
+        timestamp: 0,
+    }]));
+    let context = crate::ai::types::Context { messages: wire, system_prompt: Some(state.system_prompt().await), tools: Some(tools) };
+    // The reply is read here, not shown: the sender's receiver is dropped.
+    let (sink, _unused) = crate::agent::runtime::events::event_bus();
+    let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let call = crate::agent::runtime::loop_core::call_provider_with_pool_rotation(app, model, Arc::new(context), ThinkingLevel::Off, &sink, &source, &abort);
+    match tokio::time::timeout(std::time::Duration::from_secs(SUMMARY_TIMEOUT_SECS + 20), call).await {
+        Ok(Ok(reply)) => text_of_reply(&reply),
+        Ok(Err(e)) => {
+            log::warn!("[compaction v2] the cache-reusing summary call failed: {e}");
+            None
+        }
+        Err(_) => {
+            abort.store(true, std::sync::atomic::Ordering::SeqCst);
+            log::warn!("[compaction v2] the cache-reusing summary call timed out");
+            None
+        }
+    }
+}
+
+/// The best summary available: the cache-reusing call first (with the policy's retries),
+/// then the plain transcript call, `None` for the deterministic fallback. A summary that
+/// isn't smaller than what it replaces counts as a failure.
+pub async fn summarize_best(app: &tauri::AppHandle, run_model: &ModelRef, policy: &Policy, state: &AgentState, messages: &[AgentMessage]) -> Option<Done> {
+    let replaced = tokens_of(messages);
+    let model = policy.summarizer.as_ref().unwrap_or(run_model);
+    let label = format!("{}/{}", model.provider, model.id);
+    for _ in 0..=policy.retries {
+        match summarize_cached(app, model, state, messages).await {
+            Some(text) if shrinks(&text, replaced) => return Some(Done { text, how: "cached", model: label }),
+            Some(_) => log::warn!("[compaction v2] the cached summary was no smaller than the {replaced} tokens it replaces"),
+            None => {}
+        }
+    }
+    let text = summarize(app, model, messages).await?;
+    Some(Done { text, how: "transcript", model: label })
+}
+
+/// Summarise `messages` with the model from a text rendering of them: a full-size
+/// transcript first, a shorter one if that fails. `None` means use the fallback.
 pub async fn summarize(app: &tauri::AppHandle, model: &crate::agent::runtime::types::ModelRef, messages: &[AgentMessage]) -> Option<String> {
     let replaced = tokens_of(messages);
     for preview in PREVIEW_CHARS {
@@ -167,7 +347,7 @@ pub async fn summarize(app: &tauri::AppHandle, model: &crate::agent::runtime::ty
         }
         let call = crate::ai::completion::complete_background(app, model, INSTRUCTION, &transcript);
         match tokio::time::timeout(std::time::Duration::from_secs(SUMMARY_TIMEOUT_SECS), call).await {
-            Ok(Ok(text)) if shrinks(&text, replaced) => return Some(checkpoint(&text)),
+            Ok(Ok(text)) if shrinks(&text, replaced) => return Some(text),
             Ok(Ok(_)) => log::warn!("[compaction v2] the summary was empty or no smaller than the {replaced} tokens it replaces (previews of {preview} characters)"),
             Ok(Err(e)) => log::warn!("[compaction v2] the summary call failed (previews of {preview} characters): {e}"),
             Err(_) => log::warn!("[compaction v2] the summary call took over {SUMMARY_TIMEOUT_SECS}s (previews of {preview} characters)"),
@@ -268,8 +448,68 @@ mod tests {
 
     #[test]
     fn the_checkpoint_keeps_the_frame_the_rest_of_the_app_recognises() {
-        let c = checkpoint("  **Goal**: x  ");
+        let c = checkpoint("  **Goal**: x  ", "abc-123");
         assert!(c.starts_with(OPEN) && c.ends_with(CLOSE) && c.contains("**Goal**: x"));
         assert!(!c.contains("  **Goal**"));
+        assert_eq!(checkpoint_id(&c).as_deref(), Some("abc-123"));
+        assert_eq!(checkpoint_id("<compacted_history>\nGoal: old style\n</compacted_history>"), None);
+        assert_eq!(checkpoint_id("an ordinary message"), None);
+    }
+
+    fn settings() -> Value {
+        serde_json::json!({ "compaction": {
+            "defaults": { "thresholdRatio": 0.8, "retainRatio": 0.2, "retries": 2 },
+            "policies": [
+                { "provider": "openai", "model": "gpt-x", "thresholdRatio": 0.5, "retries": 0,
+                  "summarizer": { "id": "mini", "api": "openai-completions", "provider": "openai", "name": "mini", "maxTokens": 4096, "contextWindow": 64000 } },
+                { "provider": "bad", "model": "m", "thresholdRatio": 3.0, "retainRatio": 0.9 }
+            ] } })
+    }
+
+    #[test]
+    fn a_models_policy_replaces_the_defaults_field_by_field() {
+        let p = policy_for(&settings(), "openai", "gpt-x");
+        assert_eq!((p.threshold_ratio, p.retain_ratio, p.retries), (Some(0.5), Some(0.2), 0));
+        assert_eq!(p.summarizer.map(|m| m.id).as_deref(), Some("mini"));
+        let other = policy_for(&settings(), "anthropic", "claude");
+        assert_eq!((other.threshold_ratio, other.retain_ratio, other.retries), (Some(0.8), Some(0.2), 2));
+        assert!(other.summarizer.is_none());
+    }
+
+    #[test]
+    fn nonsense_ratios_are_ignored_and_no_settings_means_the_old_behaviour() {
+        let bad = policy_for(&settings(), "bad", "m");
+        assert_eq!(bad.threshold_ratio, Some(0.8), "3.0 is not a share, so the default stands");
+        assert_eq!(bad.retain_ratio, None, "a tail of 0.9 is not below the trigger of 0.8");
+        let none = policy_for(&serde_json::json!({}), "a", "b");
+        assert_eq!((none.threshold_ratio, none.retain_ratio, none.retries), (None, None, 1));
+        assert_eq!(budgets(&none, 100_000, 20_000, 7_000), (80_000, 7_000));
+    }
+
+    #[test]
+    fn the_trigger_is_a_share_of_the_window_capped_by_the_room_after_the_reserve() {
+        let p = Policy { threshold_ratio: Some(0.9), retain_ratio: Some(0.25), ..Default::default() };
+        assert_eq!(budgets(&p, 100_000, 30_000, 5_000), (70_000, 17_500), "90% would be 90k, but only 70k is usable");
+        let p = Policy { threshold_ratio: Some(0.5), retain_ratio: Some(0.01), ..Default::default() };
+        assert_eq!(budgets(&p, 100_000, 10_000, 5_000), (50_000, 2_048), "a tiny tail has a floor");
+    }
+
+    #[test]
+    fn only_one_compaction_runs_per_session_and_the_lock_is_released_on_drop() {
+        let a = try_lock("s1").expect("free");
+        assert!(try_lock("s1").is_none() && is_locked("s1"));
+        assert!(try_lock("s2").is_some(), "another session is independent");
+        drop(a);
+        assert!(!is_locked("s1") && try_lock("s1").is_some());
+    }
+
+    #[test]
+    fn a_reply_with_no_text_or_an_error_is_not_a_summary() {
+        let ok = AgentMessage::Assistant { content: vec![MessageContent::Text { text: " a summary ".into() }], stop_reason: "stop".into(), error_message: None, timestamp: 0, usage: None };
+        assert_eq!(text_of_reply(&ok).as_deref(), Some("a summary"));
+        let err = AgentMessage::Assistant { content: vec![MessageContent::Text { text: "x".into() }], stop_reason: "error".into(), error_message: None, timestamp: 0, usage: None };
+        assert_eq!(text_of_reply(&err), None);
+        assert_eq!(text_of_reply(&calls(&["a"])), None, "only tool calls");
+        assert_eq!(text_of_reply(&user("hi")), None);
     }
 }

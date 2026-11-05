@@ -609,6 +609,7 @@ pub async fn run_agent_loop_continue(
         // but the run continues instead of ending.
         if steer_flag.swap(false, Ordering::SeqCst) {
             let steered = drain_queue(&queues.steering_queue, &queues.steering_mode).await;
+            mirror_queues(state, queues).await;
             if !steered.is_empty() {
                 pending_messages = steered;
                 has_more_tool_calls = false;
@@ -788,6 +789,16 @@ pub async fn run_agent_loop_continue(
         if state.team_member().await.is_none() {
             tool_defs.retain(|t| !matches!(t.get("name").and_then(|n| n.as_str()), Some("message_agent" | "team_post" | "team_read")));
         }
+        // What a compaction summary replays so the provider's prompt cache still hits.
+        state.set_request_prefix(tool_defs.clone(), source_tag).await;
+        let session_tag = state.session_tag().await;
+        if let Some(tag) = session_tag.as_deref() {
+            let header = crate::agent::runtime::request_header::header(&model.provider, &model.id, &format!("{thinking_level:?}"), &tool_defs, &context.system_prompt);
+            if crate::agent::runtime::request_header::changed(tag, &header) {
+                crate::agent::orchestration::record_new(tag, "request.header", header);
+            }
+            crate::agent::orchestration::record_new(tag, "step.started", serde_json::json!({ "model": format!("{}/{}", model.provider, model.id), "messages": context.messages.len() }));
+        }
         let mut llm_context = crate::ai::types::Context {
             messages: llm_messages,
             system_prompt: Some(context.system_prompt.clone()),
@@ -843,6 +854,15 @@ pub async fn run_agent_loop_continue(
                 Ok(AgentMessage::Assistant { stop_reason, usage, .. }) => (Some(stop_reason.clone()), usage.as_ref().map(|u| (u.input + u.cache_read + u.cache_write, u.output))),
                 _ => (None, None),
             };
+            if let Some(tag) = session_tag.as_deref() {
+                crate::agent::orchestration::record_new(tag, "step.ended", serde_json::json!({
+                    "answeredBy": format!("{}/{}", used_model.provider, used_model.id),
+                    "stopReason": stop,
+                    "inputTokens": usage.map(|u| u.0),
+                    "outputTokens": usage.map(|u| u.1),
+                    "error": outcome.as_ref().err().map(|e| crate::ai::utils::truncate_error_text(e, 300)),
+                }));
+            }
             trace.event("turn", serde_json::json!({
                 "model": format!("{}/{}", model.provider, model.id),
                 "answered_by": format!("{}/{}", used_model.provider, used_model.id),
@@ -1257,6 +1277,7 @@ pub async fn run_agent_loop_continue(
         // Drain steering messages at the end of this turn, before the next
         // LLM call — matches agent-loop.ts's end-of-iteration steering fetch.
         pending_messages = drain_queue(&queues.steering_queue, &queues.steering_mode).await;
+        mirror_queues(state, queues).await;
     }
 
     // The inner loop only exits when there are no more tool calls AND no
@@ -1274,6 +1295,7 @@ pub async fn run_agent_loop_continue(
     if next.is_empty() {
         next = drain_queue(&queues.follow_up_queue, &queues.follow_up_mode).await;
     }
+    mirror_queues(state, queues).await;
     if next.is_empty() {
         // A planning turn ends by handing a plan over for review: no
         // verification nudge and no goal nudge, which would only fight that.
@@ -1431,6 +1453,11 @@ pub(crate) fn context_budgets(context_window: u32) -> (u32, u32) {
     (reserve, keep_recent)
 }
 
+/// Mirror the steering and follow-up queues to disk after the loop took from them.
+async fn mirror_queues(state: &AgentState, queues: &QueueHandles) {
+    crate::agent::runtime::inbox::persist(state.session_tag().await.as_deref(), &queues.steering_queue, &queues.follow_up_queue).await;
+}
+
 pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &AgentState, app: &tauri::AppHandle, model: &ModelRef, force: bool) -> bool {
     use crate::agent::runtime::compaction::{calculate_context_tokens_incremental, generate_mermaid_summary};
     use crate::agent::runtime::compaction_v2 as v2;
@@ -1459,7 +1486,10 @@ pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &Ag
     });
     let overhead = ((context.system_prompt.len() / 4) as u32 + tool_tokens).min(model.context_window / 3);
     let current_tokens = calculate_context_tokens_incremental(&context.messages, &mut context.token_cache_len, &mut context.token_cache_sum) + overhead;
-    let budget = model.context_window.saturating_sub(reserve_tokens);
+    // Per-model policy from settings: a share of the window as the trigger, a share
+    // as the tail that survives, a retry count and an optional cheaper summariser.
+    let policy = v2::policy_for(&crate::agent::tools::exec::read_settings_json().await, &model.provider, &model.id);
+    let (budget, keep_recent_tokens) = v2::budgets(&policy, model.context_window, reserve_tokens, keep_recent_tokens);
     if !force && current_tokens <= budget {
         return false;
     }
@@ -1470,7 +1500,18 @@ pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &Ag
         return false;
     }
 
+    // One compaction at a time per session, whoever asks.
+    let lock_key = state.session_tag().await.unwrap_or_else(|| "primary".to_string());
+    let Some(_lock) = v2::try_lock(&lock_key) else { return false };
+    let session_tag = state.session_tag().await;
+    let compaction_id = uuid::Uuid::new_v4().to_string();
     let compacted: Vec<AgentMessage> = context.messages.drain(..cut_point).collect();
+    let replaced_tokens = v2::tokens_of(&compacted);
+    v2::record(
+        session_tag.as_deref(),
+        "compaction.started",
+        serde_json::json!({ "id": compaction_id, "trigger": if force { "forced" } else { "pressure" }, "messages": compacted.len(), "tokens": replaced_tokens, "contextTokens": current_tokens }),
+    );
     // The model only needs the summary; the user wants everything they ever
     // said. Keep the originals where the conversation view can find them.
     if let Some(path) = state.history_archive().await {
@@ -1478,14 +1519,15 @@ pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &Ag
             log::warn!("[compaction] couldn't archive compacted messages: {e}");
         }
     }
-    let summary_text = if state.llm_summary_enabled().await {
-        match v2::summarize(app, model, &compacted).await {
-            Some(text) => text,
-            None => generate_mermaid_summary(&compacted),
-        }
-    } else {
-        generate_mermaid_summary(&compacted)
+    let (summary_text, how, written_by) = match if state.llm_summary_enabled().await { v2::summarize_best(app, model, &policy, state, &compacted).await } else { None } {
+        Some(done) => (v2::checkpoint(&done.text, &compaction_id), done.how, done.model),
+        None => (generate_mermaid_summary(&compacted), "fallback", String::new()),
     };
+    v2::record(
+        session_tag.as_deref(),
+        "compaction.summarized",
+        serde_json::json!({ "id": compaction_id, "how": how, "model": written_by, "tokensBefore": replaced_tokens, "tokensAfter": crate::agent::runtime::compaction::estimate_tokens(&summary_text) }),
+    );
     // A `User` message, not `Custom` — `convert_agent_messages_to_ai` maps
     // `Custom` to empty content blocks, which would silently vanish from the
     // actual LLM request (the bug that left the two pre-existing compaction
@@ -1499,6 +1541,7 @@ pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &Ag
     // them into the saved transcript re-seeded stale ones on every later turn.
     let persisted: Vec<AgentMessage> = context.messages.iter().filter(|m| !is_system_reminder(m)).cloned().collect();
     state.set_messages(persisted).await;
+    v2::record(session_tag.as_deref(), "compaction.finished", serde_json::json!({ "id": compaction_id }));
     #[cfg(debug_assertions)]
     eprintln!(
         "[DEBUG] compacted {} messages ({} tokens -> budget {}), 1 summary message inserted",
@@ -1771,7 +1814,7 @@ async fn model_chain(primary: &ModelRef, sticky: &Option<(ModelRef, std::time::I
 /// configured resolves to exactly one candidate (the primary key), so this
 /// is a no-op wrapper for the common case — identical behavior to calling
 /// `call_provider_with_retry` directly.
-async fn call_provider_with_pool_rotation(
+pub(crate) async fn call_provider_with_pool_rotation(
     app: &tauri::AppHandle,
     model: &ModelRef,
     context: Arc<Context>,

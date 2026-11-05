@@ -37,6 +37,8 @@ pub struct AppState {
     /// the message being steered away from. Reset at the start of every
     /// `cmd_agent_prompt`/`cmd_agent_continue`.
     pub steer_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Why the current run was stopped (see `runtime::cancel`).
+    pub(in crate::agent::runtime) cancel_cause: std::sync::Mutex<Option<crate::agent::runtime::cancel::CancelCause>>,
     /// Where this thread's transcript is saved, when not in the sessions list:
     /// a bot's conversation is its `thread.json`.
     pub transcript_file: std::sync::Mutex<Option<std::path::PathBuf>>,
@@ -56,6 +58,7 @@ impl Default for AppState {
             follow_up_queue,
             abort_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             steer_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            cancel_cause: std::sync::Mutex::new(None),
             transcript_file: std::sync::Mutex::new(None),
         }
     }
@@ -344,6 +347,7 @@ pub async fn run_turn(
 
     state.abort_flag.store(false, std::sync::atomic::Ordering::SeqCst);
     state.steer_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    state.clear_cancel();
     // Multiplayer project: take in the partner's commits and show the agent
     // what they did (a no-op anywhere else).
     crate::multiplayer::collab::before_run(app, &mp_workspace_folders, &agent.state).await;
@@ -504,7 +508,7 @@ pub async fn cmd_agent_continue(
 pub async fn cmd_agent_abort(#[allow(non_snake_case)] threadId: Option<String>,
     registry: State<'_, AgentRegistry>) -> Result<(), String> {
     let state = registry.resolve(threadId.as_deref()).await;
-    state.abort_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    state.cancel(crate::agent::runtime::cancel::CancelKind::User, None).await;
     // A plan being carried out runs inside one long tool call, which the
     // loop's abort check can't reach until it returns — stop it directly.
     // ponytail: stops every thread's plans and team runs, not only this
@@ -551,6 +555,7 @@ pub async fn cmd_agent_steer(
         timestamp: now_ms(),
     };
     state.steering_queue.write().await.push(message);
+    persist_queues(&state).await;
     state.steer_flag.store(true, std::sync::atomic::Ordering::SeqCst);
     Ok(())
 }
@@ -601,6 +606,7 @@ pub async fn cmd_agent_follow_up_queue(
         timestamp: now_ms(),
     };
     state.follow_up_queue.write().await.push(message);
+    persist_queues(&state).await;
     Ok(())
 }
 
@@ -611,6 +617,7 @@ pub async fn cmd_agent_clear_queues(#[allow(non_snake_case)] threadId: Option<St
     let state = registry.resolve(threadId.as_deref()).await;
     state.steering_queue.write().await.clear();
     state.follow_up_queue.write().await.clear();
+    persist_queues(&state).await;
     Ok(())
 }
 
@@ -656,6 +663,8 @@ pub async fn cmd_agent_remove_queued(
         return Err(format!("Index {index} out of range ({} queued)", guard.len()));
     }
     guard.remove(index);
+    drop(guard);
+    persist_queues(&state).await;
     Ok(())
 }
 
@@ -1000,6 +1009,14 @@ pub async fn cmd_compact_now(
     registry: State<'_, AgentRegistry>,
 ) -> Result<usize, String> {
     let state = registry.resolve(threadId.as_deref()).await;
+    // Only between turns: waiting here for a running turn to end froze the button.
+    if !state.is_idle() {
+        return Err("busy: a turn is running. Stop it or wait for it to finish, then compact.".to_string());
+    }
+    let lock_key = state.agent_state.session_tag().await.unwrap_or_else(|| "primary".to_string());
+    if crate::agent::runtime::compaction_v2::is_locked(&lock_key) {
+        return Err("busy: this conversation is already being compacted.".to_string());
+    }
     let agent = state.lock_agent().await;
     let model = agent.state.model().await;
     let mut context = crate::agent::runtime::types::AgentContext {
@@ -1799,7 +1816,16 @@ pub async fn cmd_load_session(
     // archive path and append its own compacted messages to the project's
     // history.
     state.resume(&session.id, session.messages, None).await;
+    let back = crate::agent::runtime::inbox::restore(&session.id, &state.steering_queue, &state.follow_up_queue).await;
+    if back > 0 {
+        log::info!("[inbox] put back {back} queued message(s) for {}", session.id);
+    }
     Ok(())
+}
+
+/// Mirror a thread's two queues to disk after they change.
+async fn persist_queues(state: &AppState) {
+    crate::agent::runtime::inbox::persist(state.agent_state.session_tag().await.as_deref(), &state.steering_queue, &state.follow_up_queue).await;
 }
 
 /// Save the current agent transcript as a session.
