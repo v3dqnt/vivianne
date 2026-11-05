@@ -33,7 +33,19 @@ function cells(line: string): string[] {
     .replace(/^\|/, '')
     .replace(/\|$/, '')
     .split('|')
-    .map((c) => plain(c))
+    .map((c) => c.trim())
+}
+
+/** A heading's leading emoji, read as the tone it was meant to carry. */
+const TONE_OF: Record<string, 'error' | 'warning' | 'success' | 'info'> = {
+  '\u{1F534}': 'error',
+  '\u{274C}': 'error',
+  '\u{1F7E0}': 'warning',
+  '\u{1F7E1}': 'warning',
+  '\u{26A0}': 'warning',
+  '\u{1F7E2}': 'success',
+  '\u{2705}': 'success',
+  '\u{1F535}': 'info',
 }
 
 function tokenize(md: string): B[] {
@@ -136,7 +148,10 @@ export function autoCard(md: string): AutoCard | null {
   for (; at < body.length; at++) {
     const b = body[at]
     if (b.t === 'heading') {
-      out.push({ type: 'heading', text: plain(b.text) })
+      const raw = plain(b.text)
+      const e = EMOJI.exec(raw)
+      const tone = e ? TONE_OF[e[1].replace(/\uFE0F/g, '')] : undefined
+      out.push({ type: 'heading', text: raw.replace(EMOJI, '').trim() || raw, ...(tone ? { tone } : {}) })
     } else if (b.t === 'table') {
       out.push({ type: 'table', columns: b.columns, rows: b.rows })
     } else if (b.t === 'para') {

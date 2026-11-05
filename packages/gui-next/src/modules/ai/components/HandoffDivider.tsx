@@ -59,7 +59,7 @@ export function HandoffDivider({ text }: { text: string }) {
         }}
       >
         <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
-        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, whiteSpace: 'nowrap' }}>
+        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 500, whiteSpace: 'nowrap' }}>
           {label}
         </Typography>
         <Typography variant="caption" sx={{ color: 'text.disabled', whiteSpace: 'nowrap' }}>
@@ -120,7 +120,7 @@ export function SummaryDivider({ text }: { text: string }) {
         }}
       >
         <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
-        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, whiteSpace: 'nowrap' }}>
+        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 500, whiteSpace: 'nowrap' }}>
           Above this, the agent works from a summary
         </Typography>
         <Typography variant="caption" sx={{ color: 'text.disabled', whiteSpace: 'nowrap' }}>
@@ -160,7 +160,7 @@ export function PairActivityDivider({ text }: { text: string }) {
         sx={{ display: 'flex', alignItems: 'center', gap: 1.25, width: '100%', borderRadius: '8px', py: 0.5 }}
       >
         <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
-        <Typography variant="caption" sx={{ color: 'success.main', fontWeight: 600, whiteSpace: 'nowrap' }}>
+        <Typography variant="caption" sx={{ color: 'success.main', fontWeight: 500, whiteSpace: 'nowrap' }}>
           {partner}: {updates || 'an'} update{updates === 1 ? '' : 's'} shared with your agent
         </Typography>
         <Typography variant="caption" sx={{ color: 'text.disabled', whiteSpace: 'nowrap' }}>
@@ -193,7 +193,7 @@ export function ResumeDivider({ text }: { text: string }) {
         sx={{ display: 'flex', alignItems: 'center', gap: 1.25, width: '100%', borderRadius: '8px', py: 0.5 }}
       >
         <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
-        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, whiteSpace: 'nowrap' }}>
+        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 500, whiteSpace: 'nowrap' }}>
           Picked up where it left off
         </Typography>
         <Typography variant="caption" sx={{ color: 'text.disabled', whiteSpace: 'nowrap' }}>
@@ -242,7 +242,7 @@ export function PlanNoteDivider({ text }: { text: string }) {
         sx={{ display: 'flex', alignItems: 'center', gap: 1.25, width: '100%', borderRadius: '8px', py: 0.5 }}
       >
         <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
-        <Typography variant="caption" sx={{ color: approved ? 'success.main' : 'text.secondary', fontWeight: 600, whiteSpace: 'nowrap' }}>
+        <Typography variant="caption" sx={{ color: approved ? 'success.main' : 'text.secondary', fontWeight: 500, whiteSpace: 'nowrap' }}>
           {label}
         </Typography>
         {!approved && (

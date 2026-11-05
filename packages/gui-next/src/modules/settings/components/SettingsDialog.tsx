@@ -137,7 +137,7 @@ export function SettingsDialog() {
             overflowY: 'auto',
           }}
         >
-          <Typography variant="subtitle1" sx={{ fontWeight: 700, px: 1 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600, px: 1 }}>
             Settings
           </Typography>
           {GROUPS.map((group) => (
@@ -182,7 +182,7 @@ export function SettingsDialog() {
             direction="row"
             sx={{ alignItems: 'center', justifyContent: 'space-between', px: 3, py: 1.5, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}
           >
-            <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'text.secondary' }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 500, color: 'text.secondary' }}>
               {activeLabel}
             </Typography>
             <Tooltip title="Close">
@@ -211,7 +211,7 @@ export function SettingsDialog() {
                 <Stack sx={{ gap: 4 }}>
                   <AccountSection />
                   <Box>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.25 }}>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 500, mb: 0.25 }}>
                       Usage
                     </Typography>
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>

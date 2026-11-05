@@ -737,6 +737,39 @@ pub async fn touch_entry(root: &str, id: &str) -> Result<(), String> {
     .map_err(|e| format!("touch task panicked: {e}"))?
 }
 
+/// Touch many entries in one pass. The recall path can surface up to
+/// MAX_RECALL_HITS direct matches plus cascade entries per call — one
+/// statement per store beats one UPDATE per entry.
+pub async fn touch_entries(root: &str, ids: &[String]) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let root = root.to_string();
+    let ids = ids.to_vec();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0) as i64;
+    tokio::task::spawn_blocking(move || {
+        with_conn(&root, |conn| {
+            let placeholders: Vec<String> = (0..ids.len()).map(|i| format!("?{}", i + 2)).collect();
+            let sql = format!(
+                "UPDATE memories SET access_count = access_count + 1, last_accessed_at = ?1, updated_at = ?1 WHERE id IN ({})",
+                placeholders.join(", ")
+            );
+            let mut params: Vec<&dyn rusqlite::types::ToSql> = vec![&now];
+            for id in &ids {
+                params.push(id);
+            }
+            conn.execute(&sql, params.as_slice())
+                .map_err(|e| format!("failed to touch entries: {e}"))?;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| format!("touch task panicked: {e}"))?
+}
+
 /// Rewrite one memory in place (a merge or a correction). Its old vector no
 /// longer describes it, so the embedding is cleared for re-embedding, and
 /// confidence resets: the memory has just been confirmed.
@@ -900,17 +933,31 @@ pub async fn delete_outgoing_edges(root: &str, entry_id: &str) -> Result<usize, 
     .map_err(|e| format!("edge delete task panicked: {e}"))?
 }
 
-/// Load all edges from the database — used by BFS cascade which needs the
-/// full edge set for graph traversal.
-pub async fn all_edges(root: &str) -> Result<Vec<Edge>, String> {
+/// Load edges that touch any of the given entry IDs (incoming or outgoing)
+/// in one query — the per-hop fetch behind recall's cascade traversal, so
+/// the step costs `ids.size`-indexed lookups instead of a full edge-table
+/// scan every turn.
+pub async fn edges_touching(root: &str, ids: &[String]) -> Result<Vec<Edge>, String> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
     let root = root.to_string();
+    let ids = ids.to_vec();
     tokio::task::spawn_blocking(move || {
         with_conn(&root, |conn| {
+            let placeholders: Vec<String> = (0..ids.len()).map(|i| format!("?{}", i + 1)).collect();
+            let sql = format!(
+                "SELECT source, target, kind, kind_json, created_at FROM memory_edges \
+                 WHERE source IN ({p}) OR target IN ({p})",
+                p = placeholders.join(", ")
+            );
             let mut stmt = conn
-                .prepare("SELECT source, target, kind, kind_json, created_at FROM memory_edges")
+                .prepare(&sql)
                 .map_err(|e| format!("failed to prepare edge query: {e}"))?;
+            let params: Vec<&dyn rusqlite::types::ToSql> =
+                ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
             let rows = stmt
-                .query_map([], |row| {
+                .query_map(params.as_slice(), |row| {
                     let source: String = row.get(0)?;
                     let target: String = row.get(1)?;
                     let kind_name: String = row.get(2)?;

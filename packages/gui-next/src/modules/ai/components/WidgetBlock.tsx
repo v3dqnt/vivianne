@@ -44,7 +44,7 @@ export function WidgetBlock({ code }: { code: string }) {
       window.setTimeout(() => setCopied(false), 1200)
     })
 
-  const tool = { width: 26, height: 26, borderRadius: '7px', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } } as const
+  const tool = { width: 26, height: 28, borderRadius: '6px', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } } as const
   return (
     <Box sx={{ my: 1.5, borderRadius: '16px', overflow: 'hidden', border: 1, borderColor: alpha(theme.palette.primary.main, 0.18), bgcolor: alpha(theme.palette.text.primary, 0.02) }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, px: 1.25, py: 0.5, borderBottom: 1, borderColor: 'divider' }}>

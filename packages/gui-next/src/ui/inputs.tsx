@@ -964,7 +964,7 @@ export function Slider({ value, min = 0, max = 100, step = 1, marks, onChange, d
       transition: `box-shadow ${theme.transitions.duration.fast}ms`,
       '&:hover, &:focus-visible': { boxShadow: `0 0 0 4px ${alpha(t.ring, 0.3)}` },
     },
-    '& .ui-Slider-mark': { position: 'absolute', width: 2, height: 2, borderRadius: 1, backgroundColor: t.mutedForeground, top: '50%', transform: 'translate(-1px, -50%)', pointerEvents: 'none' },
+    '& .ui-Slider-mark': { position: 'absolute', width: 2, height: 2, borderRadius: 0.8, backgroundColor: t.mutedForeground, top: '50%', transform: 'translate(-1px, -50%)', pointerEvents: 'none' },
     '& .ui-Slider-markActive': { backgroundColor: t.background, opacity: 0.8 },
   }
   return render(

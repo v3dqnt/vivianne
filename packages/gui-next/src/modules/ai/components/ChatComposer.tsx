@@ -172,6 +172,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, {
   )
 
   const shownError = outerError ?? error
+  // With a toolbar the card is two rows: the text, then one quiet row of controls inside the same card.
+  const full = !!(left || right)
   const stopMode = busy && !typed && !hasAttachments
   const steerMode = busy && typed && !!onSteer
 
@@ -228,7 +230,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, {
               placeItems: 'center',
               pointerEvents: 'none',
               fontSize: '0.8125rem',
-              fontWeight: 600,
+              fontWeight: 500,
               color: 'primary.main',
             }}
           >
@@ -251,11 +253,20 @@ export const ChatComposer = forwardRef<ChatComposerHandle, {
             ))}
           </Stack>
         )}
-        <Stack direction="row" sx={{ alignItems: 'flex-end', gap: 0.5, px: 0.75, py: 0.625 }}>
+        <Stack
+          direction="row"
+          sx={
+            full
+              ? { display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr) auto auto auto', alignItems: 'center', columnGap: 0.5, rowGap: 0.25, px: 1, pt: 0.75, pb: 0.75, '& > *': { gridRow: 2 } }
+              : { alignItems: 'flex-end', gap: 0.5, px: 0.75, py: 0.625 }
+          }
+        >
           {attachments && (
-            <AttachFileButton onAddImages={(i) => setImages((p) => [...p, ...i])} onAddFiles={(f) => setFiles((p) => [...p, ...f])} />
+            <Box sx={full ? { gridColumn: 1, display: 'flex' } : { display: 'flex' }}>
+              <AttachFileButton onAddImages={(i) => setImages((p) => [...p, ...i])} onAddFiles={(f) => setFiles((p) => [...p, ...f])} />
+            </Box>
           )}
-          <Box sx={{ position: 'relative', flex: 1, minWidth: 0 }}>
+          <Box sx={{ position: 'relative', flex: 1, minWidth: 0, ...(full ? { gridRow: 1, gridColumn: '1 / -1', px: 0.5, pt: 0.25, pb: 0.5, minHeight: 58 } : {}) }}>
           {/* The text again, behind the real field, with file names marked.
               The field's own text is transparent so only this shows. */}
           {marks.length > 0 && <HighlightedText value={value} marks={marks} scrollOf={inputRef} />}
@@ -263,7 +274,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, {
             inputRef={inputRef}
             multiline
             fullWidth
-            minRows={1}
+            minRows={full ? 2 : 1}
             maxRows={dense ? 6 : 10}
             value={value}
             placeholder={placeholder}
@@ -285,9 +296,21 @@ export const ChatComposer = forwardRef<ChatComposerHandle, {
             }}
           />
           </Box>
-          <DictateButton onInterim={setInterim} onText={append} onError={setError} />
+          {full && (
+            <>
+              <Stack direction="row" sx={{ gridColumn: 2, alignItems: 'center', gap: 0.5, minWidth: 0, overflow: 'hidden' }}>
+                {left}
+              </Stack>
+              <Stack direction="row" sx={{ gridColumn: 3, alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+                {right}
+              </Stack>
+            </>
+          )}
+          <Box sx={full ? { gridColumn: 4, display: 'flex' } : { display: 'flex' }}>
+            <DictateButton onInterim={setInterim} onText={append} onError={setError} />
+          </Box>
         <Tooltip title={stopMode ? (stopping ? 'Stopping…' : 'Stop') : steerMode ? 'Steer: redirect the run with this' : 'Send'}>
-          <span>
+          <span style={full ? { gridColumn: 5, display: 'flex' } : undefined}>
             <IconButton
               aria-label={stopMode ? 'Stop' : steerMode ? 'Steer' : 'Send'}
               onClick={primary}
@@ -330,18 +353,6 @@ export const ChatComposer = forwardRef<ChatComposerHandle, {
           <Typography sx={{ px: 1.75, pb: 0.5, fontSize: '0.875rem', color: 'text.disabled', fontStyle: 'italic' }}>{interim}…</Typography>
         )}
       </Box>
-      {(left || right) && (
-        <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 0.5, pt: 0.5, minWidth: 0 }}>
-          {/* Each side is one group with one gap, so the spacing between
-              controls is the same whatever they are. */}
-          <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, minWidth: 0, flexWrap: 'wrap' }}>
-            {left}
-          </Stack>
-          <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, minWidth: 0, flexShrink: 0 }}>
-            {right}
-          </Stack>
-        </Stack>
-      )}
       {shownError && (
         <Alert severity="error" sx={{ mt: 0.75, py: 0.25, fontSize: '0.75rem' }}>
           {shownError}

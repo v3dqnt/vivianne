@@ -59,7 +59,7 @@ export const useModelStore = create<ModelStoreState>((set, get) => ({
         call<DiscoveredModel[]>('cmd_list_available_models').then((models) => set({ models: models ?? [] })),
         call<SessionStats>('cmd_agent_session_stats', { threadId: activeThreadId() }).then((stats) => {
           set({ stats: stats ?? null })
-          if (stats?.provider && stats.provider !== 'router') preconnectProvider(stats.provider)
+          if (stats?.provider && stats.provider !== 'router' && stats.provider !== 'harness' && stats.provider !== 'sd') preconnectProvider(stats.provider)
         }),
         fetchSessionCost().then((sessionCost) => set({ sessionCost })),
       ])
@@ -69,7 +69,7 @@ export const useModelStore = create<ModelStoreState>((set, get) => ({
   },
 
   selectModel: async (model) => {
-    if (model.provider !== 'router') preconnectProvider(model.provider)
+    if (model.provider !== 'router' && model.provider !== 'harness' && model.provider !== 'sd') preconnectProvider(model.provider)
     await call('cmd_agent_set_model', {
       id: model.id,
       name: model.name,

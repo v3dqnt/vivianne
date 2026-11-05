@@ -559,13 +559,13 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
         }),
         serde_json::json!({
             "name": "generate_image",
-            "description": "Generate a new image from a text description using an image-generation model. Defaults to OpenAI's gpt-image-2; pass provider=\"google\" to use Google's Imagen instead. Requires an API key for whichever provider is used, configured in Settings → API Keys — if none is set, this returns an error saying so. Use for creating original images (illustrations, mockups, icons), not for analysing an existing image (that's just done by looking at it, no tool needed).",
+            "description": "Generate a new image from a text description using an image-generation model. Defaults to OpenAI's gpt-image-1; pass provider to use another cloud provider (google, xai, together, nebius, nvidia-nim, openrouter) or provider=\"sd\" with a downloaded local model file as `model` to draw on this computer. Cloud providers need an API key configured in Settings → Providers — if none is set, this returns an error saying so. Use for creating original images (illustrations, mockups, icons), not for analysing an existing image (that's just done by looking at it, no tool needed).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "prompt": { "type": "string", "description": "Description of the image to generate" },
-                    "size": { "type": "string", "description": "OpenAI only. Image size, e.g. \"1024x1024\", \"1536x1024\", \"1024x1536\" (default \"1024x1024\")" },
-                    "provider": { "type": "string", "enum": ["openai", "google"], "description": "Which provider to generate with (default \"openai\")" },
+                    "size": { "type": "string", "description": "Image size (OpenAI, Together, Nebius, NVIDIA and local models), e.g. \"1024x1024\", \"1536x1024\", \"1024x1536\" (default \"1024x1024\")" },
+                    "provider": { "type": "string", "enum": ["openai", "google", "xai", "together", "nebius", "nvidia-nim", "openrouter", "sd"], "description": "Which provider to generate with (default \"openai\"); \"sd\" is a model running on this computer" },
                     "model": { "type": "string", "description": "Override the default model for the chosen provider, e.g. \"gpt-image-1-mini\" (cheaper) for openai, or \"imagen-4.0-ultra-generate-001\" for google" }
                 },
                 "required": ["prompt"]
@@ -631,6 +631,18 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
                     "groups": { "type": "array", "items": { "type": "string" }, "description": "Group names from your capability list, e.g. [\"GitHub\"] or [\"browse\"]. \"custom\" loads MCP and playbook tools." },
                     "tools": { "type": "array", "items": { "type": "string" }, "description": "Exact tool names, when you know them." }
                 }
+            }
+        }),
+        serde_json::json!({
+            "name": "search_tools",
+            "description": "Find the tool for a job by describing it, and load the best matches so you can call them from your next step. Searches every tool you have right now: built-in, MCP, playbook and custom tools, whether or not they are in your function list. Use it when you need a capability you do not see and do not know which group holds it; load_tools is for when you already know the group's name. Results show each tool's arguments (a trailing ? means optional).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "What you want to do, in plain words, e.g. \"schedule something every morning\" or \"click a button in a window\"" },
+                    "limit": { "type": "number", "description": "How many matches to load (default 5, max 10)" }
+                },
+                "required": ["query"]
             }
         }),
         serde_json::json!({
@@ -942,6 +954,19 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
             "name": "list_custom_tools",
             "description": "List the custom tools (the ones created with create_tool) with how often and how recently each was used, and when it was made. For reviewing the set.",
             "parameters": { "type": "object", "properties": {} }
+        }),
+        serde_json::json!({
+            "name": "run_native",
+            "description": "Write a Rust or C++ program that calls your tools, compile it, and run it: for jobs that want a compiled language, such as parsing or rewriting thousands of files, heavy computation, or a refactor that is easier to express as code than as a hundred edit calls. Like run_script, one turn instead of a round-trip per call, and only what the program prints comes back. Prefer run_script (JavaScript, no compile) for light orchestration. Needs rustc (Rust) or g++ (C++) on PATH. The program runs in the workspace folder. Write `fn main()` (Rust) or `int main()` (C++) only: the bridge is already in scope.\nRust: `viv::call(tool, args_json) -> Result<String, String>` calls any tool with JSON arguments; `viv::json(s)` makes a JSON string literal; shorthands `viv::read(path)`, `write(path, content)`, `edit(path, old, new)`, `grep(pattern, path)`, `glob(pattern, path)`, `bash(command)` all return Result<String, String>. Use only the standard library (no crates). C++: the same in namespace `viv`, returning std::string and throwing std::runtime_error with the tool's error. Print results with println!/std::cout: that output comes back to you. A compile error is returned as the error; the same program is compiled once and cached. Every call goes through the same approval as calling the tool directly. A program cannot start run_script or run_native.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "language": { "type": "string", "enum": ["rust", "cpp"], "description": "rust (rustc, edition 2021) or cpp (g++, C++17)" },
+                    "code": { "type": "string", "description": "The program's source: main plus anything it needs" },
+                    "timeout_seconds": { "type": "number", "description": "Max seconds the running program may take, compile excluded (default 60, max 600)" }
+                },
+                "required": ["language", "code"]
+            }
         }),
         serde_json::json!({
             "name": "run_script",

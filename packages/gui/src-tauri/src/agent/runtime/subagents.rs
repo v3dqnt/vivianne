@@ -205,7 +205,10 @@ impl Tool for TaskOutputTool {
             });
             out_lines.push(format!("{id}: {status_str} — {}", g.description));
             if let SubagentStatus::Completed { output, .. } = &g.status {
-                out_lines.push(format!("  output:\n{}", indent_lines(output, "    ")));
+                // Capped like every other tool output: a polled report used to
+                // duplicate the whole subagent text into context on every poll.
+                let text = crate::agent::tools::exec::clip_tool_text(output, crate::agent::tools::exec::MAX_UNBOUNDED_TOOL_CHARS);
+                out_lines.push(format!("  output:\n{}", indent_lines(&text, "    ")));
             }
             if let SubagentStatus::Failed { error } = &g.status {
                 out_lines.push(format!("  error: {error}"));

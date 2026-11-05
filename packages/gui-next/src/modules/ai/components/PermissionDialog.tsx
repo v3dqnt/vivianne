@@ -46,7 +46,7 @@ export function PermissionDialog() {
           sx={{
             m: 0,
             p: 1.5,
-            borderRadius: 2,
+            borderRadius: 1.6,
             bgcolor: 'action.hover',
             fontFamily: '"Geist Mono", ui-monospace, monospace',
             fontSize: '0.75rem',

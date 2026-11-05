@@ -254,7 +254,7 @@ function ActivityRow({ entry, who, mine }: { entry: ActivityEntry; who: string; 
   return (
     <Stack sx={{ gap: 0.25, pl: 1.25, borderLeft: `2px solid ${alpha(color, 0.6)}` }}>
       <Stack direction="row" sx={{ gap: 0.75, alignItems: 'baseline' }}>
-        <Typography variant="caption" sx={{ fontWeight: 600, color }}>
+        <Typography variant="caption" sx={{ fontWeight: 500, color }}>
           {who}
         </Typography>
         <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>

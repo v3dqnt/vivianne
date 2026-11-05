@@ -1,16 +1,9 @@
-import { lazy, Suspense } from 'react'
 import { Alert, Box, useTheme } from '../../ui'
 import { hasTauri } from '../../ipc'
-import { mainPane } from '../../theme'
+import { SURFACE_RADIUS } from '../../theme'
 import { ChatView } from '../ai/components/ChatView'
-import { HireRequests } from '../team/components/HireRequests'
-import { useProjectsStore, modeOf } from '../sessions/store/projectsStore'
-import { TeamStrip } from '../team/components/TeamStrip'
+import { useProjectsStore } from '../sessions/store/projectsStore'
 import { ProjectTools } from '../team/components/ProjectTools'
-import { useBotsStore } from '../team/store/botsStore'
-import { LEAD_CHANNEL } from '../team/components/TreeTeam'
-
-const TeamRoom = lazy(() => import('../team/components/TeamRoom').then((m) => ({ default: m.TeamRoom })))
 
 /** Every panel fills its box and scrolls itself; the group never scrolls. */
 function Fill({ children }: { children: React.ReactNode }) {
@@ -18,14 +11,13 @@ function Fill({ children }: { children: React.ReactNode }) {
     // Transparent, so the group's glass surface shows through — the same
     // way the sidebar's content sits directly on its card.
     <Box sx={{ height: '100%', width: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <Suspense fallback={null}>{children}</Suspense>
+      {children}
     </Box>
   )
 }
 
 function Chat() {
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === s.activeProjectId))
-  const treeChannel = useBotsStore((s) => (project?.path ? s.channel[project.path] : undefined))
   if (!hasTauri()) {
     return (
       <Fill>
@@ -38,25 +30,26 @@ function Chat() {
       </Fill>
     )
   }
-  const isTeam = !!project?.path && modeOf(project) === 'tree'
-  // A team project: a teammate picked on the left shows its work, read
-  // only; otherwise the lead's conversation, where you talk to the team.
-  const teammate = isTeam && treeChannel && treeChannel !== LEAD_CHANNEL && treeChannel !== 'room' && !treeChannel.startsWith('group:')
+  // The threads rail lives on the workspace's chrome (see Workspace), for
+  // General and for threads projects alike, so the dark surface starts at
+  // the conversation itself. Only a project brings tools to its right.
+  const isThreads = !!project?.path
   return (
     <Fill>
-      {/* The team's people sit on the left; the same space on the right keeps the chat centred. */}
-      <Box sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', px: isTeam ? '224px' : 0 }}>
-        {isTeam && project?.path && <TeamStrip root={project.path} projectName={project.name} />}
-        {isTeam && project?.path && <ProjectTools root={project.path} />}
-        {project?.path && teammate ? (
-          <TeamRoom key={project.path} root={project.path} readOnly />
-        ) : (
-          <>
-            {/* A team project's lead asks to hire here, where you talk to it. */}
-            {isTeam && project?.path && <HireRequests root={project.path} />}
-            <ChatView />
-          </>
-        )}
+      <Box
+        sx={{
+          position: 'relative',
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          // The tools strip sits on the pane's right; the threads are not on
+          // the pane at all, so nothing is reserved on the left.
+          pr: isThreads && project?.path ? '296px' : 0,
+        }}
+      >
+        {isThreads && project?.path && <ProjectTools />}
+        <ChatView />
       </Box>
     </Fill>
   )
@@ -65,20 +58,44 @@ function Chat() {
 /**
  * The main area: the conversation, on one pane. There are no side panels:
  * files, links and documents open in the system's own apps.
+ *
+ * General and threads projects both put their threads on the workspace's
+ * chrome, to the left of the pane: the chat pane's dark surface starts at its
+ * own left edge instead of reserving a column beside the chat. A project's
+ * right side stays on the dark pane, with the project tools riding it.
  */
 export function Workspace() {
   const theme = useTheme()
+  const { pane } = theme.palette.background
   return (
-    <Box sx={{ flex: 1, minWidth: 0, height: '100%', bgcolor: 'background.chrome', pr: 1, pb: 1, pl: 0.5 }}>
+    // One rounded card on the frame, inset from the window's edges: the thread
+    // rail (a step lighter than the frame) and the chat (lightest) joined
+    // inside it with no gap or notch between them.
+    <Box sx={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', minHeight: 0, bgcolor: 'background.chrome', pr: 1, pb: 1, pl: 1 }}>
       <Box
         sx={{
-          height: '100%',
+          flex: 1,
+          minWidth: 0,
           display: 'flex',
-          flexDirection: 'column',
-          ...mainPane(theme),
+          minHeight: 0,
+          borderRadius: `${SURFACE_RADIUS}px`,
+          overflow: 'hidden',
+          border: `1px solid ${theme.palette.divider}`,
+          boxShadow: theme.elevation.pane,
         }}
       >
-        <Chat />
+        <Box
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            position: 'relative',
+            display: 'flex',
+            flexDirection: 'column',
+            bgcolor: pane,
+          }}
+        >
+          <Chat />
+        </Box>
       </Box>
     </Box>
   )

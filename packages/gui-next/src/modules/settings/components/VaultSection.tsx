@@ -68,7 +68,7 @@ export function VaultSection() {
   return (
     <Stack sx={{ gap: 2, maxWidth: 560 }}>
       <Stack sx={{ gap: 0.5 }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+        <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
           Vault
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.55 }}>
@@ -97,7 +97,7 @@ export function VaultSection() {
           <Stack key={e.id} direction="row" sx={{ alignItems: 'center', gap: 1.25, px: 1.5, py: 1, border: 1, borderColor: 'divider', borderRadius: '8px' }}>
             <LockLinear size={15} color="currentColor" />
             <Stack sx={{ flex: 1, minWidth: 0 }}>
-              <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>
+              <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
                 {e.label}
               </Typography>
               <Typography variant="caption" color="text.secondary" noWrap>

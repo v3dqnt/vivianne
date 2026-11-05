@@ -41,6 +41,12 @@ const EMBEDDED: &[(&str, &str)] = &[
     ("mods/index.md", include_str!("../../../../../vivianne-guides/mods/index.md")),
     ("interactive-answers/index.md", include_str!("../../../../../vivianne-guides/interactive-answers/index.md")),
     ("git/index.md", include_str!("../../../../../vivianne-guides/git/index.md")),
+    ("tools/files.md", include_str!("../../../../../vivianne-guides/tools/files.md")),
+    ("tools/finding-tools.md", include_str!("../../../../../vivianne-guides/tools/finding-tools.md")),
+    ("tools/images.md", include_str!("../../../../../vivianne-guides/tools/images.md")),
+    ("tools/index.md", include_str!("../../../../../vivianne-guides/tools/index.md")),
+    ("tools/scripts.md", include_str!("../../../../../vivianne-guides/tools/scripts.md")),
+    ("tools/shell.md", include_str!("../../../../../vivianne-guides/tools/shell.md")),
     ("projects/existing-project.md", include_str!("../../../../../vivianne-guides/projects/existing-project.md")),
     ("projects/index.md", include_str!("../../../../../vivianne-guides/projects/index.md")),
     ("projects/knowledge.md", include_str!("../../../../../vivianne-guides/projects/knowledge.md")),
@@ -152,7 +158,8 @@ pub async fn read(path: &str) -> Result<String, String> {
 pub fn schema() -> serde_json::Value {
     serde_json::json!({
         "name": "guide",
-        "description": "Read Vivianne's guides: how documents should look, and how to get to know and carry a project. Read the relevant ones BEFORE the work, not after.\n- Making any document, deck, spreadsheet or graphic: follow the user's design direction; read the format guide (`design/formats/pdf`, `design/formats/slides`, `design/formats/docx`, `design/formats/xlsx`, `design/formats/graphics`) and anything else it points to (`design/typography`, `design/data`, `design/layout`…). Templates: `design/templates/cv`, `invoice`, `letter`, `poster`, `social`.\n- Starting a new project: `projects/new-project`. Joining or first working on an existing one: `projects/existing-project`. The project knowledge files: `projects/knowledge`. Day-to-day: `projects/working`, `projects/roadmap`, `projects/team`.\n- Putting chemistry, biology, physics or maths in a reply as drawings: `science/chemistry` (structures, reactions, mechanisms, 3D molecules), `science/biology` (sequences, plasmids, trees, pathways, cells), `science/physics` (graphs and physics diagrams). Read the one you need before writing the fence.\nPass no path for the overview.",
+        "description": "Read Vivianne's guides: how documents should look, and how to get to know and carry a project. Read the relevant ones BEFORE the work, not after.\n- Making any document, deck, spreadsheet or graphic: follow the user's design direction; read the format guide (`design/formats/pdf`, `design/formats/slides`, `design/formats/docx`, `design/formats/xlsx`, `design/formats/graphics`) and anything else it points to (`design/typography`, `design/data`, `design/layout`…). Templates: `design/templates/cv`, `invoice`, `letter`, `poster`, `social`.\n- Starting a new project: `projects/new-project`. Joining or first working on an existing one: `projects/existing-project`. The project knowledge files: `projects/knowledge`. Day-to-day: `projects/working`, `projects/roadmap`, `projects/team`.\n- Putting chemistry, biology, physics or maths in a reply as drawings: `science/chemistry` (structures, reactions, mechanisms, 3D molecules), `science/biology` (sequences, plasmids, trees, pathways, cells), `science/physics` (graphs and physics diagrams). Read the one you need before writing the fence.\n- Before using a tool you often get wrong, or when a job looks like a loop: `tools/index` has worked examples (`tools/files` for read, edit, patch; `tools/shell` for bash and PowerShell; `tools/scripts` for run_script and run_native; `tools/finding-tools` for search_tools; `tools/images` for generate_image).
+Pass no path for the overview.",
         "parameters": {
             "type": "object",
             "properties": {

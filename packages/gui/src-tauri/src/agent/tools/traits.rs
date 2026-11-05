@@ -32,7 +32,7 @@ pub fn effect(tool: &str) -> Option<Effect> {
     use Effect::*;
     Some(match tool {
         "read" | "grep" | "glob" | "code_search" | "ls" | "repo_overview" | "diagnostics" | "inspect_document" | "web_search"
-        | "web_fetch" | "recall" | "read_skill" | "list_tools" | "load_tools" | "list_subagent_profiles" | "get_current_time"
+        | "web_fetch" | "recall" | "read_skill" | "list_tools" | "search_tools" | "load_tools" | "list_subagent_profiles" | "get_current_time"
         | "get_goal" | "github" | "guide" | "check_diagram" | "math" | "task_output" | "team_read" | "list_automations"
         | "list_custom_tools" | "sleep" => Read,
         "question" | "confirm_action" | "todo_write" | "submit_plan" | "present_snippet" | "message_agent"
@@ -41,7 +41,7 @@ pub fn effect(tool: &str) -> Option<Effect> {
         "write" | "edit" | "apply_patch" | "notebook_edit" | "create_document" | "edit_document" | "generate_image" | "remember"
         | "create_goal" | "update_goal" | "create_automation" | "delete_automation" | "set_automation_enabled" | "create_tool"
         | "delete_tool" | "repo_clone" => Change,
-        "bash" | "powershell" | "run_script" | "sandbox_execute" | "terminal" | "connect_mcp_server" => Run,
+        "bash" | "powershell" | "run_script" | "run_native" | "sandbox_execute" | "terminal" | "connect_mcp_server" => Run,
         "dip" | "computer" | "user_browser_driver" | "web_preview" | "github_act" | "github_api" | "email" | "phone" | "vault"
         | "nebius_job" => Act,
         t if t.starts_with("browser_") => Act,

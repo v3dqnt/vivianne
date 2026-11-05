@@ -58,7 +58,7 @@ export function SkillsSection() {
   return (
     <Stack sx={{ gap: 0.5 }}>
       <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
           Skills
         </Typography>
         <Button size="small" onClick={() => setHub((h) => !h)} sx={{ textTransform: 'none', ml: 'auto', mr: 0.5 }}>
@@ -98,7 +98,7 @@ export function SkillsSection() {
       {!hub && skills.length > 0 && (
         <Stack
           direction="row"
-          sx={{ alignItems: 'center', gap: 1, px: 1.5, py: 0.75, mb: 1, borderRadius: 2, border: 1, borderColor: 'divider' }}
+          sx={{ alignItems: 'center', gap: 1, px: 1.5, py: 0.75, mb: 1, borderRadius: 1.6, border: 1, borderColor: 'divider' }}
         >
           <SearchNormalLinear size={14} color="currentColor" />
           <InputBase
@@ -121,7 +121,7 @@ export function SkillsSection() {
         </Typography>
       ) : (
         filtered.map((s) => (
-          <Stack key={s.name} direction="row" sx={{ alignItems: 'center', gap: 1.5, py: 1, px: 1, borderRadius: 2, '&:hover': { bgcolor: 'action.hover' } }}>
+          <Stack key={s.name} direction="row" sx={{ alignItems: 'center', gap: 1.5, py: 1, px: 1, borderRadius: 1.6, '&:hover': { bgcolor: 'action.hover' } }}>
             <MagicpenLinear size={15} color="currentColor" />
             <Stack sx={{ flex: 1, minWidth: 0 }}>
               <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>

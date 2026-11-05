@@ -2,11 +2,10 @@ import { useEffect, useState } from 'react'
 import type { AgentMessage } from '../../ai/lib/types'
 import { usePlanStore } from '../../plan/store/planStore'
 import { Button, ButtonBase, Stack, Tooltip, Typography } from '../../../ui'
-import { LEAD_CHANNEL } from './TreeTeam'
 import { NewAgentDialog } from './NewAgentDialog'
 import { call } from '../../../ipc'
 import { ModelPicker } from '../../ai/components/ModelPicker'
-import { useTeamStore, type TeamAgent } from '../store/teamStore'
+import { useTeamStore, LEAD_CHANNEL, type TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey, isGroup, GROUP_PREFIX, type BotStatus } from '../store/botsStore'
 import { useBotFace } from './AgentFace'
 import { Avatar, faceOf } from './bits'
@@ -120,7 +119,7 @@ function DirectMessage({ root, bot, team, readOnly, messenger }: { root: string;
         <BotChip root={root} agent={bot} onOpen={() => {}} />
         <Stack sx={{ minWidth: 0, flex: 1 }}>
           <Stack direction="row" sx={{ alignItems: 'baseline', gap: 0.75 }}>
-            <Typography variant="body2" sx={{ fontWeight: 700 }} noWrap>
+            <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
               {bot.name}
             </Typography>
             <Typography variant="caption" color="text.secondary">
@@ -143,7 +142,7 @@ function DirectMessage({ root, bot, team, readOnly, messenger }: { root: string;
           toolbar: <ModelPicker mode="agent" value={bot.model} onChange={(model) => void save(root, { ...bot, model }, bot.id)} />,
           onRevertTo: revertTo,
           readOnly: readOnly ? (
-            <Stack direction="row" sx={{ alignItems: 'center', gap: 1, mx: 2, mb: 2, px: 1.5, py: 1, borderRadius: '10px', border: 1, borderColor: 'divider', bgcolor: 'action.hover' }}>
+            <Stack direction="row" sx={{ alignItems: 'center', gap: 1, mx: 2, mb: 2, px: 1.5, py: 1, borderRadius: '8px', border: 1, borderColor: 'divider', bgcolor: 'action.hover' }}>
               <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
                 {bot.name}'s live work. To direct it, message the lead.
               </Typography>
@@ -227,7 +226,7 @@ function Room({ root, team, channel = 'room', name }: { root: string; team: Team
                 <Avatar key={a.id} {...faceOf(a)} size={34} />
               ))}
             </Stack>
-            <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary' }}>
+            <Typography variant="body2" sx={{ fontWeight: 500, color: 'text.primary' }}>
               {name ?? 'Everyone'}
             </Typography>
             <Typography variant="caption" sx={{ maxWidth: 380, lineHeight: 1.5 }}>

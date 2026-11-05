@@ -60,7 +60,7 @@ function CustomSwatch({ value, on, onChange, label }: { value: string; on: boole
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <Stack direction="row" sx={{ alignItems: 'center', gap: '12px', minHeight: 32 }}>
-      <Typography sx={{ fontSize: '12px', color: 'text.secondary', width: 52, flexShrink: 0 }}>{label}</Typography>
+      <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary', width: 52, flexShrink: 0 }}>{label}</Typography>
       <Stack direction="row" sx={{ alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
         {children}
       </Stack>
@@ -77,7 +77,7 @@ function ColorRow({ label, value, presets, onChange }: { label: string; value: s
         aria-label={`${label}: automatic`}
         aria-pressed={!value}
         onClick={() => onChange(undefined)}
-        sx={{ height: SWATCH, px: '8px', borderRadius: '999px', fontSize: '11px', fontWeight: 500, color: value ? 'text.secondary' : 'text.primary', bgcolor: value ? 'transparent' : 'action.selected', boxShadow: (t) => `inset 0 0 0 1px ${t.palette.divider}` }}
+        sx={{ height: SWATCH, px: '8px', borderRadius: '999px', fontSize: '0.6875rem', fontWeight: 500, color: value ? 'text.secondary' : 'text.primary', bgcolor: value ? 'transparent' : 'action.selected', boxShadow: (t) => `inset 0 0 0 1px ${t.palette.divider}` }}
       >
         Auto
       </ButtonBase>
@@ -103,7 +103,7 @@ export function FaceStage({ name, color, face, size = 128 }: { name: string; col
             key={s}
             onClick={() => setMood(s)}
             aria-pressed={mood === s}
-            sx={{ px: '8px', height: 22, borderRadius: '999px', fontSize: '11px', textTransform: 'capitalize', color: mood === s ? 'text.primary' : 'text.secondary', bgcolor: mood === s ? 'action.selected' : 'transparent', '&:hover': { color: 'text.primary' } }}
+            sx={{ px: '8px', height: 24, borderRadius: '999px', fontSize: '0.6875rem', textTransform: 'capitalize', color: mood === s ? 'text.primary' : 'text.secondary', bgcolor: mood === s ? 'action.selected' : 'transparent', '&:hover': { color: 'text.primary' } }}
           >
             {s}
           </ButtonBase>
@@ -143,7 +143,7 @@ export function FaceControls({
               aria-label={s}
               aria-pressed={on}
               onClick={() => set({ shape: s })}
-              sx={{ width: 40, height: 40, borderRadius: '10px', bgcolor: on ? 'action.selected' : 'action.hover', boxShadow: on ? (t) => `inset 0 0 0 1.5px ${t.palette.text.primary}` : 'none', '&:hover': { bgcolor: 'action.selected' } }}
+              sx={{ width: 40, height: 40, borderRadius: '8px', bgcolor: on ? 'action.selected' : 'action.hover', boxShadow: on ? (t) => `inset 0 0 0 1.5px ${t.palette.text.primary}` : 'none', '&:hover': { bgcolor: 'action.selected' } }}
             >
               <AgentFace name={name || '?'} color={hex} face={{ ...f, shape: s }} size={26} />
             </ButtonBase>
@@ -184,10 +184,10 @@ export function FaceEditor({
       <Stack sx={{ gap: '12px', flex: 1, minWidth: 240 }}>
         <FaceControls name={name} color={color} face={face} onChange={onChange} />
         <Stack direction="row" sx={{ gap: '8px', pl: '64px' }}>
-          <ButtonBase onClick={() => onChange(randomLook())} sx={{ height: 28, px: '12px', borderRadius: '8px', fontSize: '12px', fontWeight: 500, bgcolor: 'action.hover', '&:hover': { bgcolor: 'action.selected' } }}>
+          <ButtonBase onClick={() => onChange(randomLook())} sx={{ height: 28, px: '12px', borderRadius: '8px', fontSize: '0.75rem', fontWeight: 500, bgcolor: 'action.hover', '&:hover': { bgcolor: 'action.selected' } }}>
             Randomize
           </ButtonBase>
-          <ButtonBase onClick={() => onChange({ color, face: null })} sx={{ height: 28, px: '12px', borderRadius: '8px', fontSize: '12px', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover' } }}>
+          <ButtonBase onClick={() => onChange({ color, face: null })} sx={{ height: 28, px: '12px', borderRadius: '8px', fontSize: '0.75rem', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover' } }}>
             Reset
           </ButtonBase>
         </Stack>

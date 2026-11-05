@@ -45,7 +45,7 @@ export function ChatImage({ src, alt, inline = false }: { src: string; alt?: str
   const [broken, setBroken] = useState(false)
   if (failed || broken) {
     return (
-      <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, px: 1.25, py: 0.75, my: inline ? 1 : 0, borderRadius: '10px', border: 1, borderColor: 'divider', color: 'text.secondary', maxWidth: '100%' }}>
+      <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, px: 1.25, py: 0.75, my: inline ? 1 : 0, borderRadius: '8px', border: 1, borderColor: 'divider', color: 'text.secondary', maxWidth: '100%' }}>
         <ImageBrokenLinear size={15} color="currentColor" />
         <Typography noWrap sx={{ fontSize: '0.75rem', minWidth: 0 }} title={src}>
           {alt || "Couldn't load this image"} · {src.startsWith('data:') ? 'embedded image' : src}

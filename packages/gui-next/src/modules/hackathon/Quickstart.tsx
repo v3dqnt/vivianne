@@ -19,7 +19,7 @@ const toOverride = (m: DiscoveredModel): SubagentModelOverride => ({
   contextWindow: m.contextWindow ?? 128000,
 })
 
-const field = { fontSize: '0.8125rem', px: 1.25, height: 36, border: 1, borderColor: 'divider', borderRadius: '9px', flex: 1 } as const
+const field = { fontSize: '0.8125rem', px: 1.25, height: 36, border: 1, borderColor: 'divider', borderRadius: '8px', flex: 1 } as const
 
 /**
  * First-run card for the edition: paste a Nebius key, and the app picks
@@ -165,7 +165,7 @@ export function Quickstart() {
             </Typography>
 
             <Stack sx={{ gap: 0.75 }}>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>
                 1. Nebius API key
               </Typography>
               <Stack direction="row" sx={{ gap: 1 }}>
@@ -182,8 +182,8 @@ export function Quickstart() {
             </Stack>
 
             {connected && (
-              <Stack sx={{ gap: 1, p: 1.5, borderRadius: '10px', bgcolor: alpha(theme.palette.primary.main, 0.07) }}>
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              <Stack sx={{ gap: 1, p: 1.5, borderRadius: '8px', bgcolor: alpha(theme.palette.primary.main, 0.07) }}>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
                   2. Models
                 </Typography>
                 <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
@@ -209,7 +209,7 @@ export function Quickstart() {
             )}
 
             <Stack sx={{ gap: 0.75 }}>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>
                 {connected ? '3. Optional keys' : '2. Optional keys'}
               </Typography>
               <Stack direction="row" sx={{ gap: 1 }}>

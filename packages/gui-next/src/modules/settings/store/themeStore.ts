@@ -29,7 +29,7 @@ export interface Appearance {
 
 export const DEFAULT_APPEARANCE: Appearance = {
   modePref: 'dark',
-  paletteId: 'nvidia',
+  paletteId: 'aero',
   accent: null,
   font: 'general',
   uiScale: 1,
@@ -75,9 +75,9 @@ function resolve(pref: ModePref): ThemeMode {
   return pref
 }
 
-/** The NVIDIA edition opens in its own theme once, whatever was saved before;
+/** Aero is the new default: it is applied once, whatever was saved before;
  * a later pick sticks. */
-const EDITION_THEMED_KEY = 'viv.hackathon.themed'
+const EDITION_THEMED_KEY = 'viv.palette.aero'
 /** General Sans became the default face in the better-newer update: everyone moves to it once, then their choice stands. */
 const DEFAULT_FONT_KEY = 'viv.font.general'
 

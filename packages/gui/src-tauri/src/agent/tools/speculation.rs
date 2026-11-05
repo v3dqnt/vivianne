@@ -117,7 +117,7 @@ tokio::task_local! {
 /// count, or a script's speculations would die the moment it started.
 pub fn note_call(name: &str) {
     use super::traits::Effect;
-    if name == "run_script" {
+    if name == "run_script" || name == "run_native" {
         return;
     }
     if !matches!(super::traits::effect(name), Some(Effect::Read | Effect::Talk | Effect::Delegate)) {

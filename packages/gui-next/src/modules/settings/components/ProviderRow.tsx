@@ -42,7 +42,7 @@ export function ProviderRow({ provider }: { provider: ProviderMeta }) {
   return (
     <Stack
       direction="row"
-      sx={{ alignItems: 'center', gap: 1.5, py: 1.25, px: 1.5, borderRadius: 2, '&:hover': { bgcolor: 'action.hover' } }}
+      sx={{ alignItems: 'center', gap: 1.5, py: 1.25, px: 1.5, borderRadius: 1.6, '&:hover': { bgcolor: 'action.hover' } }}
     >
       <Box sx={{ width: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'text.secondary' }}>
         <KeyLinear size={16} color="currentColor" />
@@ -162,7 +162,7 @@ function KeyPoolPanel({ providerId, providerLabel }: { providerId: string; provi
 
   return (
     <Stack sx={{ gap: 1 }}>
-      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, display: 'block' }}>
+      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, display: 'block' }}>
         {providerLabel} key pool
       </Typography>
       <Typography variant="caption" color="text.secondary">
@@ -196,7 +196,7 @@ function KeyPoolPanel({ providerId, providerLabel }: { providerId: string; provi
           placeholder="Label (e.g. backup key)"
           value={label}
           onChange={(e) => setLabel(e.target.value)}
-          sx={{ fontSize: '0.8125rem', bgcolor: 'action.hover', borderRadius: 1.5, px: 1.25, py: 0.5 }}
+          sx={{ fontSize: '0.8125rem', bgcolor: 'action.hover', borderRadius: 1.6, px: 1.25, py: 0.5 }}
         />
         <Stack direction="row" sx={{ gap: 0.75 }}>
           <InputBase
@@ -206,7 +206,7 @@ function KeyPoolPanel({ providerId, providerLabel }: { providerId: string; provi
             value={key}
             onChange={(e) => setKey(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && void add()}
-            sx={{ fontSize: '0.8125rem', fontFamily: '"Geist Mono", ui-monospace, monospace', bgcolor: 'action.hover', borderRadius: 1.5, px: 1.25, py: 0.5 }}
+            sx={{ fontSize: '0.8125rem', fontFamily: '"Geist Mono", ui-monospace, monospace', bgcolor: 'action.hover', borderRadius: 1.6, px: 1.25, py: 0.5 }}
           />
           <IconButton size="small" onClick={() => void add()} disabled={busy || !key.trim()}>
             {busy ? <CircularProgress size={14} /> : <AddLinear size={16} color="currentColor" />}

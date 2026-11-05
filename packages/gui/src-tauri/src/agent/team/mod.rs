@@ -26,6 +26,7 @@ pub mod bots;
 pub mod contact;
 pub mod master;
 pub mod plans;
+pub mod proactive;
 pub mod run;
 pub mod runs;
 

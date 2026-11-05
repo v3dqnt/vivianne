@@ -12,20 +12,20 @@ export const MONO_FONT = '"Geist Mono", ui-monospace, monospace'
 
 export const T = {
   /** A detail's heading. */
-  title: { fontSize: '14px', lineHeight: '20px', fontWeight: 600 },
+  title: { fontSize: '0.875rem', lineHeight: '20px', fontWeight: 600 },
   /** Row titles, prose. */
-  body: { fontSize: '13px', lineHeight: '20px' },
+  body: { fontSize: '0.8125rem', lineHeight: '20px' },
   /** Buttons, tabs, secondary lines. */
-  small: { fontSize: '12px', lineHeight: '16px' },
+  small: { fontSize: '0.75rem', lineHeight: '16px' },
   /** Meta lines under a title, counts, times. */
-  meta: { fontSize: '11px', lineHeight: '16px' },
+  meta: { fontSize: '0.6875rem', lineHeight: '16px' },
   /** Section labels. */
-  label: { fontSize: '11px', lineHeight: '16px', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' },
+  label: { fontSize: '0.6875rem', lineHeight: '16px', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' },
   mono: { fontFamily: MONO_FONT },
 } as const
 
 /** Buttons in the view: 24px tall, 8px in, 6px corners. */
-export const BTN_SX = { height: 24, minHeight: 24, minWidth: 0, px: u(2), py: 0, fontSize: '12px', lineHeight: '16px', borderRadius: '6px', whiteSpace: 'nowrap' } as const
+export const BTN_SX = { height: 24, minHeight: 24, minWidth: 0, px: u(2), py: 0, fontSize: '0.75rem', lineHeight: '16px', borderRadius: '6px', whiteSpace: 'nowrap' } as const
 
 /** A filter choice: 20px, flat when picked, outlined when not. */
 export function Pill({ active, onClick, children, title }: { active: boolean; onClick: () => void; children: ReactNode; title?: string }) {

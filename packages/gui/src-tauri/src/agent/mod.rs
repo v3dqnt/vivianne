@@ -15,6 +15,8 @@
 /// - `system` — data paths, telemetry, notifications, dev servers
 
 pub mod background;
+pub mod harness;
+pub mod harness_install;
 pub mod changes;
 pub mod models;
 pub mod profiles;

@@ -99,7 +99,7 @@ function KeyRecorder({ value, onChange, placeholder = 'Not set' }: { value: stri
           justifyContent: 'center',
           px: 1,
           py: 0.4,
-          borderRadius: 1.5,
+          borderRadius: 1.6,
           border: 1,
           borderColor: rec ? 'primary.main' : 'divider',
           fontFamily: 'monospace',
@@ -270,7 +270,7 @@ export function LayoutSection() {
 
   return (
     <Stack sx={{ gap: 1.5 }}>
-      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
         Window
       </Typography>
       <Row label="Sidebar side">
@@ -286,7 +286,7 @@ export function LayoutSection() {
 
       <Divider />
       <Stack direction="row" sx={{ alignItems: 'center' }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, flex: 1 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 500, flex: 1 }}>
           Shortcuts
         </Typography>
         <Button size="small" color="inherit" disabled={Object.keys(overrides).length === 0} onClick={resetAll} sx={{ textTransform: 'none', color: 'text.secondary' }}>
@@ -312,7 +312,7 @@ export function LayoutSection() {
       {INSTANT_ENABLED && hasTauri() && (
         <>
           <Divider />
-          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
             Notch
           </Typography>
           <NotchRows />

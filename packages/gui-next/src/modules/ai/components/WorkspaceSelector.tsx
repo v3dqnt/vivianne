@@ -77,7 +77,7 @@ export function WorkspaceSelector() {
         transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
         slotProps={{ paper: { sx: { width: 320, p: 1.5 } } }}
       >
-        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, display: 'block', px: 0.5, mb: 0.5 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, display: 'block', px: 0.5, mb: 0.5 }}>
           Workspace folders
         </Typography>
 
@@ -91,7 +91,7 @@ export function WorkspaceSelector() {
               <Stack
                 key={f}
                 direction="row"
-                sx={{ alignItems: 'center', gap: 1, px: 0.75, py: 0.75, borderRadius: 1.5, '&:hover .ws-remove': { opacity: 1 } }}
+                sx={{ alignItems: 'center', gap: 1, px: 0.75, py: 0.75, borderRadius: 1.6, '&:hover .ws-remove': { opacity: 1 } }}
               >
                 <Typography
                   variant="caption"
@@ -129,12 +129,12 @@ export function WorkspaceSelector() {
                 if (e.key === 'Enter') void confirmCreate()
                 if (e.key === 'Escape') setCreating(false)
               }}
-              sx={{ fontSize: '0.8125rem', bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 1.5, px: 1, py: 0.5 }}
+              sx={{ fontSize: '0.8125rem', bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 1.6, px: 1, py: 0.5 }}
             />
             <Stack direction="row" sx={{ gap: 1 }}>
               <ButtonBase
                 onClick={() => setCreating(false)}
-                sx={{ flex: 1, py: 0.75, borderRadius: 1.5, fontSize: '0.75rem', border: 1, borderColor: 'divider' }}
+                sx={{ flex: 1, py: 0.75, borderRadius: 1.6, fontSize: '0.75rem', border: 1, borderColor: 'divider' }}
               >
                 Cancel
               </ButtonBase>
@@ -144,7 +144,7 @@ export function WorkspaceSelector() {
                 sx={{
                   flex: 1,
                   py: 0.75,
-                  borderRadius: 1.5,
+                  borderRadius: 1.6,
                   fontSize: '0.75rem',
                   bgcolor: 'primary.main',
                   color: 'primary.contrastText',
@@ -160,7 +160,7 @@ export function WorkspaceSelector() {
             <ButtonBase
               onClick={() => void addExistingFolder()}
               disabled={loading}
-              sx={{ justifyContent: 'flex-start', gap: 1, px: 1, py: 0.75, borderRadius: 1.5, fontSize: '0.8125rem', '&:hover': { bgcolor: 'action.hover' } }}
+              sx={{ justifyContent: 'flex-start', gap: 1, px: 1, py: 0.75, borderRadius: 1.6, fontSize: '0.8125rem', '&:hover': { bgcolor: 'action.hover' } }}
             >
               <AddLinear size={14} color="currentColor" />
               Add existing folder…
@@ -168,7 +168,7 @@ export function WorkspaceSelector() {
             <ButtonBase
               onClick={() => setCreating(true)}
               disabled={loading}
-              sx={{ justifyContent: 'flex-start', gap: 1, px: 1, py: 0.75, borderRadius: 1.5, fontSize: '0.8125rem', '&:hover': { bgcolor: 'action.hover' } }}
+              sx={{ justifyContent: 'flex-start', gap: 1, px: 1, py: 0.75, borderRadius: 1.6, fontSize: '0.8125rem', '&:hover': { bgcolor: 'action.hover' } }}
             >
               <FolderAddLinear size={14} color="currentColor" />
               New folder…
@@ -187,7 +187,7 @@ export function WorkspaceSelector() {
             gap: 1,
             px: 1,
             py: 0.75,
-            borderRadius: 1.5,
+            borderRadius: 1.6,
             fontSize: '0.8125rem',
             color: accessMode === 'readOnly' ? 'text.secondary' : 'text.primary',
             '&:hover': { bgcolor: 'action.hover' },

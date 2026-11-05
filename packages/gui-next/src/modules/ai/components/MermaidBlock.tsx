@@ -59,7 +59,7 @@ export function MermaidBlock({ code }: { code: string }) {
     return (
       <Box
         component="pre"
-        sx={{ my: 1, p: 1.5, borderRadius: 1.5, border: 1, borderColor: 'error.main', fontSize: '0.75rem', overflowX: 'auto' }}
+        sx={{ my: 1, p: 1.5, borderRadius: 1.6, border: 1, borderColor: 'error.main', fontSize: '0.75rem', overflowX: 'auto' }}
       >
         {code}
       </Box>
@@ -76,7 +76,7 @@ export function MermaidBlock({ code }: { code: string }) {
 
   return (
     <Box
-      sx={{ my: 1, p: 1.5, borderRadius: 1.5, border: 1, borderColor: 'divider', bgcolor: 'background.paper', overflowX: 'auto', '& svg': { maxWidth: '100%' } }}
+      sx={{ my: 1, p: 1.5, borderRadius: 1.6, border: 1, borderColor: 'divider', bgcolor: 'background.paper', overflowX: 'auto', '& svg': { maxWidth: '100%' } }}
       dangerouslySetInnerHTML={{ __html: svg }}
     />
   )

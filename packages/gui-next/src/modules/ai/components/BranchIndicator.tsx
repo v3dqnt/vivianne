@@ -94,7 +94,7 @@ export function BranchIndicator() {
         onClose={close}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-        slotProps={{ paper: { sx: { width: 320, borderRadius: 2, overflow: 'hidden' } } }}
+        slotProps={{ paper: { sx: { width: 320, borderRadius: 1.6, overflow: 'hidden' } } }}
       >
         <Stack sx={{ alignItems: 'center', gap: 1, px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider' }} direction="row">
           <SearchNormalLinear size={13} color="currentColor" />
@@ -150,9 +150,9 @@ export function BranchIndicator() {
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && void submitCreate()}
-                sx={{ fontSize: '0.8125rem', bgcolor: 'action.hover', borderRadius: 1, px: 1, py: 0.375 }}
+                sx={{ fontSize: '0.8125rem', bgcolor: 'action.hover', borderRadius: 0.8, px: 1, py: 0.375 }}
               />
-              <ButtonBase onClick={() => void submitCreate()} disabled={!newName.trim() || busy !== null} sx={{ px: 1, py: 0.5, borderRadius: 1, bgcolor: 'primary.main', color: 'primary.contrastText', fontSize: '0.75rem' }}>
+              <ButtonBase onClick={() => void submitCreate()} disabled={!newName.trim() || busy !== null} sx={{ px: 1, py: 0.5, borderRadius: 0.8, bgcolor: 'primary.main', color: 'primary.contrastText', fontSize: '0.75rem' }}>
                 {busy === '__new__' ? <CircularProgress size={12} sx={{ color: 'inherit' }} /> : 'Create'}
               </ButtonBase>
             </Stack>

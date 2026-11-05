@@ -64,7 +64,7 @@ pub const CORE_TOOLS: &[&str] = &[
     "write", "edit", "apply_patch",
     "bash", "powershell",
     "web_search", "web_fetch",
-    "todo_write", "question", "recall", "list_tools", LOAD_TOOLS,
+    "todo_write", "question", "recall", "list_tools", LOAD_TOOLS, crate::agent::tools::tool_search::SEARCH_TOOLS,
 ];
 
 /// Held back from a cloud model's request until the conversation shows it
@@ -74,7 +74,7 @@ pub const DEFERRED_TOOLS: &[&str] = &[
     "user_browser_driver",
     "dip",
     "create_automation", "list_automations", "delete_automation", "set_automation_enabled",
-    "nebius_job", "create_tool", "list_custom_tools", "delete_tool", "connect_mcp_server",
+    "nebius_job", "create_tool", "list_custom_tools", "delete_tool", "connect_mcp_server", "run_native",
 ];
 
 /// How much of the tool list a request starts with.
@@ -202,7 +202,9 @@ pub fn select_tool_defs(
 ) -> Vec<serde_json::Value> {
     let name_of = |d: &serde_json::Value| d.get("name").and_then(|n| n.as_str()).map(String::from);
     let all: HashSet<String> = defs.iter().filter_map(name_of).collect();
-    let wanted = tool_names(profile, messages, &all);
+    let mut wanted = tool_names(profile, messages, &all);
+    // Whatever the model's searches found is loaded too.
+    wanted.extend(crate::agent::tools::tool_search::loaded_by_searches(defs, messages));
     defs.iter()
         .filter(|d| name_of(d).is_some_and(|name| available.contains(&name) && wanted.contains(&name)))
         .cloned()

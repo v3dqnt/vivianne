@@ -18,12 +18,12 @@ export function WidgetLab() {
   return (
     <Stack sx={{ flex: 1, minHeight: 0, background: `radial-gradient(120% 60% at 0% 0%, ${LAB_COLOR}22, transparent 60%)` }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: '12px', px: '20px', py: '14px' }}>
-        <Box sx={{ width: 44, height: 44, borderRadius: '14px', display: 'grid', placeItems: 'center', bgcolor: `${LAB_COLOR}33`, fontSize: '20px' }}>🧪</Box>
+        <Box sx={{ width: 44, height: 44, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: `${LAB_COLOR}33`, fontSize: '1.25rem' }}>🧪</Box>
         <Stack sx={{ flex: 1, minWidth: 0 }}>
-          <Typography sx={{ fontSize: '16px', fontWeight: 600 }}>Widget Lab</Typography>
-          <Typography sx={{ fontSize: '12px', color: 'text.secondary' }}>Every card an agent can show, in every state</Typography>
+          <Typography sx={{ fontSize: '1rem', fontWeight: 600 }}>Widget Lab</Typography>
+          <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>Every card an agent can show, in every state</Typography>
         </Stack>
-        <ButtonBase onClick={reset} sx={{ height: 30, px: '12px', borderRadius: '999px', fontSize: '12px', bgcolor: 'action.hover' }}>
+        <ButtonBase onClick={reset} sx={{ height: 32, px: '12px', borderRadius: '999px', fontSize: '0.75rem', bgcolor: 'action.hover' }}>
           Reset
         </ButtonBase>
       </Stack>
@@ -33,7 +33,7 @@ export function WidgetLab() {
             const state = states[i] ?? card.state
             return (
               <Stack key={i} sx={{ gap: '6px' }}>
-                <Typography sx={{ fontSize: '11px', fontWeight: 600, color: 'text.disabled', pl: '44px' }}>
+                <Typography sx={{ fontSize: '0.6875rem', fontWeight: 500, color: 'text.disabled', pl: '44px' }}>
                   {card.label} · {card.state}
                 </Typography>
                 <Stack direction="row" sx={{ alignItems: 'flex-end', gap: '8px' }}>

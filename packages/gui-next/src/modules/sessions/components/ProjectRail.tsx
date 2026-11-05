@@ -13,7 +13,7 @@ const TILE = 30
 
 /** A picked image, cropped square from its centre and scaled to 64px, as a
  * PNG data URL — small enough to keep in projects.json. */
-async function iconFrom(file: File): Promise<string> {
+export async function iconFrom(file: File): Promise<string> {
   const bitmap = await createImageBitmap(file)
   const side = Math.min(bitmap.width, bitmap.height)
   const canvas = document.createElement('canvas')
@@ -29,7 +29,7 @@ async function iconFrom(file: File): Promise<string> {
 /** Create/edit a project: name, folder, accent color. The folder is what
  * powers "open in Explorer/PowerShell" and the workspace the threads in this
  * project run against. */
-function ProjectDialog({ project, open, onClose }: { project: Project | null; open: boolean; onClose: () => void }) {
+export function ProjectDialog({ project, open, onClose }: { project: Project | null; open: boolean; onClose: () => void }) {
   const create = useProjectsStore((s) => s.create)
   const update = useProjectsStore((s) => s.update)
   const [name, setName] = useState('')
@@ -73,7 +73,7 @@ function ProjectDialog({ project, open, onClose }: { project: Project | null; op
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle sx={{ fontSize: '1rem', fontWeight: 700 }}>{project ? 'Edit project' : 'New project'}</DialogTitle>
+      <DialogTitle sx={{ fontSize: '1rem', fontWeight: 600 }}>{project ? 'Edit project' : 'New project'}</DialogTitle>
       <DialogContent>
         <Stack sx={{ gap: 2, pt: 0.5 }}>
           <TextField size="small" label="Name" value={name} onChange={(e) => setName(e.target.value)} autoFocus fullWidth />
@@ -102,7 +102,7 @@ function ProjectDialog({ project, open, onClose }: { project: Project | null; op
                   sx={{
                     width: 24,
                     height: 24,
-                    borderRadius: 1.5,
+                    borderRadius: 1.6,
                     bgcolor: hex,
                     border: '2px solid',
                     borderColor: color === id ? 'text.primary' : 'transparent',
@@ -209,8 +209,8 @@ export function ProjectRail() {
                 flexShrink: 0,
                 borderRadius: '8px',
                 overflow: 'hidden',
-                fontSize: '0.78125rem',
-                fontWeight: 700,
+                fontSize: '0.8125rem',
+                fontWeight: 500,
                 color: projectColor(p),
                 bgcolor: `${projectColor(p)}22`,
                 border: '1.5px solid',

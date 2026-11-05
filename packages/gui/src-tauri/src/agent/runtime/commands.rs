@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// Global app state shared across commands.
 pub struct AppState {
-    pub agent: tokio::sync::Mutex<crate::agent::Agent>,
+    pub(in crate::agent::runtime) agent: tokio::sync::Mutex<crate::agent::Agent>,
     /// The same `AgentState` the `Agent` above holds, cloned out at
     /// construction (it wraps an `Arc<RwLock<_>>`, so this is a shared
     /// handle, not a copy).
@@ -20,7 +20,7 @@ pub struct AppState {
     /// message list were all unreachable mid-turn, and a turn parked on an
     /// unanswered permission prompt held it for up to 900s.
     pub agent_state: crate::agent::runtime::state::AgentState,
-    pub session_id: tokio::sync::Mutex<Option<String>>,
+    pub(in crate::agent::runtime) session_id: tokio::sync::Mutex<Option<String>>,
     /// Cloned out of `Agent` at construction time so steering/follow-up
     /// commands can push messages without waiting on `agent`'s mutex, which
     /// is held for the full duration of an in-flight prompt/continue run.
@@ -143,7 +143,7 @@ pub async fn cmd_set_project_dir(path: String) -> Result<String, String> {
 /// active session id so `usage_by_source.json` can at least identify which
 /// session a request's cost came from without a full parent/child tree.
 async fn main_source_tag(state: &AppState) -> String {
-    let session_id = state.session_id.lock().await.clone().unwrap_or_default();
+    let session_id = state.session_id().await.unwrap_or_default();
     format!("main:{session_id}")
 }
 
@@ -193,7 +193,11 @@ pub async fn run_turn(
     turn: Turn,
 ) -> Result<Vec<AgentMessage>, String> {
     use tauri::Emitter;
-    let mut agent = state.agent.lock().await;
+    if turn.main {
+        // Alongside the reply, never in front of it: a first message also gets a title.
+        crate::agent::sessions::title::on_turn_start(app, &state, &text).await;
+    }
+    let mut agent = state.lock_agent().await;
     let (tx, mut rx) = crate::agent::runtime::events::event_bus();
 
     // Every event this turn gets tagged with the thread it belongs to, so a
@@ -381,7 +385,18 @@ pub async fn run_turn(
         None
     };
     crate::agent::background::run_ledger::begin_run(&state, thread_id, &request_text).await;
-    let new_messages = agent.prompt(message, app, &tx, &state.abort_flag, &state.steer_flag, &source_tag).await;
+    // Another coding agent (Claude Code, Codex, Gemini CLI…) as the model:
+    // the turn runs in it, over ACP, instead of in Vivianne's own loop.
+    let current = agent.state.model().await;
+    let new_messages = if current.provider == crate::agent::harness::PROVIDER {
+        let bypass = crate::agent::tools::exec::read_bypass_mode().await || agent.state.auto_approve().await;
+        crate::agent::harness::run_turn(&agent.state, &tx, thread_id, &current.id, message, &state.abort_flag, bypass).await
+    } else if crate::ai::imagegen::is_image_model(&current.provider, &current.id) {
+        // An image model picked: the message is the prompt and the picture is the reply.
+        crate::ai::imagegen::run_turn(&agent.state, &tx, app, &current.provider, &current.id, message, &state.abort_flag).await
+    } else {
+        agent.prompt(message, app, &tx, &state.abort_flag, &state.steer_flag, &source_tag).await
+    };
     if let Some(auto) = routed_from {
         agent.state.set_model(auto).await;
     }
@@ -404,7 +419,7 @@ pub async fn cmd_agent_continue(
 ) -> Result<Vec<AgentMessage>, String> {
     let state = registry.resolve(threadId.as_deref()).await;
     use tauri::Emitter;
-    let mut agent = state.agent.lock().await;
+    let mut agent = state.lock_agent().await;
     let (tx, mut rx) = crate::agent::runtime::events::event_bus();
 
     let app_clone = app.clone();
@@ -504,10 +519,7 @@ pub async fn cmd_agent_reset(
     registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
     let state = registry.resolve(threadId.as_deref()).await;
-    let mut agent = state.agent.lock().await;
-    agent.reset().await;
-    let mut active_id = state.session_id.lock().await;
-    *active_id = None;
+    state.reset_thread().await;
     Ok(())
 }
 
@@ -945,7 +957,7 @@ pub async fn cmd_compact_now(
     registry: State<'_, AgentRegistry>,
 ) -> Result<usize, String> {
     let state = registry.resolve(threadId.as_deref()).await;
-    let agent = state.agent.lock().await;
+    let agent = state.lock_agent().await;
     let model = agent.state.model().await;
     let mut context = crate::agent::runtime::types::AgentContext {
         system_prompt: agent.state.system_prompt().await,
@@ -972,13 +984,12 @@ pub async fn cmd_agent_set_steering_mode(
     registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
     let state = registry.resolve(threadId.as_deref()).await;
-    let mut agent = state.agent.lock().await;
     let mode_enum = match mode.to_lowercase().as_str() {
         "all" => QueueMode::All,
         "one-at-a-time" => QueueMode::OneAtATime,
         _ => QueueMode::OneAtATime,
     };
-    agent.steering_mode = mode_enum;
+    state.set_steering_mode(mode_enum).await;
     Ok(())
 }
 
@@ -990,13 +1001,12 @@ pub async fn cmd_agent_set_follow_up_mode(
     registry: State<'_, AgentRegistry>,
 ) -> Result<(), String> {
     let state = registry.resolve(threadId.as_deref()).await;
-    let mut agent = state.agent.lock().await;
     let mode_enum = match mode.to_lowercase().as_str() {
         "all" => QueueMode::All,
         "one-at-a-time" => QueueMode::OneAtATime,
         _ => QueueMode::OneAtATime,
     };
-    agent.follow_up_mode = mode_enum;
+    state.set_follow_up_mode(mode_enum).await;
     Ok(())
 }
 
@@ -1508,6 +1518,11 @@ pub(crate) fn write_session_file_atomic(path: &std::path::Path, json: &str) -> R
 pub struct SessionInfo {
     pub(crate) id: String,
     pub(crate) name: String,
+    /// Who made the name: `user` (typed, never replaced) or `auto` (a summary
+    /// or a cleaned sentence). Written before `messages` so it can be read
+    /// from the start of a large file. Absent on sessions from before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) title_source: Option<String>,
     pub(crate) messages: Vec<AgentMessage>,
     pub(crate) created_at: String,
     /// Per-session workspace folders (first = primary) + access mode,
@@ -1648,8 +1663,7 @@ pub async fn cmd_get_sessions() -> Result<Vec<SessionMeta>, String> {
 pub async fn cmd_get_active_session_id(#[allow(non_snake_case)] threadId: Option<String>,
     registry: State<'_, AgentRegistry>) -> Result<Option<String>, String> {
     let state = registry.resolve(threadId.as_deref()).await;
-    let id = state.session_id.lock().await.clone();
-    Ok(id)
+    Ok(state.session_id().await)
 }
 
 /// Permanently delete a saved session file. If it's the currently active
@@ -1669,13 +1683,8 @@ pub async fn cmd_delete_session(
         invalidate_session_list_cache();
     }
 
-    let mut active_id_lock = state.session_id.lock().await;
-    if active_id_lock.as_deref() == Some(id.as_str()) {
-        *active_id_lock = None;
-        drop(active_id_lock);
-        let agent = state.agent.lock().await;
-        agent.state.set_messages(Vec::new()).await;
-    }
+    state.close_if_open(&id).await;
+    crate::agent::sessions::title::forget(&id);
     Ok(())
 }
 
@@ -1728,23 +1737,17 @@ pub async fn cmd_load_session(
     let session: SessionInfo = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse session: {}", e))?;
     
-    let agent = state.agent.lock().await;
-    agent.state.set_messages(session.messages).await;
-    agent.state.clear_goal().await;
-    // An ordinary thread keeps no compaction archive. Without this, a thread
-    // opened after a project's conversation would inherit that conversation's
-    // archive path and append its own compacted messages to the project's
-    // history.
-    agent.state.set_history_archive(None).await;
     let access_mode = if session.access_mode.as_deref() == Some("readOnly") {
         crate::agent::runtime::state::WorkspaceAccessMode::ReadOnly
     } else {
         crate::agent::runtime::state::WorkspaceAccessMode::Full
     };
-    agent.state.set_workspace(session.workspace_folders, access_mode).await;
-
-    let mut active_id = state.session_id.lock().await;
-    *active_id = Some(session.id);
+    state.agent_state.set_workspace(session.workspace_folders, access_mode).await;
+    // An ordinary thread keeps no compaction archive. Without this, a thread
+    // opened after a project's conversation would inherit that conversation's
+    // archive path and append its own compacted messages to the project's
+    // history.
+    state.resume(&session.id, session.messages, None).await;
     Ok(())
 }
 
@@ -1794,17 +1797,12 @@ async fn save_current_session_impl(name: Option<String>, state: &Arc<AppState>) 
         return Ok("".to_string());
     }
     if save_transcript_file(state, &messages) {
-        return Ok(state.session_id.lock().await.clone().unwrap_or_default());
+        return Ok(state.session_id().await.unwrap_or_default());
     }
     
-    let mut active_id_lock = state.session_id.lock().await;
-    let s_id = active_id_lock.clone().unwrap_or_else(|| {
-        format!("session_{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs())
-    });
-    *active_id_lock = Some(s_id.clone());
+    let s_id = state
+        .session_id_or_else(|| format!("session_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()))
+        .await;
 
     let dir = get_session_dir()?;
     let path = dir.join(format!("{}.json", s_id));
@@ -1819,18 +1817,24 @@ async fn save_current_session_impl(name: Option<String>, state: &Arc<AppState>) 
     // Named from the first thing the USER actually asked. A day opens with a
     // handoff note carried in a `User` message, and naming the day after that
     // would label every day "<previous_day date=...".
-    let first_ask = messages.iter().find_map(|m| match m {
-        AgentMessage::User { content, .. } if !crate::agent::sessions::days::is_handoff(m) => content.first().and_then(|c| match c {
-            MessageContent::Text { text } => Some(text.chars().take(30).collect::<String>()),
-            _ => None,
-        }),
-        _ => None,
-    });
-    let name_str = name.unwrap_or_else(|| {
-        // An unused day keeps an empty name, which is how the history knows to
-        // leave it out.
-        first_ask.unwrap_or_else(|| if day.is_some() { String::new() } else { "Untitled Session".to_string() })
-    });
+    let first_ask = crate::agent::sessions::title::first_ask(&messages);
+    // The name: one the caller gives, else the one this thread already has
+    // (a rename sticks; a summary stays), else the first message cleaned up.
+    // An unused day keeps an empty name, which is how the history knows to
+    // leave it out.
+    let (name_str, title_source) = match name {
+        Some(n) => (n, crate::agent::sessions::title::USER),
+        None if first_ask.is_none() && day.is_some() => (String::new(), crate::agent::sessions::title::AUTO),
+        None => {
+            let (existing_name, existing_source) = match crate::agent::sessions::title::remembered(&s_id) {
+                Some((n, src)) => (Some(n), Some(src.to_string())),
+                None => session_head_fields(&path),
+            };
+            let (n, src) = crate::agent::sessions::title::decide(existing_name.as_deref(), existing_source.as_deref(), first_ask.as_deref());
+            crate::agent::sessions::title::remember(&s_id, &n, src);
+            (n, src)
+        }
+    };
 
     let workspace_folders = state.agent_state.workspace_folders().await;
     let access_mode = match state.agent_state.access_mode().await {
@@ -1841,6 +1845,7 @@ async fn save_current_session_impl(name: Option<String>, state: &Arc<AppState>) 
     let session = SessionInfo {
         id: s_id.clone(),
         name: name_str,
+        title_source: Some(title_source.to_string()),
         messages,
         created_at,
         workspace_folders,
@@ -1849,6 +1854,7 @@ async fn save_current_session_impl(name: Option<String>, state: &Arc<AppState>) 
 
     let json = serde_json::to_string_pretty(&session)
         .map_err(|e| format!("Failed to serialize session: {}", e))?;
+    let _writing = crate::agent::sessions::title::SESSION_WRITE.lock().await;
     write_session_file_atomic(&path, &json)?;
     Ok(s_id)
 }
@@ -1875,42 +1881,28 @@ pub async fn cmd_new_session(
     // every click writes another empty session file — clicking the button a
     // few times (as anyone does when it looks like nothing happened) leaves
     // a pile of identical dead "New chat" threads behind.
-    {
-        let agent = state.agent.lock().await;
-        if agent.state.messages().await.is_empty() {
-            if let Some(existing) = state.session_id.lock().await.clone() {
-                return Ok(existing);
-            }
-        }
-    }
-
-    {
-        let mut agent = state.agent.lock().await;
-        agent.reset().await;
-        // See `cmd_load_session`: a thread must not write into a project
-        // conversation's archive.
-        agent.state.set_history_archive(None).await;
+    if let Some(existing) = state.untouched_session().await {
+        return Ok(existing);
     }
 
     let s_id = format!(
         "session_{}",
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()
     );
-    *state.session_id.lock().await = Some(s_id.clone());
+    // See `cmd_load_session`: a thread must not write into a project
+    // conversation's archive, so it starts with none.
+    state.start_fresh(&s_id, Vec::new(), None).await;
 
-    let (workspace_folders, access_mode) = {
-        let agent = state.agent.lock().await;
-        let folders = agent.state.workspace_folders().await;
-        let mode = match agent.state.access_mode().await {
-            crate::agent::runtime::state::WorkspaceAccessMode::ReadOnly => Some("readOnly".to_string()),
-            crate::agent::runtime::state::WorkspaceAccessMode::Full => Some("full".to_string()),
-        };
-        (folders, mode)
+    let workspace_folders = state.agent_state.workspace_folders().await;
+    let access_mode = match state.agent_state.access_mode().await {
+        crate::agent::runtime::state::WorkspaceAccessMode::ReadOnly => Some("readOnly".to_string()),
+        crate::agent::runtime::state::WorkspaceAccessMode::Full => Some("full".to_string()),
     };
 
     let session = SessionInfo {
         id: s_id.clone(),
         name: "New chat".to_string(),
+        title_source: None,
         messages: Vec::new(),
         created_at: chrono::Utc::now().to_rfc3339(),
         workspace_folders,
@@ -1935,12 +1927,31 @@ pub async fn cmd_rename_session(id: String, name: String) -> Result<(), String> 
     if !path.exists() {
         return Err("Session not found".to_string());
     }
+    crate::agent::sessions::title::remember(&id, name, crate::agent::sessions::title::USER);
+    rename_session_file(&id, name, crate::agent::sessions::title::USER).await
+}
+
+/// The name (and who made it) of a session file, rewritten in place. Shared by
+/// a rename and by the title the model writes for a new thread.
+pub(crate) async fn rename_session_file(id: &str, name: &str, source: &str) -> Result<(), String> {
+    let _writing = crate::agent::sessions::title::SESSION_WRITE.lock().await;
+    let path = get_session_dir()?.join(format!("{}.json", id));
     let content = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read session: {}", e))?;
     let mut session: SessionInfo = serde_json::from_str(&content).map_err(|e| format!("Failed to parse session: {}", e))?;
     session.name = name.to_string();
+    session.title_source = Some(source.to_string());
     let json = serde_json::to_string_pretty(&session).map_err(|e| format!("Failed to serialize session: {}", e))?;
-    write_session_file_atomic(&path, &json)?;
-    Ok(())
+    write_session_file_atomic(&path, &json)
+}
+
+/// `name` and `title_source` from the start of a session file: the first
+/// kilobyte is enough, so a very large transcript is never read for this.
+fn session_head_fields(path: &std::path::Path) -> (Option<String>, Option<String>) {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else { return (None, None) };
+    let mut buf = vec![0u8; 1024];
+    let n = f.read(&mut buf).unwrap_or(0);
+    crate::agent::sessions::title::head_fields(&String::from_utf8_lossy(&buf[..n]))
 }
 
 /// Checkpoints: revert the active conversation to right before `index` —
@@ -1956,8 +1967,7 @@ pub async fn cmd_agent_revert_to_index(
     registry: State<'_, AgentRegistry>,
 ) -> Result<usize, String> {
     let state = registry.resolve(threadId.as_deref()).await;
-    let agent = state.agent.lock().await;
-    let mut messages = agent.state.messages().await;
+    let mut messages = state.agent_state.messages().await;
     if index > messages.len() {
         return Err(format!("Index {index} out of range ({} messages)", messages.len()));
     }
@@ -1966,15 +1976,14 @@ pub async fn cmd_agent_revert_to_index(
         return Ok(0);
     }
     messages.truncate(index);
-    agent.state.set_messages(messages.clone()).await;
-    drop(agent);
+    state.agent_state.set_messages(messages.clone()).await;
 
     // Persist to the active session file, if one exists — a revert that
     // only lived in memory would silently un-revert on the next reload.
     if save_transcript_file(&state, &messages) {
         return Ok(removed);
     }
-    if let Some(session_id) = state.session_id.lock().await.clone() {
+    if let Some(session_id) = state.session_id().await {
         if let Ok(dir) = get_session_dir() {
             let path = dir.join(format!("{session_id}.json"));
             if let Ok(content) = std::fs::read_to_string(&path) {
@@ -2022,10 +2031,7 @@ pub async fn cmd_fork_session(
         .map_err(|e| format!("Failed to serialize session: {}", e))?;
     write_session_file_atomic(&new_path, &json)?;
 
-    let agent = state.agent.lock().await;
-    agent.state.set_messages(session.messages).await;
-    let mut active_id = state.session_id.lock().await;
-    *active_id = Some(new_id.clone());
+    state.adopt(&new_id, session.messages).await;
 
     Ok(new_id)
 }
@@ -2051,8 +2057,8 @@ fn fork_at(source: &SessionInfo, messages: &[AgentMessage], index: usize, new_id
 pub async fn cmd_fork_session_at(index: usize, #[allow(non_snake_case)] threadId: Option<String>,
     registry: State<'_, AgentRegistry>) -> Result<String, String> {
     let state = registry.resolve(threadId.as_deref()).await;
-    let messages = state.agent.lock().await.state.messages().await;
-    let id = state.session_id.lock().await.clone().ok_or_else(|| "Nothing is open to fork.".to_string())?;
+    let messages = state.agent_state.messages().await;
+    let id = state.session_id().await.ok_or_else(|| "Nothing is open to fork.".to_string())?;
     let dir = get_session_dir()?;
     let source: SessionInfo = std::fs::read_to_string(dir.join(format!("{id}.json")))
         .ok()
@@ -2060,6 +2066,7 @@ pub async fn cmd_fork_session_at(index: usize, #[allow(non_snake_case)] threadId
         .unwrap_or_else(|| SessionInfo {
             id: id.clone(),
             name: "Conversation".to_string(),
+            title_source: None,
             messages: Vec::new(),
             created_at: chrono::Utc::now().to_rfc3339(),
             workspace_folders: Vec::new(),
@@ -2797,18 +2804,33 @@ pub async fn cmd_git_diff_stat(path: String, staged: bool) -> Result<Vec<GitFile
     Ok(changes)
 }
 
+/// How much of a file a diff shows around each change.
+fn diff_flags(context: Option<u32>, ignore_whitespace: Option<bool>) -> Vec<String> {
+    let mut flags = Vec::new();
+    if let Some(c) = context {
+        flags.push(format!("-U{c}"));
+    }
+    if ignore_whitespace == Some(true) {
+        flags.push("-w".to_string());
+    }
+    flags
+}
+
 /// Unified diff for one file. Untracked files have no diff to show, so their
 /// full contents are synthesized as an all-additions patch instead of
-/// returning nothing.
+/// returning nothing. `context` is the lines around each change (the whole
+/// file for a large number); `ignore_whitespace` leaves out whitespace-only
+/// changes.
 #[tauri::command]
-pub async fn cmd_git_diff_file(path: String, file: String, staged: bool) -> Result<String, String> {
+pub async fn cmd_git_diff_file(path: String, file: String, staged: bool, context: Option<u32>, ignore_whitespace: Option<bool>) -> Result<String, String> {
     let path = git_toplevel(&path).await;
-    let mut args = vec!["diff"];
+    let mut args: Vec<String> = vec!["diff".to_string()];
+    args.extend(diff_flags(context, ignore_whitespace));
     if staged {
-        args.push("--cached");
+        args.push("--cached".to_string());
     }
-    args.push("--");
-    args.push(&file);
+    args.push("--".to_string());
+    args.push(file.clone());
     let output = tokio::process::Command::new("git")
         .args(&args)
         .current_dir(&path)
@@ -2974,7 +2996,7 @@ pub async fn cmd_list_checkpoints(
     let state = registry.resolve(threadId.as_deref()).await;
     let id = match session_id {
         Some(s) if !s.is_empty() => s,
-        _ => state.session_id.lock().await.clone().unwrap_or_default(),
+        _ => state.session_id().await.unwrap_or_default(),
     };
     if id.is_empty() {
         return Ok(Vec::new());
@@ -2997,7 +3019,7 @@ pub async fn cmd_restore_checkpoint(
     let state = registry.resolve(threadId.as_deref()).await;
     let id = match session_id {
         Some(s) if !s.is_empty() => s,
-        _ => state.session_id.lock().await.clone().unwrap_or_default(),
+        _ => state.session_id().await.unwrap_or_default(),
     };
     if id.is_empty() {
         return Err("No active session to restore a checkpoint from.".to_string());
@@ -3071,6 +3093,7 @@ mod fork_at_tests {
 
     fn session() -> SessionInfo {
         SessionInfo {
+            title_source: None,
             id: "s1".into(),
             name: "Plan".into(),
             messages: vec![user("a", 1), user("b", 2), user("c", 3)],

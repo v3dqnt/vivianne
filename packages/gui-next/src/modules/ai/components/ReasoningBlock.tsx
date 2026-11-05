@@ -2,6 +2,7 @@ import { memo, useState } from 'react'
 import { Box, Typography } from '../../../ui'
 import { ArrowDownLinear } from '../../../icons'
 import { useThrottledValue } from '../../../lib/useThrottledValue'
+import { CHAT_GUTTER } from '../lib/chatStyle'
 
 /** Collapsible model-reasoning text (`thinking` content blocks) — muted and auto-expanded while actively streaming so the reasoning is visible live, not just after the fact. */
 export const ReasoningBlock = memo(function ReasoningBlock({ text, streaming }: { text: string; streaming?: boolean }) {
@@ -13,7 +14,7 @@ export const ReasoningBlock = memo(function ReasoningBlock({ text, streaming }: 
   // node swap per token. The same leading+trailing throttle Markdown uses for
   // its parse work keeps DOM text updates to ~10/sec while staying live;
   // the trailing edge guarantees the final text still lands.
-  const throttledText = useThrottledValue(text, 100)
+  const throttledText = useThrottledValue(text, 50)
   if (!text) return null
   const open = manualOpen ?? !!streaming
 
@@ -24,7 +25,10 @@ export const ReasoningBlock = memo(function ReasoningBlock({ text, streaming }: 
         sx={{
           display: 'flex',
           alignItems: 'center',
-          gap: 0.75,
+          gap: 0.5,
+          // The word sits on the same left edge as the reply under it, so a
+          // reply that opened with reasoning doesn't start 8px indented.
+          px: CHAT_GUTTER,
           cursor: 'pointer',
           color: 'text.secondary',
           '&:hover': { color: 'text.primary' },
@@ -46,7 +50,7 @@ export const ReasoningBlock = memo(function ReasoningBlock({ text, streaming }: 
             borderRadius: '8px',
             bgcolor: 'action.hover',
             color: 'text.secondary',
-            fontSize: '12.5px',
+            fontSize: '0.8125rem',
             lineHeight: '20px',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',

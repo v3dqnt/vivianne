@@ -124,7 +124,7 @@ function FitTag({ fit }: { fit: Fit | null }) {
   if (!fit) return null
   const color = fit === 'well' ? 'success.main' : fit === 'slow' ? 'warning.main' : 'text.disabled'
   return (
-    <Box component="span" sx={{ fontSize: '0.6875rem', fontWeight: 600, color, whiteSpace: 'nowrap' }}>
+    <Box component="span" sx={{ fontSize: '0.6875rem', fontWeight: 500, color, whiteSpace: 'nowrap' }}>
       {FIT_LABEL[fit]}
     </Box>
   )
@@ -239,7 +239,7 @@ export function DiscoverModels() {
   /** The download button, or its progress, or "added". */
   const action = (key: string, start: () => void) => {
     const local = fileFor[key] ?? key.split('/').pop()!
-    if (done[key]) return <Typography sx={{ fontSize: '0.75rem', color: 'success.main', fontWeight: 600 }}>Added</Typography>
+    if (done[key]) return <Typography sx={{ fontSize: '0.75rem', color: 'success.main', fontWeight: 500 }}>Added</Typography>
     if (busy[key]) {
       const p = progress[local]
       const pct = p?.total ? Math.round((p.received / p.total) * 100) : 0
@@ -268,7 +268,7 @@ export function DiscoverModels() {
       <Stack direction="row" sx={{ ...card, alignItems: 'center', gap: 1.25 }}>
         <ComputerLinear size={18} color="currentColor" />
         <Stack sx={{ flex: 1, minWidth: 0 }}>
-          <Typography sx={{ fontSize: '0.8125rem', fontWeight: 600 }}>This computer</Typography>
+          <Typography sx={{ fontSize: '0.8125rem', fontWeight: 500 }}>This computer</Typography>
           <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
             {hw
               ? `${hw.ramGb} GB memory · ${hw.cpuThreads} threads · ${hw.gpus.length ? hw.gpus.map((g) => (hw.unified ? `${g.name} (shared memory)` : `${g.name} (${g.vramGb} GB)`)).join(', ') : 'no dedicated GPU'}`
@@ -286,7 +286,7 @@ export function DiscoverModels() {
               Install llama.cpp
             </Button>
           ))}
-        {server && <Typography sx={{ fontSize: '0.6875rem', color: 'success.main', fontWeight: 600 }}>llama.cpp ready</Typography>}
+        {server && <Typography sx={{ fontSize: '0.6875rem', color: 'success.main', fontWeight: 500 }}>llama.cpp ready</Typography>}
       </Stack>
       {server === null && (
         <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary', mt: -0.5 }}>
@@ -302,11 +302,11 @@ export function DiscoverModels() {
 
       {recommended.length > 0 && (
         <Stack sx={{ gap: 0.75 }}>
-          <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>Recommended for this computer</Typography>
+          <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>Recommended for this computer</Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 1 }}>
             {recommended.map((r) => (
               <Stack key={r.repo} sx={{ ...card, gap: 0.5 }}>
-                <Typography sx={{ fontSize: '0.875rem', fontWeight: 650 }}>
+                <Typography sx={{ fontSize: '0.875rem', fontWeight: 600 }}>
                   {r.family} {r.label}
                 </Typography>
                 <Typography sx={{ fontSize: '0.6875rem', color: 'text.secondary' }}>
@@ -320,11 +320,11 @@ export function DiscoverModels() {
       )}
 
       <Stack sx={{ gap: 0.5 }}>
-        <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>All starter models</Typography>
+        <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>All starter models</Typography>
         {STARTERS.map((f) => (
           <Stack key={f.family} sx={{ py: 0.75, borderBottom: 1, borderColor: 'divider', gap: 0.5 }}>
             <Stack direction="row" sx={{ alignItems: 'baseline', gap: 1 }}>
-              <Typography sx={{ fontSize: '0.8125rem', fontWeight: 600 }}>{f.family}</Typography>
+              <Typography sx={{ fontSize: '0.8125rem', fontWeight: 500 }}>{f.family}</Typography>
               <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>{f.blurb}</Typography>
             </Stack>
             {f.variants.map((v) => (
@@ -343,7 +343,7 @@ export function DiscoverModels() {
 
       {/* Anything else on Hugging Face that ships a GGUF. */}
       <Stack sx={{ gap: 0.75 }}>
-        <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>Search Hugging Face</Typography>
+        <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>Search Hugging Face</Typography>
         <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.25, height: 28, borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.05) }}>
           <SearchNormalLinear size={14} color="currentColor" />
           <InputBase
@@ -457,7 +457,7 @@ function OllamaModels() {
 
   return (
     <Stack sx={{ gap: 0.75 }}>
-      <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>Ollama</Typography>
+      <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>Ollama</Typography>
       {models.map((m) => {
         const added = ollama?.models.some((x) => x.id === m.name)
         return (
@@ -465,7 +465,7 @@ function OllamaModels() {
             <Typography sx={{ fontSize: '0.8125rem', flex: 1 }}>{m.name}</Typography>
             <Typography sx={{ fontSize: '0.6875rem', color: 'text.secondary' }}>{fmtGb(gb(m.size))}</Typography>
             {added ? (
-              <Typography sx={{ fontSize: '0.75rem', color: 'success.main', fontWeight: 600 }}>In the picker</Typography>
+              <Typography sx={{ fontSize: '0.75rem', color: 'success.main', fontWeight: 500 }}>In the picker</Typography>
             ) : (
               <Button size="small" onClick={() => void use(m.name)} sx={{ textTransform: 'none' }}>
                 Use

@@ -47,7 +47,7 @@ function StatusPill({ status }: { status: AgentRun['status'] }) {
       ) : (
         <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: c }} />
       )}
-      <Typography component="span" sx={{ fontSize: '0.6875rem', fontWeight: 600, lineHeight: '18px' }}>
+      <Typography component="span" sx={{ fontSize: '0.6875rem', fontWeight: 500, lineHeight: '18px' }}>
         {label}
       </Typography>
     </Stack>
@@ -89,7 +89,7 @@ export function AgentPage({ root, agent, onBack, onEdit }: { root: string; agent
         <Stack direction="row" sx={{ alignItems: 'flex-start', gap: 1.25 }}>
           <Avatar {...faceOf(agent)} size={34} />
           <Stack sx={{ flex: 1, minWidth: 0, gap: 0.5 }}>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
               {agent.name}
             </Typography>
             {agent.role && (
@@ -169,14 +169,14 @@ export function AgentPage({ root, agent, onBack, onEdit }: { root: string; agent
 function RunCard({ run, open, onToggle }: { run: AgentRun; open: boolean; onToggle: () => void }) {
   const live = run.status === 'running'
   return (
-    <Box sx={{ borderRadius: '10px', border: 1, borderColor: live ? 'primary.main' : 'divider', overflow: 'hidden' }}>
+    <Box sx={{ borderRadius: '8px', border: 1, borderColor: live ? 'primary.main' : 'divider', overflow: 'hidden' }}>
       <ButtonBase
         onClick={onToggle}
         aria-expanded={open}
         sx={{ display: 'flex', width: '100%', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', gap: 1, px: 1.25, py: 1, '&:hover': { bgcolor: 'action.hover' } }}
       >
         <Stack sx={{ flex: 1, minWidth: 0, gap: 0.25 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem' }} noWrap>
+          <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }} noWrap>
             {run.description || 'Task'}
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>

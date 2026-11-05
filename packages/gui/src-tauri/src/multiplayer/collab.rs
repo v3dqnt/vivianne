@@ -470,7 +470,7 @@ async fn bundle_since(dir: &Path, base: Option<&str>) -> Result<Option<(Option<S
 }
 
 async fn is_idle(app: &AppHandle) -> bool {
-    app.try_state::<Arc<crate::agent::runtime::commands::AppState>>().is_some_and(|s| s.agent.try_lock().is_ok())
+    app.try_state::<Arc<crate::agent::runtime::commands::AppState>>().is_some_and(|s| s.is_idle())
 }
 
 /// Merge the partner's fetched commits. Returns a note for the user when it

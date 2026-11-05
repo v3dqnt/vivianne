@@ -35,7 +35,7 @@ export function PairChip() {
     <Tooltip title={`${tip}${unread ? ` · ${unread} unread` : ''}`}>
       <Box sx={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 0.75, height: 28, pl: 0.5, pr: 1, mr: 0.5, borderRadius: '999px' }}>
         <Box sx={{ position: 'relative' }}>
-          <Box sx={{ width: 20, height: 20, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: '0.5625rem', fontWeight: 700, bgcolor: alpha(color, 0.16), color }}>
+          <Box sx={{ width: 20, height: 20, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: '0.6875rem', fontWeight: 500, bgcolor: alpha(color, 0.16), color }}>
             {initials || '?'}
           </Box>
           <Box
@@ -52,11 +52,11 @@ export function PairChip() {
             }}
           />
         </Box>
-        <Box component="span" sx={{ fontSize: '0.75rem', fontWeight: 600, color: live ? 'text.primary' : 'text.secondary', maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <Box component="span" sx={{ fontSize: '0.75rem', fontWeight: 500, color: live ? 'text.primary' : 'text.secondary', maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {name}
         </Box>
         {unread > 0 && (
-          <Box sx={{ minWidth: 16, height: 16, px: 0.5, borderRadius: '8px', bgcolor: 'primary.main', color: 'primary.contrastText', fontSize: '0.625rem', fontWeight: 700, display: 'grid', placeItems: 'center' }}>
+          <Box sx={{ minWidth: 16, height: 16, px: 0.5, borderRadius: '8px', bgcolor: 'primary.main', color: 'primary.contrastText', fontSize: '0.6875rem', fontWeight: 500, display: 'grid', placeItems: 'center' }}>
             {unread}
           </Box>
         )}

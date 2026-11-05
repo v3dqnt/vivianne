@@ -4,6 +4,10 @@ import { listen } from '@tauri-apps/api/event'
 import { call, hasTauri } from '../../../ipc'
 import type { SubagentModelOverride } from '../../settings/lib/subagentProfiles'
 
+/** The channel a project's lead conversation shows in, when its lead is the
+ * project's master (a project made as a company). */
+export const LEAD_CHANNEL = '__lead'
+
 /** Mirrors `agent::team::TeamAgent` (`rename_all = "camelCase"`). */
 export interface TeamAgent {
   id: string

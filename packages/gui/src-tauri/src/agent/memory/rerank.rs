@@ -38,13 +38,17 @@ const TOPIC_CHANGE_THRESHOLD: f32 = 0.30;
 /// don't stay frozen in the injection slot forever.
 const CADENCE: usize = 3;
 
-/// Global tracker for the last query embedding + turn counter. Thread-safe
-/// through `Mutex` — lock is held briefly (no `.await` inside).
+/// Global tracker for the last reranked query embedding plus how many
+/// consecutive stable-topic turns have been skipped since. Thread-safe
+/// through `Mutex` — lock is held briefly (no `.await` inside). The gate is
+/// self-counting: there is no caller-supplied turn number, so no call site
+/// has to thread one through (the II-74 bug — `turn_count: 0` on every call
+/// made the cadence test always true — can't come back that way).
 struct TopicTracker {
     /// The embedding of the most recently reranked query.
     last_embedding: Option<Vec<f32>>,
-    /// Total turn counter (monotonically increasing; set by the caller).
-    last_rerank_turn: Option<usize>,
+    /// Distinct stable-topic turns skipped since that rerank.
+    turns_since_rerank: usize,
 }
 
 static TOPIC_TRACKER: OnceLock<Mutex<TopicTracker>> = OnceLock::new();
@@ -52,7 +56,7 @@ static TOPIC_TRACKER: OnceLock<Mutex<TopicTracker>> = OnceLock::new();
 fn topic_tracker() -> &'static Mutex<TopicTracker> {
     TOPIC_TRACKER.get_or_init(|| Mutex::new(TopicTracker {
         last_embedding: None,
-        last_rerank_turn: None,
+        turns_since_rerank: 0,
     }))
 }
 
@@ -61,29 +65,35 @@ fn topic_tracker() -> &'static Mutex<TopicTracker> {
 /// Returns `true` if any of these conditions hold:
 /// 1. No previous rerank has ever run (first turn).
 /// 2. The topic has shifted (cosine similarity < `TOPIC_CHANGE_THRESHOLD`).
-/// 3. The minimum cadence (`CADENCE`) has elapsed since the last rerank.
+/// 3. The minimum cadence (`CADENCE`) of stable-topic skips has accumulated
+///    since the last rerank — the tracker counts them itself.
 ///
-/// When `false`, the caller can skip the reranker and use the heuristic
-/// dynamic-gate results directly.
-pub fn should_run_rerank(
-    current_embedding: &[f32],
-    turn_count: usize,
-) -> bool {
-    let tracker = match topic_tracker().lock() {
+/// With `None` (BM25-only recall — no embedding key, no local model) there
+/// is nothing to compare against, so the gate stays conservative and
+/// allows the reranker. When `false`, the caller can skip the reranker and
+/// use the heuristic dynamic-gate results directly; every `true` answer
+/// should be followed by [`record_rerank`] after the attempted run.
+pub fn should_run_rerank(current_embedding: Option<&[f32]>) -> bool {
+    let mut tracker = match topic_tracker().lock() {
         Ok(g) => g,
         Err(_) => return true, // Lock poisoned → run to be safe
     };
-
-    match (&tracker.last_embedding, tracker.last_rerank_turn) {
-        // First turn ever → always rerank
-        (None, _) => true,
-        // Topic shifted → force rerank
-        (Some(prev), _) if cosine_similarity(prev, current_embedding) < TOPIC_CHANGE_THRESHOLD => true,
-        // Cadence due → force rerank
-        (_, Some(last)) if turn_count.saturating_sub(last) >= CADENCE => true,
-        // Everything stable → skip the reranker
-        _ => false,
+    let Some(current) = current_embedding else {
+        // Nothing to compare the current query against.
+        return true;
+    };
+    let Some(prev) = tracker.last_embedding.as_ref() else {
+        // First turn ever → always rerank (nothing has been recorded yet).
+        return true;
+    };
+    if cosine_similarity(prev, current) < TOPIC_CHANGE_THRESHOLD {
+        // Topic shifted → force rerank; a run will reset the counter.
+        return true;
     }
+    // Stable topic: this turn skips the reranker. Once enough skips have
+    // tilted the counter past CADENCE, it's due again.
+    tracker.turns_since_rerank = tracker.turns_since_rerank.saturating_add(1);
+    tracker.turns_since_rerank >= CADENCE
 }
 
 /// Reset the topic tracker to its initial state — test-only utility. The
@@ -92,15 +102,17 @@ pub fn should_run_rerank(
 pub fn reset_topic_tracker() {
     if let Ok(mut tracker) = topic_tracker().lock() {
         tracker.last_embedding = None;
-        tracker.last_rerank_turn = None;
+        tracker.turns_since_rerank = 0;
     }
 }
 
-/// Update the topic tracker after a reranker run completes.
-pub fn record_rerank(embedding: Vec<f32>, turn_count: usize) {
+/// Update the topic tracker after a reranker attempt completes (success or
+/// failure): the new query becomes the reference embedding and the skip
+/// counter restarts.
+pub fn record_rerank(embedding: Vec<f32>) {
     if let Ok(mut tracker) = topic_tracker().lock() {
         tracker.last_embedding = Some(embedding);
-        tracker.last_rerank_turn = Some(turn_count);
+        tracker.turns_since_rerank = 0;
     }
 }
 
@@ -361,21 +373,21 @@ mod tests {
     #[test]
     fn topic_gate_always_reranks_on_first_call() {
         reset_topic_tracker();
-        assert!(should_run_rerank(&[0.5, 0.5], 0));
+        assert!(should_run_rerank(Some(&[0.5, 0.5])));
     }
 
     #[test]
     fn topic_gate_skips_when_topic_stable_and_below_cadence() {
         reset_topic_tracker();
-        // Seed the tracker with initial state
-        // Seed the tracker
+        // Seed the tracker with a fresh rerank
         {
             let mut t = topic_tracker().lock().unwrap();
             t.last_embedding = Some(vec![0.9, 0.1]);
-            t.last_rerank_turn = Some(0);
+            t.turns_since_rerank = 0;
         }
-        // Same/similar embedding, only 1 turn later → skip
-        assert!(!should_run_rerank(&[0.91, 0.09], 1));
+        // Same/similar embedding on the two turns after the rerank → skip
+        assert!(!should_run_rerank(Some(&[0.91, 0.09])));
+        assert!(!should_run_rerank(Some(&[0.91, 0.09])));
     }
 
     #[test]
@@ -384,11 +396,31 @@ mod tests {
         {
             let mut t = topic_tracker().lock().unwrap();
             t.last_embedding = Some(vec![0.9, 0.1]);
-            t.last_rerank_turn = Some(0);
+            t.turns_since_rerank = 0;
         }
-        // Same topic, 3 turns later → cadence forces rerank
-        assert!(should_run_rerank(&[0.91, 0.09], 3));
-        assert!(should_run_rerank(&[0.91, 0.09], 4));
+        // Same topic: two stable skips, then the cadence (3 skips) forces a
+        // rerank — the internal counter does the counting.
+        assert!(!should_run_rerank(Some(&[0.91, 0.09])));
+        assert!(!should_run_rerank(Some(&[0.91, 0.09])));
+        assert!(should_run_rerank(Some(&[0.91, 0.09])));
+        assert!(should_run_rerank(Some(&[0.91, 0.09])));
+    }
+
+    #[test]
+    fn topic_gate_restarts_after_record() {
+        reset_topic_tracker();
+        {
+            let mut t = topic_tracker().lock().unwrap();
+            t.last_embedding = Some(vec![0.9, 0.1]);
+            t.turns_since_rerank = 0;
+        }
+        assert!(!should_run_rerank(Some(&[0.91, 0.09])));
+        // A rerank ran on this turn: record it and the counter restarts, so
+        // the cadence is fresh again.
+        record_rerank(vec![0.91, 0.09]);
+        assert!(!should_run_rerank(Some(&[0.91, 0.09])));
+        assert!(!should_run_rerank(Some(&[0.91, 0.09])));
+        assert!(should_run_rerank(Some(&[0.91, 0.09])));
     }
 
     #[test]
@@ -397,10 +429,17 @@ mod tests {
         {
             let mut t = topic_tracker().lock().unwrap();
             t.last_embedding = Some(vec![0.9, 0.1]);
-            t.last_rerank_turn = Some(0);
+            t.turns_since_rerank = 0;
         }
         // Very different embedding → topic shift → force
-        assert!(should_run_rerank(&[0.1, 0.9], 1));
+        assert!(should_run_rerank(Some(&[0.1, 0.9])));
+    }
+
+    #[test]
+    fn topic_gate_is_conservative_without_an_embedding() {
+        reset_topic_tracker();
+        // BM25-only recall can't compare topics — always allow the reranker.
+        assert!(should_run_rerank(None));
     }
 
     #[test]

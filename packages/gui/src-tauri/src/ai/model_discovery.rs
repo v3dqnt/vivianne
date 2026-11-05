@@ -50,12 +50,18 @@ pub(crate) fn model_supports_vision(provider: &str, id: &str) -> bool {
     classify_capabilities(provider, id).2
 }
 
+/// Whether a model makes pictures rather than text.
+pub(crate) fn is_image_id(provider: &str, id: &str) -> bool {
+    classify_capabilities(provider, id).0
+}
+
 fn classify_capabilities(provider: &str, id: &str) -> (bool, bool, bool) {
     let l = id.to_lowercase();
 
     let is_image_model = [
         "stable-diffusion", "stablediffusion", "sdxl", "flux", "dall-e", "dalle",
         "gpt-image", "imagen", "kandinsky", "playground-v2", "sd-turbo", "sdturbo",
+        "flash-image", "image-preview", "nano-banana", "grok-2-image", "grok-imagine",
     ]
     .iter()
     .any(|p| l.contains(p));
@@ -92,6 +98,32 @@ fn classify_capabilities(provider: &str, id: &str) -> (bool, bool, bool) {
     };
 
     (is_image_model, is_audio_model, supports_vision)
+}
+
+
+/// Models nobody picks any more: the previous generations of the big
+/// vendors, which still show in their `/models` lists years after release.
+/// Matched on the model's own name and the vendor it comes from, so an
+/// aggregator's `openai/gpt-3.5-turbo` goes the same way as OpenAI's own.
+pub(crate) fn is_legacy(provider: &str, id: &str) -> bool {
+    let l = id.to_lowercase();
+    let (vendor, tail) = match l.rsplit_once('/') {
+        Some((v, t)) => (v.split('/').next().unwrap_or(v).to_string(), t.to_string()),
+        None => (provider.to_lowercase(), l.clone()),
+    };
+    let starts = |ps: &[&str]| ps.iter().any(|p| tail.starts_with(p));
+    let has = |ps: &[&str]| ps.iter().any(|p| tail.contains(p));
+    match vendor.as_str() {
+        "openai" | "chatgpt" => {
+            starts(&["gpt-3", "gpt-4-", "chatgpt-", "davinci", "babbage", "o1", "text-", "codex-mini"]) || tail == "gpt-4"
+        }
+        "anthropic" => starts(&["claude-1", "claude-2", "claude-3", "claude-instant"]),
+        "google" => starts(&["gemini-1", "gemini-pro", "gemini-2.0", "gemini-exp", "gemini-ultra", "text-", "chat-bison", "aqa"]),
+        "x-ai" | "xai" => starts(&["grok-1", "grok-2", "grok-beta", "grok-vision"]),
+        "mistralai" | "mistral" => starts(&["mistral-tiny", "mistral-small-2", "open-mistral-7b", "open-mixtral"]),
+        "meta-llama" => has(&["llama-2", "llama-3-", "llama-3.1", "llama-3.2"]),
+        _ => false,
+    }
 }
 
 async fn resolve_key(auth: &AuthState, provider: &str) -> Option<String> {
@@ -355,6 +387,8 @@ pub async fn discover_all(auth: &AuthState) -> Vec<DiscoveredModel> {
     // Bedrock (SigV4, not a bearer-token REST call), and HuggingFace (different
     // API shape entirely) are intentionally not auto-discovered here.
 
+    out.retain(|m| !is_legacy(&m.provider, &m.id));
+
     // Single pass: tag capability labels from each model's id/provider. Done
     // once here rather than in every fetcher so the classification rules live
     // in exactly one place.
@@ -404,7 +438,8 @@ fn load_cached() -> Option<Cached> {
     if let Some(c) = MEMORY.lock().unwrap_or_else(|e| e.into_inner()).clone() {
         return Some(c);
     }
-    let c: Cached = serde_json::from_str(&std::fs::read_to_string(cache_path()).ok()?).ok()?;
+    let mut c: Cached = serde_json::from_str(&std::fs::read_to_string(cache_path()).ok()?).ok()?;
+    c.models.retain(|m| !is_legacy(&m.provider, &m.id));
     *MEMORY.lock().unwrap_or_else(|e| e.into_inner()) = Some(c.clone());
     Some(c)
 }
@@ -493,5 +528,20 @@ mod capability_tests {
         assert!(!classify_capabilities("openai", "gpt-oss-120b").2);
         assert!(!classify_capabilities("anthropic", "claude-instant-1.2").2);
         assert!(!classify_capabilities("deepseek", "deepseek-chat").2);
+    }
+}
+
+#[cfg(test)]
+mod legacy_tests {
+    use super::is_legacy;
+
+    #[test]
+    fn old_generations_go_current_ones_stay() {
+        for (p, id) in [("openai", "gpt-3.5-turbo"), ("openai", "gpt-4"), ("openai", "gpt-4-turbo"), ("openai", "o1-mini"), ("anthropic", "claude-3-5-sonnet-20241022"), ("anthropic", "claude-2.1"), ("google", "gemini-1.5-pro"), ("google", "gemini-2.0-flash"), ("xai", "grok-2"), ("openrouter", "openai/gpt-3.5-turbo"), ("openrouter", "anthropic/claude-3-opus")] {
+            assert!(is_legacy(p, id), "{p}/{id} should be hidden");
+        }
+        for (p, id) in [("openai", "gpt-5"), ("openai", "gpt-4o"), ("openai", "gpt-4.1"), ("openai", "o3"), ("anthropic", "claude-sonnet-5-5"), ("anthropic", "claude-opus-4-1"), ("google", "gemini-2.5-pro"), ("xai", "grok-4"), ("openrouter", "anthropic/claude-sonnet-4.5"), ("nebius", "nvidia/nemotron-3")] {
+            assert!(!is_legacy(p, id), "{p}/{id} should stay");
+        }
     }
 }

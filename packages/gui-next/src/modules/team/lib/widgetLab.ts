@@ -1,7 +1,7 @@
 import type { ApprovalInput } from './widgets.ts'
 
 /** Where a card stands: waiting on you, or how it ended. */
-export type WidgetState = 'pending' | 'approved' | 'denied' | 'expired'
+export type WidgetState = 'pending' | 'approved' | 'denied' | 'expired' | 'never'
 
 export interface LabCard {
   /** What this card is here to show. */

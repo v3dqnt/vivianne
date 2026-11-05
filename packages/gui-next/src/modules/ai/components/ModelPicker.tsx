@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Box, ButtonBase, InputBase, Popover, Stack, Tooltip, Typography, alpha, useTheme } from '../../../ui'
 import { SearchNormalLinear, CpuLinear, ArrowRightLinear, CloseCircleLinear, TickCircleLinear, StarLinear, StarBold, ArrowDownLinear } from '../../../icons'
 import { loadPersisted, savePersisted } from '../../../lib/persist'
+import { statusOf, useHarnessStore, type Harness } from '../store/harnessStore'
+import { useImageModels } from '../store/imageModelsStore'
 import { useModelStore, type SelectableModel } from '../store/modelStore'
 import { useLlamaStore } from '../../settings/store/llamaStore'
 import { useCustomProviderStore } from '../../settings/store/customProviderStore'
@@ -9,6 +11,23 @@ import { useSettingsUi } from '../../settings/store/uiStore'
 import { llamaModelId, isRunning } from '../../settings/lib/llama'
 import type { SubagentModelOverride } from '../../settings/lib/subagentProfiles'
 import { TOOLBAR_PILL } from '../lib/toolbarPill'
+
+const HARNESS = 'harness'
+
+/** The agent as a model: the backend routes turns for provider `harness` to it. */
+const harnessModel = (h: Harness): SelectableModel => ({
+  id: h.id,
+  name: h.name,
+  provider: HARNESS,
+  api: 'acp',
+  contextWindow: null,
+  maxOutputTokens: null,
+  inputCostPerMillion: null,
+  outputCostPerMillion: null,
+  isImageModel: false,
+  isAudioModel: false,
+  supportsVision: false,
+})
 
 const MONO = '"Geist Mono", ui-monospace, monospace'
 
@@ -24,20 +43,13 @@ const PROVIDER_LABEL: Record<string, string> = {
   nebius: 'Nebius',
   'nvidia-nim': 'NVIDIA NIM',
   local: 'On this computer',
+  sd: 'Images · on this computer',
+  harness: 'Coding agent',
 }
 const providerLabel = (p: string) => PROVIDER_LABEL[p] ?? p.charAt(0).toUpperCase() + p.slice(1)
 
-/** Stays distinguishable in both themes; keyed by a hash of the name so a
- * provider keeps its colour whatever else is signed in. */
-const HUES = [210, 25, 152, 280, 340, 45, 190, 100, 320, 0]
-function providerHue(name: string): number {
-  let h = 0
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
-  return HUES[h % HUES.length]
-}
-
 function ProviderMark({ provider, size = 16 }: { provider: string; size?: number }) {
-  if (provider === 'local') {
+  if (provider === 'local' || provider === 'sd') {
     return (
       <Box sx={{ display: 'flex', color: 'text.secondary', flexShrink: 0 }}>
         <CpuLinear size={size} color="currentColor" />
@@ -53,10 +65,11 @@ function ProviderMark({ provider, size = 16 }: { provider: string; size?: number
         flexShrink: 0,
         display: 'grid',
         placeItems: 'center',
-        bgcolor: `hsl(${providerHue(provider)}, 58%, 52%)`,
-        color: 'rgba(0,0,0,0.78)',
+        // One accent in the interface: a provider is a neutral monogram, not a colour of its own.
+        bgcolor: 'action.selected',
+        color: 'text.secondary',
         fontSize: size * 0.55,
-        fontWeight: 700,
+        fontWeight: 600,
         lineHeight: 1,
       }}
     >
@@ -108,11 +121,15 @@ function usePickableModels(withRouter = false): PickableModel[] {
   const refreshLlama = useLlamaStore((s) => s.refresh)
   const custom = useCustomProviderStore((s) => s.providers)
   const refreshCustom = useCustomProviderStore((s) => s.refresh)
+  const imageFiles = useImageModels((s) => s.models)
+  const imageReady = useImageModels((s) => s.installed)
+  const refreshImages = useImageModels((s) => s.refresh)
   useEffect(() => {
     void init()
     void refreshLlama()
     void refreshCustom()
-  }, [init, refreshLlama, refreshCustom])
+    void refreshImages()
+  }, [init, refreshLlama, refreshCustom, refreshImages])
 
   return useMemo(() => {
     const out: PickableModel[] = []
@@ -154,8 +171,27 @@ function usePickableModels(withRouter = false): PickableModel[] {
       }
       out.push({ key: modelKey(model), group: 'local', model })
     }
+    // Image models run by stable-diffusion.cpp: one per downloaded file.
+    if (imageReady) {
+      for (const f of imageFiles) {
+        const model: SelectableModel = {
+          id: f.file,
+          name: f.file.replace(/\.(safetensors|gguf|ckpt)$/i, ''),
+          provider: 'sd',
+          api: 'image',
+          contextWindow: null,
+          maxOutputTokens: null,
+          inputCostPerMillion: 0,
+          outputCostPerMillion: 0,
+          isImageModel: true,
+          isAudioModel: false,
+          supportsVision: false,
+        }
+        out.push({ key: modelKey(model), group: 'sd', model })
+      }
+    }
     return out
-  }, [cloud, custom, llama])
+  }, [cloud, custom, llama, imageFiles, imageReady])
 }
 
 /** What an agent stores to run on a model. */
@@ -184,6 +220,7 @@ const FILTERS = [
   { id: 'vision', label: 'Vision', title: 'Accepts images', test: (m: SelectableModel) => m.supportsVision },
   { id: 'free', label: 'Free', title: 'No input or output cost', test: (m: SelectableModel) => m.inputCostPerMillion === 0 && m.outputCostPerMillion === 0 },
   { id: 'long', label: '200K+', title: 'Context window of 200K tokens or more', test: (m: SelectableModel) => (m.contextWindow ?? 0) >= 200_000 },
+  { id: 'image', label: 'Image', title: 'Draws pictures instead of writing text', test: (m: SelectableModel) => m.isImageModel },
   { id: 'local', label: 'Local', title: 'Runs on this computer', test: (m: SelectableModel) => m.provider === 'local' },
 ] as const
 type FilterId = (typeof FILTERS)[number]['id']
@@ -224,6 +261,10 @@ export function ModelPicker(
   const [query, setQuery] = useState('')
   const [active, setActive] = useState<FilterId[]>([])
   const [cursor, setCursor] = useState(0)
+  const [tab, setTab] = useState<'models' | 'agents'>('models')
+  const harnesses = useHarnessStore((s) => s.list)
+  const harnessError = useHarnessStore((s) => s.error)
+  const refreshHarnesses = useHarnessStore((s) => s.refresh)
   const [favs, setFavs] = useState<string[]>(() => readList(FAV_KEY))
   const listRef = useRef<HTMLDivElement | null>(null)
   const variant = props.variant ?? 'pill'
@@ -233,11 +274,19 @@ export function ModelPicker(
     props.mode === 'chat' ? (stats?.provider === 'router' && routed ? `Auto · ${routed.model}` : stats?.modelName || 'Select model') : props.value ? (items.find((i) => i.key === currentKey)?.model.name ?? props.value.name) : 'Same as the chat'
   const currentProvider = props.mode === 'chat' ? (stats?.provider ?? null) : (props.value?.provider ?? null)
 
+  // Coding agents are listed on first open, and only where they can be used:
+  // the chat. An agent's own model is always one of Vivianne's.
+  useEffect(() => {
+    if (anchor && props.mode === 'chat') void refreshHarnesses()
+  }, [anchor, props.mode, refreshHarnesses])
+
   useEffect(() => {
     if (anchor) return
     setQuery('')
     setActive([])
     setCursor(0)
+    setTab(currentProvider === HARNESS ? 'agents' : 'models')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [anchor])
 
   const rows = useMemo<Row[]>(() => {
@@ -264,10 +313,13 @@ export function ModelPicker(
           .slice(0, 4),
       )
     }
+    // A model already shown under Favourites or Recent is not listed a second time below them.
+    const pinnedKeys = new Set(out.filter((r): r is Extract<Row, { kind: 'model' }> => r.kind === 'model').map((r) => r.item.key))
     const groups = new Map<string, PickableModel[]>()
-    for (const i of visible) groups.set(i.group, [...(groups.get(i.group) ?? []), i])
+    for (const i of visible) if (!pinnedKeys.has(i.key)) groups.set(i.group, [...(groups.get(i.group) ?? []), i])
     // Local last: a different kind of thing from the cloud providers.
-    const order = [...groups.keys()].sort((a, b) => (a === 'local' ? 1 : b === 'local' ? -1 : 0))
+    const last = (g: string) => (g === 'local' ? 1 : g === 'sd' ? 2 : 0)
+    const order = [...groups.keys()].sort((a, b) => last(a) - last(b))
     for (const g of order) {
       out.push({ kind: 'header', label: providerLabel(g), provider: g })
       for (const item of groups.get(g)!) out.push({ kind: 'model', item, section: g })
@@ -328,7 +380,7 @@ export function ModelPicker(
           sx={variant === 'field' ? {
             gap: 0.75,
             px: 1,
-            height: 34,
+            height: 32,
             minWidth: 0,
             maxWidth: variant === 'field' ? '100%' : 220,
             width: variant === 'field' ? '100%' : undefined,
@@ -341,35 +393,64 @@ export function ModelPicker(
             '&:hover': { bgcolor: 'action.hover' },
           } : { ...TOOLBAR_PILL, maxWidth: 220, color: 'text.primary' }}
         >
-          {currentProvider ? <ProviderMark provider={currentProvider} size={14} /> : <CpuLinear size={14} color="currentColor" />}
+          {variant === 'field' && (currentProvider ? <ProviderMark provider={currentProvider} size={14} /> : <CpuLinear size={14} color="currentColor" />)}
           {/* Never hidden when the composer narrows (`cq-model` only shortens it):
               which model is selected is the one thing that must stay readable. */}
           <Typography className="cq-model" noWrap sx={{ fontSize: variant === 'field' ? '0.8125rem' : 'inherit', fontWeight: 500, minWidth: 0, flex: variant === 'field' ? 1 : undefined, textAlign: 'left' }}>
             {currentName}
           </Typography>
-          <Box className="cq-label" sx={{ display: 'flex', color: 'text.secondary', flexShrink: 0 }}>
-            <ArrowDownLinear size={12} color="currentColor" />
-          </Box>
+          {variant === 'field' && (
+            <Box sx={{ display: 'flex', color: 'text.secondary', flexShrink: 0 }}>
+              <ArrowDownLinear size={12} color="currentColor" />
+            </Box>
+          )}
         </ButtonBase>
       </Tooltip>
       <Popover
         open={!!anchor}
         anchorEl={anchor}
         onClose={() => setAnchor(null)}
-        anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
-        transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        slotProps={{ paper: { sx: { width: 400, p: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', borderRadius: '14px' } } }}
+        anchorOrigin={{ vertical: 'top', horizontal: variant === 'field' ? 'left' : 'right' }}
+        transformOrigin={{ vertical: 'bottom', horizontal: variant === 'field' ? 'left' : 'right' }}
+        slotProps={{ paper: { sx: { width: 400, p: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', borderRadius: '12px' } } }}
       >
         <Box onKeyDown={onKey} sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, maxHeight: 'min(520px, 70vh)' }}>
           {/* Search and filters stay put; only the list scrolls, so group
               headers stick under them instead of sliding beneath. */}
           <Box sx={{ flexShrink: 0, borderBottom: 1, borderColor: 'divider' }}>
-            <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, pt: 1.25, pb: 0.75 }}>
+            {props.mode === 'chat' && (
+              <Stack direction="row" role="tablist" sx={{ gap: 0.5, px: 1.25, pt: 1.25 }}>
+                {([['models', 'Models'], ['agents', 'Coding agents']] as const).map(([id, label]) => (
+                  <ButtonBase
+                    key={id}
+                    role="tab"
+                    aria-selected={tab === id}
+                    onClick={() => {
+                      setTab(id)
+                      setCursor(0)
+                    }}
+                    sx={{
+                      px: 1.25,
+                      height: 28,
+                      borderRadius: '8px',
+                      fontSize: '0.75rem',
+                      fontWeight: 500,
+                      color: tab === id ? 'text.primary' : 'text.secondary',
+                      bgcolor: tab === id ? alpha(ring, 0.16) : 'transparent',
+                      '&:hover': { bgcolor: tab === id ? alpha(ring, 0.2) : 'action.hover' },
+                    }}
+                  >
+                    {label}
+                  </ButtonBase>
+                ))}
+              </Stack>
+            )}
+            <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, pt: 1, pb: 0.75 }}>
               <SearchNormalLinear size={14} color="currentColor" />
               <InputBase
                 autoFocus
                 fullWidth
-                placeholder="Search models"
+                placeholder={tab === 'agents' ? 'Search coding agents' : 'Search models'}
                 value={query}
                 onChange={(e) => {
                   setQuery(e.target.value)
@@ -383,6 +464,7 @@ export function ModelPicker(
                 </ButtonBase>
               )}
             </Stack>
+            {tab === 'models' && (
             <Stack direction="row" sx={{ gap: 0.5, px: 1.5, pb: 1, flexWrap: 'wrap' }}>
               {FILTERS.map((f) => {
                 const on = active.includes(f.id)
@@ -396,10 +478,10 @@ export function ModelPicker(
                       }}
                       sx={{
                         px: 1,
-                        height: 22,
+                        height: 24,
                         borderRadius: '999px',
                         fontSize: '0.6875rem',
-                        fontWeight: 600,
+                        fontWeight: 500,
                         border: 1,
                         borderColor: on ? ring : 'divider',
                         color: on ? 'text.primary' : 'text.secondary',
@@ -413,16 +495,33 @@ export function ModelPicker(
                 )
               })}
             </Stack>
+            )}
           </Box>
 
           <Box ref={listRef} role="listbox" sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 0.5, pb: 0.5 }}>
-            {empty && (
+            {tab === 'agents' && (
+              <AgentList
+                harnesses={harnesses}
+                error={harnessError}
+                query={query}
+                currentId={currentProvider === HARNESS ? (stats?.modelId ?? null) : null}
+                onSettings={() => {
+                  setAnchor(null)
+                  openSettings('providers')
+                }}
+                onPick={(h) => {
+                  void selectModel(harnessModel(h))
+                  setAnchor(null)
+                }}
+              />
+            )}
+            {tab === 'models' && empty && (
               <Typography sx={{ px: 1.5, py: 2, fontSize: '0.8125rem', color: 'text.secondary' }}>No models yet. Add a provider in Settings.</Typography>
             )}
-            {!empty && selectable.length === 0 && (
+            {tab === 'models' && !empty && selectable.length === 0 && (
               <Typography sx={{ px: 1.5, py: 2, fontSize: '0.8125rem', color: 'text.secondary' }}>{active.length ? 'No models match those filters.' : 'No matches.'}</Typography>
             )}
-            {rows.map((r, i) => {
+            {tab === 'models' && rows.map((r, i) => {
               if (r.kind === 'header') {
                 return (
                   <Stack
@@ -431,7 +530,7 @@ export function ModelPicker(
                     sx={{ position: 'sticky', top: 0, zIndex: 1, bgcolor: 'background.paper', alignItems: 'center', gap: 0.75, px: 1, pt: 1, pb: 0.5 }}
                   >
                     {r.provider && <ProviderMark provider={r.provider} size={12} />}
-                    <Typography sx={{ fontSize: '0.6875rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>{r.label}</Typography>
+                    <Typography sx={{ fontSize: '0.6875rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>{r.label}</Typography>
                   </Stack>
                 )
               }
@@ -456,7 +555,7 @@ export function ModelPicker(
                     alignItems: 'center',
                     gap: 0.875,
                     px: 1,
-                    height: 34,
+                    height: 32,
                     borderRadius: '8px',
                     cursor: 'pointer',
                     bgcolor: isCursor ? 'action.hover' : 'transparent',
@@ -481,10 +580,10 @@ export function ModelPicker(
                             px: 0.625,
                             borderRadius: '6px',
                             fontSize: '0.6875rem',
-                            fontWeight: 600,
+                            fontWeight: 500,
                             lineHeight: '18px',
-                            color: theme.palette.mode === 'dark' ? `hsl(${providerHue(split!.vendor)}, 62%, 70%)` : `hsl(${providerHue(split!.vendor)}, 68%, 33%)`,
-                            bgcolor: alpha(`hsl(${providerHue(split!.vendor)}, 60%, 50%)`, 0.15),
+                            color: 'text.secondary',
+                            bgcolor: 'action.hover',
                           }}
                         >
                           {split!.vendor}
@@ -494,7 +593,7 @@ export function ModelPicker(
                         {split!.rest}
                       </Typography>
                       {m!.supportsVision && (
-                        <Box component="span" sx={{ flexShrink: 0, px: 0.5, borderRadius: '5px', fontSize: '0.625rem', fontWeight: 600, lineHeight: '16px', color: 'text.secondary', border: 1, borderColor: 'divider' }}>
+                        <Box component="span" sx={{ flexShrink: 0, px: 0.5, borderRadius: '4px', fontSize: '0.6875rem', fontWeight: 500, lineHeight: '16px', color: 'text.secondary', border: 1, borderColor: 'divider' }}>
                           Vision
                         </Box>
                       )}
@@ -519,14 +618,14 @@ export function ModelPicker(
                 </Stack>
               )
             })}
-            {!query && active.length === 0 && !items.some((i) => i.group === 'local') && (
+            {tab === 'models' && !query && active.length === 0 && !items.some((i) => i.group === 'local') && (
               <Stack
                 direction="row"
                 onClick={() => {
                   setAnchor(null)
                   openSettings('local')
                 }}
-                sx={{ alignItems: 'center', gap: 1, px: 1, height: 34, mt: 0.5, borderRadius: '8px', cursor: 'pointer', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } }}
+                sx={{ alignItems: 'center', gap: 1, px: 1, height: 32, mt: 0.5, borderRadius: '8px', cursor: 'pointer', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } }}
               >
                 <CpuLinear size={16} color="currentColor" />
                 <Typography sx={{ fontSize: '0.8125rem', flex: 1 }}>Get a model that runs on this computer</Typography>
@@ -536,7 +635,7 @@ export function ModelPicker(
           </Box>
 
           {/* What the highlighted model costs and holds. */}
-          {detail && (
+          {tab === 'models' && detail && (detail.contextWindow || detail.maxOutputTokens || detail.inputCostPerMillion != null || detail.outputCostPerMillion != null) && (
             <Stack direction="row" sx={{ flexShrink: 0, gap: 2, px: 1.5, py: 0.875, borderTop: 1, borderColor: 'divider', bgcolor: alpha(theme.palette.text.primary, 0.02) }}>
               <Stat label="Context" value={fmtCtx(detail.contextWindow) ?? '—'} />
               <Stat label="Max out" value={fmtCtx(detail.maxOutputTokens) ?? '—'} />
@@ -553,8 +652,101 @@ export function ModelPicker(
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <Stack sx={{ gap: 0.125, minWidth: 0 }}>
-      <Typography sx={{ fontSize: '0.5625rem', textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.disabled' }}>{label}</Typography>
+      <Typography sx={{ fontSize: '0.6875rem', textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.disabled' }}>{label}</Typography>
       <Typography sx={{ fontSize: '0.75rem', fontFamily: MONO }}>{value}</Typography>
     </Stack>
+  )
+}
+
+function AgentList({
+  harnesses,
+  error,
+  query,
+  currentId,
+  onPick,
+  onSettings,
+}: {
+  harnesses: Harness[] | null
+  error: boolean
+  query: string
+  currentId: string | null
+  onPick: (h: Harness) => void
+  onSettings: () => void
+}) {
+  const busy = useHarnessStore((s) => s.busy)
+  const install = useHarnessStore((s) => s.install)
+  const progress = useHarnessStore((s) => s.progress)
+  const failures = useHarnessStore((s) => s.failures)
+  if (!harnesses) return <Typography sx={{ px: 1.5, py: 2, fontSize: '0.8125rem', color: 'text.secondary' }}>Looking up coding agents…</Typography>
+  const q = query.trim().toLowerCase()
+  const list = harnesses.filter((h) => !q || h.name.toLowerCase().includes(q) || h.id.toLowerCase().includes(q))
+  if (!list.length) {
+    return (
+      <Typography sx={{ px: 1.5, py: 2, fontSize: '0.8125rem', color: 'text.secondary' }}>
+        {error ? 'Could not load the agent list.' : 'No coding agents match.'}
+      </Typography>
+    )
+  }
+  return (
+    <>
+      <Typography sx={{ px: 1.25, pt: 1, pb: 0.5, fontSize: '0.75rem', color: 'text.secondary', lineHeight: 1.4 }}>
+        The thread's turns run in that agent, with its own tools. Manage them in{' '}
+        <Box component="span" onClick={onSettings} sx={{ color: 'primary.main', cursor: 'pointer', textDecoration: 'underline' }}>
+          Settings
+        </Box>
+        .
+      </Typography>
+      {list.map((h) => {
+        const selected = h.id === currentId
+        const status = statusOf(h)
+        const working = busy[h.id] === 'install'
+        const failure = failures[h.id]
+        return (
+          <Stack key={h.id} sx={{ borderRadius: '8px', '&:hover': { bgcolor: 'action.hover' } }}>
+            <Stack
+              role="option"
+              aria-selected={selected}
+              aria-disabled={status === 'missing'}
+              direction="row"
+              onClick={() => status !== 'missing' && !working && onPick(h)}
+              sx={{ alignItems: 'center', gap: 1, px: 1, py: 0.75, cursor: status === 'missing' ? 'not-allowed' : 'pointer' }}
+            >
+              <Box sx={{ opacity: status === 'missing' ? 0.45 : 1, display: 'flex' }}>
+                <ProviderMark provider={h.id} size={20} />
+              </Box>
+              <Stack sx={{ flex: 1, minWidth: 0, opacity: status === 'missing' ? 0.55 : 1 }}>
+                <Typography noWrap sx={{ fontSize: '0.8125rem', fontWeight: selected ? 600 : 500 }}>
+                  {h.name}
+                </Typography>
+                <Typography noWrap sx={{ fontSize: '0.6875rem', color: 'text.secondary' }}>
+                  {working ? (progress[h.id] ? `${(progress[h.id].bytes / 1e6).toFixed(0)} MB downloaded · ${progress[h.id].line}` : 'Starting the download…') : h.description}
+                </Typography>
+              </Stack>
+              {status === 'missing' && (
+                <Tooltip title="Needs Node.js (npx) or uv (uvx) installed to start this agent.">
+                  <Box component="span" sx={{ flexShrink: 0, px: 0.75, borderRadius: '6px', fontSize: '0.6875rem', fontWeight: 500, lineHeight: '18px', color: 'text.secondary', border: 1, borderColor: 'divider' }}>
+                    Not installed
+                  </Box>
+                </Tooltip>
+              )}
+              {status === 'setup' && (
+                <ButtonBase
+                  disabled={working}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void install(h.id)
+                  }}
+                  sx={{ flexShrink: 0, px: 1, height: 24, borderRadius: '6px', fontSize: '0.6875rem', fontWeight: 500, border: 1, borderColor: 'divider', '&:hover': { bgcolor: 'action.selected' } }}
+                >
+                  {working ? 'Setting up…' : 'Set up'}
+                </ButtonBase>
+              )}
+              <Box sx={{ width: 14, display: 'flex', color: 'primary.main', flexShrink: 0 }}>{selected && <TickCircleLinear size={14} color="currentColor" />}</Box>
+            </Stack>
+            {failure && <Typography sx={{ px: 1, pb: 0.75, fontSize: '0.6875rem', color: 'error.main', whiteSpace: 'pre-wrap' }}>{failure}</Typography>}
+          </Stack>
+        )
+      })}
+    </>
   )
 }

@@ -72,7 +72,7 @@ const rowSx = {
 
 function IconTile({ Icon }: { Icon: typeof SparklesLinear }) {
   return (
-    <Box sx={{ width: 32, height: 32, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: 'action.selected', color: 'text.secondary', flexShrink: 0 }}>
+    <Box sx={{ width: 32, height: 32, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: 'action.selected', color: 'text.secondary', flexShrink: 0 }}>
       <Icon size={16} color="currentColor" />
     </Box>
   )
@@ -84,17 +84,17 @@ function Row({ Icon, title, sub, value, onClick }: { Icon?: typeof SparklesLinea
     <ButtonBase onClick={onClick} disabled={!onClick} sx={{ ...rowSx, '&:hover': { bgcolor: 'action.hover' } }}>
       {Icon && <IconTile Icon={Icon} />}
       <Stack sx={{ flex: 1, minWidth: 0 }}>
-        <Typography sx={{ fontSize: '14px', fontWeight: 500 }} noWrap>
+        <Typography sx={{ fontSize: '0.875rem', fontWeight: 500 }} noWrap>
           {title}
         </Typography>
         {sub && (
-          <Typography sx={{ fontSize: '12px', color: 'text.secondary' }} noWrap>
+          <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }} noWrap>
             {sub}
           </Typography>
         )}
       </Stack>
       {value && (
-        <Typography sx={{ fontSize: '13px', color: 'text.secondary', flexShrink: 0 }} noWrap>
+        <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', flexShrink: 0 }} noWrap>
           {value}
         </Typography>
       )}
@@ -116,7 +116,7 @@ function Segments<T extends string>({ value, options, onChange }: { value: T | n
           key={o.value}
           onClick={() => onChange(o.value)}
           aria-pressed={value === o.value}
-          sx={{ flex: 1, height: 32, px: '10px', borderRadius: '999px', fontSize: '13px', fontWeight: value === o.value ? 600 : 400, color: value === o.value ? 'text.primary' : 'text.secondary', bgcolor: value === o.value ? 'background.paper' : 'transparent', whiteSpace: 'nowrap' }}
+          sx={{ flex: 1, height: 32, px: '10px', borderRadius: '999px', fontSize: '0.8125rem', fontWeight: value === o.value ? 600 : 400, color: value === o.value ? 'text.primary' : 'text.secondary', bgcolor: value === o.value ? 'background.paper' : 'transparent', whiteSpace: 'nowrap' }}
         >
           {o.label}
         </ButtonBase>
@@ -128,14 +128,14 @@ function Segments<T extends string>({ value, options, onChange }: { value: T | n
 function SheetHeader({ title, sub, onBack }: { title: string; sub?: string; onBack: () => void }) {
   return (
     <Stack sx={{ gap: '4px', mb: '16px' }}>
-      <ButtonBase onClick={onBack} sx={{ alignSelf: 'flex-start', gap: '4px', fontSize: '12px', color: 'text.secondary', borderRadius: '6px', '&:hover': { color: 'text.primary' } }}>
+      <ButtonBase onClick={onBack} sx={{ alignSelf: 'flex-start', gap: '4px', fontSize: '0.75rem', color: 'text.secondary', borderRadius: '6px', '&:hover': { color: 'text.primary' } }}>
         <Box sx={{ display: 'flex', transform: 'rotate(180deg)' }}>
           <ChevronRightLinear size={12} color="currentColor" />
         </Box>
         Settings
       </ButtonBase>
-      <Typography sx={{ fontSize: '20px', fontWeight: 600 }}>{title}</Typography>
-      {sub && <Typography sx={{ fontSize: '13px', color: 'text.secondary', lineHeight: 1.5 }}>{sub}</Typography>}
+      <Typography sx={{ fontSize: '1.25rem', fontWeight: 600 }}>{title}</Typography>
+      {sub && <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', lineHeight: 1.5 }}>{sub}</Typography>}
     </Stack>
   )
 }
@@ -177,10 +177,17 @@ export function AgentSettingsPanel({
   const [instructions, setInstructions] = useState(agent.instructions)
   const [editing, setEditing] = useState<Partial<Routine> | null>(null)
   const [shot, setShot] = useState<string | null>(null)
+  const [personality, setPersonality] = useState('')
+  const [userName, setUserName] = useState('')
   const args = { root, botId: agent.id }
 
   useEffect(() => {
-    void call<BotSettings>('cmd_bots_settings', args).then((s) => s && setSettings(s))
+    void call<BotSettings>('cmd_bots_settings', args).then((s) => {
+      if (!s) return
+      setSettings(s)
+      setPersonality(s.personality ?? '')
+    })
+    void call<string | null>('cmd_bots_user_name').then((n) => setUserName(n ?? ''))
     void call<Routine[]>('cmd_bots_routines', args).then((r) => setRoutines(r ?? []))
     void call<string>('cmd_bots_memory', args).then((m) => setMemory(m ?? ''))
     setInstructions(agent.instructions)
@@ -236,9 +243,9 @@ export function AgentSettingsPanel({
             onChange={(e) => setInstructions(e.target.value)}
             onBlur={() => instructions !== agent.instructions && void save(root, { ...agent, instructions }, agent.id)}
             placeholder={'Check the inbox at 8am.\nNever send anything without asking me first.'}
-            sx={{ ...card, px: '16px', py: '12px', fontSize: '14px', lineHeight: 1.55, alignItems: 'flex-start' }}
+            sx={{ ...card, px: '16px', py: '12px', fontSize: '0.875rem', lineHeight: 1.55, alignItems: 'flex-start' }}
           />
-          <Typography sx={{ fontSize: '12px', color: 'text.disabled', mt: '8px' }}>Saved when you click away.</Typography>
+          <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled', mt: '8px' }}>Saved when you click away.</Typography>
         </>
       )
     if (sheet === 'rules' && settings)
@@ -249,8 +256,8 @@ export function AgentSettingsPanel({
             {RULES.map((r) => (
               <Stack key={r.key} sx={{ gap: '8px' }}>
                 <Stack direction="row" sx={{ alignItems: 'baseline', gap: '8px' }}>
-                  <Typography sx={{ fontSize: '14px', fontWeight: 500 }}>{r.label}</Typography>
-                  <Typography sx={{ fontSize: '12px', color: 'text.disabled' }}>{r.hint}</Typography>
+                  <Typography sx={{ fontSize: '0.875rem', fontWeight: 500 }}>{r.label}</Typography>
+                  <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled' }}>{r.hint}</Typography>
                 </Stack>
                 <Segments value={settings.rules[r.key]} options={LEVELS} onChange={(v) => void saveSettings({ ...settings, rules: { ...settings.rules, [r.key]: v } })} />
               </Stack>
@@ -267,33 +274,33 @@ export function AgentSettingsPanel({
               <Stack key={r.id} sx={{ ...card, p: '14px', gap: '6px' }}>
                 <Stack direction="row" sx={{ alignItems: 'center', gap: '8px' }}>
                   <ButtonBase onClick={() => setEditing(r)} sx={{ flex: 1, minWidth: 0, justifyContent: 'flex-start', textAlign: 'left' }}>
-                    <Typography sx={{ fontSize: '14px', fontWeight: 500 }} noWrap>
+                    <Typography sx={{ fontSize: '0.875rem', fontWeight: 500 }} noWrap>
                       {r.title}
                     </Typography>
                   </ButtonBase>
                   <Switch size="small" checked={r.enabled} onChange={(e) => void saveRoutine({ ...r, enabled: e.target.checked })} />
                 </Stack>
-                <Typography sx={{ fontSize: '12px', color: 'text.secondary' }}>
+                <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
                   {r.once ? 'Once' : 'Repeats'} · next {r.enabled ? when(r.nextRun) : 'off'}
                 </Typography>
                 <Stack direction="row" sx={{ gap: '4px', mt: '2px' }}>
-                  <ButtonBase onClick={() => void call('cmd_bots_run_routine', { ...args, routineId: r.id })} sx={{ height: 26, px: '10px', borderRadius: '8px', fontSize: '12px', bgcolor: 'action.selected' }}>
+                  <ButtonBase onClick={() => void call('cmd_bots_run_routine', { ...args, routineId: r.id })} sx={{ height: 28, px: '10px', borderRadius: '8px', fontSize: '0.75rem', bgcolor: 'action.selected' }}>
                     Run now
                   </ButtonBase>
-                  <ButtonBase onClick={() => setEditing(r)} sx={{ height: 26, px: '10px', borderRadius: '8px', fontSize: '12px', color: 'text.secondary' }}>
+                  <ButtonBase onClick={() => setEditing(r)} sx={{ height: 28, px: '10px', borderRadius: '8px', fontSize: '0.75rem', color: 'text.secondary' }}>
                     Edit
                   </ButtonBase>
                   <ButtonBase
                     aria-label="Delete"
                     onClick={() => void call<Routine[]>('cmd_bots_delete_routine', { ...args, routineId: r.id }).then((all) => setRoutines(all ?? []))}
-                    sx={{ width: 26, height: 26, borderRadius: '8px', color: 'text.secondary', ml: 'auto', '&:hover': { color: 'error.main' } }}
+                    sx={{ width: 26, height: 28, borderRadius: '8px', color: 'text.secondary', ml: 'auto', '&:hover': { color: 'error.main' } }}
                   >
                     <TrashLinear size={14} color="currentColor" />
                   </ButtonBase>
                 </Stack>
               </Stack>
             ))}
-            <ButtonBase onClick={() => setEditing({})} sx={{ height: 44, borderRadius: '14px', fontSize: '14px', fontWeight: 600, bgcolor: alpha(color, 0.16), '&:hover': { bgcolor: alpha(color, 0.24) } }}>
+            <ButtonBase onClick={() => setEditing({})} sx={{ height: 44, borderRadius: '12px', fontSize: '0.875rem', fontWeight: 600, bgcolor: alpha(color, 0.16), '&:hover': { bgcolor: alpha(color, 0.24) } }}>
               New routine
             </ButtonBase>
           </Stack>
@@ -312,12 +319,12 @@ export function AgentSettingsPanel({
               setMemoryDirty(true)
             }}
             placeholder="Nothing yet."
-            sx={{ ...card, px: '16px', py: '12px', fontSize: '13px', lineHeight: 1.55, alignItems: 'flex-start' }}
+            sx={{ ...card, px: '16px', py: '12px', fontSize: '0.8125rem', lineHeight: 1.55, alignItems: 'flex-start' }}
           />
           {memoryDirty && (
             <ButtonBase
               onClick={() => void call('cmd_bots_save_memory', { ...args, text: memory }).then(() => setMemoryDirty(false))}
-              sx={{ alignSelf: 'flex-end', mt: '10px', height: 34, px: '16px', borderRadius: '10px', fontSize: '13px', fontWeight: 600, bgcolor: color, color: (t) => t.palette.getContrastText(color) }}
+              sx={{ alignSelf: 'flex-end', mt: '10px', height: 32, px: '16px', borderRadius: '8px', fontSize: '0.8125rem', fontWeight: 500, bgcolor: color, color: (t) => t.palette.getContrastText(color) }}
             >
               Save
             </ButtonBase>
@@ -331,15 +338,15 @@ export function AgentSettingsPanel({
           <Stack sx={card}>
             <ButtonBase onClick={() => void saveSettings({ ...settings, folder: null })} sx={{ ...rowSx, '&:hover': { bgcolor: 'action.hover' } }}>
               <Stack sx={{ flex: 1, minWidth: 0 }}>
-                <Typography sx={{ fontSize: '14px', fontWeight: 500 }}>Its own private folder</Typography>
-                <Typography sx={{ fontSize: '12px', color: 'text.secondary' }}>Nothing else on this computer is touched</Typography>
+                <Typography sx={{ fontSize: '0.875rem', fontWeight: 500 }}>Its own private folder</Typography>
+                <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>Nothing else on this computer is touched</Typography>
               </Stack>
               {!settings.folder && <Typography sx={{ color }}>✓</Typography>}
             </ButtonBase>
             <ButtonBase onClick={() => void chooseFolder()} sx={{ ...rowSx, '&:hover': { bgcolor: 'action.hover' } }}>
               <Stack sx={{ flex: 1, minWidth: 0 }}>
-                <Typography sx={{ fontSize: '14px', fontWeight: 500 }}>A folder you choose</Typography>
-                <Typography sx={{ fontSize: '12px', color: 'text.secondary' }} noWrap title={settings.folder ?? undefined}>
+                <Typography sx={{ fontSize: '0.875rem', fontWeight: 500 }}>A folder you choose</Typography>
+                <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }} noWrap title={settings.folder ?? undefined}>
                   {settings.folder ?? 'Desktop, a project, Downloads'}
                 </Typography>
               </Stack>
@@ -356,10 +363,10 @@ export function AgentSettingsPanel({
             <ButtonBase onClick={onEditProfile} sx={{ ...rowSx, minHeight: 72, '&:hover': { bgcolor: 'action.hover' } }}>
               <Avatar {...faceOf(agent)} size={40} />
               <Stack sx={{ flex: 1, minWidth: 0 }}>
-                <Typography sx={{ fontSize: '15px', fontWeight: 600 }} noWrap>
+                <Typography sx={{ fontSize: '1rem', fontWeight: 600 }} noWrap>
                   {agent.name}
                 </Typography>
-                <Typography sx={{ fontSize: '12px', color: 'text.secondary' }} noWrap>
+                <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }} noWrap>
                   {agent.role || 'Name, job and look'}
                 </Typography>
               </Stack>
@@ -374,7 +381,7 @@ export function AgentSettingsPanel({
             <>
             <Stack direction="row" sx={{ ...rowSx, justifyContent: 'space-between' }}>
               <IconTile Icon={SparklesLinear} />
-              <Typography sx={{ flex: 1, fontSize: '14px', fontWeight: 500 }}>Model</Typography>
+              <Typography sx={{ flex: 1, fontSize: '0.875rem', fontWeight: 500 }}>Model</Typography>
               <Box sx={{ minWidth: 0, maxWidth: 200 }}>
                 <ModelPicker mode="agent" value={agent.model} onChange={(model) => void save(root, { ...agent, model }, agent.id)} />
               </Box>
@@ -384,9 +391,9 @@ export function AgentSettingsPanel({
             )}
             {settings && (
               <Stack sx={{ ...rowSx, flexDirection: 'column', alignItems: 'stretch', gap: '10px', py: '14px' }}>
-                <Typography sx={{ fontSize: '14px', fontWeight: 500 }}>Before {agent.name} acts</Typography>
+                <Typography sx={{ fontSize: '0.875rem', fontWeight: 500 }}>Before {agent.name} acts</Typography>
                 <Segments value={acts} options={[{ value: 'ask', label: 'Ask me first' }, { value: 'auto', label: 'Just do it' }]} onChange={setAll} />
-                <ButtonBase onClick={() => setSheet('rules')} sx={{ alignSelf: 'flex-start', fontSize: '12px', color: 'text.secondary', '&:hover': { color: 'text.primary' } }}>
+                <ButtonBase onClick={() => setSheet('rules')} sx={{ alignSelf: 'flex-start', fontSize: '0.75rem', color: 'text.secondary', '&:hover': { color: 'text.primary' } }}>
                   {acts ? 'Fine-tune by kind of action' : 'Custom: set by kind of action'}
                 </ButtonBase>
               </Stack>
@@ -397,15 +404,39 @@ export function AgentSettingsPanel({
               <Stack direction="row" sx={rowSx}>
                 <IconTile Icon={PowerLinear} />
                 <Stack sx={{ flex: 1, minWidth: 0 }}>
-                  <Typography sx={{ fontSize: '14px', fontWeight: 500 }}>Always on</Typography>
-                  <Typography sx={{ fontSize: '12px', color: 'text.secondary' }}>Checks in every {settings.checkinHours} h, posts only what matters</Typography>
+                  <Typography sx={{ fontSize: '0.875rem', fontWeight: 500 }}>Always on</Typography>
+                  <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>Checks in every {settings.checkinHours} h, posts only what matters</Typography>
                 </Stack>
                 <Switch checked={settings.alwaysOn} onChange={(e) => void saveSettings({ ...settings, alwaysOn: e.target.checked })} />
               </Stack>
               <Stack direction="row" sx={rowSx}>
                 <IconTile Icon={CloseLinear} />
-                <Typography sx={{ flex: 1, fontSize: '14px', fontWeight: 500 }}>Paused</Typography>
+                <Typography sx={{ flex: 1, fontSize: '0.875rem', fontWeight: 500 }}>Paused</Typography>
                 <Switch checked={settings.paused} onChange={(e) => void saveSettings({ ...settings, paused: e.target.checked })} />
+              </Stack>
+            </Stack>
+          )}
+          {settings && (
+            <Stack sx={card}>
+              <Stack sx={{ ...rowSx, flexDirection: 'column', alignItems: 'stretch', gap: '6px', py: '12px' }}>
+                <Typography sx={{ fontSize: '0.875rem', fontWeight: 500 }}>Personality</Typography>
+                <InputBase
+                  value={personality}
+                  onChange={(e) => setPersonality(e.target.value)}
+                  onBlur={() => personality !== (settings.personality ?? '') && void saveSettings({ ...settings, personality })}
+                  placeholder="Warm and brief"
+                  sx={{ fontSize: '0.8125rem' }}
+                />
+              </Stack>
+              <Stack sx={{ ...rowSx, flexDirection: 'column', alignItems: 'stretch', gap: '6px', py: '12px' }}>
+                <Typography sx={{ fontSize: '0.875rem', fontWeight: 500 }}>What should your agents call you?</Typography>
+                <InputBase
+                  value={userName}
+                  onChange={(e) => setUserName(e.target.value)}
+                  onBlur={() => void call('cmd_bots_set_user_name', { name: userName })}
+                  placeholder="Your name (all your agents use it)"
+                  sx={{ fontSize: '0.8125rem' }}
+                />
               </Stack>
             </Stack>
           )}
@@ -416,20 +447,20 @@ export function AgentSettingsPanel({
         {(place === 'this_pc' || place === 'auto') && (
           <Stack sx={{ gap: '8px' }}>
             <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-              <Typography sx={{ fontSize: '13px', color: 'text.secondary' }}>{agent.name}'s screen</Typography>
-              <Typography sx={{ fontSize: '12px', color: 'text.disabled' }}>this computer</Typography>
+              <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary' }}>{agent.name}'s screen</Typography>
+              <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled' }}>this computer</Typography>
             </Stack>
             <Box sx={{ ...card, aspectRatio: '16 / 9', display: 'grid', placeItems: 'center' }}>
               {shot ? (
                 <Box component="img" src={shot} alt="This computer's screen" sx={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               ) : (
-                <Typography sx={{ fontSize: '12px', color: 'text.disabled' }}>Capturing the screen…</Typography>
+                <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled' }}>Capturing the screen…</Typography>
               )}
             </Box>
           </Stack>
         )}
         <Stack sx={{ ...card, p: '16px', gap: '12px' }}>
-          <Typography sx={{ fontSize: '15px', fontWeight: 600 }}>Where {agent.name} works</Typography>
+          <Typography sx={{ fontSize: '1rem', fontWeight: 600 }}>Where {agent.name} works</Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
             {PLACES.map((p) => {
               const on = place === p.id
@@ -453,13 +484,13 @@ export function AgentSettingsPanel({
                   }}
                 >
                   <p.Icon size={18} color={on ? color : 'currentColor'} />
-                  <Typography sx={{ fontSize: '13px', fontWeight: on ? 600 : 500, color: 'inherit', textAlign: 'center' }}>{p.label}</Typography>
-                  {p.note && <Typography sx={{ fontSize: '11px', color: 'text.disabled' }}>{p.note}</Typography>}
+                  <Typography sx={{ fontSize: '0.8125rem', fontWeight: on ? 600 : 500, color: 'inherit', textAlign: 'center' }}>{p.label}</Typography>
+                  {p.note && <Typography sx={{ fontSize: '0.6875rem', color: 'text.disabled' }}>{p.note}</Typography>}
                 </ButtonBase>
               )
             })}
           </Box>
-          <Typography sx={{ fontSize: '12px', color: 'text.secondary', lineHeight: 1.5 }}>{PLACE_NOTE[place]}</Typography>
+          <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary', lineHeight: 1.5 }}>{PLACE_NOTE[place]}</Typography>
         </Stack>
         <Stack sx={card}>
           <Row Icon={RepeatLinear} title="Routines" value={routines.length ? `${routines.filter((r) => r.enabled).length} on` : 'None'} onClick={() => setSheet('routines')} />

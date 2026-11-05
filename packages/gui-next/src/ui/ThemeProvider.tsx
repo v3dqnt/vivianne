@@ -63,7 +63,7 @@ export function CssBaseline({ extra }: { extra?: Record<string, unknown> }) {
             // one-off sx sizes), so this one value is the app's text scale.
             // 15px sits a step under the browser's 16: denser, while spacing
             // (px-based) keeps its breathing room.
-            fontSize: '15px',
+            fontSize: '1rem',
             colorScheme: p.mode,
           },
           '*, *::before, *::after': { boxSizing: 'inherit' },

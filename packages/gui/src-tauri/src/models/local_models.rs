@@ -389,6 +389,12 @@ pub async fn cmd_local_model_download(app: AppHandle, url: String, file: String)
     fetch(&app, &url, &dir, &file, "local-models:progress").await.map(|p| p.to_string_lossy().to_string())
 }
 
+/// `fetch` for other model downloads (image models, the stable-diffusion.cpp build).
+pub(crate) async fn fetch_to(app: &AppHandle, url: &str, dir: &Path, file: &str, event: &str) -> Result<PathBuf, String> {
+    CANCELLED.lock().unwrap().remove(file);
+    fetch(app, url, dir, file, event).await
+}
+
 #[tauri::command]
 pub async fn cmd_local_model_cancel(file: String) -> Result<(), String> {
     CANCELLED.lock().unwrap().insert(file);

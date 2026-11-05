@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ButtonBase, Popover, Stack, Typography, alpha, useTheme } from '../../../ui'
-import { ArrowDownLinear, ClipboardTextLinear, MessageQuestionLinear, ShieldTickLinear, TickCircleLinear } from '../../../icons'
+import { ClipboardTextLinear, MessageQuestionLinear, ShieldTickLinear, TickCircleLinear } from '../../../icons'
 import { usePermissionModeStore } from '../store/permissionModeStore'
 import { usePlanStore } from '../../plan/store/planStore'
 import { TOOLBAR_PILL } from '../lib/toolbarPill'
@@ -61,7 +61,6 @@ export function ModePill() {
         <Typography className="cq-label" variant="caption" sx={{ fontWeight: 500 }}>
           {shown.label}
         </Typography>
-        <ArrowDownLinear size={12} color="currentColor" />
       </ButtonBase>
       <Popover
         open={!!anchor}
@@ -69,7 +68,7 @@ export function ModePill() {
         onClose={() => setAnchor(null)}
         anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
         transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        slotProps={{ paper: { sx: { width: 300, borderRadius: '14px', p: 0.5, mt: -0.5 } } }}
+        slotProps={{ paper: { sx: { width: 300, borderRadius: '12px', p: 0.5, mt: -0.5 } } }}
       >
         <Stack role="listbox" sx={{ gap: 0.25 }}>
           {MODES.map((m) => {
@@ -88,7 +87,7 @@ export function ModePill() {
                   gap: 1.25,
                   px: 1.25,
                   py: 1,
-                  borderRadius: '10px',
+                  borderRadius: '8px',
                   bgcolor: on ? alpha(theme.palette.primary.main, 0.1) : 'transparent',
                   '&:hover': { bgcolor: on ? alpha(theme.palette.primary.main, 0.14) : 'action.hover' },
                 }}
@@ -97,7 +96,7 @@ export function ModePill() {
                   <m.Icon size={15} color="currentColor" />
                 </Stack>
                 <Stack sx={{ flex: 1, minWidth: 0, gap: 0.125 }}>
-                  <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem' }}>
+                  <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }}>
                     {m.label}
                   </Typography>
                   <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.4 }}>

@@ -1,4 +1,5 @@
 import { DiscoverModels } from './DiscoverModels'
+import { ImageModelsPanel } from './ImageModelsPanel'
 import { useEffect, useState } from 'react'
 import { Stack, Typography, Divider, Button, IconButton, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Select, MenuItem, InputLabel, FormControl, FormControlLabel, Checkbox, Collapse, Box, ToggleButton, ToggleButtonGroup } from '../../../ui'
 import { ImportLinear, PlayCircleLinear, StopCircleLinear, TrashLinear, CpuLinear, SettingLinear } from '../../../icons'
@@ -171,7 +172,7 @@ function EndpointDialog({
           </FormControl>
           {info && (
             <Stack sx={{ gap: 0.25, px: 1.25, py: 1, borderRadius: '8px', bgcolor: 'action.hover' }}>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>
                 {[info.format ?? 'Unknown format', info.architecture, info.sizeLabel].filter(Boolean).join(' · ')}
               </Typography>
               <Typography variant="caption" color="text.secondary">
@@ -302,7 +303,7 @@ function EndpointDialog({
                   />
                   {GROUPS.map((g) => (
                     <Stack key={g.title} spacing={1.5}>
-                      <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary', pt: 0.5 }}>
+                      <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary', pt: 0.5 }}>
                         {g.title}
                       </Typography>
                       {MORE.filter((f) => f.group === g.title).map((f) =>
@@ -385,7 +386,7 @@ function EndpointRow({ endpoint, onEdit }: { endpoint: LlamaEndpoint; onEdit: ()
   }
 
   return (
-    <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5, py: 1.25, px: 1.5, borderRadius: 2, '&:hover': { bgcolor: 'action.hover' } }}>
+    <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5, py: 1.25, px: 1.5, borderRadius: 1.6, '&:hover': { bgcolor: 'action.hover' } }}>
       <CpuLinear size={16} color="currentColor" />
       <Stack sx={{ flex: 1, minWidth: 0 }}>
         <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
@@ -455,7 +456,7 @@ export function LocalModelsSection() {
   const refresh = useLlamaStore((s) => s.refresh)
   const pickGgufFile = useLlamaStore((s) => s.pickGgufFile)
   const [dialog, setDialog] = useState<{ endpoint: LlamaEndpoint | null; modelPath: string | null } | null>(null)
-  const [tab, setTab] = useState<'installed' | 'discover'>(() => (endpoints.length ? 'installed' : 'discover'))
+  const [tab, setTab] = useState<'installed' | 'discover' | 'images'>(() => (endpoints.length ? 'installed' : 'discover'))
 
   useEffect(() => {
     void refresh()
@@ -470,7 +471,7 @@ export function LocalModelsSection() {
   return (
     <Stack sx={{ gap: 0.5 }}>
       <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
           Local models
         </Typography>
         <Button
@@ -482,15 +483,20 @@ export function LocalModelsSection() {
           Add GGUF model
         </Button>
       </Stack>
-      <ToggleButtonGroup size="small" exclusive value={tab} onChange={(_: unknown, v: 'installed' | 'discover' | null) => v && setTab(v)} sx={{ alignSelf: 'flex-start', mb: 1 }}>
+      <ToggleButtonGroup size="small" exclusive value={tab} onChange={(_: unknown, v: 'installed' | 'discover' | 'images' | null) => v && setTab(v)} sx={{ alignSelf: 'flex-start', mb: 1 }}>
         <ToggleButton value="installed" sx={{ textTransform: 'none', px: 1.5 }}>
           Installed{endpoints.length ? ` · ${endpoints.length}` : ''}
         </ToggleButton>
         <ToggleButton value="discover" sx={{ textTransform: 'none', px: 1.5 }}>
           Get models
         </ToggleButton>
+        <ToggleButton value="images" sx={{ textTransform: 'none', px: 1.5 }}>
+          Image generation
+        </ToggleButton>
       </ToggleButtonGroup>
-      {tab === 'discover' ? (
+      {tab === 'images' ? (
+        <ImageModelsPanel />
+      ) : tab === 'discover' ? (
         <DiscoverModels />
       ) : (
         <>

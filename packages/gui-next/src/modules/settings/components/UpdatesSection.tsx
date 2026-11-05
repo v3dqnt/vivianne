@@ -32,7 +32,7 @@ export function UpdatesSection() {
         sx={{ alignItems: 'center', gap: 2, p: 2, borderRadius: 1.2, border: 1, borderColor: 'divider' }}
       >
         <Stack sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>
             Vivianne {version || '—'}
           </Typography>
           <Typography variant="caption" color="text.secondary">
@@ -73,7 +73,7 @@ export function UpdatesSection() {
 
       {installStatus === 'installing' && (
         <Box>
-          <LinearProgress variant={pct === null ? 'indeterminate' : 'determinate'} value={pct ?? 0} sx={{ borderRadius: 1 }} />
+          <LinearProgress variant={pct === null ? 'indeterminate' : 'determinate'} value={pct ?? 0} sx={{ borderRadius: 0.8 }} />
           <Typography variant="caption" color="text.secondary" sx={{ mt: 0.75, display: 'block' }}>
             {pct === null
               ? 'Downloading…'
@@ -85,7 +85,7 @@ export function UpdatesSection() {
 
       {update?.notes && (
         <Box sx={{ p: 2, borderRadius: 1.2, border: 1, borderColor: 'divider' }}>
-          <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
+          <Typography variant="body2" sx={{ fontWeight: 500, mb: 1 }}>
             What's in {update.version}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>
@@ -97,7 +97,7 @@ export function UpdatesSection() {
       <Divider />
 
       <Stack sx={{ gap: 1 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
           Release history
         </Typography>
         {changelog.length === 0 ? (

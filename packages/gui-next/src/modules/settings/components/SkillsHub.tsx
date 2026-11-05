@@ -165,7 +165,7 @@ export function SkillsHub({ onInstalled }: { onInstalled: () => void }) {
         </Typography>
       </Stack>
 
-      <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, height: 28, borderRadius: 2, border: 1, borderColor: 'divider' }}>
+      <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, height: 28, borderRadius: 1.6, border: 1, borderColor: 'divider' }}>
         <SearchNormalLinear size={14} color="currentColor" />
         <InputBase fullWidth placeholder={`Search ${src.label} skills`} value={query} onChange={(e) => setQuery(e.target.value)} sx={{ fontSize: '0.8125rem' }} />
       </Stack>
@@ -189,14 +189,14 @@ export function SkillsHub({ onInstalled }: { onInstalled: () => void }) {
       {visible.map((s) => {
         const have = installedNames.get(s.name)
         return (
-          <Stack key={s.dir} direction="row" sx={{ alignItems: 'center', gap: 1.5, py: 1, px: 1, borderRadius: 2, '&:hover': { bgcolor: 'action.hover' } }}>
+          <Stack key={s.dir} direction="row" sx={{ alignItems: 'center', gap: 1.5, py: 1, px: 1, borderRadius: 1.6, '&:hover': { bgcolor: 'action.hover' } }}>
             <Stack sx={{ flex: 1, minWidth: 0 }}>
               <Stack direction="row" sx={{ alignItems: 'baseline', gap: 0.75 }}>
                 <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
                   {s.name}
                 </Typography>
                 {s.hasCard && (
-                  <Typography variant="caption" sx={{ fontSize: '0.625rem', fontWeight: 700, color: 'text.secondary', border: 1, borderColor: 'divider', borderRadius: '4px', px: 0.5 }}>
+                  <Typography variant="caption" sx={{ fontSize: '0.6875rem', fontWeight: 500, color: 'text.secondary', border: 1, borderColor: 'divider', borderRadius: '4px', px: 0.5 }}>
                     SKILL CARD
                   </Typography>
                 )}
@@ -208,7 +208,7 @@ export function SkillsHub({ onInstalled }: { onInstalled: () => void }) {
               ) : null}
             </Stack>
             {have ? (
-              <Typography variant="caption" sx={{ color: have.status === 'ok' ? 'success.main' : 'warning.main', fontWeight: 600, flexShrink: 0 }}>
+              <Typography variant="caption" sx={{ color: have.status === 'ok' ? 'success.main' : 'warning.main', fontWeight: 500, flexShrink: 0 }}>
                 {have.status === 'ok' ? 'Installed' : 'Edited since install'}
               </Typography>
             ) : null}
@@ -231,7 +231,7 @@ export function SkillsHub({ onInstalled }: { onInstalled: () => void }) {
 
       {installed.length > 0 && (
         <Stack sx={{ gap: 0.5, mt: 1 }}>
-          <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
+          <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
             Installed from a catalog
           </Typography>
           {installed.map((i) => (
@@ -278,12 +278,12 @@ export function SkillsHub({ onInstalled }: { onInstalled: () => void }) {
 
               {review.preview.report.findings.length > 0 && (
                 <Stack sx={{ gap: 0.5 }}>
-                  <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
+                  <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
                     What the scan found
                   </Typography>
                   {review.preview.report.findings.slice(0, 40).map((f, i) => (
                     <Stack key={i} direction="row" sx={{ gap: 1, alignItems: 'baseline' }}>
-                      <Typography variant="caption" sx={{ width: 44, fontWeight: 700, color: sevColor(f.severity), textTransform: 'uppercase', fontSize: '0.625rem' }}>
+                      <Typography variant="caption" sx={{ width: 44, fontWeight: 600, color: sevColor(f.severity), textTransform: 'uppercase', fontSize: '0.6875rem' }}>
                         {f.severity}
                       </Typography>
                       <Typography variant="caption" sx={{ flex: 1, minWidth: 0 }}>
@@ -299,7 +299,7 @@ export function SkillsHub({ onInstalled }: { onInstalled: () => void }) {
               )}
 
               <Stack sx={{ gap: 0.5 }}>
-                <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
+                <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
                   {review.preview.card ? 'Skill card' : 'No skill card'}
                 </Typography>
                 <Box component="pre" sx={{ m: 0, p: 1.25, maxHeight: 200, overflow: 'auto', borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.04), fontSize: '0.6875rem', fontFamily: '"Geist Mono", ui-monospace, monospace', whiteSpace: 'pre-wrap' }}>
@@ -308,7 +308,7 @@ export function SkillsHub({ onInstalled }: { onInstalled: () => void }) {
               </Stack>
 
               <Stack sx={{ gap: 0.5 }}>
-                <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
+                <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
                   SKILL.md
                 </Typography>
                 <Box component="pre" sx={{ m: 0, p: 1.25, maxHeight: 220, overflow: 'auto', borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.04), fontSize: '0.6875rem', fontFamily: '"Geist Mono", ui-monospace, monospace', whiteSpace: 'pre-wrap' }}>

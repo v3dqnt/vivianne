@@ -161,11 +161,15 @@ pub(crate) async fn execute_ptc_tool(
 
     match rx.await {
         Ok(Ok(text)) => AgentToolResult {
-            content: vec![MessageContent::Text { text }],
+            // Capped like every other tool output: a script that returned a
+            // huge blob used to push it into context verbatim.
+            content: vec![MessageContent::Text {
+                text: crate::agent::tools::exec::clip_tool_text(&text, crate::agent::tools::exec::MAX_UNBOUNDED_TOOL_CHARS),
+            }],
             details: serde_json::Value::Null,
             terminate: None,
         },
-        Ok(Err(text)) => err_result(&text),
+        Ok(Err(text)) => err_result(&crate::agent::tools::exec::clip_tool_text(&text, crate::agent::tools::exec::MAX_UNBOUNDED_TOOL_CHARS)),
         Err(_) => err_result("Error: the script execution thread ended unexpectedly."),
     }
 }
@@ -327,7 +331,7 @@ fn with_logs<'js>(ctx: &Ctx<'js>, result: String) -> String {
 /// from Rust requires a `Ctx`, and holding one across this boundary is what
 /// crashed the process at teardown (see the binding in `run_script`).
 #[allow(clippy::too_many_arguments)]
-async fn call_bridged_tool(
+pub(crate) async fn call_bridged_tool(
     name: &str,
     arguments: serde_json::Value,
     seq: &AtomicU32,
@@ -337,8 +341,8 @@ async fn call_bridged_tool(
     emit: &EventSender,
     app: &tauri::AppHandle,
 ) -> String {
-    if name == "run_script" {
-        return tagged_err("run_script can't be called from inside a script — you are already in one.");
+    if name == "run_script" || name == "run_native" {
+        return tagged_err("run_script and run_native can't be called from inside a script — you are already in one.");
     }
     let n = seq.fetch_add(1, Ordering::SeqCst);
     let tc = AgentToolCall { id: format!("{outer_call_id}-ptc{n}"), name: name.to_string(), arguments };

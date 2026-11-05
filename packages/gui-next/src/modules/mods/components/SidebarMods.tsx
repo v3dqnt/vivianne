@@ -30,7 +30,7 @@ export function SidebarMods() {
           <Box key={id}>
             <ButtonBase
               onClick={() => toggle(id)}
-              sx={{ width: '100%', justifyContent: 'flex-start', gap: 0.75, px: 1, py: 0.5, borderRadius: 1.5, color: 'text.secondary' }}
+              sx={{ width: '100%', justifyContent: 'flex-start', gap: 0.75, px: 1, py: 0.5, borderRadius: 1.6, color: 'text.secondary' }}
             >
               <Box component="span" sx={{ display: 'inline-flex', transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform 120ms' }}>
                 <ArrowDownLinear size={12} color="currentColor" />

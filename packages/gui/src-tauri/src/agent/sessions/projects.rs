@@ -42,6 +42,12 @@ pub struct Project {
     /// `data:image/...` URL (resized before it gets here).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// The banner above the project's threads: `preset:<id>` for a built-in
+    /// one, `file:<ext>` for the user's image (kept under
+    /// `~/.viv/project-banners/<project id>.<ext>`, not in this file, which is
+    /// rewritten on every change), or none for the project colour's gradient.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banner: Option<String>,
 }
 
 /// `tree` is how new projects are made; `company` and `team` are what it
@@ -148,6 +154,7 @@ pub async fn cmd_create_project(name: String, path: Option<String>, color: Optio
         multiplayer: None,
         mode,
         icon: None,
+        banner: None,
     };
     data.projects.push(project.clone());
     save(&data)?;
@@ -243,6 +250,7 @@ pub async fn cmd_create_multiplayer_project(
         }),
         mode: None,
         icon: None,
+        banner: None,
     };
     data.projects.push(project.clone());
     save(&data)?;
@@ -288,6 +296,100 @@ pub async fn cmd_set_project_icon(id: String, icon: Option<String>) -> Result<()
     save(&data)
 }
 
+const BANNER_MAX_BYTES: usize = 300 * 1024;
+
+fn banners_dir() -> PathBuf {
+    crate::agent::system::paths::viv_home_path(&["project-banners"])
+}
+
+/// A project id as a file name: only what an id is made of, never a path.
+fn safe_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 80 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// A `data:image/...;base64,...` URL as (file extension, bytes). Refuses
+/// anything but png, jpeg and webp, and anything over the size cap.
+fn decode_banner(url: &str) -> Result<(&'static str, Vec<u8>), String> {
+    use base64::Engine;
+    let rest = url.strip_prefix("data:image/").ok_or("The banner must be an image.")?;
+    let (meta, data) = rest.split_once(',').ok_or("The banner isn't a valid image.")?;
+    let ext = match meta.split(';').next().unwrap_or("") {
+        "png" => "png",
+        "jpeg" | "jpg" => "jpg",
+        "webp" => "webp",
+        _ => return Err("The banner must be a PNG, JPEG or WebP image.".into()),
+    };
+    if !meta.contains("base64") {
+        return Err("The banner isn't a valid image.".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|_| "The banner isn't a valid image.".to_string())?;
+    if bytes.len() > BANNER_MAX_BYTES {
+        return Err(format!("The banner is too large: {} KB, the limit is {} KB.", bytes.len() / 1024, BANNER_MAX_BYTES / 1024));
+    }
+    Ok((ext, bytes))
+}
+
+/// A preset reference as stored, if it is one: `preset:` plus a short id.
+fn valid_preset(reference: &str) -> bool {
+    reference.strip_prefix("preset:").is_some_and(|id| !id.is_empty() && id.len() <= 24 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
+}
+
+fn remove_banner_files(id: &str) {
+    for ext in ["png", "jpg", "webp"] {
+        let _ = std::fs::remove_file(banners_dir().join(format!("{id}.{ext}")));
+    }
+}
+
+/// Set or clear a project's banner. `banner` is `preset:<id>`, a
+/// `data:image/...` URL (png, jpeg or webp under 300 KB), or none to clear.
+/// Returns what is stored in the project.
+#[tauri::command]
+pub async fn cmd_set_project_banner(id: String, banner: Option<String>) -> Result<Option<String>, String> {
+    if !safe_id(&id) {
+        return Err("Project not found".to_string());
+    }
+    let stored = match banner.as_deref() {
+        None | Some("") => None,
+        Some(b) if valid_preset(b) => Some(b.to_string()),
+        Some(b) => {
+            let (ext, bytes) = decode_banner(b)?;
+            std::fs::create_dir_all(banners_dir()).map_err(|e| e.to_string())?;
+            remove_banner_files(&id);
+            std::fs::write(banners_dir().join(format!("{id}.{ext}")), bytes).map_err(|e| e.to_string())?;
+            Some(format!("file:{ext}"))
+        }
+    };
+    let mut data = load()?;
+    let Some(project) = data.projects.iter_mut().find(|p| p.id == id) else {
+        return Err("Project not found".to_string());
+    };
+    if stored.as_deref().is_none_or(|s| !s.starts_with("file:")) {
+        remove_banner_files(&id);
+    }
+    project.banner = stored.clone();
+    save(&data)?;
+    Ok(stored)
+}
+
+/// The project's own banner image as a `data:` URL, when it has one.
+#[tauri::command]
+pub async fn cmd_get_project_banner(id: String) -> Result<Option<String>, String> {
+    use base64::Engine;
+    if !safe_id(&id) {
+        return Ok(None);
+    }
+    let data = load()?;
+    let Some(ext) = data.projects.iter().find(|p| p.id == id).and_then(|p| p.banner.as_deref()).and_then(|b| b.strip_prefix("file:")) else {
+        return Ok(None);
+    };
+    let mime = match ext {
+        "jpg" => "jpeg",
+        other => other,
+    };
+    let Ok(bytes) = std::fs::read(banners_dir().join(format!("{id}.{ext}"))) else { return Ok(None) };
+    Ok(Some(format!("data:image/{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))))
+}
+
 /// Deletes the project itself; sessions that were in it become unassigned
 /// (never deletes a session).
 #[tauri::command]
@@ -295,6 +397,9 @@ pub async fn cmd_delete_project(id: String) -> Result<(), String> {
     let mut data = load()?;
     data.projects.retain(|p| p.id != id);
     data.assignments.retain(|_, project_id| project_id != &id);
+    if safe_id(&id) {
+        remove_banner_files(&id);
+    }
     save(&data)
 }
 
@@ -417,6 +522,7 @@ pub fn add_multiplayer_project_to(
         multiplayer: Some(MultiplayerProjectInfo { peer_id: peer_id.to_string(), peer_display_name, git_remote: None }),
         mode: None,
         icon: None,
+        banner: None,
     });
     if let Some(parent) = projects_json.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -441,4 +547,53 @@ pub async fn cmd_open_path(path: String) -> Result<(), String> {
     #[cfg(all(unix, not(target_os = "macos")))]
     let spawned = std::process::Command::new("xdg-open").arg(&path).spawn();
     spawned.map(|_| ()).map_err(|e| format!("couldn't open {path}: {e}"))
+}
+
+#[cfg(test)]
+mod banner_tests {
+    use super::*;
+
+    #[test]
+    fn images_decode_by_their_declared_type_and_everything_else_is_refused() {
+        // 1x1 transparent PNG.
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+        let (ext, bytes) = decode_banner(png).unwrap();
+        assert_eq!(ext, "png");
+        assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']));
+        assert_eq!(decode_banner("data:image/jpeg;base64,/9j/4AAQ").unwrap().0, "jpg");
+        assert!(decode_banner("data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=").is_err(), "svg can carry scripts");
+        assert!(decode_banner("data:text/html;base64,PGI+").is_err());
+        assert!(decode_banner("data:image/png,rawbytes").is_err(), "must be base64");
+        assert!(decode_banner("not a url").is_err());
+        assert!(decode_banner("data:image/png;base64,@@@@").is_err());
+    }
+
+    #[test]
+    fn a_banner_over_the_cap_is_refused() {
+        use base64::Engine;
+        let big = base64::engine::general_purpose::STANDARD.encode(vec![0u8; BANNER_MAX_BYTES + 1]);
+        let err = decode_banner(&format!("data:image/png;base64,{big}")).unwrap_err();
+        assert!(err.contains("too large"), "{err}");
+    }
+
+    #[test]
+    fn presets_and_ids_are_validated_so_a_path_never_gets_in() {
+        assert!(valid_preset("preset:aurora"));
+        assert!(valid_preset("preset:dusk-2"));
+        assert!(!valid_preset("preset:"));
+        assert!(!valid_preset("preset:../x"));
+        assert!(!valid_preset("aurora"));
+        assert!(safe_id("proj_ab-12"));
+        assert!(!safe_id("../etc"));
+        assert!(!safe_id("a/b"));
+        assert!(!safe_id(""));
+    }
+
+    #[test]
+    fn a_projects_file_from_before_banners_still_loads() {
+        let old = r#"{"id":"p1","name":"Old","created_at":"2026-01-01","path":null,"color":null,"multiplayer":null}"#;
+        let p: Project = serde_json::from_str(old).unwrap();
+        assert!(p.banner.is_none());
+        assert!(!serde_json::to_string(&p).unwrap().contains("banner"), "none is not written");
+    }
 }

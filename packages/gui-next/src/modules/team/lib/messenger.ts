@@ -29,6 +29,8 @@ export type Item =
   | { kind: 'bubble'; from: 'you' | 'agent'; key: string; text: string; images: Image[]; ts: number; by?: string }
   | { kind: 'activity'; key: string; tools: ToolResult[] }
   | { kind: 'note'; key: string; text: string }
+  /** Something it offers to do, for your yes (`bots::proactive`). */
+  | { kind: 'suggestion'; key: string; text: string }
   | { kind: 'day'; key: string; label: string }
 
 function dayLabel(ts: number): string {
@@ -46,6 +48,10 @@ function dayLabel(ts: number): string {
 const AGENT_MESSAGE = /^\s*<agent_message from="([^"]+)"[^>]*>\n?([\s\S]*?)\n?<\/agent_message>/
 const ASKED = /^(.+?) \(@([\w-]+)\), another agent, asks you:\n\n([\s\S]*?)\n\nYour answer is sent back to/
 const MENTIONED = /^The user mentioned you in (.+?)'s chat:\n\n([\s\S]*?)\n\nYour answer goes into that chat/
+/** What the app asks it on its own schedule (`bots::CHECKIN_PROMPT`, `MORNING_PROMPT`). */
+const PROACTIVE = /^(Check-in|Morning brief)\. /
+/** The line it ends a reply with to offer something (`proactive::suggestion_in`). */
+const SUGGEST = /^\s*SUGGEST:[ \t]*(.+)$/m
 
 /** The transcript as a messenger reads it: what each side said, the agent's
  * tool work folded into one line between messages, reasoning left out. */
@@ -85,6 +91,7 @@ export function toItems(messages: AgentMessage[]): Item[] {
         items.push({ kind: 'bubble', from: 'you', key: `m${i}`, text: mentioned[2].trim(), images: [], ts: m.timestamp })
       }
       // The app's own notes ride in user messages: shown as a quiet line, never as your bubble.
+      else if (PROACTIVE.test(text)) items.push({ kind: 'note', key: `n${i}`, text: PROACTIVE.exec(text)![1] })
       else if (isPlanNoteText(text)) items.push({ kind: 'note', key: `n${i}`, text: 'You answered the plan' })
       else if (isSummaryText(text)) items.push({ kind: 'note', key: `n${i}`, text: 'Earlier messages were summarised' })
       else if (isAppText(text) || text.startsWith('<system-reminder>')) return
@@ -96,7 +103,10 @@ export function toItems(messages: AgentMessage[]): Item[] {
     if (!text && images.length === 0) return
     flushTools()
     day(m.timestamp)
-    items.push({ kind: 'bubble', from: 'agent', key: `m${i}`, text, images, ts: m.timestamp })
+    const suggestion = SUGGEST.exec(text)
+    const said = suggestion ? text.replace(SUGGEST, '').trim() : text
+    if (said || images.length) items.push({ kind: 'bubble', from: 'agent', key: `m${i}`, text: said, images, ts: m.timestamp })
+    if (suggestion) items.push({ kind: 'suggestion', key: `s${i}`, text: suggestion[1].trim() })
   })
   flushTools()
   return items

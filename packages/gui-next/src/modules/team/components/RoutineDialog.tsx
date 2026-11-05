@@ -58,17 +58,17 @@ function fromCron(cron: string | undefined, once: boolean | undefined): { repeat
 
 const fieldSx = (ring: string) =>
   ({
-    fontSize: '14px',
+    fontSize: '0.875rem',
     px: '12px',
     py: '8px',
-    borderRadius: '10px',
+    borderRadius: '8px',
     bgcolor: 'action.hover',
     colorScheme: 'dark light',
     '&.ui-focused': { bgcolor: 'background.paper', boxShadow: `inset 0 0 0 1.5px ${ring}` },
   }) as const
 
 function Label({ children }: { children: React.ReactNode }) {
-  return <Typography sx={{ fontSize: '12px', fontWeight: 500, color: 'text.secondary' }}>{children}</Typography>
+  return <Typography sx={{ fontSize: '0.75rem', fontWeight: 500, color: 'text.secondary' }}>{children}</Typography>
 }
 
 /** Make or change one of an agent's routines: what should happen, when, and
@@ -114,7 +114,7 @@ export function RoutineDialog({
   return (
     <Dialog open onClose={onClose} maxWidth="sm" fullWidth slotProps={{ paper: { sx: { p: 0, borderRadius: '16px', overflow: 'hidden' } } }}>
       <Stack direction="row" sx={{ alignItems: 'center', px: '24px', pt: '20px' }}>
-        <Typography sx={{ flex: 1, fontSize: '15px', fontWeight: 600 }}>{initial?.id ? 'Edit routine' : 'New routine'}</Typography>
+        <Typography sx={{ flex: 1, fontSize: '1rem', fontWeight: 600 }}>{initial?.id ? 'Edit routine' : 'New routine'}</Typography>
         <ButtonBase onClick={onClose} aria-label="Close" sx={{ width: 28, height: 28, borderRadius: '8px', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover' } }}>
           <CloseLinear size={16} color="currentColor" />
         </ButtonBase>
@@ -126,15 +126,15 @@ export function RoutineDialog({
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="What should happen?"
-          sx={{ fontSize: '22px', fontWeight: 600, py: '6px', borderBottom: 1.5, borderColor: title ? alpha(color, 0.6) : 'divider', '&.ui-focused': { borderColor: color } }}
+          sx={{ fontSize: '1.5rem', fontWeight: 600, py: '6px', borderBottom: 1.5, borderColor: title ? alpha(color, 0.6) : 'divider', '&.ui-focused': { borderColor: color } }}
         />
 
         <Stack sx={{ gap: '10px' }}>
           <Label>When</Label>
           {custom ? (
             <Stack direction="row" sx={{ alignItems: 'center', gap: '10px' }}>
-              <Typography sx={{ fontSize: '13px', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>{custom}</Typography>
-              <ButtonBase onClick={() => setCustom(null)} sx={{ fontSize: '12px', color: 'text.secondary', textDecoration: 'underline' }}>
+              <Typography sx={{ fontSize: '0.8125rem', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>{custom}</Typography>
+              <ButtonBase onClick={() => setCustom(null)} sx={{ fontSize: '0.75rem', color: 'text.secondary', textDecoration: 'underline' }}>
                 Change
               </ButtonBase>
             </Stack>
@@ -150,7 +150,7 @@ export function RoutineDialog({
                       height: 32,
                       px: '14px',
                       borderRadius: '999px',
-                      fontSize: '13px',
+                      fontSize: '0.8125rem',
                       fontWeight: 500,
                       color: repeat === r.id ? 'text.primary' : 'text.secondary',
                       bgcolor: repeat === r.id ? alpha(color, 0.18) : 'action.hover',
@@ -168,7 +168,7 @@ export function RoutineDialog({
                 {repeat !== 'hourly' ? (
                   <InputBase type="time" value={time} onChange={(e) => setTime(e.target.value)} sx={fieldSx(color)} inputProps={{ 'aria-label': 'Time' }} />
                 ) : (
-                  <Typography sx={{ fontSize: '13px', color: 'text.secondary' }}>On the hour</Typography>
+                  <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary' }}>On the hour</Typography>
                 )}
               </Stack>
             </>
@@ -179,7 +179,7 @@ export function RoutineDialog({
           <Label>Who does it</Label>
           <Stack direction="row" sx={{ alignItems: 'center', gap: '10px', px: '12px', py: '8px', borderRadius: '12px', bgcolor: alpha(color, 0.12), width: 'fit-content' }}>
             <Avatar {...faceOf(agent)} size={24} />
-            <Typography sx={{ fontSize: '13px', fontWeight: 500 }}>{agent.name}</Typography>
+            <Typography sx={{ fontSize: '0.8125rem', fontWeight: 500 }}>{agent.name}</Typography>
           </Stack>
         </Stack>
 
@@ -194,21 +194,21 @@ export function RoutineDialog({
             placeholder="Check my inbox and draft replies to anything urgent. Send me a summary."
             sx={{ ...fieldSx(color), alignItems: 'flex-start', lineHeight: 1.5 }}
           />
-          <Typography sx={{ fontSize: '12px', color: 'text.disabled', lineHeight: 1.5 }}>
+          <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled', lineHeight: 1.5 }}>
             Runs while Vivianne is open on this computer; a run missed while it was closed happens when it is back. Results arrive in {agent.name}'s chat.
           </Typography>
         </Stack>
       </Stack>
 
       <Stack direction="row" sx={{ alignItems: 'center', gap: '8px', px: '24px', py: '16px', borderTop: 1, borderColor: 'divider' }}>
-        <Typography sx={{ flex: 1, minWidth: 0, fontSize: '12px', color: 'error.main' }}>{error}</Typography>
-        <ButtonBase onClick={onClose} sx={{ height: 36, px: '16px', borderRadius: '10px', fontSize: '13px', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } }}>
+        <Typography sx={{ flex: 1, minWidth: 0, fontSize: '0.75rem', color: 'error.main' }}>{error}</Typography>
+        <ButtonBase onClick={onClose} sx={{ height: 36, px: '16px', borderRadius: '8px', fontSize: '0.8125rem', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } }}>
           Cancel
         </ButtonBase>
         <ButtonBase
           onClick={() => void save()}
           disabled={saving || !title.trim()}
-          sx={{ height: 36, minWidth: 88, px: '18px', borderRadius: '10px', fontSize: '13px', fontWeight: 600, bgcolor: color, color: (t) => t.palette.getContrastText(color), '&:disabled': { opacity: 0.45 } }}
+          sx={{ height: 36, minWidth: 88, px: '18px', borderRadius: '8px', fontSize: '0.8125rem', fontWeight: 500, bgcolor: color, color: (t) => t.palette.getContrastText(color), '&:disabled': { opacity: 0.45 } }}
         >
           <Box component="span">Save</Box>
         </ButtonBase>

@@ -108,7 +108,7 @@ export function MemorySection() {
     <Stack sx={{ gap: 0.5 }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1, mb: 0.5 }}>
         <ArchiveBookLinear size={16} color="currentColor" />
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
           Memory
         </Typography>
       </Stack>
@@ -171,7 +171,7 @@ export function MemorySection() {
       {recallResults.length > 0 && (
         <Stack sx={{ mt: 1, gap: 0.5, maxHeight: 220, overflowY: 'auto' }}>
           {recallResults.map((entry) => (
-            <Stack key={entry.id} sx={{ px: 1.5, py: 1, borderRadius: 2, bgcolor: 'action.hover' }}>
+            <Stack key={entry.id} sx={{ px: 1.5, py: 1, borderRadius: 1.6, bgcolor: 'action.hover' }}>
               <Typography variant="caption" color="text.secondary">
                 {entry.kind}
                 {entry.userWide ? ' · about you, all projects' : ''}

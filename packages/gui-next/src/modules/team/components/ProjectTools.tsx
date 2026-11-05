@@ -1,11 +1,10 @@
-import { useState } from 'react'
-import { Box, ButtonBase, Stack, Typography } from '../../../ui'
+import { useState, type ReactNode } from 'react'
+import { Box, ButtonBase, Collapse, Divider, Stack, Typography } from '../../../ui'
+import { ChevronRightLinear } from '../../../icons'
 import { WorkspaceSelector } from '../../ai/components/WorkspaceSelector'
 import { GitStatusChip, GitQuickActions } from '../../git/components/GitActions'
 import { useAppView } from '../../git/components/GitView'
-import { useMasterStore } from '../../sessions/store/masterStore'
-import { CharterDialog } from '../../sessions/components/CharterDialog'
-import { Specialists } from './TeamStrip'
+import { ContextBreakdown, ContextPercent } from '../../ai/components/ContextUsageBar'
 
 /** Every action in the column is the same row: left-aligned on one edge,
  * one line, muted until hovered. */
@@ -17,7 +16,7 @@ const ROW = {
   height: 28,
   px: '8px',
   borderRadius: '6px',
-  fontSize: '13px',
+  fontSize: '0.8125rem',
   fontWeight: 400,
   color: 'text.secondary',
   whiteSpace: 'nowrap',
@@ -26,30 +25,95 @@ const ROW = {
   '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
 } as const
 
-const LABEL = { fontSize: '11px', fontWeight: 600, color: 'text.disabled', px: '8px', pb: '4px' } as const
+/** The cards beside the chat: a flat surface one step up from the
+ * workspace, set apart by a hairline rim. */
+export const CARD = {
+  borderRadius: '16px',
+  bgcolor: 'action.hover',
+  border: 1,
+  borderColor: 'divider',
+} as const
 
-/** A team project's own tools, on the chat's right: the folder it works in,
- * version control, and the charter. Mirrors the team on the left. */
-export function ProjectTools({ root }: { root: string }) {
-  const master = useMasterStore((s) => s.byRoot[root])
-  const [charter, setCharter] = useState(false)
+export const LABEL = { fontSize: '0.6875rem', fontWeight: 500, color: 'text.disabled', px: '8px', pb: '4px' } as const
+
+const KEY = 'viv.projectRail.closed'
+const readClosed = (): string[] => {
+  try {
+    return JSON.parse(localStorage.getItem(KEY) ?? '[]')
+  } catch {
+    return []
+  }
+}
+
+/** One collapsible section of the project rail: a title row (with something
+ * quiet on its right) that folds the section away. Remembered between launches. */
+function Section({ id, title, right, children }: { id: string; title: string; right?: ReactNode; children: ReactNode }) {
+  const [closed, setClosed] = useState(() => readClosed().includes(id))
+  const toggle = () => {
+    const next = !closed
+    setClosed(next)
+    try {
+      const rest = readClosed().filter((x) => x !== id)
+      localStorage.setItem(KEY, JSON.stringify(next ? [...rest, id] : rest))
+    } catch {
+      /* not remembered */
+    }
+  }
   return (
-    <Box sx={{ position: 'absolute', right: 24, top: 24, width: 184, zIndex: 3 }}>
-      <Stack sx={{ gap: '20px' }}>
-        <Box>
-          <Typography sx={LABEL}>Workspace</Typography>
+    <Box>
+      <Stack direction="row" sx={{ alignItems: 'center', gap: '4px', pb: '4px' }}>
+        <ButtonBase
+          onClick={toggle}
+          aria-expanded={!closed}
+          sx={{ flex: '1 0 auto', justifyContent: 'flex-start', gap: '4px', px: '8px', height: 20, borderRadius: '6px', color: 'text.disabled', '&:hover': { color: 'text.primary' } }}
+        >
+          <Box sx={{ display: 'flex', transform: closed ? 'none' : 'rotate(90deg)', transition: 'transform 0.15s ease' }}>
+            <ChevronRightLinear size={12} color="currentColor" />
+          </Box>
+          <Typography noWrap sx={{ fontSize: '0.6875rem', fontWeight: 500, color: 'inherit', flexShrink: 0 }}>{title}</Typography>
+        </ButtonBase>
+        <Box sx={{ minWidth: 0, flexShrink: 1, overflow: 'hidden', pr: '8px' }}>{right}</Box>
+      </Stack>
+      <Collapse in={!closed} unmountOnExit>
+        {children}
+      </Collapse>
+    </Box>
+  )
+}
+
+/** The project rail, on the chat's right: the folder the project works in,
+ * version control and the context window. */
+export function ProjectTools() {
+  return (
+    <Box
+      sx={{
+        position: 'absolute',
+        right: 24,
+        top: 24,
+        width: 248,
+        zIndex: 3,
+        p: '12px 10px',
+        ...CARD,
+      }}
+    >
+      <Stack sx={{ gap: '8px' }}>
+        <Section id="workspace" title="Workspace">
           <Box sx={{ ml: '-2px' }}>
             <WorkspaceSelector />
           </Box>
-        </Box>
+        </Section>
 
-        <Box>
-          <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: '8px', pb: '4px' }}>
-            <Typography sx={{ ...LABEL, pb: 0 }}>Version control</Typography>
+        <Divider />
+
+        <Section
+          id="git"
+          title="Version control"
+          right={
             <Box sx={{ minWidth: 0, '& .ui-ButtonBase': { height: 20, px: '4px' } }}>
               <GitStatusChip />
             </Box>
-          </Stack>
+          }
+        >
           {/* The quick actions (commit, sync, pull request, review), drawn as
               the column's rows rather than as their own buttons. */}
           <Box
@@ -72,26 +136,14 @@ export function ProjectTools({ root }: { root: string }) {
           <ButtonBase onClick={() => useAppView.setState({ view: 'git' })} sx={ROW}>
             History and pull requests
           </ButtonBase>
-        </Box>
+        </Section>
 
-        <Specialists root={root} rowSx={ROW} labelSx={LABEL} />
+        <Divider />
 
-        {master && (
-          <Box>
-            <Typography sx={LABEL}>Project</Typography>
-            <ButtonBase
-              onClick={() => {
-                void useMasterStore.getState().load(root)
-                setCharter(true)
-              }}
-              sx={ROW}
-            >
-              Charter
-            </ButtonBase>
-          </Box>
-        )}
+        <Section id="context" title="Context" right={<ContextPercent />}>
+          <ContextBreakdown />
+        </Section>
       </Stack>
-      {master && <CharterDialog master={master} open={charter} onClose={() => setCharter(false)} />}
     </Box>
   )
 }

@@ -31,7 +31,15 @@ const OUTCOME: Record<Exclude<WidgetState, 'pending'>, string> = {
   approved: 'Approved',
   denied: 'Declined',
   expired: 'No answer in time',
+  never: 'Won’t suggest this again',
 }
+
+/** A suggestion's answers, in place of an approval's two. */
+export interface SuggestionChoices {
+  onNever: () => Promise<void> | void
+}
+
+const SUGGESTION_OUTCOME: Partial<Record<WidgetState, string>> = { approved: 'Doing it', denied: 'Not now' }
 
 /**
  * An agent asking before it acts, as a card in its chat: what it wants to
@@ -43,12 +51,15 @@ export function ApprovalWidget({
   state,
   accent,
   onAnswer,
+  suggestion,
 }: {
   widget: Widget
   state: WidgetState
   /** The agent's colour. */
   accent: string
   onAnswer?: (approved: boolean) => Promise<void> | void
+  /** Drawn as something the agent offers: Do it / Not now / Don't suggest this again. */
+  suggestion?: SuggestionChoices
 }) {
   const theme = useTheme()
   const [busy, setBusy] = useState<null | boolean>(null)
@@ -70,7 +81,7 @@ export function ApprovalWidget({
     <Box
       sx={{
         width: 'min(100%, 420px)',
-        borderRadius: '18px',
+        borderRadius: '16px',
         overflow: 'hidden',
         bgcolor: 'background.paper',
         border: 1,
@@ -80,17 +91,17 @@ export function ApprovalWidget({
       }}
     >
       <Stack direction="row" sx={{ alignItems: 'center', gap: '10px', px: '16px', py: '12px', bgcolor: alpha(tone, pending ? 0.12 : 0.06) }}>
-        <Box sx={{ width: 30, height: 30, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha(tone, 0.2), color: tone, flexShrink: 0 }}>
+        <Box sx={{ width: 30, height: 32, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: alpha(tone, 0.2), color: tone, flexShrink: 0 }}>
           <Icon size={16} color="currentColor" />
         </Box>
-        <Typography sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 600, lineHeight: 1.35 }}>{widget.title}</Typography>
+        <Typography sx={{ flex: 1, minWidth: 0, fontSize: '0.875rem', fontWeight: 600, lineHeight: 1.35 }}>{widget.title}</Typography>
       </Stack>
 
       {(widget.fields.length > 0 || widget.body) && (
         <Stack sx={{ px: '16px', pt: '12px', pb: widget.note ? '4px' : '12px', gap: '8px' }}>
           {widget.fields.map((f) => (
             <Stack key={f.label} direction="row" sx={{ gap: '12px', alignItems: 'baseline' }}>
-              <Typography sx={{ width: 64, flexShrink: 0, fontSize: '12px', color: 'text.secondary' }}>{f.label}</Typography>
+              <Typography sx={{ width: 64, flexShrink: 0, fontSize: '0.75rem', color: 'text.secondary' }}>{f.label}</Typography>
               <Typography
                 sx={{ flex: 1, minWidth: 0, fontSize: f.mono ? '12px' : '13px', fontWeight: 500, fontFamily: f.mono ? '"Geist Mono", ui-monospace, monospace' : 'inherit', wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}
               >
@@ -99,36 +110,46 @@ export function ApprovalWidget({
             </Stack>
           ))}
           {widget.body && (
-            <Typography sx={{ fontSize: '13px', lineHeight: 1.5, color: 'text.secondary', whiteSpace: 'pre-wrap', px: '12px', py: '10px', borderRadius: '12px', bgcolor: 'action.hover', maxHeight: 160, overflow: 'auto' }}>
+            <Typography sx={{ fontSize: '0.8125rem', lineHeight: 1.5, color: 'text.secondary', whiteSpace: 'pre-wrap', px: '12px', py: '10px', borderRadius: '12px', bgcolor: 'action.hover', maxHeight: 160, overflow: 'auto' }}>
               {widget.body}
             </Typography>
           )}
         </Stack>
       )}
-      {widget.note && <Typography sx={{ px: '16px', pb: '12px', fontSize: '12px', color: 'text.disabled' }}>{widget.note}</Typography>}
+      {widget.note && <Typography sx={{ px: '16px', pb: '12px', fontSize: '0.75rem', color: 'text.disabled' }}>{widget.note}</Typography>}
 
       {pending ? (
         <Stack direction="row" sx={{ gap: '8px', px: '12px', pb: '12px' }}>
           <ButtonBase
             onClick={() => void answer(false)}
             disabled={busy !== null || !onAnswer}
-            sx={{ flex: 1, height: 38, borderRadius: '12px', fontSize: '13px', fontWeight: 600, bgcolor: 'action.hover', '&:hover': { bgcolor: 'action.selected' } }}
+            sx={{ flex: 1, height: 38, borderRadius: '12px', fontSize: '0.8125rem', fontWeight: 500, bgcolor: 'action.hover', '&:hover': { bgcolor: 'action.selected' } }}
           >
-            {busy === false ? <CircularProgress size={14} /> : 'Decline'}
+            {busy === false ? <CircularProgress size={14} /> : suggestion ? 'Not now' : 'Decline'}
           </ButtonBase>
           <ButtonBase
             onClick={() => void answer(true)}
             disabled={busy !== null || !onAnswer}
-            sx={{ flex: 1, height: 38, borderRadius: '12px', fontSize: '13px', fontWeight: 600, bgcolor: tone, color: theme.palette.getContrastText(tone), '&:hover': { filter: 'brightness(1.08)' }, '&:active': { transform: 'scale(0.98)' } }}
+            sx={{ flex: 1, height: 38, borderRadius: '12px', fontSize: '0.8125rem', fontWeight: 500, bgcolor: tone, color: theme.palette.getContrastText(tone), '&:hover': { filter: 'brightness(1.08)' }, '&:active': { transform: 'scale(0.98)' } }}
           >
-            {busy === true ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : VERB[widget.kind]}
+            {busy === true ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : suggestion ? 'Do it' : VERB[widget.kind]}
           </ButtonBase>
         </Stack>
-      ) : (
-        <Typography
-          sx={{ px: '16px', py: '10px', borderTop: 1, borderColor: 'divider', fontSize: '12px', fontWeight: 600, color: state === 'approved' ? 'success.main' : state === 'denied' ? 'text.secondary' : 'warning.main' }}
+      ) : null}
+      {pending && suggestion && (
+        <ButtonBase
+          onClick={() => void suggestion.onNever()}
+          disabled={busy !== null}
+          sx={{ width: '100%', pb: '12px', mt: '-4px', fontSize: '0.75rem', color: 'text.secondary', '&:hover': { color: 'text.primary' } }}
         >
-          {OUTCOME[state]}
+          Don’t suggest this again
+        </ButtonBase>
+      )}
+      {!pending && (
+        <Typography
+          sx={{ px: '16px', py: '10px', borderTop: 1, borderColor: 'divider', fontSize: '0.75rem', fontWeight: 500, color: state === 'approved' ? 'success.main' : state === 'denied' ? 'text.secondary' : 'warning.main' }}
+        >
+          {(suggestion && SUGGESTION_OUTCOME[state]) || OUTCOME[state as Exclude<WidgetState, 'pending'>]}
         </Typography>
       )}
     </Box>

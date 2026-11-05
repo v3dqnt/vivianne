@@ -66,7 +66,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
         '& li::marker': { color: 'text.secondary' },
         '& li > p': { mb: 0 },
         '& li > ul, & li > ol': { mt: '4px', mb: 0 },
-        '& h1, & h2, & h3, & h4': { mt: '20px', mb: '8px', fontWeight: 700, letterSpacing: '-0.01em', color: 'text.primary' },
+        '& h1, & h2, & h3, & h4': { mt: '20px', mb: '8px', fontWeight: 600, letterSpacing: '-0.01em', color: 'text.primary' },
         '& h1': { fontSize: '1.428em', lineHeight: 1.3 },
         '& h2': { fontSize: '1.214em', lineHeight: 1.35 },
         '& h3': { fontSize: '1.071em', lineHeight: 1.45 },
@@ -120,7 +120,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
             // through markdown — a plain link to a media file is the only
             // signal available, so linked media renders as a player instead
             // of a bare "click here" link.
-            if (href && VIDEO_EXT.test(href)) return <Box component="video" src={href} controls sx={{ maxWidth: '100%', borderRadius: 1.5, my: 1 }} />
+            if (href && VIDEO_EXT.test(href)) return <Box component="video" src={href} controls sx={{ maxWidth: '100%', borderRadius: 1.6, my: 1 }} />
             if (href && AUDIO_EXT.test(href)) return <Box component="audio" src={href} controls sx={{ width: '100%', my: 1 }} />
             return (
               <Link href={href} target="_blank" rel="noopener noreferrer" title={href ? `${href}
@@ -131,7 +131,7 @@ Click: open in Preview · Ctrl-click: open in your browser` : undefined} onClick
           },
           img: ({ src, alt }) => {
             const url = typeof src === 'string' ? src : ''
-            if (VIDEO_EXT.test(url)) return <Box component="video" src={url} controls sx={{ maxWidth: '100%', borderRadius: 1.5, my: 1 }} />
+            if (VIDEO_EXT.test(url)) return <Box component="video" src={url} controls sx={{ maxWidth: '100%', borderRadius: 1.6, my: 1 }} />
             if (AUDIO_EXT.test(url)) return <Box component="audio" src={url} controls sx={{ width: '100%', my: 1 }} />
             return url ? <ChatImage src={url} alt={alt} inline /> : null
           },

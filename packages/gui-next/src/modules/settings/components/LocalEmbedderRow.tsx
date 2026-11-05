@@ -84,7 +84,7 @@ export function LocalEmbedderRow() {
       {models.map((m) => {
         const downloading = busy === m.id && progress?.model === m.id
         return (
-          <Stack key={m.id} direction="row" sx={{ alignItems: 'center', gap: 1.5, px: 1.5, py: 1, borderRadius: 2, bgcolor: 'action.hover' }}>
+          <Stack key={m.id} direction="row" sx={{ alignItems: 'center', gap: 1.5, px: 1.5, py: 1, borderRadius: 1.6, bgcolor: 'action.hover' }}>
             <Stack sx={{ flex: 1, minWidth: 0 }}>
               <Typography variant="body2" sx={{ fontWeight: 500 }}>
                 {LABEL[m.id].title}

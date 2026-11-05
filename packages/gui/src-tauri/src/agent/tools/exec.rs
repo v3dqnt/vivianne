@@ -54,6 +54,12 @@ const GATED_TOOLS: &[&str] = &[
 /// approval (every bash/powershell call already asks, workspace or not).
 const PATH_SCOPED_TOOLS: &[&str] = &["read", "write", "edit", "apply_patch", "ls", "grep", "glob", "code_search"];
 
+/// How many fast-path (read-only) calls may run at once. `join_all` used to
+/// start the whole batch simultaneously — a 20-call grep/read burst spawned
+/// 20 concurrent file walks, which thrashed the disk worse than running them
+/// one after another.
+const FAST_PATH_PARALLELISM: usize = 8;
+
 /// Whether a call can run on the concurrent fast path: a local read-only
 /// tool, not disabled, and — for one with a `path` — inside the workspace,
 /// so nothing about it can ask for approval. Also what makes a call safe to
@@ -376,6 +382,18 @@ pub(crate) fn path_in_workspace(resolved: &std::path::Path, folders: &[String]) 
 fn tool_result_to_agent_result(res: crate::agent::tools::builtin::ToolResult, vision_capable: bool) -> AgentToolResult {
     let mut content = vec![MessageContent::Text { text: res.content }];
     let mut details = res.details.unwrap_or(serde_json::Value::Null);
+    // The tool's own verdict travels with the result: `looks_like_error` reads
+    // it, so a failed build or edit isn't reported to the model as a success
+    // just because its text doesn't start with "Error".
+    if res.is_error {
+        match &mut details {
+            serde_json::Value::Object(o) => {
+                o.insert(FAILED_KEY.into(), true.into());
+            }
+            serde_json::Value::Null => details = serde_json::json!({ FAILED_KEY: true }),
+            _ => {}
+        }
+    }
     if vision_capable {
         if let Some(b64) = details.get_mut("image_base64").map(|v| v.take()) {
             if let serde_json::Value::String(b64) = b64 {
@@ -474,12 +492,22 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
     tool!("connect_mcp_server" => |cx| execute_connect_mcp_server_tool(cx.args).await),
     tool!("get_current_time" => |cx| execute_get_current_time_tool().await),
     tool!("list_tools" => |cx| execute_list_tools_tool(cx.disabled).await),
+    tool!(crate::agent::tools::tool_search::SEARCH_TOOLS => |cx| {
+        let defs = get_agent_tool_definitions().await;
+        let available = available_tool_names(cx.state).await;
+        let (query, limit) = crate::agent::tools::tool_search::query_of(cx.args);
+        let names = crate::agent::tools::tool_search::rank(&defs, &query, limit);
+        if names.is_empty() {
+            return text_result(format!("Error: no tool matches \"{query}\". Try other words for what you want to do, or call list_tools to see everything."));
+        }
+        let shown = crate::agent::tools::tool_search::describe(&defs, &names, &available);
+        text_result(format!("{} match(es), loaded: callable from your next step.\n{shown}", names.len()))
+    }),
     tool!(crate::agent::tools::profile::LOAD_TOOLS => |cx| {
         let available = available_tool_names(cx.state).await;
         let (text, is_error) = crate::agent::tools::profile::execute_load_tools(cx.args, &available);
         text_result(if is_error { format!("Error: {text}") } else { text })
     }),
-    tool!("set_panel" => |cx| execute_set_panel_tool(cx.args, cx.emit)),
     tool!("get_goal" => |cx| execute_get_goal_tool(cx.state).await),
     tool!("create_goal" => |cx| execute_create_goal_tool(cx.args, cx.state).await),
     tool!("update_goal" => |cx| execute_update_goal_tool(cx.args, cx.state).await),
@@ -498,6 +526,7 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
     tool!("set_automation_enabled" => |cx| execute_set_automation_enabled_tool(cx.args, cx.app).await),
     tool!("sandbox_execute" => |cx| execute_sandbox_tool(cx.args).await),
     tool!("run_script" => |cx| crate::agent::tools::ptc::execute_ptc_tool(cx.args, cx.depth, cx.state, cx.emit, cx.app, cx.call_id).await),
+    tool!("run_native" => |cx| crate::agent::tools::native::execute_native_tool(cx.args, cx.depth, cx.state, cx.emit, cx.app, cx.call_id).await),
     tool!("vault" => |cx| tool_result_to_agent_result(crate::vault::execute_tool(cx.args).await, cx.vision)),
     tool!("nebius_job" => |cx| tool_result_to_agent_result(crate::nebius::execute_tool(cx.args).await, cx.vision)),
     tool!("user_browser_driver" => |cx| tool_result_to_agent_result(crate::helium::execute_tool(cx.args).await, cx.vision)),
@@ -694,7 +723,7 @@ async fn describe_sensitive(tc: &AgentToolCall) -> Option<String> {
 
 /// Ask the user about a call and wait for the answer (15 minutes at most, so
 /// a closed window can't hang the turn). `false` when refused or unanswered.
-async fn ask_permission(emit: &EventSender, tc: &AgentToolCall, reason: Option<String>) -> bool {
+pub(crate) async fn ask_permission(emit: &EventSender, tc: &AgentToolCall, reason: Option<String>) -> bool {
     let request_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel();
     if let Ok(mut pending) = PENDING_PERMISSIONS.lock() {
@@ -720,9 +749,29 @@ async fn ask_permission(emit: &EventSender, tc: &AgentToolCall, reason: Option<S
     approved
 }
 
+/// Set in a result's `details` when the tool itself said it failed.
+const FAILED_KEY: &str = "toolFailed";
+
+/// Soft output cap for the tools with no budget of their own (sandboxed runs,
+/// subagent reports, script return values): head-and-tail, mirroring
+/// `math::clip` — long output keeps its start and its end, since the end is
+/// where the answer or the error usually is.
+pub(crate) const MAX_UNBOUNDED_TOOL_CHARS: usize = 30_000;
+
+pub(crate) fn clip_tool_text(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    if n <= max {
+        return s.to_string();
+    }
+    let head: String = s.chars().take(max * 2 / 3).collect();
+    let tail: String = s.chars().skip(n - max / 3).collect();
+    format!("{head}\n\n…[{span} characters clipped]…\n\n{tail}", span = n - max)
+}
+
 /// Whether a result reads as a failure (how tools report one).
 fn looks_like_error(r: &AgentToolResult) -> bool {
-    r.content.iter().any(|c| matches!(c, MessageContent::Text { text } if text.starts_with("Error") || text.starts_with("FileNotFound")))
+    r.details.get(FAILED_KEY).and_then(|v| v.as_bool()) == Some(true)
+        || r.content.iter().any(|c| matches!(c, MessageContent::Text { text } if text.starts_with("Error") || text.starts_with("FileNotFound")))
 }
 
 /// Tell the UI a call is done and return what it leaves in the transcript.
@@ -885,10 +934,8 @@ pub async fn execute_tool_calls(
             Some(p) => crate::agent::changes::checkpoints::bot_session(&p.root, &p.bot_id),
             None => app
                 .state::<std::sync::Arc<crate::agent::runtime::commands::AppState>>()
-                .session_id
-                .lock()
+                .session_id()
                 .await
-                .clone()
                 .unwrap_or_default(),
         };
         if !session_id.is_empty() {
@@ -930,9 +977,17 @@ pub async fn execute_tool_calls(
             });
         }
 
+        // Bound the parallelism: dozens of simultaneous reads/greps spawn just
+        // as many file hints and can thrash the disk worse than serializing
+        // them. 8 in flight saturates I/O without stacking the whole batch.
+        let permits = tokio::sync::Semaphore::new(FAST_PATH_PARALLELISM);
         let batch_futures = fast_path.iter().map(|(_, tc)| {
-            let (tools, cwd) = (&tools, &cwd);
+            let (tools, cwd, permits) = (&tools, &cwd, &permits);
             async move {
+                // Held for the call's whole body; only dropped (none taken) in
+                // the impossible closed case, since this batch owns the
+                // semaphore and never closes it.
+                let _permit = permits.acquire().await.ok();
                 if let Some(tool) = tools.iter().find(|t| t.name() == tc.name) {
                     // Started while the model was still writing this call?
                     let res = match super::speculation::take(cwd, &tc.name, &tc.arguments).await {
@@ -941,9 +996,13 @@ pub async fn execute_tool_calls(
                     };
                     tool_result_to_agent_result(res, vision_capable)
                 } else {
+                    // Unknown names happen when a model guesses; the FAILED_KEY
+                    // makes the attempt-record guard see the miss (attempts.rs),
+                    // so it can tell the model to stop before it burns several
+                    // turns retrying different spellings.
                     AgentToolResult {
                         content: vec![MessageContent::Text { text: format!("Tool not found: {}", tc.name) }],
-                        details: serde_json::Value::Null,
+                        details: serde_json::json!({ FAILED_KEY: true }),
                         terminate: None,
                     }
                 }
@@ -1047,11 +1106,13 @@ pub async fn execute_tool_calls(
             let hint = unknown_tool_hint(&tool_call.name)
                 .map(|h| format!(" {h}"))
                 .unwrap_or_else(|| " Call `list_tools` to see everything available.".to_string());
+            // FAILED_KEY so this is recorded as a failure, not a success — the
+            // attempt-record guard exists to stop repeated unknown-tool guesses.
             AgentToolResult {
                 content: vec![MessageContent::Text {
                     text: format!("Tool not found: {}.{hint}", tool_call.name),
                 }],
-                details: serde_json::Value::Null,
+                details: serde_json::json!({ FAILED_KEY: true }),
                 terminate: None,
             }
         };
@@ -1658,10 +1719,8 @@ mod workspace_guard_tests {
 async fn subagent_source_tag(app: &tauri::AppHandle, kind: &str) -> String {
     let session_id = app
         .state::<std::sync::Arc<crate::agent::runtime::commands::AppState>>()
-        .session_id
-        .lock()
+        .session_id()
         .await
-        .clone()
         .unwrap_or_default();
     format!("{kind}:{session_id}")
 }
@@ -2000,6 +2059,10 @@ pub(crate) async fn execute_task_tool(
         }
         notify.notify_waiters();
     }
+    // The report is the ONLY thing the parent sees; a subagent that wrote a
+    // long one used to push it into context verbatim. Cap it like every other
+    // tool output (full text stays in the registry for task_output).
+    let output = clip_tool_text(&output, MAX_UNBOUNDED_TOOL_CHARS);
     AgentToolResult {
         content: vec![MessageContent::Text {
             text: format!("Subagent completed ({tool_calls} tool calls, {turns} turns):\n\n{output}"),
@@ -2345,31 +2408,6 @@ fn goal_json(g: &Goal) -> serde_json::Value {
     serde_json::to_value(g).unwrap_or(serde_json::Value::Null)
 }
 
-/// Panel names the `set_panel` tool accepts — must stay in sync with the
-/// `panel` enum in its schema and the `RIGHT_PANEL_KINDS` list the frontend
-/// checks in `agentStore.ts`'s `panel_focus_requested` handler.
-/// Panel names `set_panel` accepts — in step with the `panel` enum in its
-/// schema and with `PanelKind` in the frontend.
-const SETTABLE_PANELS: &[&str] = &["files", "browser", "terminal"];
-
-fn execute_set_panel_tool(args: &serde_json::Value, emit: &EventSender) -> AgentToolResult {
-    let Some(panel) = args.get("panel").and_then(|v| v.as_str()) else {
-        return image_tool_err("Error: 'panel' is required.");
-    };
-    let Some(action) = args.get("action").and_then(|v| v.as_str()) else {
-        return image_tool_err("Error: 'action' is required (\"open\" or \"close\").");
-    };
-    if !SETTABLE_PANELS.contains(&panel) {
-        return image_tool_err(format!("Error: unknown panel '{panel}' — must be one of: {}.", SETTABLE_PANELS.join(", ")));
-    }
-    if action != "open" && action != "close" {
-        return image_tool_err("Error: 'action' must be \"open\" or \"close\".");
-    }
-    emit.emit(AgentEvent::PanelFocusRequested { panel: panel.to_string(), action: action.to_string() });
-    let verb = if action == "open" { "Opened" } else { "Closed" };
-    text_result(format!("{verb} the {panel} panel."))
-}
-
 async fn execute_get_goal_tool(state: &AgentState) -> AgentToolResult {
     match state.goal().await {
         Some(g) => AgentToolResult {
@@ -2691,13 +2729,30 @@ async fn execute_sandbox_tool(args: &serde_json::Value) -> AgentToolResult {
             if text.is_empty() {
                 text = "(no output)".to_string();
             }
-            AgentToolResult {
-                content: vec![MessageContent::Text { text }],
-                details: serde_json::json!({
+            // A `pip install`-style log used to flood the context wholesale.
+            text = clip_tool_text(&text, MAX_UNBOUNDED_TOOL_CHARS);
+            let exit_code = out.status.code();
+            // The non-zero exit used to live only in `details`, which is
+            // dropped before the transcript reaches the model — it couldn't
+            // tell pass from fail. Say it in the text it reads.
+            if let Some(code) = exit_code {
+                text.push_str(&format!("\n[exit code: {code}]"));
+            }
+            let failed = exit_code != Some(0);
+            let details = {
+                let mut d = serde_json::json!({
                     "language": language,
                     "image": image,
-                    "exitCode": out.status.code(),
-                }),
+                    "exitCode": exit_code,
+                });
+                if failed {
+                    d[FAILED_KEY] = true.into();
+                }
+                d
+            };
+            AgentToolResult {
+                content: vec![MessageContent::Text { text }],
+                details,
                 terminate: None,
             }
         }
@@ -2717,7 +2772,7 @@ fn image_tool_ok(prompt: &str, base64: String, media_type: &str) -> AgentToolRes
     }
 }
 
-async fn resolve_provider_api_key(app: &tauri::AppHandle, provider: &str) -> Option<String> {
+pub(crate) async fn resolve_provider_api_key(app: &tauri::AppHandle, provider: &str) -> Option<String> {
     fn credential_to_key(cred: crate::ai::auth::Credential) -> Option<String> {
         match cred {
             crate::ai::auth::Credential::ApiKey(key_cred) => key_cred.key,
@@ -2732,11 +2787,8 @@ async fn resolve_provider_api_key(app: &tauri::AppHandle, provider: &str) -> Opt
     api_key
 }
 
-/// `generate_image` — dispatches to whichever provider was requested (default
-/// OpenAI, for backwards compatibility with prompts written before this
-/// supported more than one). Each provider has its own request/response
-/// shape, so this only routes; the actual HTTP call lives in
-/// `generate_image_openai`/`generate_image_google` below.
+/// `generate_image`: a picture from a cloud provider's image model or a local
+/// one, through the same `imagegen::generate` a turn on an image model uses.
 async fn execute_generate_image_tool(args: &serde_json::Value, app: &tauri::AppHandle) -> AgentToolResult {
     let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     if prompt.is_empty() {
@@ -2744,112 +2796,20 @@ async fn execute_generate_image_tool(args: &serde_json::Value, app: &tauri::AppH
     }
     let size = args.get("size").and_then(|v| v.as_str()).unwrap_or("1024x1024").to_string();
     let provider = args.get("provider").and_then(|v| v.as_str()).unwrap_or("openai");
-    let model = args.get("model").and_then(|v| v.as_str());
-
-    match provider {
-        "openai" => generate_image_openai(app, &prompt, &size, model.unwrap_or("gpt-image-2")).await,
-        "google" => generate_image_google(app, &prompt, model.unwrap_or("imagen-4.0-generate-001")).await,
-        other => image_tool_err(format!("Error: 'provider' must be \"openai\" or \"google\", got \"{other}\".")),
+    let model = match args.get("model").and_then(|v| v.as_str()).map(String::from).or_else(|| crate::ai::imagegen::default_model(provider).map(String::from)) {
+        Some(m) => m,
+        None if provider == crate::ai::imagegen::LOCAL => {
+            return image_tool_err("Error: name the local model file in 'model' (one of those downloaded in Settings → Local models → Image generation).");
+        }
+        None => {
+            return image_tool_err(format!("Error: 'provider' must be one of {} or \"{}\", got \"{provider}\".", crate::ai::imagegen::CLOUD.join(", "), crate::ai::imagegen::LOCAL));
+        }
+    };
+    let never = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    match crate::ai::imagegen::generate(app, provider, &model, &prompt, &size, &never).await {
+        Ok(g) => image_tool_ok(&prompt, g.base64, &g.media_type),
+        Err(e) => image_tool_err(format!("Error: {e}")),
     }
-}
-
-async fn generate_image_openai(app: &tauri::AppHandle, prompt: &str, size: &str, model: &str) -> AgentToolResult {
-    let Some(api_key) = resolve_provider_api_key(app, "openai").await else {
-        return image_tool_err("Error: no OpenAI API key configured. Add one in Settings → API Keys to use image generation.");
-    };
-
-    let client = match reqwest::Client::builder().timeout(std::time::Duration::from_secs(120)).build() {
-        Ok(c) => c,
-        Err(e) => return image_tool_err(format!("Error: http client setup failed: {e}")),
-    };
-
-    let body = serde_json::json!({
-        "model": model,
-        "prompt": prompt,
-        "size": size,
-        "n": 1,
-    });
-
-    let resp = match client
-        .post("https://api.openai.com/v1/images/generations")
-        .bearer_auth(&api_key)
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => return image_tool_err(format!("Error: image generation request failed: {e}")),
-    };
-
-    let status = resp.status();
-    let json: serde_json::Value = match resp.json().await {
-        Ok(j) => j,
-        Err(e) => return image_tool_err(format!("Error: failed to parse image generation response: {e}")),
-    };
-
-    if !status.is_success() {
-        let msg = json.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("unknown error");
-        return image_tool_err(format!("Error: image generation failed ({}): {msg}", status.as_u16()));
-    }
-
-    let b64 = json.get("data").and_then(|d| d.get(0)).and_then(|d0| d0.get("b64_json")).and_then(|v| v.as_str());
-    let Some(b64) = b64 else {
-        return image_tool_err("Error: image generation response had no image data.");
-    };
-
-    image_tool_ok(prompt, b64.to_string(), "image/png")
-}
-
-/// Google's Imagen `predict` endpoint (Generative Language API) — a
-/// different request/response shape from OpenAI's images API entirely:
-/// `{instances: [{prompt}], parameters: {sampleCount}}` in, `{predictions:
-/// [{bytesBase64Encoded}]}` out. Auth is a `?key=` query param, same as
-/// google.rs's chat-completion streaming uses.
-async fn generate_image_google(app: &tauri::AppHandle, prompt: &str, model: &str) -> AgentToolResult {
-    let Some(api_key) = resolve_provider_api_key(app, "google").await else {
-        return image_tool_err("Error: no Google API key configured. Add one in Settings → API Keys to use image generation.");
-    };
-
-    let client = match reqwest::Client::builder().timeout(std::time::Duration::from_secs(120)).build() {
-        Ok(c) => c,
-        Err(e) => return image_tool_err(format!("Error: http client setup failed: {e}")),
-    };
-
-    // Key in a header, never the URL: a URL lands in error text, which here
-    // goes into the chat and to the model.
-    let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:predict");
-    let body = serde_json::json!({
-        "instances": [{ "prompt": prompt }],
-        "parameters": { "sampleCount": 1 },
-    });
-
-    let resp = match client.post(&url).header("x-goog-api-key", &api_key).json(&body).send().await {
-        Ok(r) => r,
-        Err(e) => return image_tool_err(format!("Error: image generation request failed: {}", e.without_url())),
-    };
-
-    let status = resp.status();
-    let json: serde_json::Value = match resp.json().await {
-        Ok(j) => j,
-        Err(e) => return image_tool_err(format!("Error: failed to parse image generation response: {e}")),
-    };
-
-    if !status.is_success() {
-        let msg = json.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("unknown error");
-        return image_tool_err(format!("Error: image generation failed ({}): {msg}", status.as_u16()));
-    }
-
-    let prediction = json.get("predictions").and_then(|p| p.get(0));
-    let b64 = prediction.and_then(|p| p.get("bytesBase64Encoded")).and_then(|v| v.as_str());
-    let Some(b64) = b64 else {
-        return image_tool_err("Error: image generation response had no image data.");
-    };
-    let media_type = prediction
-        .and_then(|p| p.get("mimeType"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("image/png");
-
-    image_tool_ok(prompt, b64.to_string(), media_type)
 }
 
 /// Load every skill the agent knows about: the default `~/.viv/skills`
@@ -2910,6 +2870,10 @@ async fn execute_memory_tool(name: &str, args: &serde_json::Value, state: &Agent
         "remember" => {
             let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
             let key = args.get("key").and_then(|v| v.as_str()).map(String::from);
+            // An agent saving what the user wants to be called: every agent uses it.
+            if key.as_deref() == Some("user_name") {
+                let _ = crate::agent::team::bots::set_user_name(text);
+            }
             match crate::agent::memory::remember(&root, text, key, Some(auth)).await {
                 Ok(entry) => format!("Remembered: {}", entry.text),
                 Err(e) => format!("Error: {e}"),
@@ -2936,9 +2900,7 @@ async fn execute_memory_tool(name: &str, args: &serde_json::Value, state: &Agent
                 crate::agent::memory::RerankerOptions {
                     app,
                     model,
-                    turn_count: 0,
                     focused_query: Some(query),
-                    query_embedding: None,
                 }
             });
 
@@ -3019,7 +2981,7 @@ async fn read_disabled_tools() -> Vec<String> {
 
 /// Read the `bypassMode` flag from the same settings.json. Off (false) by
 /// default, meaning gated tools (see `GATED_TOOLS`) require approval.
-async fn read_bypass_mode() -> bool {
+pub(crate) async fn read_bypass_mode() -> bool {
     read_settings_json().await.get("bypassMode").and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
@@ -3122,7 +3084,7 @@ pub(crate) async fn tool_names_for_scripts(state: &AgentState) -> Vec<String> {
         .await
         .iter()
         .filter_map(|d| d.get("name").and_then(|v| v.as_str()).map(String::from))
-        .filter(|n| n != "run_script" && !disabled_tools.contains(n))
+        .filter(|n| n != "run_script" && n != "run_native" && !disabled_tools.contains(n))
         .collect();
     names.sort();
     names.dedup();
@@ -3259,6 +3221,42 @@ mod schema_registry_consistency_tests {
             undispatchable.is_empty(),
             "these tools have a schema entry but no handler in create_coding_tools() or the \
              AGENT_TOOLS table, so calling them dead-ends at 'Tool not found': {undispatchable:?}"
+        );
+    }
+
+    /// Every `AGENT_TOOLS` dispatch entry must either have a schema the model
+    /// can see, or be a deliberate compatibility alias. Dispatchable-without-
+    /// schema is how `set_panel` survived the panels being removed and kept
+    /// rewarding hallucinated tool names — this test is the tripwire for that
+    /// bug class on this table.
+    #[test]
+    fn every_agent_tools_entry_has_a_schema_or_alias_reason() {
+        let schema_names: std::collections::HashSet<String> = static_tool_definitions()
+            .iter()
+            .filter_map(|def| def.get("name").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+
+        // Deliberately schema-less: names kept working after their real
+        // interface moved (the old Camoufox browsing names now ride the user's
+        // own browser via `user_browser_driver`) and silent accept-both
+        // aliases. Unlisted here, every name must have a schema entry.
+        const ALIASES_WITHOUT_SCHEMA: &[&str] = &[
+            "web_preview", "browser_snapshot", "browser_click", "browser_type", "browser_press_key",
+            "browser_scroll", "browser_evaluate", "browser_read_console", "browser_read_network",
+            "browser_start", "browser_session_status", "browser_import_cookies",
+            "computer", "email", "phone",
+        ];
+
+        let schemaless: Vec<&str> = super::AGENT_TOOLS
+            .iter()
+            .flat_map(|t| t.names.iter().copied())
+            .filter(|name| !schema_names.contains(*name) && !ALIASES_WITHOUT_SCHEMA.contains(name))
+            .collect();
+        assert!(
+            schemaless.is_empty(),
+            "AGENT_TOOLS entries with no schema in static_tool_definitions() — the model can never \
+             discover them. If one is a deliberate legacy alias, add it to ALIASES_WITHOUT_SCHEMA \
+             above; otherwise give it a schema (or remove it): {schemaless:?}"
         );
     }
 }

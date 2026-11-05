@@ -68,3 +68,18 @@ test("the app's own notes never show as your bubble", () => {
   assert.deepEqual(bubbles(items), [])
   assert.ok(items.some((i) => i.kind === 'note' && i.text === 'Earlier messages were summarised'))
 })
+
+test("a check-in or a morning brief shows as a quiet note, not as something you said", () => {
+  const items = toItems([user('Check-in. Look at what has changed since your last check'), reply('All quiet.'), user('Morning brief. Greet the user')])
+  assert.deepEqual(
+    items.filter((i) => i.kind !== 'day').map((i) => (i.kind === 'note' ? `note:${i.text}` : i.kind)),
+    ['note:Check-in', 'bubble', 'note:Morning brief'],
+  )
+})
+
+test('a reply ending in SUGGEST: becomes its message, then a suggestion card', () => {
+  const items = toItems([reply('Your flight moved to 9am.\nSUGGEST: Move the airport pickup to 7:30')]).filter((i) => i.kind !== 'day')
+  assert.equal(items.length, 2)
+  assert.ok(items[0].kind === 'bubble' && items[0].text === 'Your flight moved to 9am.')
+  assert.ok(items[1].kind === 'suggestion' && items[1].text === 'Move the airport pickup to 7:30')
+})

@@ -58,17 +58,17 @@ export function ThinkingLevelControl() {
         onClose={() => setAnchor(null)}
         anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
         transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        slotProps={{ paper: { sx: { width: 268, maxWidth: '92vw', borderRadius: '14px' } } }}
+        slotProps={{ paper: { sx: { width: 268, maxWidth: '92vw', borderRadius: '12px' } } }}
       >
         <Box sx={{ px: 2, pt: 1.75, pb: 1.75 }}>
           {/* The chosen level is stated as text rather than left to a tooltip
               that only appears mid-drag — previously the one thing you needed
               in order to choose was the one thing you could not see. */}
           <Stack direction="row" sx={{ alignItems: 'baseline', justifyContent: 'space-between', mb: 0.25 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, letterSpacing: 0.3 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, letterSpacing: 0.3 }}>
               Thinking level
             </Typography>
-            <Typography variant="body2" sx={{ fontWeight: 700, color: 'primary.main', lineHeight: 1 }}>
+            <Typography variant="body2" sx={{ fontWeight: 500, color: 'primary.main', lineHeight: 1 }}>
               {current.label}
             </Typography>
           </Stack>

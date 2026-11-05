@@ -153,7 +153,7 @@ export function ChangeSummary({
       }}
     >
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, py: 0.875 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem' }}>
+        <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }}>
           {changed.length === 0
             ? 'No net changes'
             : `Changed ${changed.length} file${changed.length === 1 ? '' : 's'}`}

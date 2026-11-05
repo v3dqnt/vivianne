@@ -106,13 +106,13 @@ export function NewModDialog({ open, onClose, onCreated }: { open: boolean; onCl
                   display: 'block',
                   textAlign: 'left',
                   p: 1.25,
-                  borderRadius: 2,
+                  borderRadius: 1.6,
                   border: 1,
                   borderColor: preset.id === p.id ? 'primary.main' : 'divider',
                   bgcolor: preset.id === p.id ? 'action.selected' : 'transparent',
                 }}
               >
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
                   {p.label}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">

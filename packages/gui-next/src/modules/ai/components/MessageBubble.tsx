@@ -15,6 +15,7 @@ import { ImageBlock } from './ImageBlock'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { HandoffDivider, isHandoffText, SummaryDivider, isSummaryText, PairActivityDivider, isPairActivityText, ResumeDivider, isResumeText, PlanNoteDivider, isPlanNoteText } from './HandoffDivider'
 import { CHAT_FONT, CHAT_GUTTER, CHAT_MAX_WIDTH, CHAT_RADIUS } from '../lib/chatStyle'
+import { StoppedCard } from './StoppedCard'
 
 // Memoized — `MessageList` re-renders on every streamed token (the store
 // replaces its `messages` array each time), but non-streaming message
@@ -69,7 +70,9 @@ function MessageBubbleImpl({
   }
 
   const isUser = message.type === 'user'
-  const text = contentToText(message.content)
+  // The backend adds "(N images attached to this message ...)" so models don't claim
+  // they can't see an image; it's for the model, not for the reader.
+  const text = contentToText(message.content).replace(/\n\n\(\d+ images? attached to this message — look at it\/them before answering\.\)$/, '')
   // A new day's handoff note rides in a user message but isn't from the user.
   if (isUser && isHandoffText(text)) return <HandoffDivider text={text} />
   if (isUser && isSummaryText(text)) return <SummaryDivider text={text} />
@@ -79,8 +82,10 @@ function MessageBubbleImpl({
   // Stops are left out of the transcript (`groupTranscript`); this covers any
   // other path that renders a message directly.
   if (message.type === 'assistant' && message.stopReason === 'aborted') return null
-  // A failed turn is listed behind the errors icon by the composer, not here.
-  if (message.type === 'assistant' && message.stopReason === 'error') return null
+  // A failed turn is a checkpoint where the model stopped, in yellow rather than red.
+  if (message.type === 'assistant' && message.stopReason === 'error') {
+    return <StoppedCard text={(message.errorMessage || text).replace(/^Error:\s*/, '').trim()} ts={message.timestamp} />
+  }
   const thinking = contentToThinking(message.content)
   const images = contentImages(message.content)
   // A failed turn ends with `errorMessage` set and (usually) empty content —

@@ -54,7 +54,7 @@ export function UsageByModel() {
   return (
     <Box sx={{ p: 2, borderRadius: 1.2, border: 1, borderColor: 'divider' }}>
       <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           By model
         </Typography>
         <ToggleButtonGroup size="small" exclusive value={range} onChange={(_: unknown, v: typeof range | null) => v && setRange(v)}>
@@ -99,7 +99,7 @@ export function UsageByModel() {
                   </Typography>
                 </Tooltip>
               </Stack>
-              <Box sx={{ mt: 0.5, height: 4, borderRadius: 2, bgcolor: 'action.hover', overflow: 'hidden' }}>
+              <Box sx={{ mt: 0.5, height: 4, borderRadius: 1.6, bgcolor: 'action.hover', overflow: 'hidden' }}>
                 <Box sx={{ width: `${Math.max(2, ((r.input + r.output) / max) * 100)}%`, height: '100%', bgcolor: 'primary.main' }} />
               </Box>
               <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
@@ -111,7 +111,7 @@ export function UsageByModel() {
             <Typography variant="caption" color="text.secondary">
               {rows.length} model{rows.length === 1 ? '' : 's'} · {compact(total.tokens)} tokens
             </Typography>
-            <Typography variant="caption" sx={{ fontWeight: 600, fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
+            <Typography variant="caption" sx={{ fontWeight: 500, fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
               {money(total.cost)}
               {total.unknown ? '+' : ''}
             </Typography>

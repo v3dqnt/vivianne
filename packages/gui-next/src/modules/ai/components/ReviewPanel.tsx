@@ -28,7 +28,7 @@ export function StatusMark({ status }: { status: FileChange['status'] }) {
         placeItems: 'center',
         fontFamily: MONO,
         fontSize: '0.6875rem',
-        fontWeight: 700,
+        fontWeight: 500,
         color: spec.color,
         bgcolor: alpha(spec.color, 0.14),
       }}
@@ -115,7 +115,7 @@ function DiffView({ file }: { file: FileChange }) {
   const delBg = alpha(red, dark ? 0.1 : 0.07)
 
   return (
-    <Box sx={{ fontFamily: MONO, fontSize: '12.5px', lineHeight: '20px', minWidth: 'fit-content', pb: '16px' }}>
+    <Box sx={{ fontFamily: MONO, fontSize: '0.8125rem', lineHeight: '20px', minWidth: 'fit-content', pb: '16px' }}>
       {file.hunks.map((h: Hunk, hi) => {
         const last = h.lines.reduce((n, l) => Math.max(n, l.newNo ?? 0), h.newStart)
         return (
@@ -125,10 +125,10 @@ function DiffView({ file }: { file: FileChange }) {
               direction="row"
               sx={{ alignItems: 'center', gap: '10px', px: '16px', height: 32, position: 'sticky', left: 0, color: 'text.secondary', bgcolor: alpha(theme.palette.text.primary, 0.035), borderTop: hi ? 1 : 0, borderBottom: 1, borderColor: 'divider' }}
             >
-              <Typography component="span" sx={{ fontSize: '12px', fontWeight: 600, color: 'text.secondary', fontFamily: 'inherit' }}>
+              <Typography component="span" sx={{ fontSize: '0.75rem', fontWeight: 500, color: 'text.secondary', fontFamily: 'inherit' }}>
                 Lines {h.newStart}–{last}
               </Typography>
-              <Typography component="span" sx={{ fontSize: '11px', color: 'text.disabled', fontFamily: 'inherit' }}>
+              <Typography component="span" sx={{ fontSize: '0.6875rem', color: 'text.disabled', fontFamily: 'inherit' }}>
                 {`@@ -${h.oldStart} +${h.newStart} @@`}
               </Typography>
             </Stack>
@@ -149,9 +149,9 @@ function DiffView({ file }: { file: FileChange }) {
                   <Box sx={{ bgcolor: bar }} />
                   {/* Line numbers are not selectable, so copying a block
                       copies code rather than gutter numbers. */}
-                  <Box sx={{ textAlign: 'right', pr: '10px', color: kind === 'del' ? alpha(red, 0.8) : 'text.disabled', userSelect: 'none', fontSize: '11px' }}>{l.oldNo ?? ''}</Box>
-                  <Box sx={{ textAlign: 'right', pr: '10px', color: kind === 'add' ? alpha(green, 0.85) : 'text.disabled', userSelect: 'none', fontSize: '11px' }}>{l.newNo ?? ''}</Box>
-                  <Box sx={{ userSelect: 'none', textAlign: 'center', fontWeight: 700, color: kind === 'add' ? green : kind === 'del' ? red : 'transparent' }}>{kind === 'add' ? '+' : kind === 'del' ? '−' : ''}</Box>
+                  <Box sx={{ textAlign: 'right', pr: '10px', color: kind === 'del' ? alpha(red, 0.8) : 'text.disabled', userSelect: 'none', fontSize: '0.6875rem' }}>{l.oldNo ?? ''}</Box>
+                  <Box sx={{ textAlign: 'right', pr: '10px', color: kind === 'add' ? alpha(green, 0.85) : 'text.disabled', userSelect: 'none', fontSize: '0.6875rem' }}>{l.newNo ?? ''}</Box>
+                  <Box sx={{ userSelect: 'none', textAlign: 'center', fontWeight: 600, color: kind === 'add' ? green : kind === 'del' ? red : 'transparent' }}>{kind === 'add' ? '+' : kind === 'del' ? '−' : ''}</Box>
                   <Box component="pre" sx={{ m: 0, pr: '24px', whiteSpace: 'pre', font: 'inherit', color: 'text.primary', opacity: kind === 'ctx' ? 0.78 : 1 }}>
                     {line ? line.map((t, ti) => (
                       <span key={ti} style={{ color: t.color, fontStyle: t.fontStyle && t.fontStyle & 1 ? 'italic' : undefined }}>
@@ -201,13 +201,13 @@ function FileTree({ files, root, selected, onSelect }: { files: FileChange[]; ro
               <ButtonBase
                 onClick={() => setClosed((c) => { const n = new Set(c); if (n.has(dir)) n.delete(dir); else n.add(dir); return n })}
                 title={dir}
-                sx={{ display: 'flex', width: '100%', justifyContent: 'flex-start', gap: '6px', px: '12px', height: 30, color: 'text.secondary', '&:hover': { color: 'text.primary', bgcolor: 'action.hover' } }}
+                sx={{ display: 'flex', width: '100%', justifyContent: 'flex-start', gap: '6px', px: '12px', height: 32, color: 'text.secondary', '&:hover': { color: 'text.primary', bgcolor: 'action.hover' } }}
               >
                 <Box sx={{ display: 'flex', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.12s', opacity: 0.7 }}>
                   <ChevronRightLinear size={11} color="currentColor" />
                 </Box>
                 <FolderLinear size={14} color="currentColor" />
-                <Typography sx={{ flex: 1, minWidth: 0, textAlign: 'left', fontSize: '12px', fontWeight: 500, direction: 'rtl' }} noWrap>
+                <Typography sx={{ flex: 1, minWidth: 0, textAlign: 'left', fontSize: '0.75rem', fontWeight: 500, direction: 'rtl' }} noWrap>
                   {dir}
                 </Typography>
                 <Counts additions={t.additions} deletions={t.deletions} />
@@ -231,16 +231,16 @@ function FileTree({ files, root, selected, onSelect }: { files: FileChange[]; ro
                       gap: '8px',
                       pl: dir ? '36px' : '12px',
                       pr: '12px',
-                      height: 30,
+                      height: 32,
                       position: 'relative',
                       bgcolor: active ? alpha(theme.palette.text.primary, 0.08) : 'transparent',
                       opacity: f.status === 'unchanged' ? 0.55 : 1,
-                      '&::before': active ? { content: '""', position: 'absolute', left: 0, top: 6, bottom: 6, width: 2, borderRadius: 2, bgcolor: 'text.primary' } : {},
+                      '&::before': active ? { content: '""', position: 'absolute', left: 0, top: 6, bottom: 6, width: 2, borderRadius: 1.6, bgcolor: 'text.primary' } : {},
                       '&:hover': { bgcolor: active ? alpha(theme.palette.text.primary, 0.1) : 'action.hover' },
                     }}
                   >
                     <StatusMark status={f.status} />
-                    <Typography sx={{ flex: 1, minWidth: 0, textAlign: 'left', fontFamily: MONO, fontSize: '12px', fontWeight: active ? 600 : 400 }} noWrap>
+                    <Typography sx={{ flex: 1, minWidth: 0, textAlign: 'left', fontFamily: MONO, fontSize: '0.75rem', fontWeight: active ? 600 : 400 }} noWrap>
                       {name}
                     </Typography>
                     <Counts additions={f.additions} deletions={f.deletions} />
@@ -320,9 +320,9 @@ export function ReviewPanel({
           sx={{ alignItems: 'center', gap: '12px', px: '20px', py: '14px', borderBottom: 1, borderColor: 'divider', flexWrap: 'wrap' }}
         >
           <Stack sx={{ gap: '2px' }}>
-            <Typography sx={{ fontWeight: 600, fontSize: '15px', lineHeight: 1.3 }}>Review changes</Typography>
+            <Typography sx={{ fontWeight: 600, fontSize: '1rem', lineHeight: 1.3 }}>Review changes</Typography>
             <Stack direction="row" sx={{ alignItems: 'center', gap: '8px' }}>
-              <Typography sx={{ fontSize: '12px', color: 'text.secondary' }}>
+              <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
                 {changed.length} file{changed.length === 1 ? '' : 's'} changed
               </Typography>
               <Counts additions={additions} deletions={deletions} />
@@ -376,7 +376,7 @@ export function ReviewPanel({
                 sx={{ alignItems: 'center', gap: '10px', px: '16px', height: 44, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}
               >
                 <StatusMark status={file.status} />
-                <Typography sx={{ fontFamily: MONO, fontSize: '12.5px', fontWeight: 500, minWidth: 0, flex: 1 }} noWrap title={file.path}>
+                <Typography sx={{ fontFamily: MONO, fontSize: '0.8125rem', fontWeight: 500, minWidth: 0, flex: 1 }} noWrap title={file.path}>
                   {displayPath(file.path, root)}
                 </Typography>
                 {file.modifiedSince && (

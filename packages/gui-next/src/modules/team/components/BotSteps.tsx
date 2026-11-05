@@ -73,7 +73,7 @@ export function StepsToggle({ steps }: { steps: BotStep[] }) {
       <ButtonBase
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        sx={{ alignSelf: 'flex-start', gap: 0.5, fontSize: '0.6875rem', color: 'text.secondary', borderRadius: 1, px: 0.5, ml: -0.5, '&:hover': { color: 'text.primary' } }}
+        sx={{ alignSelf: 'flex-start', gap: 0.5, fontSize: '0.6875rem', color: 'text.secondary', borderRadius: 0.8, px: 0.5, ml: -0.5, '&:hover': { color: 'text.primary' } }}
       >
         <Box component="span" sx={{ display: 'inline-flex', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 120ms' }}>
           <ChevronRightLinear size={11} color="currentColor" />
@@ -103,7 +103,7 @@ export function LiveRunCard({ agent, steps }: { agent: TeamAgent; steps: BotStep
       </Box>
       <Stack sx={{ minWidth: 0, flex: 1 }}>
         <Stack direction="row" sx={{ alignItems: 'baseline', gap: 0.75 }}>
-          <Typography variant="caption" sx={{ fontWeight: 700, color }}>
+          <Typography variant="caption" sx={{ fontWeight: 500, color }}>
             {agent.name}
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>
@@ -115,7 +115,7 @@ export function LiveRunCard({ agent, steps }: { agent: TeamAgent; steps: BotStep
             mt: 0.5,
             px: 1.25,
             py: 0.75,
-            borderRadius: '10px',
+            borderRadius: '8px',
             border: 1,
             borderColor: 'divider',
             bgcolor: alpha(theme.palette.text.primary, 0.025),

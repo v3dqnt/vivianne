@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react'
 import { Box, Stack, IconButton, Tooltip, Menu, MenuItem } from '../ui'
 import { call, hasTauri } from '../ipc'
 import { fileManagerName, terminalAppName } from '../lib/platform'
-import { FolderLinear, CommandSquareLinear, SettingsLinear } from '../icons'
+import { FolderLinear, CommandSquareLinear, HomeLinear, SettingsLinear } from '../icons'
 import { useSettingsUi } from '../modules/settings/store/uiStore'
 
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
 import { PairChip } from '../modules/multiplayer/components/PairChip'
 import { useAppView } from '../modules/git/components/GitView'
+import { ThreadTabs } from '../modules/sessions/components/ThreadTabs'
+import { useDaysStore } from '../modules/sessions/store/daysStore'
 
 const TRAFFIC_LIGHT_SIZE = 12
 
@@ -18,6 +20,8 @@ function TitleBarActions() {
   const openExternal = useProjectsStore((s) => s.openExternal)
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const projects = useProjectsStore((s) => s.projects)
+  const view = useAppView((s) => s.view)
+  const openSettings = useSettingsUi((s) => s.openSettings)
   const [openAnchor, setOpenAnchor] = useState<HTMLElement | null>(null)
 
   const hasFolder = !!projects.find((p) => p.id === activeProjectId)?.path
@@ -66,8 +70,23 @@ function TitleBarActions() {
           Open in {terminalAppName}
         </MenuItem>
       </Menu>
+      <Tooltip title={view === 'home' ? 'Back to chat' : 'Home'}>
+        <IconButton
+          size="small"
+          aria-label="Home"
+          onClick={() => {
+            if (view !== 'home') return useAppView.setState({ view: 'home' })
+            // Nothing open yet (just launched): back to chat means a blank thread.
+            if (!useDaysStore.getState().todayId) void useDaysStore.getState().newBlankThread()
+            useAppView.setState({ view: 'chat' })
+          }}
+          sx={iconSx(view === 'home')}
+        >
+          <HomeLinear size={14} color="currentColor" />
+        </IconButton>
+      </Tooltip>
       <Tooltip title="Settings">
-        <IconButton size="small" onClick={() => useSettingsUi.getState().openSettings()} aria-label="Settings" sx={iconSx(false)}>
+        <IconButton size="small" aria-label="Settings" onClick={() => openSettings()} sx={iconSx(false)}>
           <SettingsLinear size={14} color="currentColor" />
         </IconButton>
       </Tooltip>
@@ -145,7 +164,7 @@ export function TitleBar() {
       data-tauri-drag-region=""
       sx={{
         position: 'relative',
-        // Tight: it holds the window controls, the view switch and a few icons.
+        // Tight: it holds the window controls and a few icons.
         height: 36,
         display: 'flex',
         alignItems: 'center',
@@ -190,44 +209,8 @@ export function TitleBar() {
         </TrafficLight>
       </Box>
 
-      <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, pointerEvents: 'none' }}>
-        <ViewSwitch />
-      </Box>
-
+      <ThreadTabs />
       <TitleBarActions />
-    </Box>
-  )
-}
-
-/** Chat and its panels, or the project's repository. */
-function ViewSwitch() {
-  const view = useAppView((s) => s.view)
-  return (
-    <Box role="tablist" aria-label="View" sx={{ display: 'flex', gap: 0.25, p: '2px', borderRadius: '8px', bgcolor: 'action.hover', pointerEvents: 'auto' }}>
-      {(['home', 'chat', 'agents'] as const).map((v) => (
-        <Box
-          key={v}
-          component="button"
-          role="tab"
-          aria-selected={view === v}
-          onClick={() => useAppView.setState({ view: v })}
-          sx={{
-            border: 0,
-            cursor: 'pointer',
-            px: 1.25,
-            py: '2px',
-            borderRadius: '6px',
-            fontSize: '0.75rem',
-            fontWeight: view === v ? 600 : 500,
-            fontFamily: 'inherit',
-            color: view === v ? 'text.primary' : 'text.secondary',
-            bgcolor: view === v ? 'background.paper' : 'transparent',
-            '&:hover': { color: 'text.primary' },
-          }}
-        >
-          {v === 'home' ? 'Home' : v === 'chat' ? 'Chat' : 'Agents'}
-        </Box>
-      ))}
     </Box>
   )
 }

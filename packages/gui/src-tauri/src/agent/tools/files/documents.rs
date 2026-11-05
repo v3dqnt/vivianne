@@ -2253,7 +2253,7 @@ impl Tool for InspectDocumentTool {
         let listing = parts
             .iter()
             .map(|p| {
-                let preview: String = p.text.chars().take(120).collect();
+                let preview: String = p.text.chars().take(400).collect();
                 format!("{}  [{}]  {preview}", p.id, if p.editable { "editable" } else { "read-only" })
             })
             .collect::<Vec<_>>()

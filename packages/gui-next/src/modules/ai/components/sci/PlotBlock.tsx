@@ -13,12 +13,12 @@ import { seriesColorOf } from './plotColors'
 function plotStyles(c: SciColors) {
   return {
     '& svg': { display: 'block', maxWidth: '100%', overflow: 'visible' },
-    '& .function-plot': { fontFamily: 'inherit', fontSize: 11 },
+    '& .function-plot': { fontFamily: 'inherit', fontSize: '0.6875rem' },
     '& .function-plot .tick line': { stroke: c.line, opacity: 0.9 },
-    '& .function-plot .tick text': { fill: c.muted, fontSize: 11 },
+    '& .function-plot .tick text': { fill: c.muted, fontSize: '0.6875rem' },
     '& .function-plot .domain': { stroke: c.muted },
     '& .function-plot .origin': { stroke: c.muted, opacity: 0.8 },
-    '& .function-plot .axis-label, & .function-plot text.title': { fill: c.ink, fontSize: 12 },
+    '& .function-plot .axis-label, & .function-plot text.title': { fill: c.ink, fontSize: '0.75rem' },
     '& .function-plot .top-right-legend': { display: 'none' },
     '& .function-plot .line': { fill: 'none' },
   } as const
@@ -93,7 +93,7 @@ function Legend({ spec, colors }: { spec: PlotSpec; colors: SciColors }) {
     <Stack direction="row" sx={{ px: 1.5, pt: 1, gap: 1.75, flexWrap: 'wrap' }}>
       {items.map(({ s, i }) => (
         <Stack key={i} direction="row" sx={{ alignItems: 'center', gap: 0.75 }}>
-          <Box sx={{ width: 14, height: 3, borderRadius: 2, bgcolor: seriesColorOf(spec, i, colors.dark) }} />
+          <Box sx={{ width: 14, height: 3, borderRadius: 1.6, bgcolor: seriesColorOf(spec, i, colors.dark) }} />
           <Typography sx={{ fontSize: CHAT_FONT.meta, '& .katex': { fontSize: '1em' } }} color="text.secondary">
             <span dangerouslySetInnerHTML={{ __html: labelHtml(s.label ?? '') }} />
           </Typography>

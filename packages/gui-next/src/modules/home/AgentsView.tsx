@@ -10,7 +10,6 @@ import { NewAgentDialog } from '../team/components/NewAgentDialog'
 import { mainPane } from '../../theme'
 import { useTheme } from '../../ui'
 
-const WidgetLab = lazy(() => import('../team/components/WidgetLab').then((m) => ({ default: m.WidgetLab })))
 const TeamRoom = lazy(() => import('../team/components/TeamRoom').then((m) => ({ default: m.TeamRoom })))
 const NO_AGENTS: TeamAgent[] = []
 
@@ -35,8 +34,6 @@ export function AgentsView() {
   const loadStatus = useBotsStore((s) => s.loadStatus)
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
-  // The Widget Lab, a debugger agent for how agents' cards look (dev builds).
-  const [lab, setLab] = useState(false)
 
   useEffect(() => {
     void ensure().then((r) => r && void loadStatus(r))
@@ -56,19 +53,19 @@ export function AgentsView() {
       <Stack sx={{ width: 280, flexShrink: 0, ...mainPane(theme), ml: 1 }}>
         <Stack sx={{ p: '12px', gap: '8px' }}>
           <Stack direction="row" sx={{ alignItems: 'center', height: 28, px: '4px' }}>
-            <Typography sx={{ flex: 1, fontSize: '13px', fontWeight: 600, color: 'text.secondary' }}>24/7 agents</Typography>
+            <Typography sx={{ flex: 1, fontSize: '0.8125rem', fontWeight: 500, color: 'text.secondary' }}>24/7 agents</Typography>
             <ButtonBase onClick={() => setCreating(true)} disabled={!root} aria-label="New agent" title="New agent" sx={{ width: 24, height: 24, borderRadius: '6px', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } }}>
               <AddLinear size={14} color="currentColor" />
             </ButtonBase>
           </Stack>
           <Stack direction="row" sx={{ alignItems: 'center', gap: '8px', height: 32, px: '8px', borderRadius: '8px', border: 1, borderColor: 'divider', color: 'text.disabled' }}>
             <SearchNormalLinear size={13} color="currentColor" />
-            <InputBase value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" sx={{ flex: 1, fontSize: '13px', color: 'text.primary' }} />
+            <InputBase value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" sx={{ flex: 1, fontSize: '0.8125rem', color: 'text.primary' }} />
           </Stack>
         </Stack>
         <Stack sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: '8px', pb: '8px', gap: '2px' }}>
           {shown.length === 0 && (
-            <Typography sx={{ fontSize: '13px', color: 'text.secondary', p: '8px' }}>{q ? 'No agents match.' : 'No 24/7 agents yet.'}</Typography>
+            <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', p: '8px' }}>{q ? 'No agents match.' : 'No 24/7 agents yet.'}</Typography>
           )}
           {shown.map((a) => {
             const st = root ? statuses[botKey(root, a.id)] : undefined
@@ -78,52 +75,34 @@ export function AgentsView() {
               <ButtonBase
                 key={a.id}
                 onClick={() => {
-                  setLab(false)
                   if (root) setChannel(root, a.id)
                 }}
-                aria-current={on && !lab ? 'true' : undefined}
-                sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '12px', p: '8px', borderRadius: '8px', textAlign: 'left', bgcolor: on && !lab ? 'action.selected' : 'transparent', '&:hover': { bgcolor: on && !lab ? 'action.selected' : 'action.hover' } }}
+                aria-current={on ? 'true' : undefined}
+                sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '12px', p: '8px', borderRadius: '8px', textAlign: 'left', bgcolor: on ? 'action.selected' : 'transparent', '&:hover': { bgcolor: on ? 'action.selected' : 'action.hover' } }}
               >
                 <RowFace root={root} agent={a} />
                 <Stack sx={{ flex: 1, minWidth: 0 }}>
-                  <Box component="span" sx={{ fontSize: '14px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <Box component="span" sx={{ fontSize: '0.875rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {a.name}
                   </Box>
-                  <Box component="span" sx={{ fontSize: '12px', color: 'text.secondary', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <Box component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {line}
                   </Box>
                 </Stack>
               </ButtonBase>
             )
           })}
-          {import.meta.env.DEV && (
-            <ButtonBase
-              onClick={() => setLab(true)}
-              aria-current={lab ? 'true' : undefined}
-              sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '12px', p: '8px', mt: '8px', borderRadius: '8px', textAlign: 'left', borderTop: 1, borderColor: 'divider', bgcolor: lab ? 'action.selected' : 'transparent', '&:hover': { bgcolor: lab ? 'action.selected' : 'action.hover' } }}
-            >
-              <Box sx={{ width: 32, height: 32, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: 'action.selected', fontSize: '16px' }}>🧪</Box>
-              <Stack sx={{ flex: 1, minWidth: 0 }}>
-                <Box component="span" sx={{ fontSize: '14px', fontWeight: 600 }}>Widget Lab</Box>
-                <Box component="span" sx={{ fontSize: '12px', color: 'text.secondary' }}>Every card, every state</Box>
-              </Stack>
-            </ButtonBase>
-          )}
         </Stack>
       </Stack>
 
       <Box sx={{ flex: 1, minWidth: 0, ...mainPane(theme), display: 'flex', flexDirection: 'column' }}>
-        {lab ? (
-          <Suspense fallback={null}>
-            <WidgetLab />
-          </Suspense>
-        ) : root && picked ? (
+        {root && picked ? (
           <Suspense fallback={null}>
             <TeamRoom key={root} root={root} messenger />
           </Suspense>
         ) : (
           <Stack sx={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <Typography sx={{ fontSize: '13px', color: 'text.secondary' }}>Pick an agent, or make one.</Typography>
+            <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary' }}>Pick an agent, or make one.</Typography>
           </Stack>
         )}
       </Box>

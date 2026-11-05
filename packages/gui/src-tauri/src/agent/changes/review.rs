@@ -270,10 +270,8 @@ async fn session_of(state: &AppState, session_id: Option<String>) -> Result<Stri
     match session_id {
         Some(s) if !s.is_empty() => Ok(s),
         _ => state
-            .session_id
-            .lock()
+            .session_id()
             .await
-            .clone()
             .filter(|s| !s.is_empty())
             .ok_or_else(|| "No active conversation.".to_string()),
     }

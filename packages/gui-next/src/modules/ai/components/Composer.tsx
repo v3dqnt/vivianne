@@ -6,14 +6,14 @@ import { useDaysStore } from '../../sessions/store/daysStore'
 import { call, on } from '../../../ipc'
 import type { FileAttachment } from '../lib/types'
 import { ModelPicker } from './ModelPicker'
-import { ErrorsButton } from './ErrorsButton'
 import { ChatComposer, type ChatComposerHandle, type ComposerAttachments } from './ChatComposer'
 import { ThinkingLevelControl as ThinkingLevelControlImpl } from './ThinkingLevelControl'
 import { ModePill as ModePillImpl } from './ModePill'
+import { CHAT_COLUMN } from '../lib/chatStyle'
+import { ProjectPill } from '../../sessions/components/ProjectPicker'
 import { ContextUsageBar as ContextUsageBarImpl } from './ContextUsageBar'
 import { StreamStatusLine as StreamStatusLineImpl } from './StreamStatusLine'
 import { RunStatusBar as RunStatusBarImpl } from './RunStatusBar'
-import { LimitsPill as LimitsPillImpl } from './LimitsPill'
 import { usePlanStore } from '../../plan/store/planStore'
 import { SubagentPanel as SubagentPanelImpl } from './SubagentPanel'
 import { ComputerUseBanner as ComputerUseBannerImpl } from './ComputerUseBanner'
@@ -34,7 +34,6 @@ const ModePill = memo(ModePillImpl)
 const ContextUsageBar = memo(ContextUsageBarImpl)
 const StreamStatusLine = memo(StreamStatusLineImpl)
 const RunStatusBar = memo(RunStatusBarImpl)
-const LimitsPill = memo(LimitsPillImpl)
 const SubagentPanel = memo(SubagentPanelImpl)
 const ComputerUseBanner = memo(ComputerUseBannerImpl)
 const QueuePanel = memo(QueuePanelImpl)
@@ -315,17 +314,18 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
       ref={rootRef}
       sx={{
         flexShrink: 0,
-        pb: 2,
+        pb: 1,
         pt: 0.5,
         position: 'relative',
-        maxWidth: 880,
+        maxWidth: CHAT_COLUMN + 40,
         mx: 'auto',
         width: '100%',
         // The composer measures itself, not the window: the chat is a panel
         // that can be docked anywhere from a full column to a sidebar.
         containerType: 'inline-size',
         containerName: 'composer',
-        px: 2,
+        // Matches the transcript's column edges, whose gutters include its 8px scrollbar.
+        px: '20px',
         '& .cq-compact': { display: 'none' },
         '@container composer (max-width: 560px)': NARROW,
         '&[data-narrow="true"]': NARROW,
@@ -352,13 +352,12 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
           top={<RunStatusBar />}
           left={
             <>
+              {!toolbar && <ProjectPill />}
               <ModePill />
-              <LimitsPill />
             </>
           }
           right={
             <>
-              <ErrorsButton />
               <ContextUsageBar />
               <ThinkingLevelControl />
               {toolbar ?? <ChatModelPicker />}

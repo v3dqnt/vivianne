@@ -17,8 +17,11 @@ import { ApprovalWidget } from './ApprovalWidget'
 import { call } from '../../../ipc'
 import { Avatar, colorOf, faceOf } from './bits'
 import { useBotFace } from './AgentFace'
-import { ErrorsButton } from '../../ai/components/ErrorsButton'
 import { EditLinear } from '../../../icons'
+
+type SuggestionAnswer = 'yes' | 'later' | 'never'
+
+const SUGGESTION_STATE: Record<SuggestionAnswer | 'open', WidgetState> = { open: 'pending', yes: 'approved', later: 'denied', never: 'never' }
 
 /** Blocks that need room: drawn at full width, not squeezed into a bubble. */
 const WIDE = /```(ui|chart|widget|mermaid|plot|model3d|mol3d|chem|bio|physics)\b/
@@ -39,7 +42,7 @@ const bounce = keyframes({ '0%, 80%, 100%': { transform: 'translateY(0)', opacit
 
 function Typing({ color }: { color: string }) {
   return (
-    <Stack direction="row" sx={{ gap: '4px', px: '16px', py: '12px', borderRadius: '20px', borderBottomLeftRadius: '6px', bgcolor: 'action.hover', width: 'fit-content' }}>
+    <Stack direction="row" sx={{ gap: '4px', px: '16px', py: '12px', borderRadius: '16px', borderBottomLeftRadius: '6px', bgcolor: 'action.hover', width: 'fit-content' }}>
       {[0, 1, 2].map((i) => (
         <Box key={i} sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: color, animation: `${bounce} 1.2s ${i * 0.15}s infinite ease-in-out` }} />
       ))}
@@ -57,7 +60,7 @@ function Activity({ tools, color }: { tools: ToolResult[]; color: string }) {
     <Stack sx={{ alignItems: 'flex-start', pl: '44px', my: '4px' }}>
       <ButtonBase
         onClick={() => setOpen((v) => !v)}
-        sx={{ gap: '6px', px: '10px', height: 26, borderRadius: '999px', fontSize: '12px', color: failed ? 'error.main' : 'text.secondary', bgcolor: alpha(color, 0.1), '&:hover': { bgcolor: alpha(color, 0.18), color: 'text.primary' } }}
+        sx={{ gap: '6px', px: '10px', height: 28, borderRadius: '999px', fontSize: '0.75rem', color: failed ? 'error.main' : 'text.secondary', bgcolor: alpha(color, 0.1), '&:hover': { bgcolor: alpha(color, 0.18), color: 'text.primary' } }}
       >
         <Box component="span" sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: failed ? 'error.main' : color }} />
         {summary}
@@ -71,10 +74,10 @@ function Activity({ tools, color }: { tools: ToolResult[]; color: string }) {
             const a = (t.arguments ?? {}) as Record<string, unknown>
             const target = String(a.path ?? a.url ?? a.query ?? a.command ?? a.action ?? '')
             return (
-              <Typography key={t.toolCallId} sx={{ fontSize: '12px', color: t.isError ? 'error.main' : 'text.secondary', lineHeight: '20px' }} noWrap>
+              <Typography key={t.toolCallId} sx={{ fontSize: '0.75rem', color: t.isError ? 'error.main' : 'text.secondary', lineHeight: '20px' }} noWrap>
                 {t.toolName}
                 {target && (
-                  <Box component="span" sx={{ color: 'text.disabled', ml: '6px', fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '11px' }}>
+                  <Box component="span" sx={{ color: 'text.disabled', ml: '6px', fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.6875rem' }}>
                     {target.slice(0, 80)}
                   </Box>
                 )}
@@ -127,7 +130,7 @@ function Bubble({
             ))}
           </Stack>
         )}
-        {other && first && <Typography sx={{ fontSize: '11px', fontWeight: 600, color: colorOf(other), mb: '3px', px: '6px' }}>{other.name}</Typography>}
+        {other && first && <Typography sx={{ fontSize: '0.6875rem', fontWeight: 500, color: colorOf(other), mb: '3px', px: '6px' }}>{other.name}</Typography>}
         {item.text && (
           <Box
             sx={{
@@ -159,7 +162,7 @@ function Bubble({
           </Box>
         )}
         {last && (
-          <Typography sx={{ fontSize: '11px', color: 'text.disabled', mt: '4px', px: '6px' }}>{clock(item.ts)}</Typography>
+          <Typography sx={{ fontSize: '0.6875rem', color: 'text.disabled', mt: '4px', px: '6px' }}>{clock(item.ts)}</Typography>
         )}
       </Stack>
     </Stack>
@@ -204,6 +207,15 @@ export function AgentMessenger({ root, agent, team = [], status, onEdit }: { roo
   }, [allApprovals, pendingPermission, root, agent.id, agent.name, respondApproval, respondPermission])
   const [answered, setAnswered] = useState<{ id: string; widget: Widget; state: WidgetState }[]>([])
   useEffect(() => setAnswered([]), [agent.id])
+  // What it offered and what you said (`bots::proactive::Pacing`).
+  const [suggestionAnswers, setSuggestionAnswers] = useState<Record<string, SuggestionAnswer>>({})
+  useEffect(() => {
+    void call<{ answered: Record<string, SuggestionAnswer> }>('cmd_bots_pacing', { root, botId: agent.id }).then((p) => setSuggestionAnswers(p?.answered ?? {}))
+  }, [root, agent.id])
+  const answerSuggestion = (text: string) => async (answer: SuggestionAnswer) => {
+    const p = await call<{ answered: Record<string, SuggestionAnswer> }>('cmd_bots_answer_suggestion', { root, botId: agent.id, text, answer })
+    if (p) setSuggestionAnswers(p.answered)
+  }
   const answer = (ask: (typeof asks)[number]) => async (yes: boolean) => {
     await ask.answer(yes)
     setAnswered((a) => [...a, { id: ask.id, widget: ask.widget, state: yes ? 'approved' : 'denied' }])
@@ -261,10 +273,10 @@ export function AgentMessenger({ root, agent, team = [], status, onEdit }: { roo
       <Stack direction="row" sx={{ alignItems: 'center', gap: '12px', px: '20px', py: '14px', flexShrink: 0 }}>
         <Avatar {...faceOf(agent)} size={44} state={face} animate />
         <Stack sx={{ minWidth: 0, flex: 1 }}>
-          <Typography sx={{ fontSize: '16px', fontWeight: 600, lineHeight: 1.25 }} noWrap>
+          <Typography sx={{ fontSize: '1rem', fontWeight: 600, lineHeight: 1.25 }} noWrap>
             {agent.name}
           </Typography>
-          <Typography sx={{ fontSize: '12px', color: isBusy ? color : 'text.secondary' }} noWrap>
+          <Typography sx={{ fontSize: '0.75rem', color: isBusy ? color : 'text.secondary' }} noWrap>
             {status}
           </Typography>
         </Stack>
@@ -280,25 +292,39 @@ export function AgentMessenger({ root, agent, team = [], status, onEdit }: { roo
           {items.length === 0 && !isBusy && (
             <Stack sx={{ alignItems: 'center', textAlign: 'center', gap: '10px', py: '72px' }}>
               <Avatar {...faceOf(agent)} size={72} state={face} animate />
-              <Typography sx={{ fontSize: '18px', fontWeight: 600 }}>Say hi to {agent.name}</Typography>
-              <Typography sx={{ fontSize: '13px', color: 'text.secondary', maxWidth: 360 }}>{agent.role || 'Ask it anything, or give it something to look after.'}</Typography>
+              <Typography sx={{ fontSize: '1.125rem', fontWeight: 600 }}>Say hi to {agent.name}</Typography>
+              <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', maxWidth: 360 }}>{agent.role || 'Ask it anything, or give it something to look after.'}</Typography>
             </Stack>
           )}
           <FollowUpContext.Provider value={(t) => void sendMessage(t)}>
             {items.map((item, i) => {
               if (item.kind === 'day')
                 return (
-                  <Typography key={item.key} sx={{ textAlign: 'center', fontSize: '11px', fontWeight: 600, color: 'text.disabled', mt: '20px', mb: '4px' }}>
+                  <Typography key={item.key} sx={{ textAlign: 'center', fontSize: '0.6875rem', fontWeight: 500, color: 'text.disabled', mt: '20px', mb: '4px' }}>
                     {item.label}
                   </Typography>
                 )
               if (item.kind === 'note')
                 return (
-                  <Typography key={item.key} sx={{ textAlign: 'center', fontSize: '12px', color: 'text.secondary', my: '8px' }}>
+                  <Typography key={item.key} sx={{ textAlign: 'center', fontSize: '0.75rem', color: 'text.secondary', my: '8px' }}>
                     {item.text}
                   </Typography>
                 )
               if (item.kind === 'activity') return <Activity key={item.key} tools={item.tools} color={color} />
+              if (item.kind === 'suggestion') {
+                const answer = answerSuggestion(item.text)
+                return (
+                  <Stack key={item.key} direction="row" sx={{ alignItems: 'flex-end', gap: '8px', mt: '8px', pl: '44px' }}>
+                    <ApprovalWidget
+                      widget={{ kind: 'generic', title: item.text, danger: 'low', fields: [] }}
+                      state={SUGGESTION_STATE[suggestionAnswers[item.text] ?? 'open']}
+                      accent={color}
+                      onAnswer={(yes) => answer(yes ? 'yes' : 'later')}
+                      suggestion={{ onNever: () => answer('never') }}
+                    />
+                  </Stack>
+                )
+              }
               const prev = items[i - 1]
               const next = items[i + 1]
               const same = (o: Item | undefined) => o?.kind === 'bubble' && o.from === item.from && o.by === item.by
@@ -331,14 +357,14 @@ export function AgentMessenger({ root, agent, team = [], status, onEdit }: { roo
                   complete(o.id)
                 }}
                 onMouseEnter={() => setPick(i)}
-                sx={{ justifyContent: 'flex-start', gap: '10px', px: '10px', py: '8px', borderRadius: '10px', bgcolor: i === pick ? alpha(colorOf(o), 0.16) : 'transparent' }}
+                sx={{ justifyContent: 'flex-start', gap: '10px', px: '10px', py: '8px', borderRadius: '8px', bgcolor: i === pick ? alpha(colorOf(o), 0.16) : 'transparent' }}
               >
                 <Avatar {...faceOf(o)} size={26} />
                 <Stack sx={{ minWidth: 0, textAlign: 'left' }}>
-                  <Typography sx={{ fontSize: '13px', fontWeight: 600 }} noWrap>
+                  <Typography sx={{ fontSize: '0.8125rem', fontWeight: 500 }} noWrap>
                     {o.name}
                   </Typography>
-                  <Typography sx={{ fontSize: '11px', color: 'text.secondary' }} noWrap>
+                  <Typography sx={{ fontSize: '0.6875rem', color: 'text.secondary' }} noWrap>
                     @{o.id}
                     {o.role ? ` · ${o.role}` : ''}
                   </Typography>
@@ -390,9 +416,8 @@ export function AgentMessenger({ root, agent, team = [], status, onEdit }: { roo
               }
             }}
             placeholder={team.length > 1 ? `Message ${agent.name}, or @ another agent` : `Message ${agent.name}`}
-            sx={{ flex: 1, fontSize: '14px', py: '7px' }}
+            sx={{ flex: 1, fontSize: '0.875rem', py: '7px' }}
           />
-          <ErrorsButton sx={{ height: 36, borderRadius: '18px' }} />
           {composerButton({ chatBusy: isBusy, agentState, typed: text }) === 'stop' ? (
             <ButtonBase onClick={stop} aria-label="Stop" sx={{ width: 36, height: 36, borderRadius: '50%', bgcolor: alpha(color, 0.16), color }}>
               <StopLinear size={16} color="currentColor" />

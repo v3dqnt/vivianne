@@ -169,7 +169,7 @@ function DetailHead({ title, sub, url, actions }: { title: string; sub: ReactNod
         {title}
       </Typography>
       <Stack direction="row" sx={{ alignItems: 'center', gap: u(2), flexWrap: 'wrap' }}>
-        <Typography component="div" sx={{ ...T.small, color: 'text.secondary', display: 'flex', alignItems: 'center', gap: u(1), flexWrap: 'wrap', '& code': { ...T.mono, fontSize: '11px' } }}>
+        <Typography component="div" sx={{ ...T.small, color: 'text.secondary', display: 'flex', alignItems: 'center', gap: u(1), flexWrap: 'wrap', '& code': { ...T.mono, fontSize: '0.6875rem' } }}>
           {sub}
         </Typography>
         <Box sx={{ flex: 1 }} />
@@ -399,7 +399,7 @@ function PrFile({ file }: { file: J }) {
         <Box
           component="pre"
           className="select-text"
-          sx={{ m: 0, mb: u(2), py: u(1), overflowX: 'auto', borderRadius: '6px', border: 1, borderColor: 'divider', fontFamily: MONO_FONT, fontSize: '11px', lineHeight: '16px' }}
+          sx={{ m: 0, mb: u(2), py: u(1), overflowX: 'auto', borderRadius: '6px', border: 1, borderColor: 'divider', fontFamily: MONO_FONT, fontSize: '0.6875rem', lineHeight: '16px' }}
         >
           {file.patch
             ? lines.map((l, i) => (
@@ -695,7 +695,7 @@ function JobLog({ gh, id }: { gh: ReturnType<typeof useGh>; id: number }) {
       ref={box}
       component="pre"
       className="select-text"
-      sx={{ m: 0, px: u(3), py: u(2), maxHeight: 420, overflow: 'auto', borderTop: 1, borderColor: 'divider', fontFamily: MONO_FONT, fontSize: '11px', lineHeight: '16px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'text.secondary' }}
+      sx={{ m: 0, px: u(3), py: u(2), maxHeight: 420, overflow: 'auto', borderTop: 1, borderColor: 'divider', fontFamily: MONO_FONT, fontSize: '0.6875rem', lineHeight: '16px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'text.secondary' }}
     >
       {log.loading && !log.data ? 'Loading the log…' : lines || 'No log.'}
     </Box>
@@ -743,7 +743,7 @@ export function Issues({ root }: { root: string | null }) {
                 i.labels?.length ? (
                   <Stack direction="row" sx={{ gap: u(1) }}>
                     {i.labels.slice(0, 2).map((l: J) => (
-                      <Box key={l.id} sx={{ px: u(1), borderRadius: '4px', fontSize: '10px', lineHeight: '16px', bgcolor: `#${l.color}33`, color: 'text.secondary' }}>
+                      <Box key={l.id} sx={{ px: u(1), borderRadius: '4px', fontSize: '0.6875rem', lineHeight: '16px', bgcolor: `#${l.color}33`, color: 'text.secondary' }}>
                         {l.name}
                       </Box>
                     ))}

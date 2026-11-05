@@ -46,7 +46,7 @@ export function MacPermissions() {
   return (
     <Stack sx={{ gap: 1.25 }}>
       <Stack sx={{ gap: 0.25 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           Mac permissions
         </Typography>
         <Typography variant="caption" color="text.secondary">

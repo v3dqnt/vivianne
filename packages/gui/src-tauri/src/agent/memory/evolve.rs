@@ -355,7 +355,10 @@ const CORE_MAX_BYTES: usize = 2_400;
 /// The small, stable part of memory every turn should see: the user's
 /// standing instructions and explicitly remembered facts, then the profile.
 /// Oldest first so the block only grows at its end (prompt caches keep the
-/// prefix). Everything else is reached through `recall`.
+/// prefix). Overflow is shed from that same front — oldest remembered lines
+/// first, then the profile — so truncation throws away the stale past and
+/// keeps the instructions the user formed most recently. Everything else is
+/// reached through `recall`.
 pub async fn core_block(root: &str) -> Option<String> {
     if !super::state_snapshot(root).await.enabled {
         return None;
@@ -368,23 +371,46 @@ pub async fn core_block(root: &str) -> Option<String> {
         lines.push(format!("- {}", e.text.trim()));
     }
     let profile = tokio::fs::read_to_string(super::persona_path(root)).await.unwrap_or_default();
-    let bullets = profile_bullets(&profile);
+    let mut bullets = profile_bullets(&profile);
 
-    let mut body = String::new();
-    if !lines.is_empty() {
-        body.push_str("Standing instructions and facts saved on purpose:\n");
-        body.push_str(&lines.join("\n"));
-    }
-    if !bullets.is_empty() {
-        if !body.is_empty() {
-            body.push_str("\n\n");
+    // render() is re-run while shedding: the two sections share headers and
+    // blank-line separators, so dropping a line changes the layout around it.
+    fn render(lines: &[String], bullets: &[String]) -> String {
+        let mut body = String::new();
+        if !lines.is_empty() {
+            body.push_str("Standing instructions and facts saved on purpose:\n");
+            body.push_str(&lines.join("\n"));
         }
-        body.push_str("About the user (inferred from past sessions):\n");
-        body.push_str(&bullets.iter().map(|b| format!("- {b}")).collect::<Vec<_>>().join("\n"));
+        if !bullets.is_empty() {
+            if !body.is_empty() {
+                body.push_str("\n\n");
+            }
+            body.push_str("About the user (inferred from past sessions):\n");
+            body.push_str(&bullets.iter().map(|b| format!("- {b}")).collect::<Vec<_>>().join("\n"));
+        }
+        body
     }
+
+    let mut body = render(&lines, &bullets);
     if body.is_empty() {
         return None;
     }
+
+    // Over the cap: pop lines off the FRONT — oldest remembered instructions
+    // first (they were appended in creation order), then oldest profile
+    // bullets. The old end-truncation did the opposite: the newest summary
+    // lines were exactly what the byte clip cut off first.
+    while body.len() > CORE_MAX_BYTES && (!lines.is_empty() || !bullets.is_empty()) {
+        if !lines.is_empty() {
+            lines.remove(0);
+        } else {
+            bullets.remove(0);
+        }
+        body = render(&lines, &bullets);
+    }
+
+    // Last resort (a single line longer than the cap): clip on a char
+    // boundary like before, only ever losing the tail of that one line.
     if body.len() > CORE_MAX_BYTES {
         let mut end = CORE_MAX_BYTES;
         while !body.is_char_boundary(end) {

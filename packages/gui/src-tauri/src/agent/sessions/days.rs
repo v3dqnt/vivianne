@@ -293,18 +293,14 @@ pub async fn cmd_open_today(
 
     // Already live: touch nothing. Reloading from disk here would clobber an
     // in-memory transcript newer than the last autosave.
-    if state.session_id.lock().await.as_deref() == Some(id.as_str()) {
+    if state.is_session(&id).await {
         return Ok(OpenedDay { id, day, scope, is_new: false, handoff_from: None });
     }
 
     let path = get_session_dir()?.join(format!("{id}.json"));
     if path.exists() {
         let session = read_session(&id)?;
-        let agent = state.agent.lock().await;
-        agent.state.set_messages(session.messages).await;
-        agent.state.clear_goal().await;
-        drop(agent);
-        *state.session_id.lock().await = Some(id.clone());
+        state.resume(&id, session.messages, None).await;
         return Ok(OpenedDay { id, day, scope, is_new: false, handoff_from: None });
     }
 
@@ -324,15 +320,10 @@ pub async fn cmd_open_today(
         })
         .collect();
 
-    {
-        let mut agent = state.agent.lock().await;
-        // `reset` clears transcript, queues, goal and the accumulated system
-        // prompt, and leaves the workspace alone — the project's folder is
-        // still the right one for today.
-        agent.reset().await;
-        agent.state.set_messages(messages.clone()).await;
-    }
-    *state.session_id.lock().await = Some(id.clone());
+    // A fresh start clears transcript, queues, goal and the accumulated system
+    // prompt, and leaves the workspace alone — the project's folder is
+    // still the right one for today.
+    state.start_fresh(&id, messages.clone(), None).await;
 
     let workspace_folders = state.agent_state.workspace_folders().await;
     let access_mode = match state.agent_state.access_mode().await {
@@ -343,6 +334,7 @@ pub async fn cmd_open_today(
     // message keeps the handoff instead of rebuilding it. An empty name is how
     // the history recognises a day nobody actually used.
     write_session(&SessionInfo {
+        title_source: None,
         id: id.clone(),
         name: String::new(),
         messages,
@@ -396,8 +388,8 @@ fn spawn_summary_upgrade(
             }
         };
 
-        let Ok(_turn_guard) = state.agent.try_lock() else { return };
-        if state.session_id.lock().await.as_deref() != Some(id.as_str()) {
+        let Some(_turn_guard) = state.try_lock_agent() else { return };
+        if !state.is_session(&id).await {
             return;
         }
         let current = state.agent_state.messages().await;

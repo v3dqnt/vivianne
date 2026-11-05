@@ -92,7 +92,7 @@ function HistoryView({ viewing }: { viewing: Viewing }) {
         }}
       >
         <Stack sx={{ minWidth: 0, flex: 1 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>
+          <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
             {viewing.label}
           </Typography>
           <Typography variant="caption" color="text.secondary">

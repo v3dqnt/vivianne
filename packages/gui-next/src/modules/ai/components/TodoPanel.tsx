@@ -62,7 +62,7 @@ export const TodoPanel = memo(function TodoPanel({ messages }: { messages?: Agen
 
   return (
     <Box sx={{ position: 'absolute', top: 10, right: 10, zIndex: 20, width: 272, userSelect: 'none' }}>
-      <Box sx={{ borderRadius: 2, border: 1, borderColor: 'divider', bgcolor: 'background.paper', boxShadow: 3, overflow: 'hidden' }}>
+      <Box sx={{ borderRadius: 1.6, border: 1, borderColor: 'divider', bgcolor: 'background.paper', boxShadow: 3, overflow: 'hidden' }}>
         <Stack
           component="button"
           direction="row"
@@ -81,14 +81,14 @@ export const TodoPanel = memo(function TodoPanel({ messages }: { messages?: Agen
           }}
         >
           <TaskLinear size={13} color="currentColor" />
-          <Typography component="span" variant="caption" sx={{ fontWeight: 600, color: 'text.primary' }}>
+          <Typography component="span" variant="caption" sx={{ fontWeight: 500, color: 'text.primary' }}>
             {doneCount}/{todos.length}
           </Typography>
           <Typography component="span" variant="caption">
             done
           </Typography>
           {/* Progress at a glance, without opening the panel. */}
-          <Box sx={{ flex: 1, height: 3, borderRadius: 2, bgcolor: 'action.hover', overflow: 'hidden', mx: 0.5 }}>
+          <Box sx={{ flex: 1, height: 3, borderRadius: 1.6, bgcolor: 'action.hover', overflow: 'hidden', mx: 0.5 }}>
             <Box sx={{ width: `${(doneCount / todos.length) * 100}%`, height: '100%', bgcolor: 'success.main', transition: 'width 0.3s' }} />
           </Box>
           <Box sx={{ display: 'flex' }}>

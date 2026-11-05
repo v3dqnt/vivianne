@@ -72,14 +72,14 @@ function ToolsSubsection() {
         tabIndex={0}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), setOpen((o) => !o))}
-        sx={{ alignItems: 'center', gap: 0.75, cursor: 'pointer', borderRadius: 1.5, mx: -0.5, px: 0.5, py: 0.25, '&:hover': { bgcolor: 'action.hover' } }}
+        sx={{ alignItems: 'center', gap: 0.75, cursor: 'pointer', borderRadius: 1.6, mx: -0.5, px: 0.5, py: 0.25, '&:hover': { bgcolor: 'action.hover' } }}
       >
         <ArrowDownLinear
           size={14}
           color="currentColor"
           style={{ flexShrink: 0, transition: 'transform 120ms', transform: open ? 'none' : 'rotate(-90deg)' }}
         />
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
           Built-in tools
         </Typography>
         {loaded && (
@@ -119,7 +119,7 @@ function ToolsSubsection() {
           <Stack
             key={tool.name}
             direction="row"
-            sx={{ alignItems: 'center', gap: 1.5, py: 0.75, px: 1, borderRadius: 2, '&:hover': { bgcolor: 'action.hover' } }}
+            sx={{ alignItems: 'center', gap: 1.5, py: 0.75, px: 1, borderRadius: 1.6, '&:hover': { bgcolor: 'action.hover' } }}
           >
             <FlashLinear size={15} color="currentColor" style={{ flexShrink: 0 }} />
             <Stack sx={{ flex: 1, minWidth: 0 }}>
@@ -172,7 +172,7 @@ function CustomToolRow({ tool, onRetire }: { tool: CustomTool; onRetire: () => P
     setSource((await call<string>('cmd_custom_tool_source', { name: tool.name }).catch(() => null)) ?? '')
   }
   return (
-    <Stack sx={{ py: 1, px: 1, borderRadius: 2, '&:hover': { bgcolor: 'action.hover' } }}>
+    <Stack sx={{ py: 1, px: 1, borderRadius: 1.6, '&:hover': { bgcolor: 'action.hover' } }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
         <CodeLinear size={15} color="currentColor" style={{ flexShrink: 0 }} />
         <Stack sx={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => void toggleSource()}>
@@ -229,7 +229,7 @@ function CustomToolsSubsection() {
     <Stack sx={{ gap: 1 }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
         <Stack sx={{ flex: 1 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
             Tools Vivianne made
           </Typography>
           <Typography variant="caption" color="text.secondary">

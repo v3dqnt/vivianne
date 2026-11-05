@@ -70,6 +70,43 @@ interface ConversationState {
   openThread: (id: string) => Promise<void>
   renameThread: (id: string, name: string) => Promise<void>
   deleteThread: (id: string) => Promise<void>
+
+  // ── Tabs: the threads open along the top ──
+  /** Session ids, left to right. A thread gets a tab whenever it opens. */
+  tabs: string[]
+  /** A blank thread, in no project yet. */
+  newBlankThread: () => Promise<void>
+  /** A new thread already filed under a project (or General). */
+  newThreadIn: (scope: string) => Promise<void>
+  /** Open any thread, from whichever project it belongs to. */
+  focusThread: (id: string) => Promise<void>
+  /** File the open thread under a project, or none with null. */
+  assignThread: (projectId: string | null) => Promise<void>
+  closeTab: (id: string) => Promise<void>
+}
+
+const TABS_KEY = 'viv.threadTabs'
+function loadTabs(): string[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TABS_KEY) ?? '[]')
+    return Array.isArray(saved) ? saved : []
+  } catch {
+    return []
+  }
+}
+function setTabs(tabs: string[]) {
+  useDaysStore.setState({ tabs })
+  try {
+    localStorage.setItem(TABS_KEY, JSON.stringify(tabs))
+  } catch {
+    // storage unavailable: the tabs just won't come back next launch
+  }
+}
+
+/** Make a scope current without opening anything in it. */
+function enterScope(scope: string) {
+  useDaysStore.setState({ scope })
+  useProjectsStore.setState({ activeProjectId: scope })
 }
 
 /** The single conversation General had before it went back to threads. It
@@ -143,6 +180,7 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
   archive: [],
   viewing: null,
   threads: [],
+  tabs: loadTabs(),
 
   openScope: (scope) => {
     const run = async () => {
@@ -167,6 +205,8 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
       const opened = await call<OpenedConversation>('cmd_open_conversation', { scope })
       if (!opened) return
       set({ scope, todayId: opened.id, viewing: null, earlier: [], earlierStart: 0, threads: [] })
+      if (!get().tabs.includes(opened.id)) setTabs([...get().tabs, opened.id])
+      useProjectsStore.setState({ activeProjectId: scope })
       await syncLiveMessages()
       await get().refreshEarlier()
       // After the transcript: resuming a long task sends a message into it.
@@ -237,12 +277,64 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
   },
 
   deleteThread: async (id) => {
-    const wasOpen = get().todayId === id
-    await call('cmd_delete_session', { id })
+    await get().closeTab(id)
+    holders.delete(id)
+    await call('cmd_delete_session', { id }).catch(() => undefined)
     await get().refreshThreads()
-    if (wasOpen) {
-      const next = get().threads[0]
-      await serialized(() => (next ? loadThread(next.id) : createThread()))
+  },
+
+  newBlankThread: () =>
+    serialized(async () => {
+      enterScope(GENERAL_SCOPE)
+      await createThread()
+    }),
+
+  newThreadIn: (scope) =>
+    serialized(async () => {
+      enterScope(scope)
+      await createThread()
+    }),
+
+  focusThread: (id) => {
+    // A project's one conversation opens through its scope, not as a thread.
+    if (id.startsWith('conv--') && id !== LEGACY_GENERAL_CONVERSATION) return get().openScope(id.slice('conv--'.length))
+    return serialized(async () => {
+      enterScope(useProjectsStore.getState().sessionProjectMap[id] ?? GENERAL_SCOPE)
+      try {
+        await loadThread(id)
+      } catch (e) {
+        // Its session is gone (never saved, or deleted elsewhere): drop the tab.
+        setTabs(get().tabs.filter((t) => t !== id))
+        console.warn('Could not open the thread', e)
+      }
+    })
+  },
+
+  assignThread: async (projectId) => {
+    const id = get().todayId
+    if (!id) return
+    await useProjectsStore.getState().assign(id, projectId)
+    enterScope(projectId ?? GENERAL_SCOPE)
+    await applyThreadWorkspace()
+    await get().refreshThreads()
+  },
+
+  closeTab: async (id) => {
+    const { tabs, todayId } = get()
+    const at = tabs.indexOf(id)
+    const rest = tabs.filter((t) => t !== id)
+    setTabs(rest)
+    // A thread nothing was ever said in leaves nothing behind.
+    const holder = holders.get(id)
+    const state = holder === undefined ? null : agentStoreFor(holder).getState()
+    const blank = !!state && !state.isBusy && state.messages.length === 0 && !useProjectsStore.getState().sessionProjectMap[id]
+    if (todayId === id) {
+      const next = rest[at] ?? rest[at - 1]
+      await (next ? get().focusThread(next) : get().newBlankThread())
+    }
+    if (blank) {
+      holders.delete(id)
+      await call('cmd_delete_session', { id }).catch(() => undefined)
     }
   },
 }))
@@ -303,6 +395,8 @@ async function show(sessionId: string, threadId: string, fresh: boolean) {
   holders.set(sessionId, threadId)
   setActiveThread(threadId)
   useDaysStore.setState({ todayId: sessionId, viewing: null, earlier: [], earlierStart: 0 })
+  const { tabs } = useDaysStore.getState()
+  if (!tabs.includes(sessionId)) setTabs([...tabs, sessionId])
   rememberThread(sessionId)
   await Promise.all([fresh ? applyThreadWorkspace() : null, syncLiveMessages()])
   void useModelStore.getState().refreshStats()
@@ -320,9 +414,18 @@ async function loadThread(id: string) {
 }
 
 async function createThread() {
-  const thread = placeFor(`s:new-${Date.now()}`)
-  const id = await call<string>('cmd_new_session', { threadId: thread })
+  let thread = placeFor(`s:new-${Date.now()}`)
+  let id = await call<string>('cmd_new_session', { threadId: thread })
   if (!id) return
+  // The backend hands back the session an empty agent thread already holds. That
+  // is only "blank" if nothing was ever saved in it; after a reload it can be a
+  // real thread not yet loaded, so start on an agent thread of its own instead.
+  const saved = await call<AgentMessage[]>('cmd_read_session_messages', { id }).catch(() => null)
+  if (saved?.length) {
+    thread = `s:new-${Date.now()}`
+    id = await call<string>('cmd_new_session', { threadId: thread })
+    if (!id) return
+  }
   // A project's thread belongs to it.
   const scope = useDaysStore.getState().scope
   if (scope && scope !== GENERAL_SCOPE) await useProjectsStore.getState().assign(id, scope)

@@ -51,7 +51,7 @@ type Block =
   | { type: 'tabs'; tabs: { label: string; blocks: Block[] }[] }
   | { type: 'list'; items: string[]; ordered?: boolean }
   // Summary blocks: for reporting what was found or done.
-  | { type: 'heading'; text: string }
+  | { type: 'heading'; text: string; tone?: Tone }
   | { type: 'steps'; items: { title: string; text?: string; state?: 'done' | 'active' | 'todo' | 'error' }[] }
   | { type: 'cards'; items: { title: string; text?: string; badge?: string; tone?: Tone; icon?: string }[] }
   | { type: 'kv'; items: { label: string; value: string | number }[] }
@@ -159,7 +159,7 @@ export function InteractiveBlock({ code }: { code: string }) {
     const label = (
       <Stack direction="row" sx={{ justifyContent: 'space-between', gap: 1 }}>
         <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary' }}>{i.label ?? i.id}</Typography>
-        {(i.type === 'slider' || i.type === 'number') && <Typography sx={{ fontSize: '0.8125rem', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{format(v, i.format, i.unit)}</Typography>}
+        {(i.type === 'slider' || i.type === 'number') && <Typography sx={{ fontSize: '0.8125rem', fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>{format(v, i.format, i.unit)}</Typography>}
       </Stack>
     )
     if (i.type === 'slider')
@@ -222,9 +222,9 @@ export function InteractiveBlock({ code }: { code: string }) {
         return (
           <Box key={k} sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 1 }}>
             {b.items.map((s, j) => (
-              <Stack key={j} sx={{ p: 1.25, borderRadius: '10px', bgcolor: alpha(theme.palette.text.primary, 0.04), gap: 0.25, minWidth: 0 }}>
+              <Stack key={j} sx={{ p: 1.25, borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.04), gap: 0.25, minWidth: 0 }}>
                 <Typography sx={{ fontSize: '0.6875rem', color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4 }}>{s.label}</Typography>
-                <Typography sx={{ fontSize: '1.25rem', fontWeight: 650, fontVariantNumeric: 'tabular-nums', lineHeight: 1.25 }}>{format(val(s.value), s.format, s.unit)}</Typography>
+                <Typography sx={{ fontSize: '1.25rem', fontWeight: 600, fontVariantNumeric: 'tabular-nums', lineHeight: 1.25 }}>{format(val(s.value), s.format, s.unit)}</Typography>
                 {s.hint && <Typography sx={{ fontSize: '0.6875rem', color: 'text.disabled' }}>{text(s.hint)}</Typography>}
               </Stack>
             ))}
@@ -279,7 +279,7 @@ export function InteractiveBlock({ code }: { code: string }) {
                   height: 32,
                   borderRadius: '999px',
                   fontSize: '0.8125rem',
-                  fontWeight: 600,
+                  fontWeight: 500,
                   bgcolor: it.primary ? 'primary.main' : alpha(theme.palette.primary.main, 0.1),
                   color: it.primary ? 'primary.contrastText' : 'primary.main',
                   '&:hover': { bgcolor: it.primary ? 'primary.dark' : alpha(theme.palette.primary.main, 0.18) },
@@ -311,9 +311,10 @@ export function InteractiveBlock({ code }: { code: string }) {
       }
       case 'heading':
         return (
-          <Typography key={k} sx={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: 'text.secondary', pt: 0.5 }}>
-            {text(b.text)}
-          </Typography>
+          <Stack key={k} direction="row" sx={{ alignItems: 'center', gap: 1, pt: 1 }}>
+            {b.tone && <Box component="span" aria-hidden sx={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, bgcolor: toneColor(b.tone) }} />}
+            <Typography sx={{ fontSize: '1rem', fontWeight: 600, lineHeight: 1.35 }}>{rich(text(b.text))}</Typography>
+          </Stack>
         )
       case 'steps':
         return (
@@ -333,8 +334,8 @@ export function InteractiveBlock({ code }: { code: string }) {
                         borderRadius: '50%',
                         display: 'grid',
                         placeItems: 'center',
-                        fontSize: '0.5625rem',
-                        fontWeight: 800,
+                        fontSize: '0.6875rem',
+                        fontWeight: 500,
                         lineHeight: 1,
                         color: hollow ? c : theme.palette.background.paper,
                         bgcolor: hollow ? 'transparent' : c,
@@ -367,7 +368,7 @@ export function InteractiveBlock({ code }: { code: string }) {
                 >
                   <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75 }}>
                     {it.icon && <Box component="span" sx={{ fontSize: '1rem', lineHeight: 1 }}>{it.icon}</Box>}
-                    <Typography sx={{ fontSize: '0.875rem', fontWeight: 650, flex: 1, minWidth: 0 }}>{text(it.title)}</Typography>
+                    <Typography sx={{ fontSize: '0.875rem', fontWeight: 600, flex: 1, minWidth: 0 }}>{text(it.title)}</Typography>
                     {it.badge && <Chip label={it.badge} tone={it.tone} />}
                   </Stack>
                   {it.text && <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', lineHeight: 1.5 }}>{rich(text(it.text))}</Typography>}
@@ -382,7 +383,7 @@ export function InteractiveBlock({ code }: { code: string }) {
             {b.items.map((it, j) => (
               <Box key={j} sx={{ display: 'contents' }}>
                 <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary' }}>{it.label}</Typography>
-                <Typography sx={{ fontSize: '0.8125rem', fontWeight: 600, wordBreak: 'break-word' }}>{typeof it.value === 'string' ? rich(text(it.value)) : it.value}</Typography>
+                <Typography sx={{ fontSize: '0.8125rem', fontWeight: 500, wordBreak: 'break-word' }}>{typeof it.value === 'string' ? rich(text(it.value)) : it.value}</Typography>
               </Box>
             ))}
           </Box>
@@ -393,7 +394,7 @@ export function InteractiveBlock({ code }: { code: string }) {
           <Stack key={k} sx={{ gap: 0.5 }}>
             <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
               <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary' }}>{b.label ? text(b.label) : ''}</Typography>
-              <Typography sx={{ fontSize: '0.8125rem', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{Math.round(v * 100)}%</Typography>
+              <Typography sx={{ fontSize: '0.8125rem', fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>{Math.round(v * 100)}%</Typography>
             </Stack>
             <Box sx={{ height: 8, borderRadius: '4px', bgcolor: alpha(theme.palette.text.primary, 0.08), overflow: 'hidden' }}>
               <Box sx={{ height: '100%', width: `${v * 100}%`, borderRadius: '4px', bgcolor: 'primary.main', transition: 'width 300ms' }} />
@@ -423,7 +424,7 @@ export function InteractiveBlock({ code }: { code: string }) {
           {spec.title && (
             <Stack direction="row" sx={{ alignItems: 'center', gap: 0.875, flexWrap: 'wrap' }}>
               {spec.icon && <Box component="span" sx={{ fontSize: '1.125rem', lineHeight: 1 }}>{spec.icon}</Box>}
-              <Typography sx={{ fontSize: '0.9375rem', fontWeight: 650 }}>{text(spec.title)}</Typography>
+              <Typography sx={{ fontSize: '1rem', fontWeight: 600 }}>{text(spec.title)}</Typography>
               {spec.status && <Chip label={spec.status.label} tone={spec.status.tone} />}
             </Stack>
           )}
@@ -460,7 +461,7 @@ function rich(s: string): ReactNode {
   for (const m of s.matchAll(re)) {
     const at = m.index ?? 0
     if (at > last) out.push(s.slice(last, at))
-    if (m[1] !== undefined) out.push(<strong key={n++}>{m[1]}</strong>)
+    if (m[1] !== undefined) out.push(<strong key={n++}>{rich(m[1])}</strong>)
     else if (m[2] !== undefined)
       out.push(
         <Box key={n++} component="code" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.85em', px: 0.5, borderRadius: '4px', bgcolor: 'action.hover' }}>
@@ -473,7 +474,7 @@ function rich(s: string): ReactNode {
           {m[3]}
         </a>,
       )
-    else out.push(<em key={n++}>{m[5]}</em>)
+    else out.push(<em key={n++}>{rich(m[5])}</em>)
     last = at + m[0].length
   }
   if (last < s.length) out.push(s.slice(last))
@@ -485,7 +486,7 @@ function Chip({ label, tone }: { label: string; tone?: Tone }) {
   return (
     <Box
       component="span"
-      sx={{ px: 0.875, height: 20, display: 'inline-flex', alignItems: 'center', borderRadius: '999px', fontSize: '0.6875rem', fontWeight: 700, whiteSpace: 'nowrap', color: c, bgcolor: alpha(c, 0.14) }}
+      sx={{ px: 0.875, height: 20, display: 'inline-flex', alignItems: 'center', borderRadius: '999px', fontSize: '0.6875rem', fontWeight: 500, whiteSpace: 'nowrap', color: c, bgcolor: alpha(c, 0.14) }}
     >
       {label}
     </Box>
@@ -497,15 +498,48 @@ function Tabs({ tabs, render }: { tabs: { label: string; blocks: Block[] }[]; re
   const theme = useTheme()
   return (
     <Stack sx={{ gap: 1.25 }}>
-      <Stack direction="row" sx={{ gap: 0.5, p: 0.375, borderRadius: '10px', bgcolor: alpha(theme.palette.text.primary, 0.05), alignSelf: 'flex-start' }}>
+      <Stack direction="row" sx={{ gap: 0.5, p: 0.375, borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.05), alignSelf: 'flex-start' }}>
         {tabs.map((t, i) => (
-          <ButtonBase key={i} onClick={() => setAt(i)} sx={{ px: 1.25, height: 28, borderRadius: '8px', fontSize: '0.8125rem', fontWeight: 600, color: at === i ? 'text.primary' : 'text.secondary', bgcolor: at === i ? 'background.paper' : 'transparent' }}>
+          <ButtonBase key={i} onClick={() => setAt(i)} sx={{ px: 1.25, height: 28, borderRadius: '8px', fontSize: '0.8125rem', fontWeight: 500, color: at === i ? 'text.primary' : 'text.secondary', bgcolor: at === i ? 'background.paper' : 'transparent' }}>
             {t.label}
           </ButtonBase>
         ))}
       </Stack>
       {render(tabs[at]?.blocks ?? [])}
     </Stack>
+  )
+}
+
+/** What a column holds, from its cells: a short value (a line number, a
+ * count) stays on one line; a path or identifier is set in the mono face and
+ * may break at a slash; everything else is prose and wraps. */
+type ColumnKind = 'short' | 'code' | 'prose'
+
+const bare = (c: string | number) => String(c).replace(/[*`]/g, '').trim()
+
+function kindOf(cells: (string | number)[]): ColumnKind {
+  const shown = cells.map(bare).filter(Boolean)
+  if (shown.length === 0) return 'prose'
+  if (shown.every((c) => c.length <= 12)) return 'short'
+  const codey = cells.filter((c) => /[\\/]/.test(bare(c)) || /^`[^`]+`$/.test(String(c).trim()) || /\.\w{1,5}$/.test(bare(c))).length
+  return codey >= Math.ceil(cells.length * 0.6) ? 'code' : 'prose'
+}
+
+/** A path with a line break allowed after each slash, never inside a name
+ * (a hyphen in `gui-next` is not a place to break). */
+function breakable(s: string): ReactNode {
+  const parts = s.split(/([\\/])/)
+  return parts.map((p, i) =>
+    i % 2 ? (
+      <span key={i}>
+        {p}
+        <wbr />
+      </span>
+    ) : (
+      <span key={i} style={{ whiteSpace: 'nowrap' }}>
+        {p}
+      </span>
+    ),
   )
 }
 
@@ -522,9 +556,22 @@ function SortableTable({ columns, rows }: { columns: string[]; rows: (string | n
       return c * sort.dir
     })
   }, [rows, sort])
+  const kinds = useMemo(() => columns.map((_, i) => kindOf(rows.map((r) => r[i] ?? ''))), [columns, rows])
   return (
-    <Box sx={{ overflowX: 'auto' }}>
-      <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8125rem', '& td, & th': { px: 1, py: 0.75, textAlign: 'left', borderBottom: 1, borderColor: 'divider' } }}>
+    <Box sx={{ overflowX: 'auto', border: 1, borderColor: 'divider', borderRadius: '12px' }}>
+      <Box
+        component="table"
+        sx={{
+          width: '100%',
+          borderCollapse: 'separate',
+          borderSpacing: 0,
+          fontSize: '0.8125rem',
+          lineHeight: 1.5,
+          '& th, & td': { px: 1.75, py: 1.25, textAlign: 'left', verticalAlign: 'top' },
+          '& tbody td': { borderTop: 1, borderColor: 'divider' },
+          '& tbody tr:hover td': { bgcolor: 'action.hover' },
+        }}
+      >
         <thead>
           <tr>
             {columns.map((c, i) => (
@@ -532,10 +579,19 @@ function SortableTable({ columns, rows }: { columns: string[]; rows: (string | n
                 component="th"
                 key={i}
                 onClick={() => setSort((s) => (s?.col === i ? { col: i, dir: s.dir === 1 ? -1 : 1 } : { col: i, dir: 1 }))}
-                sx={{ cursor: 'pointer', fontWeight: 600, color: 'text.secondary', whiteSpace: 'nowrap', userSelect: 'none' }}
+                sx={{
+                  cursor: 'pointer',
+                  fontSize: '0.75rem',
+                  fontWeight: 500,
+                  color: 'text.secondary',
+                  bgcolor: 'action.hover',
+                  whiteSpace: 'nowrap',
+                  userSelect: 'none',
+                  '&:hover': { color: 'text.primary' },
+                }}
               >
                 {c}
-                {sort?.col === i ? (sort.dir === 1 ? ' ↑' : ' ↓') : ''}
+                {sort?.col === i ? (sort.dir === 1 ? ' \u2191' : ' \u2193') : ''}
               </Box>
             ))}
           </tr>
@@ -543,9 +599,25 @@ function SortableTable({ columns, rows }: { columns: string[]; rows: (string | n
         <tbody>
           {sorted.map((r, i) => (
             <tr key={i}>
-              {r.map((c, j) => (
-                <td key={j}>{typeof c === 'number' ? c.toLocaleString() : c}</td>
-              ))}
+              {r.map((c, j) => {
+                const kind = kinds[j]
+                // A lone `path` in a code column is already in the mono face.
+                const raw = typeof c === 'string' ? c.replace(/^`([^`]+)`$/, '$1') : c
+                const plain = typeof raw === 'string' && !/[*`\[]/.test(raw)
+                return (
+                  <Box
+                    component="td"
+                    key={j}
+                    sx={{
+                      ...(kind === 'short' && { whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums', color: 'text.secondary' }),
+                      ...(kind === 'code' && { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem', minWidth: 240 }),
+                      ...(kind === 'prose' && { minWidth: 220 }),
+                    }}
+                  >
+                    {typeof c === 'number' ? c.toLocaleString() : kind === 'code' && plain ? breakable(raw as string) : rich(c)}
+                  </Box>
+                )
+              })}
             </tr>
           ))}
         </tbody>

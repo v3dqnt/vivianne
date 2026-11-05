@@ -75,7 +75,7 @@ function AppTile({ app, onSetup }: { app: ConnectionApp; onSetup: (app: Connecti
       <Stack direction="row" sx={{ gap: 1.25, alignItems: 'center', minWidth: 0 }}>
         <AppIcon app={app} />
         <Stack sx={{ minWidth: 0, flex: 1 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>
+          <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
             {app.name}
           </Typography>
           <Typography variant="caption" color="text.secondary" noWrap title={app.account ?? undefined}>
@@ -160,7 +160,7 @@ function SetupDialog({ app, onClose }: { app: ConnectionApp | null; onClose: () 
         <Stack direction="row" sx={{ gap: 1.25, alignItems: 'center' }}>
           <AppIcon app={app} size={36} />
           <Stack>
-            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
               Connect {app.name}
             </Typography>
             <Typography variant="caption" color="text.secondary">
@@ -257,7 +257,7 @@ export function ConnectionsSection() {
   return (
     <Stack sx={{ gap: 2 }}>
       <Stack sx={{ gap: 0.5 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
           Connections
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.5 }}>
@@ -302,7 +302,7 @@ export function ConnectionsSection() {
         <>
           {connected.length > 0 && (
             <Stack sx={{ gap: 1 }}>
-              <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
+              <Typography variant="caption" sx={{ fontWeight: 500, color: 'text.secondary' }}>
                 Connected
               </Typography>
               {grid(connected)}
@@ -311,7 +311,7 @@ export function ConnectionsSection() {
           {rest.length > 0 && (
             <Stack sx={{ gap: 1 }}>
               {connected.length > 0 && (
-                <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
+                <Typography variant="caption" sx={{ fontWeight: 500, color: 'text.secondary' }}>
                   More apps
                 </Typography>
               )}
@@ -329,7 +329,7 @@ export function ConnectionsSection() {
       <Stack sx={{ gap: 1, pt: 1, borderTop: 1, borderColor: 'divider' }}>
         <ButtonBase
           onClick={() => setAdvanced((v) => !v)}
-          sx={{ display: 'flex', alignItems: 'center', gap: 0.5, alignSelf: 'flex-start', color: 'text.secondary', fontSize: '0.8125rem', fontWeight: 600 }}
+          sx={{ display: 'flex', alignItems: 'center', gap: 0.5, alignSelf: 'flex-start', color: 'text.secondary', fontSize: '0.8125rem', fontWeight: 500 }}
         >
           <ArrowDownLinear size={12} color="currentColor" style={{ transform: advanced ? 'rotate(180deg)' : undefined, transition: 'transform 0.15s' }} />
           Advanced: add an MCP server by hand

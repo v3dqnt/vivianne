@@ -62,7 +62,7 @@ function Message({ m, team, prev, root }: { m: BotMessage; team: TeamAgent[]; pr
           </Stack>
         )}
         {m.text !== '(attachments)' && (
-          <Box sx={{ maxWidth: '80%', px: 1.75, py: 1.125, borderRadius: '18px', bgcolor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.09 : 0.06), fontSize: '0.875rem' }}>
+          <Box sx={{ maxWidth: '80%', px: 1.75, py: 1.125, borderRadius: '16px', bgcolor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.09 : 0.06), fontSize: '0.875rem' }}>
             <Markdown text={m.text} />
           </Box>
         )}
@@ -80,15 +80,15 @@ function Message({ m, team, prev, root }: { m: BotMessage; team: TeamAgent[]; pr
       <Stack sx={{ minWidth: 0, flex: 1 }}>
         {!grouped && (
           <Stack direction="row" sx={{ alignItems: 'baseline', gap: 0.75 }}>
-            <Typography variant="caption" sx={{ fontWeight: 700, color }}>
+            <Typography variant="caption" sx={{ fontWeight: 500, color }}>
               {bot?.name ?? m.from}
             </Typography>
             {label && (
               <Typography
                 variant="caption"
                 sx={{
-                  fontSize: '0.625rem',
-                  fontWeight: 700,
+                  fontSize: '0.6875rem',
+                  fontWeight: 600,
                   textTransform: 'uppercase',
                   letterSpacing: 0.4,
                   color: needs ? 'warning.main' : 'text.secondary',
@@ -105,7 +105,7 @@ function Message({ m, team, prev, root }: { m: BotMessage; team: TeamAgent[]; pr
         <Box
           sx={{
             fontSize: '0.875rem',
-            ...(needs ? { mt: 0.5, p: 1.25, borderRadius: '10px', border: 1, borderColor: alpha(theme.palette.warning.main, 0.4), bgcolor: alpha(theme.palette.warning.main, 0.06) } : {}),
+            ...(needs ? { mt: 0.5, p: 1.25, borderRadius: '8px', border: 1, borderColor: alpha(theme.palette.warning.main, 0.4), bgcolor: alpha(theme.palette.warning.main, 0.06) } : {}),
           }}
         >
           {needs ? <Markdown text={m.text} /> : <ReportMarkdown text={m.text} />}
@@ -125,7 +125,7 @@ function ApprovalCard({ a, team }: { a: PendingApproval; team: TeamAgent[] }) {
     <Stack sx={{ gap: 1, p: 1.25, my: 1, borderRadius: '12px', border: 1, borderColor: alpha(theme.palette.warning.main, 0.45), bgcolor: alpha(theme.palette.warning.main, 0.06) }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
         {bot && <Avatar {...faceOf(bot)} size={22} />}
-        <Typography variant="body2" sx={{ fontWeight: 600, flex: 1, minWidth: 0 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500, flex: 1, minWidth: 0 }}>
           {bot?.name ?? a.botId} wants to use <code>{a.toolName}</code>
         </Typography>
       </Stack>
@@ -140,10 +140,10 @@ function ApprovalCard({ a, team }: { a: PendingApproval; team: TeamAgent[] }) {
         </Typography>
       )}
       <Stack direction="row" sx={{ gap: 1 }}>
-        <ButtonBase onClick={() => void respond(a.requestId, true)} sx={{ px: 1.5, height: 28, borderRadius: '8px', bgcolor: 'text.primary', color: 'background.paper', fontSize: '0.75rem', fontWeight: 600 }}>
+        <ButtonBase onClick={() => void respond(a.requestId, true)} sx={{ px: 1.5, height: 28, borderRadius: '8px', bgcolor: 'text.primary', color: 'background.paper', fontSize: '0.75rem', fontWeight: 500 }}>
           Allow
         </ButtonBase>
-        <ButtonBase onClick={() => void respond(a.requestId, false)} sx={{ px: 1.5, height: 28, borderRadius: '8px', border: 1, borderColor: 'divider', fontSize: '0.75rem', fontWeight: 600 }}>
+        <ButtonBase onClick={() => void respond(a.requestId, false)} sx={{ px: 1.5, height: 28, borderRadius: '8px', border: 1, borderColor: 'divider', fontSize: '0.75rem', fontWeight: 500 }}>
           Deny
         </ButtonBase>
       </Stack>
@@ -313,10 +313,10 @@ export function BotChat({
                         onSelect={() => complete(o.id)}
                         onHover={() => setPick(i)}
                         tint={o.agent ? colorOf(o.agent) : theme.palette.primary.main}
-                        icon={o.agent ? <Avatar {...faceOf(o.agent)} size={20} /> : <Box component="span" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>@</Box>}
+                        icon={o.agent ? <Avatar {...faceOf(o.agent)} size={20} /> : <Box component="span" sx={{ fontSize: '0.75rem', fontWeight: 500 }}>@</Box>}
                         title={o.label}
                         subtitle={o.agent ? (o.agent.role || `@${o.id}`) : 'Everyone on the team'}
-                        tag={<Box component="span" sx={{ fontSize: '0.625rem', color: 'text.disabled', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>@{o.id}</Box>}
+                        tag={<Box component="span" sx={{ fontSize: '0.6875rem', color: 'text.disabled', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>@{o.id}</Box>}
                       />
                     ))}
                   </Box>

@@ -40,7 +40,7 @@ export function ChangelogBody({ entries, limit }: { entries: ChangelogEntry[]; l
       {shown.map((entry) => (
         <Stack key={entry.version} sx={{ gap: 1 }}>
           <Stack direction="row" sx={{ alignItems: 'baseline', gap: 1 }}>
-            <Typography variant="body2" sx={{ fontWeight: 700 }}>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
               {entry.version}
             </Typography>
             {entry.date && (
@@ -55,7 +55,7 @@ export function ChangelogBody({ entries, limit }: { entries: ChangelogEntry[]; l
               <Typography
                 variant="caption"
                 sx={{
-                  fontWeight: 700,
+                  fontWeight: 600,
                   textTransform: 'uppercase',
                   letterSpacing: 0.5,
                   fontSize: '0.6875rem',

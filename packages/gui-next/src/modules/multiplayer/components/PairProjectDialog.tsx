@@ -13,13 +13,13 @@ function Step({ n, title, done, children }: { n: number; title: string; done: bo
       <Box
         sx={{
           width: 22,
-          height: 22,
+          height: 24,
           borderRadius: '50%',
           flexShrink: 0,
           display: 'grid',
           placeItems: 'center',
           fontSize: '0.6875rem',
-          fontWeight: 700,
+          fontWeight: 500,
           bgcolor: done ? alpha(theme.palette.success.main, 0.15) : 'action.hover',
           color: done ? 'success.main' : 'text.secondary',
           mt: 0.125,
@@ -28,7 +28,7 @@ function Step({ n, title, done, children }: { n: number; title: string; done: bo
         {done ? <TickCircleLinear size={14} color="currentColor" /> : n}
       </Box>
       <Stack sx={{ flex: 1, minWidth: 0, gap: 1 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           {title}
         </Typography>
         {children}
@@ -127,7 +127,7 @@ export function PairProjectDialog({ open, onClose }: { open: boolean; onClose: (
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle sx={{ fontSize: '1rem', fontWeight: 700 }}>Work together</DialogTitle>
+      <DialogTitle sx={{ fontSize: '1rem', fontWeight: 600 }}>Work together</DialogTitle>
       <DialogContent>
         <Stack sx={{ gap: 2.5, pt: 0.5 }}>
           <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.55 }}>

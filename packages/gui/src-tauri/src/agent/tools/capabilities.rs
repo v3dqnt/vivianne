@@ -281,12 +281,14 @@ pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Other",
         when: "Occasional needs.",
-        tools: &["run_script", "connect_mcp_server", "list_tools", "load_tools", "get_current_time", "sleep"],
+        tools: &["run_script", "run_native", "connect_mcp_server", "list_tools", "search_tools", "load_tools", "get_current_time", "sleep"],
         how: Some(
             "list_tools returns your full live tool list with descriptions — call it if you are ever unsure whether \
-             you have some capability, instead of telling the user you lack it.",
+             you have some capability, instead of telling the user you lack it. search_tools finds the tool for a job \
+             from a description of it (\"schedule something every morning\") and loads the best matches, MCP tools \
+             included: use it when a tool you need is not in your function list and you do not know its group.",
         ),
-        triggers: &[],
+        triggers: &["rust script", "c++ script", "cpp script", "native script", "compile a program", "write a program to"],
     },
 ];
 

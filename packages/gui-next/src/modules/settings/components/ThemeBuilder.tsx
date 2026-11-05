@@ -158,7 +158,7 @@ export function ThemeBuilder({ base, editing, onClose }: { base: PaletteDef; edi
                         value={isHex(v) ? v : '#888888'}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => set(k, e.target.value)}
                         aria-label={LABELS[k]}
-                        sx={{ width: 30, height: 26, p: 0, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'transparent', cursor: 'pointer', flexShrink: 0 }}
+                        sx={{ width: 30, height: 28, p: 0, border: 1, borderColor: 'divider', borderRadius: 0.8, bgcolor: 'transparent', cursor: 'pointer', flexShrink: 0 }}
                       />
                       <TextField size="small" label={LABELS[k]} value={v} onChange={(e) => set(k, e.target.value)} sx={{ flex: 1 }} />
                     </Stack>

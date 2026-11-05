@@ -38,7 +38,7 @@ export function PrChip({ pr, onClick }: { pr: BranchPr; onClick?: () => void }) 
       >
         <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color }} />
         <Box component="span" sx={{ fontWeight: 600 }}>#{pr.number}</Box>
-        {checks && <Box component="span" sx={{ color: checksColor, fontWeight: 700 }}>{checks}</Box>}
+        {checks && <Box component="span" sx={{ color: checksColor, fontWeight: 600 }}>{checks}</Box>}
       </ButtonBase>
     </Tooltip>
   )
@@ -213,7 +213,7 @@ function CommitDialog({ root, onClose, onDone }: { root: string; onClose: () => 
   }
   return (
     <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle sx={{ fontSize: '1rem', fontWeight: 700, pb: 0.5 }}>Commit all changes</DialogTitle>
+      <DialogTitle sx={{ fontSize: '1rem', fontWeight: 600, pb: 0.5 }}>Commit all changes</DialogTitle>
       <DialogContent>
         <Stack sx={{ gap: 1.25, pt: 1 }}>
           <TextField size="small" autoFocus label="Summary" placeholder="Fix the login timeout" value={title} onChange={(e) => setTitle(e.target.value)} helperText={title.length > 72 ? `${title.length} characters: keep it under 72` : ' '} />
@@ -280,7 +280,7 @@ function PrDialog({ root, branch, base: defaultBase, needsPush, onClose, onDone 
   }
   return (
     <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle sx={{ fontSize: '1rem', fontWeight: 700, pb: 0.5 }}>Open a pull request</DialogTitle>
+      <DialogTitle sx={{ fontSize: '1rem', fontWeight: 600, pb: 0.5 }}>Open a pull request</DialogTitle>
       <DialogContent>
         <Stack sx={{ gap: 1.25, pt: 1 }}>
           <Typography variant="caption" color="text.secondary">

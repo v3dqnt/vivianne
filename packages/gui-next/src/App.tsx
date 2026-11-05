@@ -1,11 +1,10 @@
 import { useEffect } from 'react'
 import { ModsRuntime } from './modules/mods/components/ModsRuntime'
 import { Box, Stack } from './ui'
+import { useProjectsStore } from './modules/sessions/store/projectsStore'
 import { TitleBar } from './components/TitleBar'
 import { HomeView } from './modules/home/HomeView'
-import { useProjectsStore, modeOf, GENERAL_PROJECT_ID } from './modules/sessions/store/projectsStore'
 import { AgentsView } from './modules/home/AgentsView'
-import { Sidebar } from './modules/sessions/components/Sidebar'
 import { SettingsDialog } from './modules/settings/components/SettingsDialog'
 import { OptionalComponentsModal } from './modules/settings/components/OptionalComponentsModal'
 import { UpdateSurfaces } from './modules/updates/components/UpdateSurfaces'
@@ -13,18 +12,14 @@ import { LayoutErrorBoundary } from './components/LayoutErrorBoundary'
 import { Workspace } from './modules/workspace/Workspace'
 import { GitView, useAppView } from './modules/git/components/GitView'
 import { startGitStatus } from './modules/git/store/gitStatusStore'
-import { useSidebarStore } from './modules/sessions/store/sidebarStore'
+import { startThreadGit } from './modules/git/store/threadGitStore'
 import { installShortcuts, registerShortcuts } from './lib/shortcuts'
 import { appShortcuts } from './modules/settings/lib/appShortcuts'
 import { startWorkflowRunner } from './modules/automation/workflowRunner'
 import { startAutoReadAloud } from './modules/ai/lib/readAloud'
 import { WorkflowConfirm } from './modules/automation/WorkflowConfirm'
-import { Quickstart } from './modules/hackathon/Quickstart'
-import { useLayoutPrefs } from './modules/settings/store/layoutPrefsStore'
 
 function App() {
-  const sidebarCollapsed = useSidebarStore((s) => s.collapsed)
-  const sidebarSide = useLayoutPrefs((s) => s.sidebarSide)
   const view = useAppView((s) => s.view)
 
   // Every app shortcut, rebindable in Settings → Layout & shortcuts.
@@ -37,11 +32,11 @@ function App() {
   useEffect(() => startAutoReadAloud(), [])
   // The repository's state, for the sidebar, the Git tab and the agent.
   useEffect(() => startGitStatus(), [])
+  // The same, for the folders the threads list spans.
+  useEffect(() => startThreadGit(), [])
 
-  // Home lists the projects and threads itself; the sidebar is for working in one.
-  // A team project shows its people beside the chat instead (TeamStrip).
-  const teamProject = useProjectsStore((s) => modeOf(s.projects.find((p) => p.id === s.activeProjectId)) === 'tree' && s.activeProjectId !== GENERAL_PROJECT_ID)
-  const sidebar = !sidebarCollapsed && view === 'chat' && !teamProject && <Sidebar />
+  // Refresh here: nothing else loads the projects at launch, and the tabs need the thread-to-project map.
+  useEffect(() => void useProjectsStore.getState().refresh(), [])
 
   return (
     <Stack sx={{ height: '100%' }}>
@@ -52,7 +47,6 @@ function App() {
       <Stack direction="row" sx={{ flex: 1, minHeight: 0, bgcolor: 'background.chrome' }}>
         {/* Fixed chrome: projects and their days are navigation, not content,
             so they stay put while everything to their right is dockable. */}
-        {sidebarSide === 'left' && sidebar}
 
         {/* Chat, editor, files, preview, terminals — all panels, arranged
             however the user drags them. See `modules/workspace`. */}
@@ -66,13 +60,11 @@ function App() {
           {view === 'home' && <HomeView />}
           {view === 'agents' && <AgentsView />}
         </LayoutErrorBoundary>
-        {sidebarSide === 'right' && sidebar}
       </Stack>
 
       <SettingsDialog />
       <ModsRuntime />
       <WorkflowConfirm />
-      <Quickstart />
       <OptionalComponentsModal />
       <UpdateSurfaces />
     </Stack>

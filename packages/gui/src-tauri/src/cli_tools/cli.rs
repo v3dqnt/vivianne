@@ -278,7 +278,7 @@ pub async fn run(app: tauri::AppHandle, args: RunArgs) -> ! {
     if args.interactive {
         chat_loop(&app, &state, &args, &cwd).await;
     }
-    let prompt = cmd_agent_prompt(args.task.clone(), None, Some("cli-run".into()), app.clone(), registry);
+    let prompt = cmd_agent_prompt(args.task.clone(), None, Some("cli-run".into()), None, app.clone(), registry);
     let outcome = tokio::time::timeout(Duration::from_secs(args.max_minutes * 60), prompt).await;
     let seconds = started.elapsed().as_secs_f64();
     match outcome {
@@ -423,7 +423,7 @@ async fn chat_loop(app: &tauri::AppHandle, state: &std::sync::Arc<crate::agent::
             break;
         }
         let registry = app.state::<AgentRegistry>();
-        let turn = cmd_agent_prompt(line, None, Some("cli-run".into()), app.clone(), registry);
+        let turn = cmd_agent_prompt(line, None, Some("cli-run".into()), None, app.clone(), registry);
         match tokio::time::timeout(Duration::from_secs(args.max_minutes * 60), turn).await {
             Err(_) => {
                 state.abort_flag.store(true, Ordering::SeqCst);

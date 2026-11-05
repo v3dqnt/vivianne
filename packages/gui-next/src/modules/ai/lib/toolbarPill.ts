@@ -9,7 +9,7 @@ export const TOOLBAR_PILL = {
   minWidth: 0,
   borderRadius: '8px',
   border: 0,
-  fontSize: '12px',
+  fontSize: '0.75rem',
   fontWeight: 500,
   lineHeight: 1,
   textTransform: 'none',

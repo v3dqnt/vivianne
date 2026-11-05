@@ -12,10 +12,10 @@ import { AgentSettingsPanel } from './AgentSettingsPanel'
 const fieldSx = (ring: string) =>
   ({
     width: '100%',
-    fontSize: '14px',
+    fontSize: '0.875rem',
     px: '12px',
     py: '10px',
-    borderRadius: '10px',
+    borderRadius: '8px',
     bgcolor: 'action.hover',
     boxShadow: 'inset 0 0 0 1px transparent',
     transition: 'box-shadow 0.12s, background-color 0.12s',
@@ -26,8 +26,8 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   return (
     <Stack sx={{ gap: '6px' }}>
       <Stack direction="row" sx={{ alignItems: 'baseline', gap: '8px' }}>
-        <Typography sx={{ fontSize: '12px', fontWeight: 500, color: 'text.secondary' }}>{label}</Typography>
-        {hint && <Typography sx={{ fontSize: '12px', color: 'text.disabled' }}>{hint}</Typography>}
+        <Typography sx={{ fontSize: '0.75rem', fontWeight: 500, color: 'text.secondary' }}>{label}</Typography>
+        {hint && <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled' }}>{hint}</Typography>}
       </Stack>
       {children}
     </Stack>
@@ -114,14 +114,14 @@ export function NewAgentDialog({
         >
           <FaceStage name={name} color={color} face={face} />
           <Stack sx={{ alignItems: 'center', gap: '4px', textAlign: 'center', maxWidth: 220 }}>
-            <Typography sx={{ fontSize: '18px', fontWeight: 600, lineHeight: 1.25, wordBreak: 'break-word' }}>{name || 'Unnamed'}</Typography>
-            <Typography sx={{ fontSize: '13px', color: 'text.secondary', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+            <Typography sx={{ fontSize: '1.125rem', fontWeight: 600, lineHeight: 1.25, wordBreak: 'break-word' }}>{name || 'Unnamed'}</Typography>
+            <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
               {role || 'What it is there to do'}
             </Typography>
           </Stack>
           <ButtonBase
             onClick={() => look(randomLook())}
-            sx={{ height: 30, px: '14px', borderRadius: '999px', fontSize: '12px', fontWeight: 500, bgcolor: alpha(hex, 0.18), color: 'text.primary', '&:hover': { bgcolor: alpha(hex, 0.28) }, '&:active': { transform: 'scale(0.97)' } }}
+            sx={{ height: 32, px: '14px', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 500, bgcolor: alpha(hex, 0.18), color: 'text.primary', '&:hover': { bgcolor: alpha(hex, 0.28) }, '&:active': { transform: 'scale(0.97)' } }}
           >
             Surprise me
           </ButtonBase>
@@ -130,7 +130,7 @@ export function NewAgentDialog({
         {/* The form, with its actions pinned under it. */}
         <Stack sx={{ minHeight: 0 }}>
           <Stack sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: '28px', pt: '24px', pb: '8px', gap: '20px' }}>
-            <Typography sx={{ fontSize: '18px', fontWeight: 600 }}>{agent ? `Edit ${agent.name}` : title}</Typography>
+            <Typography sx={{ fontSize: '1.125rem', fontWeight: 600 }}>{agent ? `Edit ${agent.name}` : title}</Typography>
             {agent && (
               // Underline tabs in the agent's colour: who it is, how it behaves, where it works.
               <Stack direction="row" sx={{ gap: '20px', borderBottom: 1, borderColor: 'divider', mt: '-8px' }}>
@@ -145,7 +145,7 @@ export function NewAgentDialog({
                     key={id}
                     onClick={() => setTab(id)}
                     aria-selected={tab === id}
-                    sx={{ pb: '10px', fontSize: '13px', fontWeight: tab === id ? 600 : 500, color: tab === id ? 'text.primary' : 'text.secondary', borderBottom: 2, borderColor: tab === id ? hex : 'transparent', mb: '-1px', '&:hover': { color: 'text.primary' } }}
+                    sx={{ pb: '10px', fontSize: '0.8125rem', fontWeight: tab === id ? 600 : 500, color: tab === id ? 'text.primary' : 'text.secondary', borderBottom: 2, borderColor: tab === id ? hex : 'transparent', mb: '-1px', '&:hover': { color: 'text.primary' } }}
                   >
                     {label}
                   </ButtonBase>
@@ -183,16 +183,16 @@ export function NewAgentDialog({
             )}
           </Stack>
           <Stack direction="row" sx={{ alignItems: 'center', gap: '8px', px: '28px', py: '16px', borderTop: 1, borderColor: 'divider' }}>
-            <Typography sx={{ flex: 1, minWidth: 0, fontSize: '12px', color: 'error.main' }} noWrap title={error ?? undefined}>
+            <Typography sx={{ flex: 1, minWidth: 0, fontSize: '0.75rem', color: 'error.main' }} noWrap title={error ?? undefined}>
               {error}
             </Typography>
-            <ButtonBase onClick={onClose} sx={{ height: 36, px: '16px', borderRadius: '10px', fontSize: '13px', fontWeight: 500, color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } }}>
+            <ButtonBase onClick={onClose} sx={{ height: 36, px: '16px', borderRadius: '8px', fontSize: '0.8125rem', fontWeight: 500, color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } }}>
               Cancel
             </ButtonBase>
             <ButtonBase
               onClick={() => void create()}
               disabled={saving || !name.trim()}
-              sx={{ height: 36, minWidth: 96, px: '18px', borderRadius: '10px', fontSize: '13px', fontWeight: 600, bgcolor: hex, color: onHex, '&:hover': { filter: 'brightness(1.08)' }, '&:active': { transform: 'scale(0.98)' }, '&:disabled': { opacity: 0.45 } }}
+              sx={{ height: 36, minWidth: 96, px: '18px', borderRadius: '8px', fontSize: '0.8125rem', fontWeight: 500, bgcolor: hex, color: onHex, '&:hover': { filter: 'brightness(1.08)' }, '&:active': { transform: 'scale(0.98)' }, '&:disabled': { opacity: 0.45 } }}
             >
               {saving ? <CircularProgress size={14} sx={{ color: onHex }} /> : agent ? 'Save' : 'Create'}
             </ButtonBase>

@@ -1,3 +1,4 @@
+import { useAppView } from '../../git/components/GitView'
 import type { ShortcutAction } from '../../../lib/shortcuts'
 import { useSidebarStore } from '../../sessions/store/sidebarStore'
 import { useSettingsUi } from '../store/uiStore'
@@ -12,7 +13,7 @@ export function appShortcuts(): ShortcutAction[] {
   const actions: ShortcutAction[] = [
     { id: 'sidebar.toggle', label: 'Show or hide the sidebar', group: 'App', defaultKeys: 'Mod+B', run: () => useSidebarStore.getState().toggle() },
     { id: 'settings.open', label: 'Open Settings', group: 'App', defaultKeys: 'Mod+,', run: () => useSettingsUi.getState().openSettings() },
-    { id: 'chat.new', label: 'New chat', group: 'Chat', defaultKeys: 'Mod+Shift+N', run: () => useDaysStore.getState().newThread() },
+    { id: 'chat.new', label: 'New chat', group: 'Chat', defaultKeys: 'Mod+Shift+N', run: () => void useDaysStore.getState().newBlankThread().then(() => useAppView.setState({ view: 'chat' })) },
     {
       id: 'chat.focus',
       label: 'Focus the message box',

@@ -29,10 +29,12 @@ pub mod guides;
 pub mod math;
 pub mod office;
 pub mod ptc;
+pub mod native;
 
 pub mod capabilities;
 pub mod exec;
 pub mod profile;
+pub mod tool_search;
 pub(crate) mod schemas;
 pub mod speculation;
 pub mod traits;

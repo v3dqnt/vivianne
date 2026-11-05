@@ -48,7 +48,7 @@ export function Sources({ sources }: { sources: Source[] }) {
     borderRadius: '6px',
     border: 1,
     borderColor: 'divider',
-    fontSize: '12px',
+    fontSize: '0.75rem',
     lineHeight: '16px',
     color: 'text.secondary',
     textDecoration: 'none',

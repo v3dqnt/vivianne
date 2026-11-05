@@ -64,7 +64,7 @@ export function ToolGroup({ tools, thoughts = 0, children }: { tools: ToolResult
             <FileLink path={file} />
           ) : (
             target && (
-              <Typography noWrap sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem', color: 'text.secondary', minWidth: 0 }}>
+              <Typography noWrap sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem', color: 'text.secondary', flex: '0 1 auto', minWidth: 0 }}>
                 {target}
               </Typography>
             )
@@ -75,7 +75,7 @@ export function ToolGroup({ tools, thoughts = 0, children }: { tools: ToolResult
             </Box>
           )}
           {running && <CircularProgress size={11} thickness={5} />}
-          <Box sx={{ display: 'flex', flexShrink: 0, opacity: 0.8, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
+          <Box sx={{ display: 'flex', flexShrink: 0, ml: 'auto', opacity: 0.8, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
             <ArrowDownLinear size={12} color="currentColor" />
           </Box>
         </Box>

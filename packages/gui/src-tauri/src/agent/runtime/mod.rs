@@ -16,6 +16,7 @@ pub mod hooks;
 pub mod loop_core;
 pub mod recovery;
 pub mod state;
+pub mod thread;
 pub mod trace;
 pub mod types;
 pub mod verification;

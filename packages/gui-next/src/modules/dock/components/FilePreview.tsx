@@ -236,7 +236,7 @@ export function FileContent({
   if (data.kind === 'binary') {
     return (
       <Stack sx={{ minWidth: 0, gap: 0.5 }}>
-        <Typography variant="caption" sx={{ fontWeight: 600 }}>
+        <Typography variant="caption" sx={{ fontWeight: 500 }}>
           {data.note}
         </Typography>
         <Box
@@ -275,7 +275,7 @@ export function FileContent({
           minWidth: 0,
           m: 0,
           p: bare ? 0 : 1.5,
-          ...(bare ? { color: 'text.secondary' } : { borderRadius: 1, bgcolor: '#0d1117', color: '#c9d1d9' }),
+          ...(bare ? { color: 'text.secondary' } : { borderRadius: 0.8, bgcolor: '#0d1117', color: '#c9d1d9' }),
           fontFamily: '"Geist Mono", ui-monospace, monospace',
           fontSize: '0.75rem',
           lineHeight: 1.5,
@@ -469,7 +469,7 @@ function RenderedText({ kind, path, content }: { kind: Rendered; path: string; c
                 py: 0.25,
                 borderRadius: '6px',
                 fontSize: '0.6875rem',
-                fontWeight: 600,
+                fontWeight: 500,
                 color: on ? 'text.primary' : 'text.secondary',
                 bgcolor: on ? 'action.selected' : 'transparent',
                 '&:hover': { bgcolor: on ? 'action.selected' : 'action.hover' },

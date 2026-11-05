@@ -70,21 +70,21 @@ function ThemeCard({
     <Box
       sx={{
         position: 'relative',
-        borderRadius: 2,
+        borderRadius: 1.6,
         border: 1,
         borderColor: active ? 'primary.main' : 'divider',
         bgcolor: active ? 'action.selected' : 'transparent',
         '&:hover .theme-actions': { opacity: 1 },
       }}
     >
-      <ButtonBase onClick={onPick} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1.25, width: '100%', justifyContent: 'flex-start', borderRadius: 2 }}>
+      <ButtonBase onClick={onPick} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1.25, width: '100%', justifyContent: 'flex-start', borderRadius: 1.6 }}>
         <Box sx={{ display: 'flex', flexShrink: 0, pl: 0.5 }}>
           {p.swatches.slice(0, 4).map((c, i) => (
             <Box key={`${c}${i}`} sx={{ width: 18, height: 18, borderRadius: '50%', bgcolor: c, border: 1, borderColor: 'rgba(128,128,128,0.4)', mx: -0.35 }} />
           ))}
         </Box>
         <Stack sx={{ textAlign: 'left', minWidth: 0 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>
+          <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
             {p.symbol} {p.label}
           </Typography>
           <Typography variant="caption" color="text.secondary" noWrap>
@@ -92,7 +92,7 @@ function ThemeCard({
           </Typography>
         </Stack>
       </ButtonBase>
-      <Stack direction="row" className="theme-actions" sx={{ position: 'absolute', right: 6, top: 6, opacity: 0, transition: 'opacity 120ms', bgcolor: 'background.paper', borderRadius: 1 }}>
+      <Stack direction="row" className="theme-actions" sx={{ position: 'absolute', right: 6, top: 6, opacity: 0, transition: 'opacity 120ms', bgcolor: 'background.paper', borderRadius: 0.8 }}>
         <Tooltip title={custom ? 'Edit' : 'Make a copy to edit'}>
           <IconButton size="small" onClick={onEdit}>
             <EditLinear size={13} color="currentColor" />
@@ -159,7 +159,7 @@ export function ThemesSection() {
 
   return (
     <Stack sx={{ gap: 1.5 }}>
-      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
         Appearance
       </Typography>
 
@@ -231,7 +231,7 @@ export function ThemesSection() {
           aria-label="Any colour"
           value={s.accent ?? '#4a9eff'}
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => s.update({ accent: e.target.value })}
-          sx={{ width: 26, height: 22, p: 0, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'transparent', cursor: 'pointer' }}
+          sx={{ width: 26, height: 24, p: 0, border: 1, borderColor: 'divider', borderRadius: 0.8, bgcolor: 'transparent', cursor: 'pointer' }}
         />
         {s.accent && (
           <Tooltip title="Back to the theme's accent">
@@ -345,7 +345,7 @@ function RobotHeads() {
   const f = useFacePrefs()
   return (
     <Stack sx={{ gap: 0.5 }}>
-      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
         Robot heads
       </Typography>
       <Row label="Size" hint="Every agent's head, everywhere">

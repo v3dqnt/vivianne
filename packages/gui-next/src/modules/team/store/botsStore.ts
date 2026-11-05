@@ -65,6 +65,8 @@ export interface BotSettings {
   workplace?: Workplace
   /** A folder the user chose for it; absent = its own private folder. */
   folder?: string | null
+  /** How it comes across, in your words; empty is warm and brief. */
+  personality?: string
 }
 
 export type Workplace = 'auto' | 'this_pc' | 'browser' | 'private_desktop' | 'cloud_desktop' | 'off'

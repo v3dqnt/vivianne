@@ -1,8 +1,15 @@
 //! Project memory — adapted from the public contract of kilo-memory's
 //! `Memory` facade (enable/disable/purge, remember/forget/recall, session
-//! consolidation, capped context injection), reimplemented from scratch for
-//! Vivianne's simpler file-backed, single-process Rust agent (no Effect
-//! runtime, no LLM-driven digesting — entries are recorded verbatim).
+//! consolidation), reimplemented from scratch for Vivianne's simpler
+//! file-backed, single-process Rust agent (no Effect runtime, no LLM-driven
+//! digesting — entries are recorded verbatim).
+//!
+//! Nothing bulky is injected per turn: recall runs on demand (the `recall`
+//! tool, subject to the topic-stability gate on the LLM reranker), and only
+//! the small always-in-context `<core_memory>` block rides along every turn
+//! (see `evolve::core_block`). The per-turn `<project_memory>` string seen
+//! in legacy stored prompts is stripped, not rebuilt — use `recall` to
+//! look up the past instead of paying for it every message.
 //!
 //! Storage layout, rooted at the workspace directory:
 //!   <root>/.vivianne/memory/state.json     — enabled flag, settings, stats
@@ -43,6 +50,14 @@ const PERSONA_BATCH_SIZE: u64 = 10;
 /// >= 90% of the best score.
 const GATE_REL_FLOOR: f32 = 0.90;
 
+/// The gate's relative floor when recall ran BM25-only (no embedding key and
+/// no local model): lexical ranking is coarser, so a synonym-phrased match
+/// often sits well below the top keyword hit without being irrelevant. At a
+/// 0.90 floor the too-strict calibrated cut turned into ~15% of relevant
+/// turns returning nothing at all for such setups — the floor relaxes so
+/// BM25 determinations of "best match" aren't discarded over score spread.
+const GATE_REL_FLOOR_BM25_ONLY: f32 = 0.75;
+
 /// Candidate must score at least this fraction of the PREVIOUSLY KEPT
 /// candidate. Catches score-distribution cliffs — as soon as a score drops
 /// more than 5% from the prior kept entry, the tail is cut.
@@ -59,9 +74,14 @@ const GATE_ABS_FLOOR: f32 = 0.25;
 /// drop-ratio conditions hold. The first candidate that fails either check
 /// cuts the entire tail. Always keeps at least the top candidate (which
 /// has already passed GATE_ABS_FLOOR by the time this is called).
-pub fn dynamic_gate_select<T>(
+///
+/// The floor is a parameter so the BM25-only ranking (whose scores are
+/// relative to far less comparable lexical evidence) can run the same logic
+/// with a relaxed calibration instead of duplicating the walk.
+pub fn dynamic_gate_select_with<T>(
     candidates: Vec<(T, f32)>,
     max_k: usize,
+    rel_floor: f32,
 ) -> Vec<(T, f32)> {
     if candidates.is_empty() {
         return Vec::new();
@@ -70,13 +90,21 @@ pub fn dynamic_gate_select<T>(
     let mut prev = top;
     let mut out = Vec::new();
     for (entry, sim) in candidates.into_iter().take(max_k) {
-        if !out.is_empty() && (sim < top * GATE_REL_FLOOR || sim < prev * GATE_DROP_RATIO) {
+        if !out.is_empty() && (sim < top * rel_floor || sim < prev * GATE_DROP_RATIO) {
             break;
         }
         prev = sim;
         out.push((entry, sim));
     }
     out
+}
+
+/// The gate at its default embedding-calibrated floor.
+pub fn dynamic_gate_select<T>(
+    candidates: Vec<(T, f32)>,
+    max_k: usize,
+) -> Vec<(T, f32)> {
+    dynamic_gate_select_with(candidates, max_k, GATE_REL_FLOOR)
 }
 
 /// Return the absolute-score floor used by the gate — exposed so the
@@ -163,7 +191,6 @@ pub struct MemoryState {
     pub auto_consolidate: bool,
     pub created_at: u64,
     pub updated_at: u64,
-    pub last_injected_at: Option<u64>,
     #[serde(default)]
     pub extraction_enabled: bool,
     #[serde(default)]
@@ -189,7 +216,6 @@ impl Default for MemoryState {
             auto_consolidate: true,
             created_at: now,
             updated_at: now,
-            last_injected_at: None,
             extraction_enabled: false,
             last_extraction_at: None,
             last_persona_synthesis_at: None,
@@ -468,70 +494,6 @@ fn format_entries(entries: &[MemoryEntry]) -> String {
     entries.iter().map(|e| format!("- [{}] {}", e.kind, e.text.trim())).collect::<Vec<_>>().join("\n")
 }
 
-/// Build the capped memory block to inject into the system prompt, recording
-/// when it was last injected. Returns `None` when memory is disabled or empty.
-///
-/// Two parts, concatenated: a stable `<user_persona>` block (read from
-/// `persona.md`, only present once L3 synthesis has run at least once — see
-/// `run_l3_persona_synthesis`) followed by the existing per-turn
-/// `<project_memory>` block, now with a "Recent topics" line drawn from L2
-/// scene tags when any facts have been scene-tagged (see `run_l1_extraction`).
-/// Splitting persona out as its own block mirrors TencentDB's
-/// stable-vs-dynamic separation for prompt-cache friendliness, even though
-/// Vivianne doesn't do explicit cache-key management today.
-/// Returns the assembled prompt block plus how many memory entries were
-/// folded into it — the count is purely informational, surfaced to the
-/// frontend as a "recalled N memories" chip so the (deliberately silent, per
-/// the injected instruction below) per-turn injection isn't invisible.
-pub async fn context(root: &str) -> Option<(String, usize)> {
-    let mut state = read_state(root).await;
-    if !state.enabled {
-        return None;
-    }
-
-    let user_persona = tokio::fs::read_to_string(persona_path(USER_ROOT)).await.ok().filter(|p| !p.trim().is_empty());
-    let persona = match user_persona {
-        Some(p) => Ok(p),
-        None => tokio::fs::read_to_string(persona_path(root)).await,
-    };
-    let persona_block = match persona {
-        Ok(persona) if !persona.trim().is_empty() => {
-            Some(format!("<user_persona>\n{}\n</user_persona>", persona.trim()))
-        }
-        _ => None,
-    };
-
-    let entries = read_entries(root).await;
-    let mut full = format_entries(&entries);
-
-    if let Ok(scenes) = self::store::scene_summary(root, 8).await {
-        if !scenes.is_empty() {
-            let topics = scenes.into_iter().map(|(name, _)| name).collect::<Vec<_>>().join(", ");
-            full = format!("Recent topics: {topics}\n\n{full}");
-        }
-    }
-
-    let memory_block = if full.trim().is_empty() {
-        None
-    } else {
-        let (capped, _truncated) = cap_text(&full, MAX_CONTEXT_BYTES);
-        Some(format!(
-            "<project_memory>\nThe following are notes remembered from previous sessions in this project. Use them silently as context; don't narrate that you're reading memory.\n\n{}\n</project_memory>",
-            capped
-        ))
-    };
-
-    if persona_block.is_none() && memory_block.is_none() {
-        return None;
-    }
-
-    state.last_injected_at = Some(now_ms());
-    let _ = write_state(root, &state).await;
-
-    let block = [persona_block, memory_block].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
-    Some((block, entries.len()))
-}
-
 pub async fn remember(
     root: &str,
     text: &str,
@@ -542,18 +504,6 @@ pub async fn remember(
         return Err("text must not be empty".to_string());
     }
     let text = redact_secrets(text.trim());
-    // Already known (near-identical to a stored memory): reinforce that one
-    // instead of adding a second copy for recall to split its score across.
-    if let Some(auth) = auth.as_ref() {
-        if let Ok(Some(emb)) = crate::ai::embedding::embed_text(auth, &text).await {
-            if let Ok(hits) = self::store::search_vector_scored(root, &emb, 1).await {
-                if let Some((existing, _)) = hits.into_iter().find(|(_, s)| *s >= 0.95) {
-                    let _ = self::store::touch_entry(root, &existing.id).await;
-                    return Ok(existing);
-                }
-            }
-        }
-    }
     let entry = MemoryEntry {
         id: uuid::Uuid::new_v4().to_string(),
         key: key.unwrap_or_else(|| slug(&text)),
@@ -567,9 +517,15 @@ pub async fn remember(
         embedding_model: None,
         user_wide: false,
     };
+    // Write first, reconcile later: the near-duplicate check needs a full
+    // embed round-trip and no agent turn should sit waiting on it (it used
+    // to add seconds between "the model said a fact worth keeping" and its
+    // next streamed token). The background task below merges any duplicate
+    // into the older entry after the fact. A crash mid-task leaves a
+    // duplicate pair, never a lost fact.
     append_entry(root, &entry).await?;
     let _ = self::store::insert_entry(root, &entry).await;
-    spawn_background_embed(root, &entry, auth);
+    spawn_background_dedup(root, &entry, auth);
     self::sleep::mark_dirty(root);
     let mut state = read_state(root).await;
     state.updated_at = now_ms();
@@ -603,21 +559,50 @@ const CASCADE_WEIGHT_FLOOR: f32 = 0.3;
 /// 3 hops captures indirectly-related facts without drifting too far.
 const CASCADE_MAX_DEPTH: usize = 3;
 
+/// Load the edge slice reachable from `seeds` within `max_depth` hops — the
+/// input `graph::bfs_cascade` walks. Instead of loading the store's whole
+/// edge table per recall, one query per hop fetches only the edges that
+/// touch the IDs discovered by the previous round. The over-fetch (incoming
+/// edges included) is harmless: `bfs_cascade` decides what to walk from the
+/// slice, and duplicate rows are deduplicated by its visited set.
+async fn cascade_edges(root: &str, seeds: &[String], max_depth: usize) -> Vec<self::graph::Edge> {
+    if seeds.is_empty() || max_depth == 0 {
+        return Vec::new();
+    }
+    let mut frontier: Vec<String> = seeds.to_vec();
+    let mut seen: std::collections::HashSet<String> = seeds.iter().cloned().collect();
+    let mut edges: Vec<self::graph::Edge> = Vec::new();
+    for _ in 0..max_depth {
+        if frontier.is_empty() {
+            break;
+        }
+        if let Ok(batch) = self::store::edges_touching(root, &frontier).await {
+            frontier = batch
+                .iter()
+                .flat_map(|e| [e.source.clone(), e.target.clone()])
+                .filter(|id| seen.insert(id.clone()) && !seeds.contains(id))
+                .collect();
+            edges.extend(batch);
+        } else {
+            break;
+        }
+    }
+    edges
+}
+
 /// Options for the LLM reranker within recall. When `None`, the reranker
 /// is skipped entirely and only the heuristic dynamic gate runs (the default
-/// no-LLM path). When `Some`, the topic-stability gate may still skip the
-/// reranker if the conversation hasn't shifted recently.
+/// no-LLM path). When `Some`, the topic-stability gate in `rerank.rs` may
+/// still skip the reranker — it self-counts stable-topic turns against the
+/// query embedding `recall` already computes, so no turn number or embedding
+/// has to be threaded through here.
 pub struct RerankerOptions<'a> {
     pub app: &'a tauri::AppHandle,
     pub model: &'a crate::agent::runtime::types::ModelRef,
-    pub turn_count: usize,
     /// The focused query — latest user intent, noise-stripped. Used as the
     /// "CURRENT REQUEST" in the reranker prompt. When `None`, falls back to
     /// the raw `query` parameter.
     pub focused_query: Option<&'a str>,
-    /// Query embedding for the topic-stability gate. When `None`, the gate
-    /// always allows the reranker to run (conservative).
-    pub query_embedding: Option<Vec<f32>>,
 }
 
 /// Hybrid search: BM25 lexical rank (SQLite FTS5) fused with cosine-similarity
@@ -763,8 +748,11 @@ pub(crate) async fn recall_in(
     // Step 3: Apply the heuristic dynamic gate unconditionally — extracts
     // the top candidates from the confidence-decayed ranking. This is the
     // result we use when no reranker is configured or when the reranker
-    // is skipped by the topic-stability gate.
-    let heuristic_results = dynamic_gate_select(confidence_decayed, MAX_RECALL_HITS);
+    // is skipped by the topic-stability gate. With no embedding the RRF
+    // merge is BM25-only and its scores are noisier, so a slightly relaxed
+    // relative floor keeps paraphrase hits from being cut on spread alone.
+    let gate_floor = if embedding.is_some() { GATE_REL_FLOOR } else { GATE_REL_FLOOR_BM25_ONLY };
+    let heuristic_results = dynamic_gate_select_with(confidence_decayed, MAX_RECALL_HITS, gate_floor);
 
     // Step 4: Optional LLM reranker (with topic-stability gate)
     let selected: Vec<MemoryEntry> = if let Some(opts) = reranker {
@@ -777,19 +765,19 @@ pub(crate) async fn recall_in(
             return Vec::new();
         }
 
-        // Topic-stability gate: decide whether to actually call the LLM
-        let should_rerank = match &opts.query_embedding {
-            Some(emb) => self::rerank::should_run_rerank(emb, opts.turn_count),
-            None => true,
-        };
+        // Topic-stability gate: decide whether to actually call the LLM. It
+        // self-counts stable-topic turns internally against the query
+        // embedding computed above; `None` there is the conservative case —
+        // rerank anyway.
+        let should_rerank = self::rerank::should_run_rerank(embedding.as_deref());
 
         if should_rerank {
             let focused = opts.focused_query.unwrap_or(query);
             let result = self::rerank::rerank(opts.app, opts.model, focused, &candidates).await;
 
             // Record the rerank for the topic-stability gate
-            if let Some(emb) = &opts.query_embedding {
-                self::rerank::record_rerank(emb.clone(), opts.turn_count);
+            if let Some(emb) = &embedding {
+                self::rerank::record_rerank(emb.clone());
             }
 
             match result {
@@ -816,61 +804,75 @@ pub(crate) async fn recall_in(
     // results are ranked below direct matches with a fractional score.
     let mut gated = selected;
     // Each store's edges link only its own facts, so each cascades from its
-    // own seeds.
+    // own seeds — hop-wise edge fetches (`cascade_edges`) instead of a full
+    // table scan per turn.
     for (store, user_wide) in [(root, false), (USER_ROOT, true)] {
         if user_wide && !user_store {
             continue;
         }
-        // Load all edges — this is cheap for personal-scale stores; revisit
-        // with pagination if the edge table exceeds ~10K rows.
-        if let Ok(edges) = self::store::all_edges(store).await {
-            if !edges.is_empty() && gated.iter().any(|e| e.user_wide == user_wide) {
-                let seed_ids: Vec<String> = gated.iter().filter(|e| e.user_wide == user_wide).map(|e| e.id.clone()).collect();
-                let cascade = self::graph::bfs_cascade(
-                    &seed_ids,
-                    &edges,
-                    CASCADE_MAX_DEPTH,
-                    CASCADE_WEIGHT_FLOOR,
-                );
-                if !cascade.is_empty() {
-                    // Filter out entries already in the direct results
-                    let existing: std::collections::HashSet<&str> =
-                        gated.iter().map(|e| e.id.as_str()).collect();
-                    let new_ids: Vec<String> = cascade
-                        .iter()
-                        .map(|r| r.entry_id.clone())
-                        .filter(|id| !existing.contains(id.as_str()))
-                        .collect();
-                    if !new_ids.is_empty() {
-                        if let Ok(cascade_entries) =
-                            self::store::get_entries_by_ids(store, &new_ids).await
-                        {
-                            // Add cascade entries sorted by cumulative_weight descending,
-                            // ranked below direct matches.
-                            let mut cascade_to_add: Vec<String> = cascade
-                                .iter()
-                                .filter(|r| !existing.contains(r.entry_id.as_str()))
-                                .map(|r| r.entry_id.clone())
-                                .collect();
-                            cascade_to_add.sort();
-                            for cid in &cascade_to_add {
-                                if let Some(entry) = cascade_entries.iter().find(|e| e.id == *cid) {
-                                    let mut entry = entry.clone();
-                                    entry.user_wide = user_wide;
-                                    gated.push(entry);
-                                }
-                            }
-                        }
-                    }
+        let seed_ids: Vec<String> = gated
+            .iter()
+            .filter(|e| e.user_wide == user_wide)
+            .map(|e| e.id.clone())
+            .collect();
+        if seed_ids.is_empty() {
+            continue;
+        }
+        let edges = cascade_edges(store, &seed_ids, CASCADE_MAX_DEPTH).await;
+        if edges.is_empty() {
+            continue;
+        }
+        let cascade = self::graph::bfs_cascade(
+            &seed_ids,
+            &edges,
+            CASCADE_MAX_DEPTH,
+            CASCADE_WEIGHT_FLOOR,
+        );
+        if cascade.is_empty() {
+            continue;
+        }
+        // Filter out entries already in the direct results
+        let existing: std::collections::HashSet<&str> =
+            gated.iter().map(|e| e.id.as_str()).collect();
+        let new_ids: Vec<String> = cascade
+            .iter()
+            .map(|r| r.entry_id.clone())
+            .filter(|id| !existing.contains(id.as_str()))
+            .collect();
+        if new_ids.is_empty() {
+            continue;
+        }
+        if let Ok(cascade_entries) = self::store::get_entries_by_ids(store, &new_ids).await {
+            // Add cascade entries sorted by cumulative_weight descending,
+            // ranked below direct matches.
+            let mut cascade_to_add: Vec<String> = cascade
+                .iter()
+                .filter(|r| !existing.contains(r.entry_id.as_str()))
+                .map(|r| r.entry_id.clone())
+                .collect();
+            cascade_to_add.sort();
+            for cid in &cascade_to_add {
+                if let Some(entry) = cascade_entries.iter().find(|e| e.id == *cid) {
+                    let mut entry = entry.clone();
+                    entry.user_wide = user_wide;
+                    gated.push(entry);
                 }
             }
         }
     }
 
-    // Step 6: Bump access_count + last_accessed_at for surfaced entries
-    for entry in &gated {
-        let store = if entry.user_wide { USER_ROOT } else { root };
-        let _ = self::store::touch_entry(store, &entry.id).await;
+    // Step 6: Bump access_count + last_accessed_at for surfaced entries —
+    // batched as one UPDATE per store (the project store and the user-wide
+    // one are separate databases) instead of one write per entry.
+    {
+        let project_ids: Vec<String> = gated.iter().filter(|e| !e.user_wide).map(|e| e.id.clone()).collect();
+        let user_ids: Vec<String> = gated.iter().filter(|e| e.user_wide).map(|e| e.id.clone()).collect();
+        if !project_ids.is_empty() {
+            let _ = self::store::touch_entries(root, &project_ids).await;
+        }
+        if !user_ids.is_empty() {
+            let _ = self::store::touch_entries(USER_ROOT, &user_ids).await;
+        }
     }
 
     gated
@@ -1104,5 +1106,36 @@ fn spawn_background_embed(root: &str, entry: &MemoryEntry, auth: Option<std::syn
         if let Ok(Some(embedding)) = crate::ai::embedding::embed_text(&auth, &text).await {
             let _ = self::store::update_embedding(&root, &id, &embedding, crate::ai::embedding::embedding_model()).await;
         }
+    });
+}
+
+/// Fire-and-forget reconcile of a freshly appended memory: embed its text
+/// once (storing the vector so the embed isn't wasted), then look for an
+/// already-stored near-identical entry. A ≥0.95 cosine hit means the model
+/// restated something that was already known — the fresh copy is deleted and
+/// the older one's access counter is bumped, so recall doesn't split its
+/// score across two copies of the same fact. `remember` writes first and
+/// calls this in the background, so the turn the write belongs to never
+/// waits on the embed round-trip.
+fn spawn_background_dedup(root: &str, entry: &MemoryEntry, auth: Option<std::sync::Arc<crate::ai::auth::AuthState>>) {
+    let Some(auth) = auth else { return };
+    let root = root.to_string();
+    let id = entry.id.clone();
+    let text = entry.text.clone();
+    tokio::spawn(async move {
+        let Ok(Some(emb)) = crate::ai::embedding::embed_text(&auth, &text).await else { return };
+        let _ = self::store::update_embedding(&root, &id, &emb, crate::ai::embedding::embedding_model()).await;
+        // The self-hit occupies one of the two slots we ask for.
+        let Ok(hits) = self::store::search_vector_scored(&root, &emb, 2).await else { return };
+        let Some((existing, _)) = hits.into_iter().find(|(e, s)| *s >= 0.95 && e.id != id) else { return };
+        // Drop the fresh copy from both mirrors (SQLite store + entries.jsonl),
+        // then reinforce the survivor.
+        let _ = self::store::delete_entry(&root, &id).await;
+        let entries = read_entries(&root).await;
+        if entries.iter().any(|e| e.id == id) {
+            let kept: Vec<MemoryEntry> = entries.into_iter().filter(|e| e.id != id).collect();
+            let _ = write_entries(&root, &kept).await;
+        }
+        let _ = self::store::touch_entry(&root, &existing.id).await;
     });
 }

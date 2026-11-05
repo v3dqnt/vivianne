@@ -11,7 +11,7 @@ import type { Theme } from '../../../ui'
  * rows, checkpoints and summaries all start at its left edge and end at its
  * right edge, so the transcript has one left margin and one right margin
  * instead of a different width per block type. */
-export const CHAT_COLUMN = 880
+export const CHAT_COLUMN = 900
 
 /** Your own messages are the one thing that stops short of the column: they
  * sit in a block on the right, narrow enough to read as a quotation rather

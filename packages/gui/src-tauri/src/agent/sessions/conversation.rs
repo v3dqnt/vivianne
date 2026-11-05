@@ -159,7 +159,7 @@ pub async fn cmd_open_conversation(
 
     // Already live: reloading from disk would clobber an in-memory transcript
     // newer than the last autosave.
-    if state.session_id.lock().await.as_deref() == Some(id.as_str()) {
+    if state.is_session(&id).await {
         state.agent_state.set_history_archive(Some(archive)).await;
         return Ok(OpenedConversation { id, scope, stitched_days: 0 });
     }
@@ -188,6 +188,7 @@ pub async fn cmd_open_conversation(
         // Written straight away so the stitch happens once, even if the app
         // closes before the first message.
         write_session(&SessionInfo {
+            title_source: None,
             id: id.clone(),
             name: String::new(),
             messages: messages.clone(),
@@ -198,15 +199,9 @@ pub async fn cmd_open_conversation(
         messages
     };
 
-    {
-        let mut agent = state.agent.lock().await;
-        // `reset` clears transcript, queues, goal and the accumulated system
-        // prompt, and leaves the workspace alone.
-        agent.reset().await;
-        agent.state.set_messages(messages).await;
-        agent.state.set_history_archive(Some(archive)).await;
-    }
-    *state.session_id.lock().await = Some(id.clone());
+    // A fresh start clears transcript, queues, goal and the accumulated system
+    // prompt, and leaves the workspace alone.
+    state.start_fresh(&id, messages, Some(archive)).await;
     Ok(OpenedConversation { id, scope, stitched_days })
 }
 

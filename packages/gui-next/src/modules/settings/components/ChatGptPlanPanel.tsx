@@ -63,7 +63,7 @@ export function ChatGptPlanPanel({ onChange }: { onChange?: (status: ChatGptStat
   return (
     <Stack sx={{ gap: 2, maxWidth: 480 }}>
       <Stack sx={{ gap: 0.5 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
           ChatGPT plan
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.55 }}>
@@ -76,7 +76,7 @@ export function ChatGptPlanPanel({ onChange }: { onChange?: (status: ChatGptStat
         <Stack sx={{ gap: 1.25, p: 1.5, border: 1, borderColor: 'divider', borderRadius: '8px' }}>
           <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
             <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'success.main' }} />
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
               Using ChatGPT plan
             </Typography>
             {status?.email && (
@@ -118,7 +118,7 @@ export function ChatGptPlanPanel({ onChange }: { onChange?: (status: ChatGptStat
               bgcolor: 'text.primary',
               color: 'background.paper',
               fontSize: '0.8125rem',
-              fontWeight: 600,
+              fontWeight: 500,
               opacity: busy ? 0.7 : 1,
               '&:hover': { opacity: 0.88 },
             }}

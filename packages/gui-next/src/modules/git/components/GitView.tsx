@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { create } from 'zustand'
 import { Box, ButtonBase, IconButton, Link, Stack, Tooltip, Typography, useTheme } from '../../../ui'
-import { GithubLinear, RefreshLinear } from '../../../icons'
+import { GithubLinear, RefreshLinear, ArrowLeftLinear } from '../../../icons'
 import { surfaceCard } from '../../../theme'
 import { useWorkspaceStore } from '../../ai/store/workspaceStore'
 import { BranchIndicator } from '../../ai/components/BranchIndicator'
@@ -12,8 +12,8 @@ import { GitQuickActions, PrChip } from './GitActions'
 import { T, u } from './gitStyle'
 import { useGitStatus, changedCount } from '../store/gitStatusStore'
 
-/** What the main area shows, picked in the title bar: the chat and its
- * panels, or the repository. */
+/** What the main area shows: home, the chat and its panels, the agents, or
+ * the repository. The title bar's home icon reaches home. */
 export const useAppView = create<{ view: 'home' | 'chat' | 'agents' | 'git' }>(() => ({ view: 'home' }))
 
 function when(iso: string): string {
@@ -73,6 +73,16 @@ export function GitView() {
   return (
     <Stack sx={{ ...card, flex: 1, minWidth: 0, mb: 1, mx: 1 }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: u(2), px: u(3), height: 40, flexShrink: 0, minWidth: 0 }}>
+        <Tooltip title="Back to chat">
+          <IconButton
+            size="small"
+            sx={{ width: 24, height: 24 }}
+            aria-label="Back to chat"
+            onClick={() => useAppView.setState({ view: 'chat' })}
+          >
+            <ArrowLeftLinear size={14} color="currentColor" />
+          </IconButton>
+        </Tooltip>
         <Typography sx={{ ...T.title }} noWrap>
           {folder}
         </Typography>
@@ -134,7 +144,7 @@ export function GitView() {
           >
             {label}
             {count(id) > 0 && (
-              <Box component="span" sx={{ minWidth: 16, height: 16, px: u(1), borderRadius: '4px', fontSize: '10px', lineHeight: '16px', fontWeight: 700, textAlign: 'center', boxSizing: 'border-box', bgcolor: id === 'actions' ? 'error.main' : 'action.selected', color: id === 'actions' ? 'error.contrastText' : 'text.secondary' }}>
+              <Box component="span" sx={{ minWidth: 16, height: 16, px: u(1), borderRadius: '4px', fontSize: '0.6875rem', lineHeight: '16px', fontWeight: 500, textAlign: 'center', boxSizing: 'border-box', bgcolor: id === 'actions' ? 'error.main' : 'action.selected', color: id === 'actions' ? 'error.contrastText' : 'text.secondary' }}>
                 {count(id)}
               </Box>
             )}
@@ -169,7 +179,7 @@ export function GitView() {
                   {c.hash.slice(0, 7)}
                 </Box>
                 {i === 0 && (
-                  <Box component="span" sx={{ ...T.meta, fontWeight: 700, px: u(1), borderRadius: '4px', border: 1, borderColor: 'warning.main', color: 'warning.main', flexShrink: 0 }}>
+                  <Box component="span" sx={{ ...T.meta, fontWeight: 600, px: u(1), borderRadius: '4px', border: 1, borderColor: 'warning.main', color: 'warning.main', flexShrink: 0 }}>
                     HEAD
                   </Box>
                 )}

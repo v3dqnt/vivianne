@@ -6,3 +6,5 @@ pub mod conversation;
 pub mod days;
 pub mod project_instructions;
 pub mod projects;
+pub mod thread_worktree;
+pub mod title;

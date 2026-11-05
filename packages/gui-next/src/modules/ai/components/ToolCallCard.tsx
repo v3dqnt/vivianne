@@ -359,7 +359,7 @@ function TodoOutput({ text }: { text: string }) {
         const done = state === 'x'
         const doing = state === '~' || state === '-'
         return (
-          <Stack key={i} direction="row" sx={{ gap: '8px', alignItems: 'flex-start', fontSize: '12.5px', lineHeight: '20px' }}>
+          <Stack key={i} direction="row" sx={{ gap: '8px', alignItems: 'flex-start', fontSize: '0.8125rem', lineHeight: '20px' }}>
             <Box
               component="span"
               sx={{
@@ -374,8 +374,8 @@ function TodoOutput({ text }: { text: string }) {
                 display: 'grid',
                 placeItems: 'center',
                 color: 'background.paper',
-                fontSize: 9,
-                fontWeight: 700,
+                fontSize: '0.6875rem',
+                fontWeight: 500,
                 lineHeight: 1,
               }}
             >
@@ -387,7 +387,7 @@ function TodoOutput({ text }: { text: string }) {
           </Stack>
         )
       })}
-      {footer && <Box sx={{ mt: '4px', fontSize: '11px', lineHeight: '16px', color: 'text.secondary' }}>{footer}</Box>}
+      {footer && <Box sx={{ mt: '4px', fontSize: '0.6875rem', lineHeight: '16px', color: 'text.secondary' }}>{footer}</Box>}
     </Stack>
   )
 }

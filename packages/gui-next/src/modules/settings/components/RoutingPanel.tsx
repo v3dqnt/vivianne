@@ -82,10 +82,10 @@ export function RoutingPanel() {
     <Stack sx={{ gap: 2, maxWidth: 520 }}>
       <Stack sx={{ gap: 0.5 }}>
         <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
             Cost-aware routing
           </Typography>
-          <Box component="span" sx={{ px: 0.75, height: 18, lineHeight: '18px', borderRadius: '5px', fontSize: '0.625rem', fontWeight: 700, letterSpacing: 0.4, bgcolor: alpha(theme.palette.warning.main, 0.16), color: 'warning.main' }}>
+          <Box component="span" sx={{ px: 0.75, height: 18, lineHeight: '18px', borderRadius: '4px', fontSize: '0.6875rem', fontWeight: 500, letterSpacing: 0.4, bgcolor: alpha(theme.palette.warning.main, 0.16), color: 'warning.main' }}>
             BETA
           </Box>
         </Stack>
@@ -97,7 +97,7 @@ export function RoutingPanel() {
 
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
         <Stack sx={{ flex: 1 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>
             Send background work to the quick model
           </Typography>
           <Typography variant="caption" color="text.secondary">
@@ -108,7 +108,7 @@ export function RoutingPanel() {
       </Stack>
 
       <Stack sx={{ gap: 0.75 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           Quick model
         </Typography>
         <ModelPicker mode="agent" variant="field" value={cfg.quick} onChange={(m) => void save({ ...cfg, quick: m })} />
@@ -120,7 +120,7 @@ export function RoutingPanel() {
       <Stack sx={{ gap: 1.25, p: 1.5, borderRadius: '8px', border: 1, borderColor: 'divider' }}>
         <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
           <Stack sx={{ flex: 1 }}>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
               Match the model to the task
             </Typography>
             <Typography variant="caption" color="text.secondary">
@@ -137,7 +137,7 @@ export function RoutingPanel() {
         {TIERS.map((t) => (
           <Stack key={t.id} direction="row" sx={{ alignItems: 'center', gap: 1.5, opacity: cfg.auto ? 1 : 0.55 }}>
             <Stack sx={{ width: 120, flexShrink: 0 }}>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>
                 {t.label}
               </Typography>
               <Typography variant="caption" color="text.secondary">
@@ -154,7 +154,7 @@ export function RoutingPanel() {
         </Typography>
 
         <Stack sx={{ gap: 0.5, pt: 0.5 }}>
-          <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
+          <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
             Try it
           </Typography>
           <InputBase
@@ -174,7 +174,7 @@ export function RoutingPanel() {
       </Stack>
 
       <Stack sx={{ gap: 0.5, p: 1.5, borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.04) }}>
-        <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
+        <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
           What it routes
         </Typography>
         <Typography variant="body2">Summaries of old conversation, hand-off notes, memory upkeep and re-ranking, who should reply in a team chat, teammates' routines and check-ins, and read-only exploring subagents.</Typography>
@@ -184,7 +184,7 @@ export function RoutingPanel() {
       </Stack>
 
       <Stack sx={{ gap: 0.5 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           Last 30 days
         </Typography>
         {!savings?.configured ? (

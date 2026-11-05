@@ -543,7 +543,7 @@ export function Tooltip({ title, children, placement = 'bottom', enterDelay, dis
     borderRadius: 6,
     fontFamily: theme.typography.fontFamily,
     padding: '4px 8px',
-    fontSize: 12,
+    fontSize: '0.75rem',
     lineHeight: 1.4,
     maxWidth: 260,
     wordWrap: 'break-word',
@@ -742,7 +742,7 @@ export function Alert({ severity = 'success', action, icon, sx, children, classN
     display: 'flex',
     gap: 10,
     padding: '6px 12px',
-    '& .ui-Alert-icon': { padding: '3px 0', display: 'flex', fontSize: 16, color: c, flexShrink: 0 },
+    '& .ui-Alert-icon': { padding: '3px 0', display: 'flex', fontSize: '1rem', color: c, flexShrink: 0 },
     '& .ui-Alert-message': { padding: '2px 0', minWidth: 0, overflow: 'auto', lineHeight: 1.5 },
     '& .ui-Alert-action': { display: 'flex', alignItems: 'flex-start', paddingLeft: 12, marginLeft: 'auto', marginRight: -6 },
   }
