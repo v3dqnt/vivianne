@@ -476,6 +476,8 @@ pub async fn cmd_get_session_project_map() -> Result<HashMap<String, String>, St
 #[tauri::command]
 pub async fn cmd_assign_session_project(session_id: String, project_id: Option<String>) -> Result<(), String> {
     let mut data = load()?;
+    let event = serde_json::json!({ "project_id": project_id });
+    let id = session_id.clone();
     match project_id {
         Some(pid) => {
             data.assignments.insert(session_id, pid);
@@ -484,7 +486,9 @@ pub async fn cmd_assign_session_project(session_id: String, project_id: Option<S
             data.assignments.remove(&session_id);
         }
     }
-    save(&data)
+    save(&data)?;
+    crate::agent::orchestration::record_new(&id, "thread.assigned", event);
+    Ok(())
 }
 
 /// Add a multiplayer project to a `projects.json` other than this instance's

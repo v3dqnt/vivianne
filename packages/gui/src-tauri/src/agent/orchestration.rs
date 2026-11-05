@@ -8,10 +8,18 @@
 //!   crash mid-effect leaves the row claimed, and `recover` puts it back.
 //! - `projection_threads` is derived: `rebuild_projections` recreates it from events.
 //!
-//! Not wired into the app yet: nothing dispatches here until thread state moves over.
+//! Session files and `projects.json` remain the source of truth until sessions
+//! move here (phase 2). Until then the log records what happens to them, and
+//! `reconcile` at launch repairs anything that changed without an event. A
+//! failure here is logged and never fails the thread operation it describes.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
+
+use serde::Serialize;
+use tauri::Emitter;
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::Value;
@@ -86,6 +94,16 @@ pub struct Effect {
     pub kind: String,
     pub payload: Value,
     pub attempts: i64,
+}
+
+/// A thread as lists and tabs need it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadRow {
+    pub id: String,
+    pub title: Option<String>,
+    pub project_id: Option<String>,
+    pub last_seq: i64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -238,6 +256,43 @@ impl Store {
         tx.commit().map_err(err)
     }
 
+    /// Every thread in the read model.
+    pub fn threads(&self) -> Result<Vec<ThreadRow>, String> {
+        let mut stmt = self.conn.prepare("SELECT thread_id, title, project_id, last_seq FROM projection_threads ORDER BY thread_id").map_err(err)?;
+        let rows = stmt.query_map([], |r| Ok(ThreadRow { id: r.get(0)?, title: r.get(1)?, project_id: r.get(2)?, last_seq: r.get(3)? })).map_err(err)?;
+        rows.collect::<Result<_, _>>().map_err(err)
+    }
+
+    /// Bring the read model in line with what is on disk, through ordinary
+    /// events, so running it again changes nothing. Returns how many events it wrote.
+    pub fn reconcile(&mut self, sessions: &[(String, String)], assignments: &HashMap<String, String>, now_ms: i64) -> Result<usize, String> {
+        let known: HashMap<String, ThreadRow> = self.threads()?.into_iter().map(|t| (t.id.clone(), t)).collect();
+        let mut events = Vec::new();
+        let new = |thread_id: &str, kind: &str, payload: Value| NewEvent { thread_id: thread_id.to_string(), kind: kind.to_string(), payload };
+        for (id, name) in sessions {
+            let project = assignments.get(id);
+            match known.get(id) {
+                None => events.push(new(id, "thread.created", serde_json::json!({ "title": name, "project_id": project }))),
+                Some(row) => {
+                    if row.title.as_deref() != Some(name) {
+                        events.push(new(id, "thread.renamed", serde_json::json!({ "title": name })));
+                    }
+                    if row.project_id.as_ref() != project {
+                        events.push(new(id, "thread.assigned", serde_json::json!({ "project_id": project })));
+                    }
+                }
+            }
+        }
+        for id in known.keys().filter(|id| !sessions.iter().any(|(s, _)| s == *id)) {
+            events.push(new(id, "thread.deleted", serde_json::json!({})));
+        }
+        let count = events.len();
+        if count > 0 {
+            self.dispatch(&format!("reconcile:{}", uuid::Uuid::new_v4()), now_ms, || Ok((events, vec![])))?;
+        }
+        Ok(count)
+    }
+
     pub fn thread(&self, id: &str) -> Result<Option<(Option<String>, Option<String>)>, String> {
         self.conn.query_row("SELECT title, project_id FROM projection_threads WHERE thread_id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?))).optional().map_err(err)
     }
@@ -261,6 +316,85 @@ fn project(tx: &Transaction, seq: i64, thread: &str, kind: &str, payload: &Value
         "thread.deleted" => tx.execute("DELETE FROM projection_threads WHERE thread_id = ?1", [thread]).map(|_| ()).map_err(err),
         _ => Ok(()),
     }
+}
+
+static STORE: OnceLock<Mutex<Option<Store>>> = OnceLock::new();
+static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+fn with_store<T>(f: impl FnOnce(&mut Store) -> Result<T, String>) -> Result<T, String> {
+    let cell = STORE.get_or_init(|| {
+        let path = crate::agent::system::paths::viv_home_path(&["agent", "orchestration.db"]);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        Mutex::new(Store::open(&path).map_err(|e| log::warn!("[orchestration] couldn't open {}: {e}", path.display())).ok())
+    });
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    f(guard.as_mut().ok_or("The thread database isn't available.")?)
+}
+
+fn notify() {
+    if let Some(app) = APP.get() {
+        let _ = app.emit("orchestration:changed", ());
+    }
+}
+
+/// Record one thread event. Failures are logged: the log follows the session
+/// files for now, and `reconcile` repairs it at the next launch.
+pub fn record(command_id: &str, thread_id: &str, kind: &str, payload: Value) {
+    let event = NewEvent { thread_id: thread_id.to_string(), kind: kind.to_string(), payload };
+    match with_store(|s| s.dispatch(command_id, now_ms(), || Ok((vec![event], vec![])))) {
+        Ok(_) => notify(),
+        Err(e) => log::warn!("[orchestration] couldn't record {kind} for {thread_id}: {e}"),
+    }
+}
+
+/// Record an event that has no natural command id of its own.
+pub fn record_new(thread_id: &str, kind: &str, payload: Value) {
+    record(&uuid::Uuid::new_v4().to_string(), thread_id, kind, payload);
+}
+
+/// At launch: keep the app handle, repair the read model and put back effects a crash cut off.
+pub async fn start(app: tauri::AppHandle) {
+    let _ = APP.set(app);
+    let sessions = match crate::agent::runtime::commands::cmd_get_sessions().await {
+        Ok(list) => list.into_iter().map(|s| (s.id, s.name)).collect::<Vec<_>>(),
+        Err(e) => return log::warn!("[orchestration] couldn't list sessions: {e}"),
+    };
+    let assignments = crate::agent::sessions::projects::cmd_get_session_project_map().await.unwrap_or_default();
+    match with_store(|s| {
+        s.recover(now_ms())?;
+        s.reconcile(&sessions, &assignments, now_ms())
+    }) {
+        Ok(0) => {}
+        Ok(n) => {
+            log::info!("[orchestration] reconciled {n} events");
+            notify();
+        }
+        Err(e) => log::warn!("[orchestration] couldn't reconcile: {e}"),
+    }
+}
+
+/// The light list behind tabs and Home.
+#[tauri::command]
+pub async fn cmd_thread_list() -> Result<Vec<ThreadRow>, String> {
+    with_store(|s| s.threads())
+}
+
+/// What a client at `cursor` missed on a thread: events, or `snapshot` if they were pruned.
+#[tauri::command]
+pub async fn cmd_thread_catch_up(#[allow(non_snake_case)] threadId: String, cursor: i64) -> Result<Value, String> {
+    with_store(|s| s.catch_up(&threadId, cursor)).map(|c| match c {
+        CatchUp::Replay(events) => serde_json::json!({
+            "kind": "replay",
+            "events": events.into_iter().map(|e| serde_json::json!({ "seq": e.seq, "threadId": e.thread_id, "kind": e.kind, "payload": e.payload })).collect::<Vec<_>>(),
+        }),
+        CatchUp::Snapshot { from_seq } => serde_json::json!({ "kind": "snapshot", "fromSeq": from_seq }),
+    })
 }
 
 fn parse(s: &str) -> Value {
@@ -367,6 +501,21 @@ mod tests {
         assert_eq!(s.catch_up("t1", 0).unwrap(), CatchUp::Snapshot { from_seq: 2 });
         let CatchUp::Replay(events) = s.catch_up("t1", 1).unwrap() else { panic!() };
         assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn reconciling_matches_the_disk_and_a_second_run_changes_nothing() {
+        let (mut s, _) = temp();
+        s.dispatch("c1", 1, || Ok((vec![NewEvent { thread_id: "gone".into(), kind: "thread.created".into(), payload: json!({ "title": "x" }) }, ev("thread.created", json!({ "title": "old" }))], vec![]))).unwrap();
+        let sessions = [("t1".to_string(), "new".to_string()), ("t2".to_string(), "two".to_string())];
+        let map = HashMap::from([("t2".to_string(), "p".to_string())]);
+        assert_eq!(s.reconcile(&sessions, &map, 2).unwrap(), 3, "renamed, created, deleted");
+        assert_eq!(s.thread("t1").unwrap(), Some((Some("new".into()), None)));
+        assert_eq!(s.thread("t2").unwrap(), Some((Some("two".into()), Some("p".into()))));
+        assert_eq!(s.thread("gone").unwrap(), None);
+        assert_eq!(s.reconcile(&sessions, &map, 3).unwrap(), 0);
+        assert_eq!(s.reconcile(&sessions, &HashMap::new(), 4).unwrap(), 1, "project cleared");
+        assert_eq!(s.thread("t2").unwrap().unwrap().1, None);
     }
 
     #[test]

@@ -1715,6 +1715,7 @@ pub async fn cmd_delete_session(
 
     state.close_if_open(&id).await;
     registry.release(&id).await;
+    crate::agent::orchestration::record_new(&id, "thread.deleted", serde_json::json!({}));
     crate::agent::sessions::title::forget(&id);
     Ok(())
 }
@@ -1950,6 +1951,7 @@ pub async fn cmd_new_session(
     let path = get_session_dir()?.join(format!("{}.json", s_id));
     let json = serde_json::to_string_pretty(&session).map_err(|e| format!("Failed to serialize session: {}", e))?;
     write_session_file_atomic(&path, &json)?;
+    crate::agent::orchestration::record(&format!("new:{s_id}"), &s_id, "thread.created", serde_json::json!({ "title": "New chat" }));
     Ok(s_id)
 }
 
@@ -1967,7 +1969,9 @@ pub async fn cmd_rename_session(id: String, name: String) -> Result<(), String> 
         return Err("Session not found".to_string());
     }
     crate::agent::sessions::title::remember(&id, name, crate::agent::sessions::title::USER);
-    rename_session_file(&id, name, crate::agent::sessions::title::USER).await
+    rename_session_file(&id, name, crate::agent::sessions::title::USER).await?;
+    crate::agent::orchestration::record_new(&id, "thread.renamed", serde_json::json!({ "title": name }));
+    Ok(())
 }
 
 /// The name (and who made it) of a session file, rewritten in place. Shared by

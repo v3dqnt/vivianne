@@ -257,6 +257,7 @@ pub async fn on_turn_start(app: &tauri::AppHandle, state: &crate::agent::runtime
         }
         remember(&id, &title, AUTO);
         if crate::agent::runtime::commands::rename_session_file(&id, &title, AUTO).await.is_ok() {
+            crate::agent::orchestration::record_new(&id, "thread.renamed", serde_json::json!({ "title": title }));
             let _ = app.emit("session:renamed", serde_json::json!({ "id": id, "name": title }));
         }
     });

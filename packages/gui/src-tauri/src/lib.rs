@@ -301,6 +301,8 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::runtime::commands::cmd_read_file_raw,
       crate::agent::runtime::commands::cmd_load_session,
       crate::agent::runtime::commands::cmd_thread_release,
+      crate::agent::orchestration::cmd_thread_list,
+      crate::agent::orchestration::cmd_thread_catch_up,
       crate::agent::runtime::commands::cmd_save_current_session,
       crate::agent::runtime::commands::cmd_rename_session,
       crate::agent::runtime::commands::cmd_new_session,
@@ -592,6 +594,7 @@ try `viv help`", cli::program_args()[0]);
       // startup is still recorded. Chains to the previous hook, so this only
       // adds a crash file — it never suppresses the normal panic output.
       crate::agent::system::telemetry::install_panic_hook(app.package_info().version.to_string());
+      tauri::async_runtime::spawn(crate::agent::orchestration::start(app.handle().clone()));
 
       // Unattended: the window the config creates is hidden before it can be
       // seen, and nothing that draws over the desktop is started.

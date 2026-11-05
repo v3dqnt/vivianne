@@ -19,19 +19,21 @@ function Running({ holder }: { holder: string }) {
 export function ThreadTabs() {
   const tabs = useDaysStore((s) => s.tabs)
   const openId = useDaysStore((s) => s.todayId)
-  const threads = useDaysStore((s) => s.threads)
   const view = useAppView((s) => s.view)
   const map = useProjectsStore((s) => s.sessionProjectMap)
   const projects = useProjectsStore((s) => s.projects)
   const [names, setNames] = useState<Record<string, string>>({})
 
+  // Tab names come from the thread read model, and follow its change event.
   useEffect(() => {
-    void call<SessionInfo[]>('cmd_get_sessions').then((list) => setNames(Object.fromEntries((list ?? []).map((t) => [t.id, titleOf(t)]))))
-  }, [tabs, threads])
-  useEffect(() => {
-    const off = on<{ id: string; name: string }>('session:renamed', ({ id, name }) => setNames((n) => ({ ...n, [id]: titleOf({ name } as SessionInfo) })))
+    const read = () =>
+      void call<{ id: string; title: string | null }[]>('cmd_thread_list').then((list) =>
+        setNames(Object.fromEntries((list ?? []).map((t) => [t.id, titleOf({ name: t.title ?? '' } as SessionInfo)]))),
+      )
+    read()
+    const off = on('orchestration:changed', read)
     return () => void off.then((f) => f())
-  }, [])
+  }, [tabs])
 
   const focus = (id: string) => {
     useAppView.setState({ view: 'chat' })
