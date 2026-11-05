@@ -15,6 +15,7 @@
 //! `run_script` (ptc), `check_diagram`, `guide`, and the document viewer's
 //! commands (`office`).
 
+pub mod arg_check;
 pub mod builtin;
 pub mod code;
 pub mod commands;

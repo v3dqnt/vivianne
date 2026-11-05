@@ -415,6 +415,12 @@ pub async fn run_turn(
         None
     };
     crate::agent::background::run_ledger::begin_run(&state, thread_id, &request_text).await;
+    // A baseline to diff this turn against, and a snapshot of what it leaves.
+    let checkpoint_scope = state.session_id().await;
+    let checkpoint_dir = agent.state.primary_workspace_folder().await;
+    if let (Some(dir), Some(scope)) = (&checkpoint_dir, &checkpoint_scope) {
+        crate::agent::changes::git_checkpoints::before_turn(dir, scope).await;
+    }
     // Another coding agent (Claude Code, Codex, Gemini CLI…) as the model:
     // the turn runs in it, over ACP, instead of in Vivianne's own loop.
     let current = agent.state.model().await;
@@ -432,7 +438,14 @@ pub async fn run_turn(
     }
     drop(agent);
 
-    let _ = save_current_session_impl(None, &state).await;
+    let saved = save_current_session_impl(None, &state).await;
+    if let Some(dir) = checkpoint_dir {
+        // The session may have been saved for the first time just now.
+        let scope = checkpoint_scope.or_else(|| saved.as_ref().ok().cloned());
+        if let Some(scope) = scope {
+            tauri::async_runtime::spawn(async move { crate::agent::changes::git_checkpoints::after_turn(&dir, &scope).await });
+        }
+    }
     // Multiplayer project: summarise the run for the partner, commit, sync.
     // Off the reply path — git and the network never delay the turn ending.
     tauri::async_runtime::spawn(crate::multiplayer::collab::after_run(app.clone(), mp_workspace_folders, request_text, new_messages.clone()));

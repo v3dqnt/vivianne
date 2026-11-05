@@ -6,6 +6,8 @@
 pub mod agent;
 pub mod attempts;
 pub mod compaction;
+pub mod compaction_v2;
+pub mod repair;
 pub mod context_shaping;
 pub mod streaming;
 pub mod subagents;

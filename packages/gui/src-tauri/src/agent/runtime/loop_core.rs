@@ -741,6 +741,11 @@ pub async fn run_agent_loop_continue(
 
         // Convert context messages to AI messages
         drop_orphaned_tool_results(&mut context.messages);
+        // A cut-off turn can leave a call with no result, which providers refuse.
+        let answered = crate::agent::runtime::repair::answer_unanswered_calls(&mut context.messages);
+        if answered > 0 {
+            log::warn!("[loop] gave {answered} interrupted tool call(s) an unknown-outcome result");
+        }
         let llm_messages = convert_agent_messages_to_ai(&context.messages);
         #[cfg(debug_assertions)]
         eprintln!("[DEBUG] converted {} AI messages for LLM", llm_messages.len());
@@ -1427,7 +1432,8 @@ pub(crate) fn context_budgets(context_window: u32) -> (u32, u32) {
 }
 
 pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &AgentState, app: &tauri::AppHandle, model: &ModelRef, force: bool) -> bool {
-    use crate::agent::runtime::compaction::{calculate_context_tokens_incremental, find_cut_point, generate_llm_summary, generate_mermaid_summary, CompactionConfig};
+    use crate::agent::runtime::compaction::{calculate_context_tokens_incremental, generate_mermaid_summary};
+    use crate::agent::runtime::compaction_v2 as v2;
 
     if !state.compaction_enabled().await {
         return false;
@@ -1458,8 +1464,8 @@ pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &Ag
         return false;
     }
 
-    let config = CompactionConfig { enabled: true, threshold_tokens: keep_recent_tokens.saturating_mul(2), min_messages: if force { 4 } else { 10 } };
-    let cut_point = find_cut_point(&context.messages, &config);
+    // Compaction v2: a cut that keeps every tool call with its result.
+    let cut_point = v2::pick_cut(&context.messages, keep_recent_tokens, if force { 4 } else { 10 });
     if cut_point == 0 || cut_point >= context.messages.len() {
         return false;
     }
@@ -1473,7 +1479,7 @@ pub(crate) async fn maybe_compact_context(context: &mut AgentContext, state: &Ag
         }
     }
     let summary_text = if state.llm_summary_enabled().await {
-        match generate_llm_summary(app, model, &compacted).await {
+        match v2::summarize(app, model, &compacted).await {
             Some(text) => text,
             None => generate_mermaid_summary(&compacted),
         }

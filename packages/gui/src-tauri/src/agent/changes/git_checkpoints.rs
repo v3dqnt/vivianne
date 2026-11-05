@@ -227,6 +227,95 @@ pub async fn rollback(dir: &Path, scope: &str, ordinal: u32) -> Result<RollbackR
     Ok(report)
 }
 
+/// How many checkpoints a thread keeps.
+const KEEP: usize = 200;
+
+/// Before a turn: make sure there is a baseline to diff the turn against.
+/// Never fails the turn: a folder that isn't a repository, or git being slow, is just skipped.
+pub async fn before_turn(dir: &str, scope: &str) {
+    let dir = Path::new(dir);
+    let work = async {
+        if list(dir, scope).await.map(|l| l.is_empty()).unwrap_or(false) {
+            capture(dir, scope).await.map(|_| ())
+        } else {
+            Ok(())
+        }
+    };
+    if let Ok(Err(e)) = tokio::time::timeout(std::time::Duration::from_secs(20), work).await {
+        if !e.contains("isn't a git repository") {
+            log::warn!("[checkpoints] baseline failed: {e}");
+        }
+    }
+}
+
+/// After a turn: snapshot what it left behind. Off the reply path.
+pub async fn after_turn(dir: &str, scope: &str) {
+    let dir = Path::new(dir);
+    match capture(dir, scope).await {
+        Ok(_) => {
+            let _ = prune(dir, scope, KEEP).await;
+        }
+        Err(e) if e.contains("isn't a git repository") => {}
+        Err(e) => log::warn!("[checkpoints] couldn't snapshot after the turn: {e}"),
+    }
+}
+
+async fn thread_dir(thread_id: &Option<String>, registry: &crate::agent::runtime::commands::AgentRegistry) -> Result<(PathBuf, String), String> {
+    let state = registry.resolve(thread_id.as_deref()).await;
+    let dir = state.agent_state.primary_workspace_folder().await.ok_or("This thread has no folder.")?;
+    let scope = state.session_id().await.ok_or("This thread has no saved session yet.")?;
+    Ok((PathBuf::from(dir), scope))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointRow {
+    pub ordinal: u32,
+    pub commit: String,
+    /// Files this checkpoint changed against the one before it; `None` for the first.
+    pub files: Option<usize>,
+}
+
+/// The open thread's checkpoints, oldest first.
+#[tauri::command]
+pub async fn cmd_git_checkpoints(#[allow(non_snake_case)] threadId: Option<String>, registry: tauri::State<'_, crate::agent::runtime::commands::AgentRegistry>) -> Result<Vec<CheckpointRow>, String> {
+    let (dir, scope) = thread_dir(&threadId, &registry).await?;
+    let counts = summary(&dir, &scope).await?;
+    Ok(list(&dir, &scope).await?.into_iter().map(|s| CheckpointRow { files: counts.get(&s.ordinal).copied(), ordinal: s.ordinal, commit: s.commit }).collect())
+}
+
+/// What a turn changed: the diff from checkpoint `from` to `to`.
+#[tauri::command]
+pub async fn cmd_git_checkpoint_diff(
+    #[allow(non_snake_case)] threadId: Option<String>,
+    from: u32,
+    to: u32,
+    registry: tauri::State<'_, crate::agent::runtime::commands::AgentRegistry>,
+) -> Result<serde_json::Value, String> {
+    let (dir, scope) = thread_dir(&threadId, &registry).await?;
+    let all = list(&dir, &scope).await?;
+    let find = |n: u32| all.iter().find(|s| s.ordinal == n).map(|s| s.commit.clone()).ok_or_else(|| format!("No checkpoint {n}."));
+    let (a, b) = (find(from)?, find(to)?);
+    let files = changed_files(&dir, &a, &b).await?;
+    let (text, truncated) = diff(&dir, &a, &b).await?;
+    Ok(serde_json::json!({ "files": files.into_iter().map(|(p, s)| serde_json::json!({ "path": p, "status": s.to_string() })).collect::<Vec<_>>(), "diff": text, "truncated": truncated }))
+}
+
+/// Put the thread's folder back to a checkpoint. Refused while a turn is running.
+#[tauri::command]
+pub async fn cmd_git_checkpoint_rollback(
+    #[allow(non_snake_case)] threadId: Option<String>,
+    ordinal: u32,
+    registry: tauri::State<'_, crate::agent::runtime::commands::AgentRegistry>,
+) -> Result<RollbackReport, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    if !state.is_idle() {
+        return Err("Wait for the current turn to finish, or stop it first.".into());
+    }
+    let (dir, scope) = thread_dir(&threadId, &registry).await?;
+    rollback(&dir, &scope, ordinal).await
+}
+
 /// Per-folder counts for the UI: how many files each checkpoint changed.
 pub async fn summary(dir: &Path, scope: &str) -> Result<HashMap<u32, usize>, String> {
     let all = list(dir, scope).await?;

@@ -867,6 +867,17 @@ pub async fn execute_tool_calls(
         }
     }
 
+    // Arguments that don't fit the tool's own schema: one error naming every
+    // problem, through the same path as a denial so the call still gets a result.
+    for tc in &tool_calls {
+        if hook_denials.contains_key(&tc.id) {
+            continue;
+        }
+        if let Some(why) = crate::agent::tools::arg_check::rejection(&tc.name, &tc.arguments) {
+            hook_denials.insert(tc.id.clone(), why);
+        }
+    }
+
     // The unattended-run risk gate. Only `auto_approve` sessions reach it —
     // today that is Viv Instant alone — so main chat is untouched and keeps its
     // real approval prompts.
