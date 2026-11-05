@@ -20,6 +20,7 @@ pub mod harness_install;
 pub mod changes;
 pub mod models;
 pub mod orchestration;
+pub mod scope;
 pub mod transcripts;
 pub mod profiles;
 pub mod runtime;

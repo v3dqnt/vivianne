@@ -791,11 +791,13 @@ fn finish_call(emit: &EventSender, tc: AgentToolCall, result: AgentToolResult, i
         result: result.clone(),
         is_error,
     });
+    let mut details = result.details;
+    super::presentation::attach(&mut details, &tc.name, &tc.arguments, is_error);
     AgentMessage::ToolResult {
         tool_call_id: tc.id,
         tool_name: tc.name,
         content: result.content,
-        details: Some(result.details),
+        details: Some(details),
         is_error: Some(is_error),
         timestamp: now_ms(),
         arguments: Some(tc.arguments),

@@ -609,6 +609,7 @@ pub async fn run_agent_loop_continue(
         // but the run continues instead of ending.
         if steer_flag.swap(false, Ordering::SeqCst) {
             let steered = drain_queue(&queues.steering_queue, &queues.steering_mode).await;
+            note_consumed(state, steered.len()).await;
             mirror_queues(state, queues).await;
             if !steered.is_empty() {
                 pending_messages = steered;
@@ -1277,6 +1278,7 @@ pub async fn run_agent_loop_continue(
         // Drain steering messages at the end of this turn, before the next
         // LLM call — matches agent-loop.ts's end-of-iteration steering fetch.
         pending_messages = drain_queue(&queues.steering_queue, &queues.steering_mode).await;
+        note_consumed(state, pending_messages.len()).await;
         mirror_queues(state, queues).await;
     }
 
@@ -1295,6 +1297,7 @@ pub async fn run_agent_loop_continue(
     if next.is_empty() {
         next = drain_queue(&queues.follow_up_queue, &queues.follow_up_mode).await;
     }
+    note_consumed(state, next.len()).await;
     mirror_queues(state, queues).await;
     if next.is_empty() {
         // A planning turn ends by handing a plan over for review: no
@@ -1451,6 +1454,13 @@ pub(crate) fn context_budgets(context_window: u32) -> (u32, u32) {
     // compaction is allowed to summarize away.
     let keep_recent = (window.saturating_sub(reserve) / 2).max(2_048);
     (reserve, keep_recent)
+}
+
+/// Record that the loop took `n` queued messages.
+async fn note_consumed(state: &AgentState, n: usize) {
+    if n > 0 {
+        crate::agent::runtime::compaction_v2::record(state.session_tag().await.as_deref(), "inbox.consumed", serde_json::json!({ "count": n }));
+    }
 }
 
 /// Mirror the steering and follow-up queues to disk after the loop took from them.

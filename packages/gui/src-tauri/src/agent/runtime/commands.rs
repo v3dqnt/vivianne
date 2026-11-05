@@ -89,6 +89,17 @@ impl AgentRegistry {
         }
     }
 
+    /// Stop every thread's run, for a reason (the app is closing).
+    pub async fn cancel_all(&self, kind: crate::agent::runtime::cancel::CancelKind, reason: &str) {
+        let mut all = vec![self.primary.clone()];
+        all.extend(self.extra.lock().await.values().cloned());
+        for state in all {
+            if !state.is_idle() {
+                state.cancel(kind, Some(reason.to_string())).await;
+            }
+        }
+    }
+
     pub async fn resolve(&self, thread_id: Option<&str>) -> Arc<AppState> {
         match thread_id {
             None | Some("") => self.primary.clone(),
@@ -342,6 +353,25 @@ pub async fn run_turn(
                 }
             }
         }
+        // Sections from settings and the thread's own scope, with their variables filled in.
+        let model = agent.state.model().await;
+        let vars = std::collections::HashMap::from([
+            ("cwd", agent.state.primary_workspace_folder().await.unwrap_or_default()),
+            ("model", model.id.clone()),
+            ("provider", model.provider.clone()),
+            ("project", agent.state.primary_workspace_folder().await.and_then(|p| std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().to_string())).unwrap_or_default()),
+            ("date", chrono::Local::now().format("%Y-%m-%d").to_string()),
+        ]);
+        let (extra, problems) = crate::agent::runtime::prompt_sections::assemble(&crate::agent::tools::exec::read_settings_json().await, state.agent_state.session_tag().await.as_deref(), &vars);
+        for p in problems {
+            log::warn!("[prompt] {p}");
+        }
+        if !extra.is_empty() {
+            prompt.push_str("
+
+");
+            prompt.push_str(&extra);
+        }
         agent.state.set_system_prompt(prompt).await;
     }
 
@@ -556,6 +586,8 @@ pub async fn cmd_agent_steer(
     };
     state.steering_queue.write().await.push(message);
     persist_queues(&state).await;
+    note_inbox(&state, "inbox.queued", 1).await;
+    crate::agent::runtime::compaction_v2::record(state.agent_state.session_tag().await.as_deref(), "run.steered", serde_json::json!({}));
     state.steer_flag.store(true, std::sync::atomic::Ordering::SeqCst);
     Ok(())
 }
@@ -607,6 +639,7 @@ pub async fn cmd_agent_follow_up_queue(
     };
     state.follow_up_queue.write().await.push(message);
     persist_queues(&state).await;
+    note_inbox(&state, "inbox.queued", 1).await;
     Ok(())
 }
 
@@ -615,9 +648,13 @@ pub async fn cmd_agent_follow_up_queue(
 pub async fn cmd_agent_clear_queues(#[allow(non_snake_case)] threadId: Option<String>,
     registry: State<'_, AgentRegistry>) -> Result<(), String> {
     let state = registry.resolve(threadId.as_deref()).await;
+    let dropped = state.steering_queue.read().await.len() + state.follow_up_queue.read().await.len();
     state.steering_queue.write().await.clear();
     state.follow_up_queue.write().await.clear();
     persist_queues(&state).await;
+    if dropped > 0 {
+        note_inbox(&state, "inbox.cancelled", dropped).await;
+    }
     Ok(())
 }
 
@@ -665,6 +702,7 @@ pub async fn cmd_agent_remove_queued(
     guard.remove(index);
     drop(guard);
     persist_queues(&state).await;
+    note_inbox(&state, "inbox.cancelled", 1).await;
     Ok(())
 }
 
@@ -763,6 +801,11 @@ pub async fn cmd_agent_set_model(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let state = registry.resolve(threadId.as_deref()).await;
+    crate::agent::runtime::compaction_v2::record(
+        state.agent_state.session_tag().await.as_deref(),
+        "model.selected",
+        serde_json::json!({ "id": id, "name": name, "api": api, "provider": provider, "baseUrl": base_url, "reasoning": reasoning, "maxTokens": max_tokens, "contextWindow": context_window }),
+    );
     use tauri::Manager;
 
     // For local providers, resolve the base URL from the endpoint registry
@@ -1568,6 +1611,8 @@ pub(crate) fn get_session_dir() -> Result<PathBuf, String> {
 /// and POSIX, a plain `write` is not.
 pub(crate) fn write_session_file_atomic(path: &std::path::Path, json: &str) -> Result<(), String> {
     crate::agent::system::paths::write_atomic(path, json.as_bytes()).map_err(|e| format!("Failed to save session: {e}"))?;
+    // The stored copy follows every save, so search and paging are never stale.
+    crate::agent::transcripts::sync_in_background(path.to_path_buf(), json.to_string());
     // Every session write funnels through here, which makes this the one
     // place the cached listing can go stale.
     invalidate_session_list_cache();
@@ -1745,6 +1790,8 @@ pub async fn cmd_delete_session(
 
     state.close_if_open(&id).await;
     registry.release(&id).await;
+    crate::agent::transcripts::forget_session(&id);
+    crate::agent::runtime::prompt_sections::forget(&id);
     crate::agent::orchestration::record_new(&id, "thread.deleted", serde_json::json!({}));
     crate::agent::sessions::title::forget(&id);
     Ok(())
@@ -1816,6 +1863,23 @@ pub async fn cmd_load_session(
     // archive path and append its own compacted messages to the project's
     // history.
     state.resume(&session.id, session.messages, None).await;
+    if let Some(m) = crate::agent::orchestration::thread_model(&session.id).as_ref().and_then(|v| {
+        let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+        Some(crate::agent::runtime::types::ModelRef {
+            id: s("id")?,
+            name: s("name").unwrap_or_default(),
+            api: s("api")?,
+            provider: s("provider")?,
+            base_url: s("baseUrl"),
+            reasoning: v.get("reasoning").and_then(|x| x.as_bool()).unwrap_or(false),
+            max_tokens: v.get("maxTokens").and_then(|x| x.as_u64()).unwrap_or(8192) as u32,
+            context_window: v.get("contextWindow").and_then(|x| x.as_u64()).unwrap_or(128_000) as u32,
+        })
+    }) {
+        if crate::agent::models::routing::provider_has_key(&m.provider).await {
+            state.agent_state.set_model(m).await;
+        }
+    }
     let back = crate::agent::runtime::inbox::restore(&session.id, &state.steering_queue, &state.follow_up_queue).await;
     if back > 0 {
         log::info!("[inbox] put back {back} queued message(s) for {}", session.id);
@@ -1824,6 +1888,10 @@ pub async fn cmd_load_session(
 }
 
 /// Mirror a thread's two queues to disk after they change.
+async fn note_inbox(state: &AppState, kind: &str, count: usize) {
+    crate::agent::runtime::compaction_v2::record(state.agent_state.session_tag().await.as_deref(), kind, serde_json::json!({ "count": count }));
+}
+
 async fn persist_queues(state: &AppState) {
     crate::agent::runtime::inbox::persist(state.agent_state.session_tag().await.as_deref(), &state.steering_queue, &state.follow_up_queue).await;
 }

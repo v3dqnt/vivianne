@@ -303,6 +303,10 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::runtime::commands::cmd_thread_release,
       crate::agent::orchestration::cmd_thread_list,
       crate::agent::transcripts::cmd_transcripts_import,
+      crate::agent::transcripts::cmd_thread_messages,
+      crate::agent::orchestration::cmd_thread_consumed_work,
+      crate::agent::runtime::prompt_sections::cmd_prompt_section_set,
+      crate::agent::runtime::prompt_sections::cmd_prompt_section_remove,
       crate::agent::changes::git_checkpoints::cmd_git_checkpoints,
       crate::agent::changes::git_checkpoints::cmd_git_checkpoint_diff,
       crate::agent::changes::git_checkpoints::cmd_git_checkpoint_rollback,
@@ -994,6 +998,9 @@ try `viv help`", cli::program_args()[0]);
       if let tauri::RunEvent::Exit = event {
         crate::ai::laya::stop();
         tauri::async_runtime::block_on(async {
+          if let Some(registry) = app_handle.try_state::<crate::agent::runtime::commands::AgentRegistry>() {
+            registry.cancel_all(crate::agent::runtime::cancel::CancelKind::Shutdown, "the app closed").await;
+          }
           crate::agent::models::usage_store::flush_all().await;
           if let Some(terminals) = app_handle.try_state::<Arc<crate::terminal::TerminalRegistry>>() {
             terminals.close_all();

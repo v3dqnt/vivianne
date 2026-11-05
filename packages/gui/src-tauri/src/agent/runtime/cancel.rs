@@ -18,8 +18,6 @@ pub enum CancelKind {
     Paused,
     /// A long task was stopped on request.
     Stopped,
-    /// A newer request took over.
-    Superseded,
     /// The app is closing.
     Shutdown,
 }
@@ -84,6 +82,6 @@ mod tests {
 
     #[test]
     fn kinds_are_written_in_snake_case() {
-        assert_eq!(serde_json::to_string(&CancelKind::Superseded).unwrap(), "\"superseded\"");
+        assert_eq!(serde_json::to_string(&CancelKind::Shutdown).unwrap(), "\"shutdown\"");
     }
 }

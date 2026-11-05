@@ -123,7 +123,7 @@ pub fn choose(cfg: &Config, default: &ModelRef, quick_has_key: bool) -> ModelRef
     }
 }
 
-async fn provider_has_key(provider: &str) -> bool {
+pub(crate) async fn provider_has_key(provider: &str) -> bool {
     provider == "local"
         || crate::ai::auth::stored_api_key(provider).await.is_some()
         || crate::ai::env_api_keys::get_env_api_key(provider, None).is_some()

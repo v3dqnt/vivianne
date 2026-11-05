@@ -10,6 +10,7 @@ pub mod compaction_v2;
 pub mod cancel;
 pub mod inbox;
 pub mod repair;
+pub mod prompt_sections;
 pub mod request_header;
 pub mod context_shaping;
 pub mod streaming;

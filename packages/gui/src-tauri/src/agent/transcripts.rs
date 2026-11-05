@@ -195,6 +195,68 @@ pub fn import_all() -> Result<ImportReport, String> {
     Ok(report)
 }
 
+/// A session file was just written: bring its stored copy up to date, off the caller's thread.
+/// Files that aren't sessions (anything outside the sessions folder) are ignored.
+pub fn sync_in_background(path: std::path::PathBuf, json: String) {
+    let Ok(dir) = crate::agent::runtime::commands::get_session_dir() else { return };
+    if path.parent() != Some(dir.as_path()) || path.extension().is_none_or(|x| x != "json") {
+        return;
+    }
+    let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(String::from) else { return };
+    std::thread::spawn(move || {
+        let Ok(session) = serde_json::from_str::<crate::agent::runtime::commands::SessionInfo>(&json) else { return };
+        let Ok(meta) = std::fs::metadata(&path) else { return };
+        let (len, mtime) = (meta.len() as i64, mtime_ms(&meta));
+        if let Err(e) = with_store(|s| import_session(s.conn(), &id, &session.messages, len, mtime)) {
+            log::warn!("[transcripts] couldn't keep {id} up to date: {e}");
+        }
+    });
+}
+
+/// Drop a deleted session's stored copy.
+pub fn forget_session(id: &str) {
+    if let Err(e) = with_store(|s| forget(s.conn(), id)) {
+        log::warn!("[transcripts] couldn't forget {id}: {e}");
+    }
+}
+
+/// A page of a session's messages: the `limit` messages before ordinal `before` (the end
+/// when `None`), oldest first, and whether older ones remain.
+pub fn page(conn: &Connection, session_id: &str, before: Option<i64>, limit: usize) -> Result<(Vec<(i64, AgentMessage)>, bool), String> {
+    let e = |e: rusqlite::Error| e.to_string();
+    let mut stmt = conn.prepare("SELECT ordinal, json FROM transcript_items WHERE session_id = ?1 AND ordinal < ?2 ORDER BY ordinal DESC LIMIT ?3").map_err(e)?;
+    let rows = stmt.query_map(params![session_id, before.unwrap_or(i64::MAX), limit as i64 + 1], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))).map_err(e)?;
+    let mut out: Vec<(i64, AgentMessage)> = vec![];
+    for row in rows {
+        let (ordinal, json) = row.map_err(e)?;
+        out.push((ordinal, serde_json::from_str(&json).map_err(|e| e.to_string())?));
+    }
+    let more = out.len() > limit;
+    out.truncate(limit);
+    out.reverse();
+    Ok((out, more))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Page {
+    pub messages: Vec<serde_json::Value>,
+    pub ordinals: Vec<i64>,
+    pub has_more: bool,
+}
+
+/// One page of a thread's history, newest first by page: pass the first ordinal you
+/// have as `before` to get the page above it. At most 75 messages a page.
+#[tauri::command]
+pub async fn cmd_thread_messages(#[allow(non_snake_case)] sessionId: String, before: Option<i64>, limit: Option<usize>) -> Result<Page, String> {
+    let (rows, has_more) = with_store(|s| page(s.conn(), &sessionId, before, limit.unwrap_or(75).clamp(1, 75)))?;
+    Ok(Page {
+        ordinals: rows.iter().map(|(o, _)| *o).collect(),
+        messages: rows.into_iter().map(|(_, m)| serde_json::to_value(m).unwrap_or_default()).collect(),
+        has_more,
+    })
+}
+
 #[tauri::command]
 pub async fn cmd_transcripts_import() -> Result<ImportReport, String> {
     tokio::task::spawn_blocking(import_all).await.map_err(|e| e.to_string())?
@@ -274,6 +336,24 @@ mod tests {
         assert_eq!(search(s.conn(), "hot oven", 10).unwrap().len(), 1);
         assert!(search(s.conn(), "AND OR \" NOT (", 10).unwrap().is_empty(), "operators are plain words");
         assert!(search(s.conn(), "   ", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn history_comes_in_pages_from_the_end_each_one_oldest_first() {
+        let mut s = store();
+        let msgs: Vec<AgentMessage> = (0..7).map(|i| user(&format!("m{i}"), i)).collect();
+        import_session(s.conn(), "p", &msgs, 1, 1).unwrap();
+        let (last, more) = page(s.conn(), "p", None, 3).unwrap();
+        assert_eq!(last.iter().map(|(o, _)| *o).collect::<Vec<_>>(), [499, 599, 699]);
+        assert!(more);
+        let (mid, more) = page(s.conn(), "p", Some(last[0].0), 3).unwrap();
+        assert_eq!(mid.iter().map(|(o, _)| *o).collect::<Vec<_>>(), [199, 299, 399]);
+        assert!(more);
+        let (first, more) = page(s.conn(), "p", Some(mid[0].0), 3).unwrap();
+        assert_eq!(first.iter().map(|(o, _)| *o).collect::<Vec<_>>(), [99]);
+        assert!(!more);
+        assert_eq!(first[0].1, msgs[0]);
+        assert!(page(s.conn(), "nobody", None, 3).unwrap().0.is_empty());
     }
 
     #[test]

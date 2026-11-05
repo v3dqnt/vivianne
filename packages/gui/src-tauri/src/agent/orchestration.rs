@@ -82,6 +82,8 @@ const MIGRATIONS: &[&str] = &["
         items INTEGER NOT NULL
     );
     CREATE VIRTUAL TABLE transcript_fts USING fts5(text, session_id UNINDEXED, ordinal UNINDEXED);
+", "
+    ALTER TABLE projection_threads ADD COLUMN model TEXT;
 "];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -314,6 +316,20 @@ impl Store {
         Ok(count)
     }
 
+    /// The model last chosen for a thread, as the JSON it was recorded with.
+    pub fn thread_model(&self, id: &str) -> Result<Option<Value>, String> {
+        let text: Option<Option<String>> = self.conn.query_row("SELECT model FROM projection_threads WHERE thread_id = ?1", [id], |r| r.get(0)).optional().map_err(err)?;
+        Ok(text.flatten().and_then(|t| serde_json::from_str(&t).ok()))
+    }
+
+    /// Every event of one thread, oldest first.
+    pub fn events_of(&self, thread_id: &str) -> Result<Vec<Event>, String> {
+        match self.catch_up(thread_id, 0)? {
+            CatchUp::Replay(events) => Ok(events),
+            CatchUp::Snapshot { .. } => Ok(vec![]),
+        }
+    }
+
     pub fn thread(&self, id: &str) -> Result<Option<(Option<String>, Option<String>)>, String> {
         self.conn.query_row("SELECT title, project_id FROM projection_threads WHERE thread_id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?))).optional().map_err(err)
     }
@@ -334,9 +350,46 @@ fn project(tx: &Transaction, seq: i64, thread: &str, kind: &str, payload: &Value
             .map_err(err),
         "thread.renamed" => run("UPDATE projection_threads SET title = ?2, last_seq = ?3 WHERE thread_id = ?1", text("title")),
         "thread.assigned" => run("UPDATE projection_threads SET project_id = ?2, last_seq = ?3 WHERE thread_id = ?1", text("project_id")),
+        "model.selected" => run("UPDATE projection_threads SET model = ?2, last_seq = ?3 WHERE thread_id = ?1", Some(payload.to_string())),
         "thread.deleted" => tx.execute("DELETE FROM projection_threads WHERE thread_id = ?1", [thread]).map(|_| ()).map_err(err),
         _ => Ok(()),
     }
+}
+
+/// What queued input became: waiting, taken by a run, or taken back out.
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsumedWork {
+    pub queued: u32,
+    pub consumed: u32,
+    pub cancelled: u32,
+    pub pending: u32,
+}
+
+/// Fold a thread's events into what its queued input became.
+pub fn fold_consumed_work(events: &[Event]) -> ConsumedWork {
+    let mut w = ConsumedWork::default();
+    let count = |e: &Event| e.payload.get("count").and_then(Value::as_u64).unwrap_or(1) as u32;
+    for e in events {
+        match e.kind.as_str() {
+            "inbox.queued" => w.queued += count(e),
+            "inbox.consumed" => w.consumed += count(e),
+            "inbox.cancelled" => w.cancelled += count(e),
+            _ => {}
+        }
+    }
+    w.pending = w.queued.saturating_sub(w.consumed + w.cancelled);
+    w
+}
+
+/// The model last chosen for a thread, if one was.
+pub fn thread_model(thread: &str) -> Option<Value> {
+    with_store(|s| s.thread_model(thread)).ok().flatten()
+}
+
+#[tauri::command]
+pub async fn cmd_thread_consumed_work(#[allow(non_snake_case)] threadId: String) -> Result<ConsumedWork, String> {
+    with_store(|s| s.events_of(&threadId)).map(|e| fold_consumed_work(&e))
 }
 
 static STORE: OnceLock<Mutex<Option<Store>>> = OnceLock::new();
@@ -543,6 +596,29 @@ mod tests {
         assert_eq!(s.reconcile(&sessions, &map, 3).unwrap(), 0);
         assert_eq!(s.reconcile(&sessions, &HashMap::new(), 4).unwrap(), 1, "project cleared");
         assert_eq!(s.thread("t2").unwrap().unwrap().1, None);
+    }
+
+    #[test]
+    fn the_chosen_model_is_kept_per_thread_and_rebuilt_from_events() {
+        let (mut s, _) = temp();
+        s.dispatch("c1", 1, || Ok((vec![ev("thread.created", json!({ "title": "A" })), ev("model.selected", json!({ "provider": "p", "id": "m1" }))], vec![]))).unwrap();
+        s.dispatch("c2", 2, || Ok((vec![ev("model.selected", json!({ "provider": "p", "id": "m2" }))], vec![]))).unwrap();
+        assert_eq!(s.thread_model("t1").unwrap().unwrap()["id"], "m2");
+        assert_eq!(s.thread_model("nobody").unwrap(), None);
+        s.rebuild_projections().unwrap();
+        assert_eq!(s.thread_model("t1").unwrap().unwrap()["id"], "m2");
+    }
+
+    #[test]
+    fn queued_input_is_folded_into_waiting_taken_and_taken_back() {
+        let (mut s, _) = temp();
+        s.dispatch("c1", 1, || {
+            Ok((vec![ev("inbox.queued", json!({})), ev("inbox.queued", json!({})), ev("inbox.queued", json!({})), ev("inbox.consumed", json!({ "count": 2 })), ev("inbox.cancelled", json!({ "count": 1 })), ev("step.started", json!({}))], vec![]))
+        })
+        .unwrap();
+        let w = fold_consumed_work(&s.events_of("t1").unwrap());
+        assert_eq!(w, ConsumedWork { queued: 3, consumed: 2, cancelled: 1, pending: 0 });
+        assert_eq!(fold_consumed_work(&[]), ConsumedWork::default());
     }
 
     #[test]

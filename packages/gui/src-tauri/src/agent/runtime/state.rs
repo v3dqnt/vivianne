@@ -412,7 +412,22 @@ impl AgentState {
     }
 
     pub async fn add_message(&self, message: AgentMessage) {
-        self.inner.write().await.messages.push(message);
+        let (index, tag) = {
+            let mut inner = self.inner.write().await;
+            let index = inner.messages.len();
+            let summary = match &message {
+                AgentMessage::User { timestamp, .. } => serde_json::json!({ "role": "user", "at": timestamp }),
+                AgentMessage::Assistant { timestamp, stop_reason, .. } => serde_json::json!({ "role": "assistant", "at": timestamp, "stopReason": stop_reason }),
+                AgentMessage::ToolResult { timestamp, tool_name, is_error, .. } => serde_json::json!({ "role": "toolResult", "at": timestamp, "tool": tool_name, "error": is_error }),
+                AgentMessage::Custom { timestamp, kind, .. } => serde_json::json!({ "role": "custom", "at": timestamp, "kind": kind }),
+            };
+            inner.messages.push(message);
+            (index, inner.session_tag.clone().map(|t| (t, summary)))
+        };
+        if let Some((tag, mut summary)) = tag {
+            summary["index"] = serde_json::json!(index);
+            crate::agent::orchestration::record_new(&tag, "message.added", summary);
+        }
     }
 
     pub async fn set_is_streaming(&self, value: bool) {
