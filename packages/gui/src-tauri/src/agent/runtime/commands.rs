@@ -449,6 +449,8 @@ pub async fn run_turn(
         None
     };
     crate::agent::background::run_ledger::begin_run(&state, thread_id, &request_text).await;
+    // A thread in a git project works on a branch of its own, made on its first turn.
+    crate::agent::sessions::thread_worktree::provision_for_turn(app, &state, &request_text).await;
     // A baseline to diff this turn against, and a snapshot of what it leaves.
     let checkpoint_scope = state.session_id().await;
     let checkpoint_dir = agent.state.primary_workspace_folder().await;

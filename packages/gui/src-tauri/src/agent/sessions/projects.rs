@@ -118,6 +118,13 @@ fn save(data: &ProjectsData) -> Result<(), String> {
 }
 
 /// Every project, for the backend.
+/// The folder of the project a session is filed under, if it has one.
+pub fn path_of_session(session_id: &str) -> Option<String> {
+    let data = load().ok()?;
+    let project = data.assignments.get(session_id)?;
+    data.projects.into_iter().find(|p| &p.id == project)?.path
+}
+
 pub fn load_all() -> Result<Vec<Project>, String> {
     Ok(load()?.projects)
 }

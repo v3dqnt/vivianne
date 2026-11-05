@@ -162,6 +162,56 @@ pub async fn ensure(project_root: &str, session_id: &str, title: &str) -> Result
     Ok(Some(Worktree { workspace: workspace(&root), root: root_s, branch, base }))
 }
 
+/// The thread's worktree, if it has one. Never makes one.
+pub async fn find(project_root: &str, session_id: &str) -> Option<Worktree> {
+    let top = native(&git(project_root, &["rev-parse", "--show-toplevel"]).await.ok()?);
+    let root = Path::new(&top).join(".viv").join("worktrees").join(folder_name(session_id));
+    if !root.join(".git").exists() {
+        return None;
+    }
+    // ensure() finds an existing one without touching it.
+    ensure(project_root, session_id, "").await.ok().flatten()
+}
+
+/// Commit everything in the worktree (the thread's own work) so it can be merged.
+/// Returns whether there was anything to commit.
+pub async fn commit_all(root: &str, message: &str) -> Result<bool, String> {
+    if git(root, &["status", "--porcelain"]).await?.is_empty() {
+        return Ok(false);
+    }
+    git(root, &["add", "-A"]).await?;
+    git(root, &["-c", "user.name=Vivianne", "-c", "user.email=vivianne@localhost", "commit", "-q", "-m", message]).await?;
+    Ok(true)
+}
+
+/// Bring the thread's branch into the branch it was cut from, then remove the worktree.
+/// Refused, with a reason, unless the project's checkout is on that branch and clean; a
+/// merge that conflicts is undone, leaving both sides as they were.
+pub async fn merge(project_root: &str, session_id: &str, message: &str) -> Result<String, String> {
+    let wt = find(project_root, session_id).await.ok_or("This thread has no worktree.")?;
+    let top = native(&git(project_root, &["rev-parse", "--show-toplevel"]).await?);
+    if wt.base.is_empty() {
+        return Err("This worktree doesn't record what it was cut from, so it can't be merged safely.".into());
+    }
+    let here = git(&top, &["rev-parse", "--abbrev-ref", "HEAD"]).await?;
+    if here != wt.base {
+        return Err(format!("The project is on `{here}`, not `{}`. Switch it back before merging.", wt.base));
+    }
+    if !git(&top, &["status", "--porcelain", "--untracked-files=no"]).await?.is_empty() {
+        return Err("The project has changes that aren't committed. Commit or stash them before merging.".into());
+    }
+    commit_all(&wt.root, message).await?;
+    let msg = format!("Merge {} into {}", wt.branch, wt.base);
+    if let Err(e) = git(&top, &["-c", "user.name=Vivianne", "-c", "user.email=vivianne@localhost", "merge", "--no-ff", "-m", &msg, &wt.branch]).await {
+        let _ = git(&top, &["merge", "--abort"]).await;
+        return Err(format!("The merge conflicts, so nothing was changed: {e}"));
+    }
+    match remove(project_root, session_id).await? {
+        Removed::Gone => Ok(format!("Merged {} into {} and removed the worktree.", wt.branch, wt.base)),
+        Removed::Kept(why) => Ok(format!("Merged {} into {}. The worktree stays: {why}.", wt.branch, wt.base)),
+    }
+}
+
 /// Take a thread's worktree away: gone when it is clean and everything on its
 /// branch is in the branch it was cut from, kept (with the reason) otherwise.
 pub async fn remove(project_root: &str, session_id: &str) -> Result<Removed, String> {
@@ -190,9 +240,90 @@ pub async fn remove(project_root: &str, session_id: &str) -> Result<Removed, Str
     Ok(Removed::Gone)
 }
 
+fn same_path(a: &str, b: &str) -> bool {
+    let norm = |p: &str| p.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    norm(a) == norm(b)
+}
+
+/// First turn of a thread filed under a git project: give it its own branch and move its
+/// workspace there. Does nothing for a thread with no project, a project that isn't a git
+/// repository with commits, a thread already working somewhere else, or when the
+/// `threadWorktrees` setting is `false`. A failure leaves the thread where it was.
+pub async fn provision_for_turn(app: &tauri::AppHandle, state: &crate::agent::runtime::commands::AppState, request: &str) {
+    use tauri::Emitter;
+    if crate::agent::tools::exec::read_settings_json().await.get("threadWorktrees").and_then(|v| v.as_bool()) == Some(false) {
+        return;
+    }
+    let Some(session) = state.session_id().await else { return };
+    let Some(project) = crate::agent::sessions::projects::path_of_session(&session) else { return };
+    let here = state.agent_state.primary_workspace_folder().await.unwrap_or_default();
+    if !same_path(&here, &project) {
+        return;
+    }
+    let title: String = request.chars().take(60).collect();
+    match ensure(&project, &session, &title).await {
+        Ok(Some(wt)) => {
+            let mode = state.agent_state.access_mode().await;
+            state.agent_state.set_workspace(vec![wt.workspace.clone()], mode).await;
+            crate::agent::orchestration::record_new(&session, "thread.worktree", serde_json::json!({ "branch": wt.branch, "base": wt.base, "workspace": wt.workspace }));
+            let _ = app.emit("thread:worktree", serde_json::json!({ "id": session, "workspace": wt.workspace, "branch": wt.branch }));
+        }
+        Ok(None) => {}
+        Err(e) => log::warn!("[worktree] couldn't make a worktree for {session}: {e}"),
+    }
+}
+
+async fn session_and_project(thread: &Option<String>, registry: &crate::agent::runtime::commands::AgentRegistry) -> Option<(String, String)> {
+    let state = registry.resolve(thread.as_deref()).await;
+    let session = state.session_id().await?;
+    let project = crate::agent::sessions::projects::path_of_session(&session)?;
+    Some((session, project))
+}
+
+/// The thread's worktree, if it has one.
+#[tauri::command]
+pub async fn cmd_thread_worktree(#[allow(non_snake_case)] threadId: Option<String>, registry: tauri::State<'_, crate::agent::runtime::commands::AgentRegistry>) -> Result<Option<Worktree>, String> {
+    let Some((session, project)) = session_and_project(&threadId, &registry).await else { return Ok(None) };
+    Ok(find(&project, &session).await)
+}
+
+/// The folder of the project the thread is filed under.
+#[tauri::command]
+pub async fn cmd_thread_project_path(#[allow(non_snake_case)] threadId: Option<String>, registry: tauri::State<'_, crate::agent::runtime::commands::AgentRegistry>) -> Result<Option<String>, String> {
+    Ok(session_and_project(&threadId, &registry).await.map(|(_, p)| p))
+}
+
+/// Finish with a thread's branch: `merge` brings its work into the branch it was cut from,
+/// `remove` takes the worktree away (kept, with the reason, if it holds unmerged work).
+/// Refused while the thread is running.
+#[tauri::command]
+pub async fn cmd_thread_worktree_finish(#[allow(non_snake_case)] threadId: Option<String>, action: String, registry: tauri::State<'_, crate::agent::runtime::commands::AgentRegistry>) -> Result<String, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    if !state.is_idle() {
+        return Err("Wait for the thread to finish its turn, or stop it, first.".into());
+    }
+    let (session, project) = session_and_project(&threadId, &registry).await.ok_or("This thread isn't in a project.")?;
+    let said = match action.as_str() {
+        "merge" => merge(&project, &session, "Work from a Vivianne thread").await?,
+        "remove" => match remove(&project, &session).await? {
+            Removed::Gone => "Removed the worktree.".to_string(),
+            Removed::Kept(why) => return Err(format!("The worktree was kept: {why}.")),
+        },
+        other => return Err(format!("Unknown action '{other}'.")),
+    };
+    crate::agent::orchestration::record_new(&session, "thread.worktree_finished", serde_json::json!({ "action": action }));
+    Ok(said)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_match_across_slash_style_case_and_a_trailing_slash() {
+        assert!(same_path(r"C:\Work\App\", "c:/work/app"));
+        assert!(!same_path("C:/work/app", "C:/work/app2"));
+    }
 
     fn temp(name: &str) -> PathBuf {
         let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
@@ -217,6 +348,53 @@ mod tests {
         sh(&d, &["add", "."]);
         sh(&d, &["commit", "-q", "-m", "first"]);
         d
+    }
+
+    #[tokio::test]
+    async fn finishing_merges_the_threads_work_into_its_base_and_cleans_up() {
+        let d = repo("merge-ok");
+        let root = d.to_string_lossy().to_string();
+        let wt = ensure(&root, "session_1730000000777", "Add b").await.unwrap().unwrap();
+        std::fs::write(Path::new(&wt.workspace).join("b.txt"), "new\n").unwrap();
+        assert!(find(&root, "session_1730000000777").await.is_some() && find(&root, "session_nobody").await.is_none());
+        let said = merge(&root, "session_1730000000777", "Thread: add b").await.unwrap();
+        assert!(said.contains("removed the worktree"), "{said}");
+        assert_eq!(std::fs::read_to_string(d.join("b.txt")).unwrap().trim_end(), "new", "git may write the file with Windows line endings");
+        assert!(!Path::new(&wt.root).exists());
+        assert!(sh(&d, &["branch", "--list", &wt.branch]).is_empty(), "the merged branch is deleted");
+        assert!(sh(&d, &["log", "--oneline"]).contains("Merge viv/"));
+    }
+
+    #[tokio::test]
+    async fn a_merge_is_refused_when_the_project_is_on_another_branch_or_has_uncommitted_changes() {
+        let d = repo("merge-refuse");
+        let root = d.to_string_lossy().to_string();
+        let wt = ensure(&root, "session_1730000000888", "Work").await.unwrap().unwrap();
+        std::fs::write(Path::new(&wt.workspace).join("w.txt"), "w\n").unwrap();
+        std::fs::write(d.join("app").join("a.txt"), "dirty\n").unwrap();
+        let e = merge(&root, "session_1730000000888", "m").await.unwrap_err();
+        assert!(e.contains("aren't committed"), "{e}");
+        sh(&d, &["checkout", "-q", "--", "."]);
+        sh(&d, &["checkout", "-q", "-b", "elsewhere"]);
+        let e = merge(&root, "session_1730000000888", "m").await.unwrap_err();
+        assert!(e.contains("not `main`") || e.contains("not `"), "{e}");
+        assert!(!d.join("w.txt").exists() && Path::new(&wt.root).exists(), "nothing was touched");
+    }
+
+    #[tokio::test]
+    async fn a_conflicting_merge_is_undone_and_leaves_both_sides_as_they_were() {
+        let d = repo("merge-conflict");
+        let root = d.to_string_lossy().to_string();
+        let wt = ensure(&root, "session_1730000000999", "Clash").await.unwrap().unwrap();
+        std::fs::write(Path::new(&wt.workspace).join("app").join("a.txt"), "thread\n").unwrap();
+        std::fs::write(d.join("app").join("a.txt"), "main\n").unwrap();
+        sh(&d, &["commit", "-qam", "main moves"]);
+        let before = sh(&d, &["rev-parse", "HEAD"]);
+        let e = merge(&root, "session_1730000000999", "m").await.unwrap_err();
+        assert!(e.contains("conflicts"), "{e}");
+        assert_eq!(sh(&d, &["rev-parse", "HEAD"]), before);
+        assert!(sh(&d, &["status", "--porcelain", "--untracked-files=no"]).is_empty(), "no half-merge left behind");
+        assert!(Path::new(&wt.root).exists());
     }
 
     #[test]

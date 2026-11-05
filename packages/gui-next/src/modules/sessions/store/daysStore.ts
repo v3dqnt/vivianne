@@ -348,7 +348,12 @@ function serialized(run: () => Promise<void>): Promise<void> {
 async function applyThreadWorkspace() {
   const scope = useDaysStore.getState().scope
   const project = useProjectsStore.getState().projects.find((p) => p.id === scope)
-  if (project?.path) {
+  // A thread that has its own branch works in it, not in the project's folder.
+  const own = await call<{ workspace: string } | null>('cmd_thread_worktree', { threadId: activeThreadId() }).catch(() => null)
+  if (own?.workspace) {
+    const ws = useWorkspaceStore.getState()
+    await ws.setWorkspace([own.workspace], ws.accessMode)
+  } else if (project?.path) {
     const ws = useWorkspaceStore.getState()
     await ws.setWorkspace([project.path], ws.accessMode)
   } else {

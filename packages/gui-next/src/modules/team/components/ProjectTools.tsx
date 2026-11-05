@@ -5,6 +5,7 @@ import { WorkspaceSelector } from '../../ai/components/WorkspaceSelector'
 import { GitStatusChip, GitQuickActions } from '../../git/components/GitActions'
 import { useAppView } from '../../git/components/GitView'
 import { ContextBreakdown, ContextPercent } from '../../ai/components/ContextUsageBar'
+import { ThreadWorktree } from './ThreadWorktree'
 
 /** Every action in the column is the same row: left-aligned on one edge,
  * one line, muted until hovered. */
@@ -102,6 +103,8 @@ export function ProjectTools() {
             <WorkspaceSelector />
           </Box>
         </Section>
+
+        <ThreadWorktree />
 
         <Divider />
 
