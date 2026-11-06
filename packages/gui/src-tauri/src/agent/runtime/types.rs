@@ -239,7 +239,7 @@ impl PersonaMode {
 // `get_goal`, and persisting state no consumer reads is worse than not
 // having it. Cleared with the rest of the session (see `AgentState::clear`).
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GoalPhase {
     Active,
@@ -254,6 +254,103 @@ pub struct Goal {
     pub objective: String,
     pub phase: GoalPhase,
     pub blocked_reason: Option<String>,
+}
+
+/// What can be done to a goal. The phase matrix lives in [`Goal::apply`], so every caller (the model's tool, the long-task controls, a future panel) gets the same answer.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GoalAction {
+    Edit(String),
+    Pause,
+    Resume,
+    Complete,
+    Block(String),
+}
+
+impl Goal {
+    /// A goal that is not finished can't be replaced by a new one; a complete one can.
+    pub fn is_finished(&self) -> bool {
+        matches!(self.phase, GoalPhase::Complete)
+    }
+
+    /// Apply an action if it is legal from the current phase: pause and block only from active, resume from active, paused or
+    /// blocked (never from complete), complete from anything not already complete, edit never changes the phase.
+    pub fn apply(&mut self, action: GoalAction) -> Result<(), String> {
+        use GoalPhase::*;
+        match (action, self.phase) {
+            (GoalAction::Edit(objective), _) => {
+                let objective = objective.trim();
+                if objective.is_empty() {
+                    return Err("the new objective can't be empty".into());
+                }
+                self.objective = objective.to_string();
+            }
+            (GoalAction::Pause, Active) => self.phase = Paused,
+            (GoalAction::Pause, p) => return Err(format!("only an active goal can be paused (this one is {p:?})")),
+            (GoalAction::Resume, Complete) => return Err("this goal is complete; create a new one instead of resuming it".into()),
+            (GoalAction::Resume, _) => {
+                self.phase = Active;
+                self.blocked_reason = None;
+            }
+            (GoalAction::Complete, Complete) => return Err("this goal is already complete".into()),
+            (GoalAction::Complete, _) => self.phase = Complete,
+            (GoalAction::Block(reason), Active) => {
+                let reason = reason.trim();
+                if reason.is_empty() {
+                    return Err("say why it is blocked: a blocked goal needs a reason".into());
+                }
+                self.phase = Blocked;
+                self.blocked_reason = Some(reason.to_string());
+            }
+            (GoalAction::Block(_), p) => return Err(format!("only an active goal can be marked blocked (this one is {p:?})")),
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod goal_tests {
+    use super::*;
+
+    fn goal(phase: GoalPhase) -> Goal {
+        Goal { objective: "ship it".into(), phase, blocked_reason: None }
+    }
+
+    #[test]
+    fn pause_and_block_only_from_active() {
+        let mut g = goal(GoalPhase::Active);
+        assert!(g.apply(GoalAction::Pause).is_ok());
+        assert!(g.apply(GoalAction::Pause).is_err(), "already paused");
+        assert!(g.apply(GoalAction::Block("x".into())).is_err(), "a paused goal can't be blocked");
+        assert!(goal(GoalPhase::Active).apply(GoalAction::Block("waiting on keys".into())).is_ok());
+    }
+
+    #[test]
+    fn a_blocked_goal_needs_a_reason_and_resuming_clears_it() {
+        let mut g = goal(GoalPhase::Active);
+        assert!(g.apply(GoalAction::Block("  ".into())).is_err());
+        g.apply(GoalAction::Block("waiting on keys".into())).unwrap();
+        assert_eq!(g.blocked_reason.as_deref(), Some("waiting on keys"));
+        g.apply(GoalAction::Resume).unwrap();
+        assert!(matches!(g.phase, GoalPhase::Active) && g.blocked_reason.is_none());
+    }
+
+    #[test]
+    fn complete_is_final_and_cannot_be_resumed_or_completed_again() {
+        let mut g = goal(GoalPhase::Active);
+        g.apply(GoalAction::Complete).unwrap();
+        assert!(g.is_finished());
+        assert!(g.apply(GoalAction::Resume).is_err());
+        assert!(g.apply(GoalAction::Complete).is_err());
+    }
+
+    #[test]
+    fn editing_changes_the_objective_never_the_phase() {
+        let mut g = goal(GoalPhase::Paused);
+        g.apply(GoalAction::Edit("  new objective ".into())).unwrap();
+        assert_eq!(g.objective, "new objective");
+        assert!(matches!(g.phase, GoalPhase::Paused));
+        assert!(g.apply(GoalAction::Edit("   ".into())).is_err());
+    }
 }
 
 // ============================================================================

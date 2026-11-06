@@ -379,13 +379,23 @@ impl AgentState {
         self.inner.read().await.goal.clone()
     }
 
-    /// Replace any existing goal with a fresh one — dsh's `create_goal`
-    /// always starts a new one rather than requiring the caller to clear the
-    /// old one first, since a session only ever tracks one goal at a time.
-    pub async fn create_goal(&self, objective: String) -> Goal {
+    /// Start a goal. An unfinished one is never replaced silently: the model has to edit or complete it, or the user clears it.
+    pub async fn create_goal(&self, objective: String) -> Result<Goal, String> {
+        let mut inner = self.inner.write().await;
+        if let Some(existing) = inner.goal.as_ref().filter(|g| !g.is_finished()) {
+            return Err(format!("there is already a goal in progress (\"{}\"); edit it with update_goal, or complete it first", existing.objective));
+        }
         let goal = Goal { objective, phase: GoalPhase::Active, blocked_reason: None };
-        self.inner.write().await.goal = Some(goal.clone());
-        goal
+        inner.goal = Some(goal.clone());
+        Ok(goal)
+    }
+
+    /// Apply a legal action to the current goal; an illegal one is refused with the reason.
+    pub async fn goal_action(&self, action: crate::agent::runtime::types::GoalAction) -> Result<Goal, String> {
+        let mut inner = self.inner.write().await;
+        let goal = inner.goal.as_mut().ok_or("no goal is set for this session — call create_goal first")?;
+        goal.apply(action)?;
+        Ok(goal.clone())
     }
 
     /// Apply an update to the current goal, whatever it is — one writer at a

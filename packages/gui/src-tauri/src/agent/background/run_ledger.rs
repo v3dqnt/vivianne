@@ -382,6 +382,8 @@ pub async fn cmd_long_task_control(
             ledger.set_status(RunStatus::Stopped, None);
             state.cancel(crate::agent::runtime::cancel::CancelKind::Stopped, Some("stopped by you".to_string())).await;
             state.agent_state.set_long_task(None).await;
+            // The goal belonged to this run: left behind, the next message would be nudged toward an objective that was stopped.
+            state.agent_state.clear_goal().await;
         }
         "extend" => ledger.extend(addUsd, addHours),
         "resume" => {
@@ -393,7 +395,7 @@ pub async fn cmd_long_task_control(
             if state.agent_state.goal().await.is_none() {
                 state.agent_state.create_goal(ledger.objective.clone()).await;
             } else {
-                let _ = state.agent_state.update_goal(|g| g.phase = crate::agent::runtime::types::GoalPhase::Active).await;
+                let _ = state.agent_state.goal_action(crate::agent::runtime::types::GoalAction::Resume).await;
             }
         }
         other => return Err(format!("Unknown long-task action '{other}'.")),

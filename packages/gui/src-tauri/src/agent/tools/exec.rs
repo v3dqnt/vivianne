@@ -2475,7 +2475,10 @@ async fn execute_create_goal_tool(args: &serde_json::Value, state: &AgentState) 
     if objective.is_empty() {
         return text_result("Error: 'objective' is required".to_string());
     }
-    let g = state.create_goal(objective).await;
+    let g = match state.create_goal(objective).await {
+        Ok(g) => g,
+        Err(e) => return text_result(format!("Error: {e}")),
+    };
     AgentToolResult {
         content: vec![MessageContent::Text { text: format!("Goal created: {}", g.objective) }],
         details: goal_json(&g),
@@ -2488,19 +2491,16 @@ async fn execute_update_goal_tool(args: &serde_json::Value, state: &AgentState) 
     let new_objective = args.get("objective").and_then(|v| v.as_str()).map(str::to_string);
     let blocked_reason = args.get("blocked_reason").and_then(|v| v.as_str()).map(str::to_string);
 
-    let apply_result = match action {
-        "edit" => state.update_goal(|g| {
-            if let Some(obj) = new_objective { g.objective = obj; }
-        }).await,
-        "pause" => state.update_goal(|g| g.phase = GoalPhase::Paused).await,
-        "resume" => state.update_goal(|g| { g.phase = GoalPhase::Active; g.blocked_reason = None; }).await,
-        "complete" => state.update_goal(|g| g.phase = GoalPhase::Complete).await,
-        "blocked" => state.update_goal(|g| {
-            g.phase = GoalPhase::Blocked;
-            g.blocked_reason = blocked_reason;
-        }).await,
+    use crate::agent::runtime::types::GoalAction;
+    let action = match action {
+        "edit" => GoalAction::Edit(new_objective.unwrap_or_default()),
+        "pause" => GoalAction::Pause,
+        "resume" => GoalAction::Resume,
+        "complete" => GoalAction::Complete,
+        "blocked" => GoalAction::Block(blocked_reason.unwrap_or_default()),
         other => return text_result(format!("Error: unknown action '{other}' (expected edit|pause|resume|complete|blocked)")),
     };
+    let apply_result = state.goal_action(action).await;
 
     match apply_result {
         Ok(g) => AgentToolResult {
