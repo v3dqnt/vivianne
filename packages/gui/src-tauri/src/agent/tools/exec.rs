@@ -449,20 +449,28 @@ macro_rules! tool {
 }
 
 /// Every tool that needs the agent's state, the app or the event stream.
+/// A delegated agent can't put a question to the user. The user is waiting on its parent, so a dialog from a child is a hang nobody
+/// can attribute; it returns the unresolved decision to its parent in its final answer instead.
+pub(crate) fn delegated_ask_refusal(depth: usize) -> Option<String> {
+    (depth >= 1).then(|| {
+        "Error: you are a delegated sub-agent, so you can't ask the user directly. Finish what you can, and put the open question and your recommended answer in your final reply; your parent will ask.".to_string()
+    })
+}
+
 /// Tools that need only their arguments and the working folder are the
 /// `Tool` registry in `agent::tools::builtin`; MCP tools come last. Adding a
 /// tool here is all its dispatch needs: the consistency tests read this table.
 pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
     tool!("remember", "recall" => |cx| execute_memory_tool(cx.name, cx.args, cx.state, cx.app).await),
     tool!("read_skill" => |cx| execute_read_skill_tool(cx.args).await),
-    tool!("question" => |cx| match cx.args.get("confirm").and_then(|v| v.as_str()) {
+    tool!("question" => |cx| if let Some(refusal) = delegated_ask_refusal(cx.depth) { text_result(refusal) } else { match cx.args.get("confirm").and_then(|v| v.as_str()) {
         Some(message) => {
             let mut args = cx.args.clone();
             args["message"] = serde_json::json!(message);
             execute_confirm_action_tool(cx.call_id, &args, cx.emit).await
         }
         None => execute_question_tool(cx.call_id, cx.args, cx.emit).await,
-    }),
+    } }),
     tool!("team_run" => |cx| crate::agent::team::run::execute_team_run(cx.args, cx.depth, cx.state, cx.app).await),
     tool!("list_threads" => |cx| crate::agent::thread_msgs::execute_list_threads(cx.state, cx.app).await),
     tool!("read_thread" => |cx| crate::agent::thread_msgs::execute_read_thread(cx.args).await),
@@ -3509,5 +3517,18 @@ mod gate_tests {
         custom.insert("my_tool".to_string());
         let a = Agent { custom, ..chat() };
         assert!(asks(&decide(&a, &call("my_tool", json!({})))));
+    }
+}
+
+#[cfg(test)]
+mod delegated_ask_tests {
+    use super::delegated_ask_refusal;
+
+    #[test]
+    fn only_the_top_level_agent_may_ask_the_user() {
+        assert!(delegated_ask_refusal(0).is_none());
+        let refusal = delegated_ask_refusal(1).expect("a delegated agent is refused");
+        assert!(refusal.contains("final reply"), "it says what to do instead");
+        assert!(delegated_ask_refusal(2).is_some());
     }
 }

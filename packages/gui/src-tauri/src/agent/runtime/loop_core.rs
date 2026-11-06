@@ -766,7 +766,7 @@ pub async fn run_agent_loop_continue(
             &context.messages,
         );
         if context.delegate_depth >= 1 {
-            tool_defs.retain(|t| !matches!(t.get("name").and_then(|n| n.as_str()), Some("task" | "team_run")));
+            tool_defs.retain(|t| !matches!(t.get("name").and_then(|n| n.as_str()), Some("task" | "team_run" | "question")));
         } else if crate::agent::tools::profile::is_lean_provider(&model.provider) {
             // A lead with a team must be able to hand work to it, and the lean
             // set has no delegation tools: add them when there is a team.
