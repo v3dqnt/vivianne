@@ -471,6 +471,10 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
         }
         None => execute_question_tool(cx.call_id, cx.args, cx.emit).await,
     } }),
+    tool!("list_subagent_models" => |cx| {
+        let allowed = crate::agent::tools::child_routes::allowed(&cx.state.model().await).await;
+        text_result(format!("Models a subagent may be started on (pass provider and model to task):\n{}", allowed.iter().map(|m| format!("{}/{}", m.provider, m.id)).collect::<Vec<_>>().join("\n")))
+    }),
     tool!("list_agents" => |cx| text_result(crate::agent::runtime::subagents::render_tree(&crate::agent::runtime::subagents::SubagentRegistry::global().on_thread(crate::agent::orchestration::turn_thread().as_deref())))),
     tool!("interrupt_agent" => |cx| {
         let name = cx.args.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -2015,6 +2019,27 @@ pub(crate) async fn execute_task_tool(
     });
 
     let sub_state = AgentState::new();
+    // A route asked for on the call, among the ones this session allows.
+    let explicit_route = match (args.get("provider").and_then(|v| v.as_str()), args.get("model").and_then(|v| v.as_str())) {
+        (None, None) => None,
+        (Some(p), Some(m)) => {
+            let allowed = crate::agent::tools::child_routes::allowed(&parent_state.model().await).await;
+            match crate::agent::tools::child_routes::pick(&allowed, p, m) {
+                Ok(found) => Some(found.clone()),
+                Err(why) => {
+                    SubagentRegistry::global().forget(&id);
+                    return text_result(format!("Error: {why}"));
+                }
+            }
+        }
+        _ => {
+            SubagentRegistry::global().forget(&id);
+            return text_result("Error: pass provider and model together, or neither.".to_string());
+        }
+    };
+    if let Some(m) = &explicit_route {
+        sub_state.set_model(m.clone()).await;
+    } else {
     match profile.as_ref().and_then(|p| p.model.as_ref()) {
         // A profile's model override wins; a profile with no override, or no
         // profile at all, keeps inheriting the parent's currently selected
@@ -2052,6 +2077,7 @@ pub(crate) async fn execute_task_tool(
             };
             sub_state.set_model(model).await
         }
+    }
     }
     // An employee's own subagents work inside the employee's area.
     let owned = match &team_agent {

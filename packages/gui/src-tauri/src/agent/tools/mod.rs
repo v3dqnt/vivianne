@@ -17,6 +17,7 @@
 
 pub mod arg_check;
 pub mod background;
+pub mod child_routes;
 pub mod presentation;
 pub mod timeouts;
 pub mod builtin;

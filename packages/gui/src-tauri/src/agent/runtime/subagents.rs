@@ -159,6 +159,11 @@ impl SubagentRegistry {
         })
     }
 
+    /// Drop a handle that never started (a request refused after it was registered).
+    pub fn forget(&self, id: &str) {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
+    }
+
     /// The next free `agent-N` for a thread.
     pub fn next_name(&self, thread: Option<&str>) -> String {
         let taken: Vec<String> = self.names_in(thread);

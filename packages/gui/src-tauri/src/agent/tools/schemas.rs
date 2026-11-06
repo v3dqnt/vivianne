@@ -718,10 +718,17 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
                     "context": { "type": "string", "description": "With a preset-prompt profile instead of prompt: a short pointer (a path, a target) appended to it." },
                     "run_in_background": { "type": "boolean", "description": "false to wait for the result", "default": true },
                     "name": { "type": "string", "description": "A name to address it by afterwards (lower-case letters, digits, dashes; e.g. \"auditor\"). Defaults to agent-1, agent-2…" },
+                    "provider": { "type": "string", "description": "With model: run this subagent on a specific route (see list_subagent_models). Omit both to use the default." },
+                    "model": { "type": "string", "description": "With provider." },
                     "output_schema": { "type": "object", "description": "A JSON schema. The subagent must answer with one JSON object matching it; you get it parsed, and a reply that doesn't fit counts as a failure." }
                 },
                 "required": ["description"]
             }
+        }),
+        serde_json::json!({
+            "name": "list_subagent_models",
+            "description": "The models a subagent may be started on in this session (its provider/model pairs). Pass one as provider and model to task, e.g. a cheap one for reading and a strong one for hard reasoning.",
+            "parameters": { "type": "object", "properties": {} }
         }),
         serde_json::json!({
             "name": "list_agents",
