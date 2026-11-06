@@ -471,6 +471,26 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
         }
         None => execute_question_tool(cx.call_id, cx.args, cx.emit).await,
     } }),
+    tool!("list_agents" => |cx| text_result(crate::agent::runtime::subagents::render_tree(&crate::agent::runtime::subagents::SubagentRegistry::global().on_thread(crate::agent::orchestration::turn_thread().as_deref())))),
+    tool!("interrupt_agent" => |cx| {
+        let name = cx.args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let message = cx.args.get("message").and_then(|v| v.as_str());
+        match crate::agent::runtime::subagents::interrupt(name, message, crate::agent::orchestration::turn_thread().as_deref()).await {
+            Ok(t) => text_result(t),
+            Err(e) => text_result(format!("Error: {e}")),
+        }
+    }),
+    tool!("message_parent" => |cx| {
+        let text = cx.args.get("text").and_then(|v| v.as_str()).unwrap_or("");
+        if text.trim().is_empty() {
+            text_result("Error: 'text' is required.".to_string())
+        } else {
+            match crate::agent::runtime::subagents::message_parent(cx.app, text).await {
+                Ok(t) => text_result(t),
+                Err(e) => text_result(format!("Error: {e}")),
+            }
+        }
+    }),
     tool!("team_run" => |cx| crate::agent::team::run::execute_team_run(cx.args, cx.depth, cx.state, cx.app).await),
     tool!("list_threads" => |cx| crate::agent::thread_msgs::execute_list_threads(cx.state, cx.app).await),
     tool!("read_thread" => |cx| crate::agent::thread_msgs::execute_read_thread(cx.args).await),
@@ -2079,6 +2099,7 @@ pub(crate) async fn execute_task_tool(
     let source_tag = subagent_source_tag(app, "task").await;
 
     if run_in_background {
+        let bg_name = arc.lock().unwrap_or_else(|e| e.into_inner()).name.clone();
         let parent_thread = crate::agent::orchestration::turn_thread();
         let (schema_bg, name_bg) = (output_schema.clone(), arc.lock().unwrap_or_else(|e| e.into_inner()).name.clone());
         let app = app.clone();
@@ -2106,7 +2127,10 @@ pub(crate) async fn execute_task_tool(
                 }
             };
             let (output, tool_calls, turns) =
-                rt.block_on(crate::agent::runtime::subagents::CURRENT_SUBAGENT.scope(id_bg.clone(), drive_subagent(app.clone(), sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc_bg)));
+                rt.block_on(crate::agent::orchestration::TURN_THREAD.scope(
+                    parent_thread.clone().unwrap_or_default(),
+                    crate::agent::runtime::subagents::CURRENT_SUBAGENT.scope(id_bg.clone(), drive_subagent(app.clone(), sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc_bg)),
+                ));
             crate::agent::runtime::subagents::settle(&arc_bg, output, tool_calls, turns, schema_bg.as_ref());
             let g = arc_bg.lock().unwrap_or_else(|e| e.into_inner());
             let notify = g.notify.clone();
@@ -2133,10 +2157,10 @@ pub(crate) async fn execute_task_tool(
         return AgentToolResult {
             content: vec![MessageContent::Text {
                 text: format!(
-                    "Subagent started in background.\ntask_id: {id}\ntype: {subagent_type}\ndescription: {description}\n\nUse task_output with task_ids=[\"{id}\"] to poll or wait for results."
+                    "Subagent started in background.\nname: {bg_name}\ntask_id: {id}\ntype: {subagent_type}\ndescription: {description}\n\nIt will tell you when it finishes. Use task_output with task_ids=[\"{bg_name}\"] to poll or wait, interrupt_agent to redirect it, kill_task to stop it, list_agents to see all of them."
                 ),
             }],
-            details: serde_json::json!({ "task_id": id, "status": "running", "background": true }),
+            details: serde_json::json!({ "task_id": id, "name": bg_name, "status": "running", "background": true }),
             terminate: None,
         };
     }
@@ -2161,11 +2185,19 @@ pub(crate) async fn execute_task_tool(
     // long one used to push it into context verbatim. Cap it like every other
     // tool output (full text stays in the registry for task_output).
     let output = clip_tool_text(&output, MAX_UNBOUNDED_TOOL_CHARS);
+    let (final_status, stop, diagnostic, structured, fg_name) = {
+        let g = arc.lock().unwrap_or_else(|e| e.into_inner());
+        (g.status.clone(), g.stop_reason, g.diagnostic.clone(), g.structured.clone(), g.name.clone())
+    };
+    let stop_text = stop.and_then(|r| serde_json::to_value(r).ok()).and_then(|v| v.as_str().map(String::from)).unwrap_or_default();
+    let text = match (&final_status, &structured) {
+        (SubagentStatus::Failed { error }, _) => format!("Subagent '{fg_name}' failed: {error}"),
+        (_, Some(v)) => format!("Subagent '{fg_name}' completed ({tool_calls} tool calls, {turns} turns, stop: {stop_text}). Structured answer:\n\n{v}"),
+        _ => format!("Subagent '{fg_name}' completed ({tool_calls} tool calls, {turns} turns, stop: {stop_text}):\n\n{output}"),
+    };
     AgentToolResult {
-        content: vec![MessageContent::Text {
-            text: format!("Subagent completed ({tool_calls} tool calls, {turns} turns):\n\n{output}"),
-        }],
-        details: serde_json::json!({ "task_id": id, "status": "completed", "tool_calls": tool_calls, "turns": turns }),
+        content: vec![MessageContent::Text { text }],
+        details: serde_json::json!({ "task_id": id, "name": fg_name, "status": if matches!(final_status, SubagentStatus::Failed { .. }) { "failed" } else { "completed" }, "stop_reason": stop, "diagnostic": diagnostic, "structured": structured, "tool_calls": tool_calls, "turns": turns }),
         terminate: None,
     }
 }

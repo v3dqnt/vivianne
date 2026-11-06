@@ -716,9 +716,37 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
                     "prompt": { "type": "string", "description": "Self-contained instructions — the subagent doesn't see this conversation. Omit only for a profile with a preset prompt." },
                     "subagent_type": { "type": "string", "description": "The subagent's role, or a profile id", "default": "general-purpose" },
                     "context": { "type": "string", "description": "With a preset-prompt profile instead of prompt: a short pointer (a path, a target) appended to it." },
-                    "run_in_background": { "type": "boolean", "description": "false to wait for the result", "default": true }
+                    "run_in_background": { "type": "boolean", "description": "false to wait for the result", "default": true },
+                    "name": { "type": "string", "description": "A name to address it by afterwards (lower-case letters, digits, dashes; e.g. \"auditor\"). Defaults to agent-1, agent-2…" },
+                    "output_schema": { "type": "object", "description": "A JSON schema. The subagent must answer with one JSON object matching it; you get it parsed, and a reply that doesn't fit counts as a failure." }
                 },
                 "required": ["description"]
+            }
+        }),
+        serde_json::json!({
+            "name": "list_agents",
+            "description": "The subagents on this thread as a tree: each one's name, what it is doing, whether it has finished and why it stopped. Use it to avoid duplicate work and to find the name to address one by.",
+            "parameters": { "type": "object", "properties": {} }
+        }),
+        serde_json::json!({
+            "name": "interrupt_agent",
+            "description": "Redirect a running subagent without ending it: it reads your message at its next step and carries on, keeping everything it has learned. With no message it is told to wrap up and give its final answer now. Use kill_task instead to end it for good. Only the agent that started a subagent can interrupt it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "The subagent's name (see list_agents) or task_id" },
+                    "message": { "type": "string", "description": "What to do differently; omit to tell it to finish up" }
+                },
+                "required": ["name"]
+            }
+        }),
+        serde_json::json!({
+            "name": "message_parent",
+            "description": "Tell the agent that started you something while you work: a finding it needs now, or something you need to know to go on. It reads it between its steps. Your final reply is still what it gets when you finish.",
+            "parameters": {
+                "type": "object",
+                "properties": { "text": { "type": "string" } },
+                "required": ["text"]
             }
         }),
         serde_json::json!({

@@ -278,6 +278,61 @@ pub fn settle(handle: &Arc<Mutex<SubagentHandle>>, output: String, tool_calls: u
     }
 }
 
+/// Put a user-role message into a running subagent's steering queue, so it reads it between steps.
+async fn steer(handle: &Arc<Mutex<SubagentHandle>>, text: String) -> bool {
+    let target = handle.lock().unwrap_or_else(|e| e.into_inner()).steering.clone();
+    let Some((queue, flag)) = target else { return false };
+    queue.write().await.push(AgentMessage::User {
+        content: vec![crate::agent::runtime::types::MessageContent::Text { text }],
+        timestamp: crate::agent::runtime::commands::now_ms(),
+    });
+    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    true
+}
+
+/// Redirect a running child without ending it: it reads the message at its next step and carries on from there. Unlike killing it, its
+/// conversation and what it has learned are kept. Only the agent that started a child may interrupt it, and never itself.
+pub async fn interrupt(name: &str, message: Option<&str>, caller_thread: Option<&str>) -> Result<String, String> {
+    let handle = SubagentRegistry::global().get(name).ok_or_else(|| format!("There is no subagent called '{name}'. Use list_agents to see them."))?;
+    let (id, status_terminal, thread, parent) = {
+        let g = handle.lock().unwrap_or_else(|e| e.into_inner());
+        (g.id.clone(), g.status.is_terminal(), g.thread.clone(), g.parent.clone())
+    };
+    if thread.as_deref() != caller_thread || parent != current_subagent() || current_subagent().as_deref() == Some(id.as_str()) {
+        return Err(format!("You can only interrupt agents you started; '{name}' isn't one of yours."));
+    }
+    if status_terminal {
+        return Err(format!("'{name}' has already finished."));
+    }
+    let text = match message.map(str::trim).filter(|m| !m.is_empty()) {
+        Some(m) => format!("Your parent interrupted you: {m}"),
+        None => "Your parent interrupted you: stop what you are doing and give your final answer now, with what you have so far.".to_string(),
+    };
+    if steer(&handle, text).await {
+        Ok(format!("Interrupted '{name}'. It will read your message at its next step and carry on from there; use kill_task to end it instead."))
+    } else {
+        Err(format!("'{name}' hasn't started its loop yet; try again in a moment, or kill_task it."))
+    }
+}
+
+/// A subagent says something to the agent that started it, mid-run: into that agent's steering queue if it is itself a subagent, else
+/// into the thread it works for.
+pub async fn message_parent(app: &tauri::AppHandle, text: &str) -> Result<String, String> {
+    let me = current_subagent().ok_or("Only a subagent has a parent to message.")?;
+    let handle = SubagentRegistry::global().get(&me).ok_or("Your own record is missing.")?;
+    let (name, parent, thread) = {
+        let g = handle.lock().unwrap_or_else(|e| e.into_inner());
+        (g.name.clone(), g.parent.clone(), g.thread.clone())
+    };
+    let note = format!("<subagent_message from=\"{name}\">\n{}\n</subagent_message>", text.trim());
+    if let Some(parent_handle) = parent.as_deref().and_then(|p| SubagentRegistry::global().get(p)) {
+        return if steer(&parent_handle, note).await { Ok("Sent to your parent.".into()) } else { Err("Your parent isn't running right now.".into()) };
+    }
+    let thread = thread.ok_or("There is no thread to deliver this to.")?;
+    crate::agent::thread_msgs::deliver_note(app, &thread, &note).await?;
+    Ok("Sent to your parent.".into())
+}
+
 /// The most subagents that may work at once. A runaway fan-out fails loudly at this line instead of starving the machine.
 pub const MAX_ACTIVE_SUBAGENTS: usize = 8;
 

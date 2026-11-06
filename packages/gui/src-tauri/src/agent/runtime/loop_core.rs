@@ -786,6 +786,10 @@ pub async fn run_agent_loop_continue(
                 }
             }
         }
+        // Only a subagent has a parent to message.
+        if context.delegate_depth == 0 {
+            tool_defs.retain(|t| t.get("name").and_then(|n| n.as_str()) != Some("message_parent"));
+        }
         // Only a member of a team run has anyone to message.
         if state.team_member().await.is_none() {
             tool_defs.retain(|t| !matches!(t.get("name").and_then(|n| n.as_str()), Some("message_agent" | "team_post" | "team_read")));
@@ -943,7 +947,8 @@ pub async fn run_agent_loop_continue(
             }
             if let crate::agent::runtime::recovery::Failure::RateLimited { retry_after } = &kind {
                 // The run stops here for good; leave a mark so it can be picked up when the limit lifts.
-                if let Some(thread) = crate::agent::orchestration::turn_thread() {
+                // A subagent hitting a limit is not its thread being stopped: only the thread's own run leaves this mark.
+                if let Some(thread) = crate::agent::orchestration::turn_thread().filter(|_| crate::agent::runtime::subagents::current_subagent().is_none()) {
                     crate::agent::orchestration::record_new(
                         &thread,
                         "run.limited",

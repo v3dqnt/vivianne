@@ -54,7 +54,7 @@ You lead this team. You don't do the work yourself: you delegate it, check it, d
 
 /// What an employee needs to run subagents of its own and to work with its
 /// team in a team run (the team tools are hidden outside one).
-const ORCHESTRATION_TOOLS: &[&str] = &["task", "task_output", "kill_task", "list_subagent_profiles", "message_agent", "team_post", "team_read"];
+const ORCHESTRATION_TOOLS: &[&str] = &["task", "task_output", "kill_task", "interrupt_agent", "list_agents", "list_subagent_profiles", "message_agent", "team_post", "team_read"];
 pub const STATUS_PROPOSED: &str = "proposed";
 
 fn agents_dir(root: &Path) -> PathBuf {

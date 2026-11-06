@@ -176,7 +176,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Delegate to subagents",
         when: "A self-contained chunk of work that would otherwise flood your own context — a broad search, an independent investigation.",
-        tools: &["task", "list_subagent_profiles", "task_output", "kill_task", "hire_agent", "ask_agent"],
+        tools: &["task", "list_subagent_profiles", "task_output", "kill_task", "interrupt_agent", "list_agents", "message_parent", "hire_agent", "ask_agent"],
         how: Some(
             "list_subagent_profiles first: pointing at an existing profile costs far fewer tokens than writing a full prompt. \
              Runs in the background by default — keep working while it does, then collect with task_output. \
