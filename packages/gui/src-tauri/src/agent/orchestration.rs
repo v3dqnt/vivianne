@@ -437,6 +437,41 @@ pub fn fold_usage(events: &[Event]) -> ThreadUsage {
     u
 }
 
+/// A pull request a thread opened.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrLink {
+    pub number: i64,
+    pub url: String,
+    pub branch: String,
+}
+
+/// The pull requests a thread has opened, each once, in the order they were opened.
+pub fn fold_prs(events: &[Event]) -> Vec<PrLink> {
+    let mut out: Vec<PrLink> = Vec::new();
+    for e in events.iter().filter(|e| e.kind == "pr.linked") {
+        let Some(number) = e.payload.get("number").and_then(Value::as_i64) else { continue };
+        if out.iter().any(|p| p.number == number) {
+            continue;
+        }
+        let text = |k: &str| e.payload.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        out.push(PrLink { number, url: text("url"), branch: text("branch") });
+    }
+    out
+}
+
+/// Remember that this thread opened a pull request.
+#[tauri::command]
+pub async fn cmd_thread_pr_link(#[allow(non_snake_case)] threadId: String, number: i64, url: String, branch: String) -> Result<(), String> {
+    record_new(&threadId, "pr.linked", serde_json::json!({ "number": number, "url": url, "branch": branch }));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cmd_thread_prs(#[allow(non_snake_case)] threadId: String) -> Result<Vec<PrLink>, String> {
+    with_store(|s| s.events_of(&threadId)).map(|e| fold_prs(&e))
+}
+
 /// How long to wait for a limit that said nothing about when it lifts.
 const DEFAULT_LIMIT_WAIT_MS: i64 = 60 * 60 * 1000;
 
@@ -688,6 +723,15 @@ mod tests {
         assert!((u.cost - 0.25).abs() < 1e-9);
         assert!(u.has_unknown_cost);
         assert_eq!(fold_usage(&[]), ThreadUsage::default());
+    }
+
+    #[test]
+    fn a_thread_lists_each_pull_request_it_opened_once() {
+        let e = |seq: i64, n: i64| Event { seq, thread_id: "t1".into(), kind: "pr.linked".into(), payload: json!({ "number": n, "url": format!("https://x/pull/{n}"), "branch": "b" }) };
+        let prs = fold_prs(&[e(1, 7), e(2, 9), e(3, 7)]);
+        assert_eq!(prs.iter().map(|p| p.number).collect::<Vec<_>>(), vec![7, 9]);
+        assert_eq!(prs[0].url, "https://x/pull/7");
+        assert!(fold_prs(&[]).is_empty());
     }
 
     #[test]

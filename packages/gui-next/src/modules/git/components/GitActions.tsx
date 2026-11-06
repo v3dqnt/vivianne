@@ -14,6 +14,7 @@ import {
 } from '../../../ui'
 import { call } from '../../../ipc'
 import { useAgentStore } from '../../ai/store/agentStore'
+import { activeThreadId } from '../../ai/store/activeThread'
 import { useGitStatus, changedCount, type BranchPr } from '../store/gitStatusStore'
 import { useGitStore } from '../store/gitStore'
 import { useAppView } from './GitView'
@@ -311,6 +312,7 @@ function PrDialog({ root, branch, base: defaultBase, needsPush, onClose, onDone 
                 body: { title: title.trim(), body, head: branch, base, draft },
                 raw: null,
               })
+              if (made?.number) void call('cmd_thread_pr_link', { threadId: activeThreadId(), number: made.number, url: made.html_url, branch })
               onDone(`Opened pull request #${made?.number}`)
               onClose()
             } catch (e) {

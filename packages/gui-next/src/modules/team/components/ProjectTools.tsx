@@ -6,6 +6,7 @@ import { GitStatusChip, GitQuickActions } from '../../git/components/GitActions'
 import { useAppView } from '../../git/components/GitView'
 import { ContextBreakdown, ContextPercent } from '../../ai/components/ContextUsageBar'
 import { ThreadWorktree } from './ThreadWorktree'
+import { ThreadPrs } from './ThreadPrs'
 import { ProjectPill } from '../../sessions/components/ProjectPicker'
 import { useDaysStore } from '../../sessions/store/daysStore'
 import { useProjectsStore } from '../../sessions/store/projectsStore'
@@ -177,6 +178,7 @@ export function ProjectTools() {
               >
                 <GitQuickActions />
               </Box>
+              <ThreadPrs />
               <ButtonBase onClick={() => useAppView.setState({ view: 'git' })} sx={ROW}>
                 History and PRs
               </ButtonBase>
