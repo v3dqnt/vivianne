@@ -1,6 +1,7 @@
-import { Component, Suspense, createElement, useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import { Suspense, createElement, useEffect, useRef, useState, type ComponentType } from 'react'
 import { Box, Button, Stack, Typography } from '../ui'
 import { FIXTURES, NOT_COMPONENTS } from './fixtures'
+import { Boundary } from './Boundary'
 
 type Loader = () => Promise<Record<string, unknown>>
 type Entry = { path: string; name: string; load: Loader }
@@ -15,20 +16,6 @@ const SKIP = new Set(['Composer'])
 const OVERLAY = /(Dialog|Modal|Overlay|Popover|Menu|Builder|Toast|Widget|Widgets)$|^(ReviewPanel|ThemeBuilder|SettingsPanel|AgentSettingsPanel|RestingNotch|Notch)$/
 const isComponent = (name: string, v: unknown) =>
   /^[A-Z]/.test(name) && !SKIP.has(name) && !NOT_COMPONENTS.test(name) && (typeof v === 'function' || (typeof v === 'object' && v !== null && '$$typeof' in v))
-
-class Boundary extends Component<{ children: ReactNode }, { error: string | null }> {
-  state = { error: null as string | null }
-  static getDerivedStateFromError(e: unknown) {
-    return { error: e instanceof Error ? e.message : String(e) }
-  }
-  render() {
-    return this.state.error ? (
-      <Typography sx={{ fontSize: '0.75rem', color: 'warning.main' }}>Needs props or a backend: {this.state.error}</Typography>
-    ) : (
-      this.props.children
-    )
-  }
-}
 
 /** Every card renders itself, but only while it is near the screen. Cards have one fixed size, so scrolling never re-lays-out the page, and
  * only a handful of components run animations, timers and listeners at any moment. */

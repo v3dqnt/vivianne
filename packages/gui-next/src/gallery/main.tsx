@@ -5,18 +5,19 @@ import { baselineExtras, buildTheme } from '../theme'
 import { KitSection } from './KitSection'
 import { IconsSection } from './IconsSection'
 import { AppSection } from './AppSection'
+import { ScenesSection } from './ScenesSection'
 import { useThemeStore, themeOptions, activePaletteId } from '../modules/settings/store/themeStore'
 import { AppearanceEffects } from '../modules/settings/components/AppearanceEffects'
 import '../tailwind.css'
 
-const TABS = ['Kit', 'Icons', 'App components'] as const
+const TABS = ['Scenes', 'Kit', 'Icons', 'App components'] as const
 
 function Gallery() {
   // The app's own appearance pipeline, so every component is drawn exactly as in the app: its palette, fonts, radius, density and wallpaper.
   const appearance = useThemeStore()
   const mode = appearance.mode
   const setMode = appearance.setMode
-  const [tab, setTab] = useState<(typeof TABS)[number]>('Kit')
+  const [tab, setTab] = useState<(typeof TABS)[number]>('Scenes')
   const paletteId = activePaletteId(appearance)
   const opts = themeOptions(appearance)
   const key = JSON.stringify([mode, paletteId, opts])
@@ -35,6 +36,7 @@ function Gallery() {
           </Stack>
         </Stack>
         <Suspense fallback={null}>
+          {tab === 'Scenes' && <ScenesSection />}
           {tab === 'Kit' && <KitSection />}
           {tab === 'Icons' && <IconsSection />}
           {tab === 'App components' && <AppSection />}
