@@ -108,7 +108,8 @@ export function GitQuickActions() {
     }
   }
 
-  const sync = s.upstream ? (s.behind && s.ahead ? 'Sync' : s.behind ? 'Pull' : s.ahead ? 'Push' : null) : 'Publish branch'
+  // A branch with nothing upstream isn't published from here: Create PR pushes it first.
+  const sync = s.upstream ? (s.behind && s.ahead ? 'Sync' : s.behind ? 'Pull' : s.ahead ? 'Push' : null) : null
 
   return (
     <Stack direction="row" sx={{ alignItems: 'center', gap: u(2), flexWrap: 'wrap' }}>
@@ -160,18 +161,6 @@ export function GitQuickActions() {
             sx={BTN_SX}
           >
             Fix checks with the agent
-          </Button>
-        </Tooltip>
-      )}
-      {changed > 0 && (
-        <Tooltip title="The agent reads the uncommitted diff and points out bugs and risks before you commit">
-          <Button
-            size="small"
-            variant="text"
-            onClick={() => askAgent('Review my uncommitted changes (git diff HEAD, and new files) for bugs, risky changes and anything missed. List what you find by file and line; change nothing yet.')}
-            sx={BTN_SX}
-          >
-            Review changes
           </Button>
         </Tooltip>
       )}
