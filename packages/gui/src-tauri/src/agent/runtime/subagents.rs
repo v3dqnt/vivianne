@@ -41,6 +41,44 @@ impl SubagentStatus {
     }
 }
 
+/// Why a subagent stopped, as a value a parent can act on instead of a string to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StopReason {
+    /// It finished and gave an answer.
+    Completed,
+    /// It was cancelled or interrupted.
+    Aborted,
+    /// It failed: an infrastructure error, or a result that didn't meet what was asked.
+    Error,
+    /// It ran out of tokens before finishing.
+    MaxTokens,
+    /// The model declined to continue.
+    Refusal,
+}
+
+impl StopReason {
+    /// From how the child's last assistant message ended (`stop`, `length`, `refusal`, `error`, `aborted`).
+    pub fn from_model(stop: &str) -> Self {
+        match stop {
+            "length" | "max_tokens" => Self::MaxTokens,
+            "refusal" | "content_filter" => Self::Refusal,
+            "error" => Self::Error,
+            "aborted" => Self::Aborted,
+            _ => Self::Completed,
+        }
+    }
+}
+
+/// A subagent's name: lower-case, starts with a letter, up to 32 characters, and never `lead` (the root).
+pub fn valid_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    name != "lead"
+        && name.len() <= 32
+        && chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
 /// A live subagent handle. Cancellation flips `cancelled` and the driver
 /// (whoever owns the executor) is expected to observe it.
 pub struct SubagentHandle {
@@ -67,6 +105,18 @@ pub struct SubagentHandle {
     /// The running loop's abort flag, set once it starts, so cancelling the
     /// subagent stops it (see `cancel_subagent`).
     pub abort: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// What the parent calls it: `agent-1`, or a name it chose. Addresses the child in `task_output`, `kill_task`, `interrupt_agent`.
+    pub name: String,
+    /// The subagent that started this one (an employee's helper), if one did.
+    pub parent: Option<String>,
+    /// The thread whose turn started it: who is told when it settles and who it can message.
+    pub thread: Option<String>,
+    pub depth: usize,
+    pub stop_reason: Option<StopReason>,
+    /// Why it failed, kept to 4 KiB.
+    pub diagnostic: Option<String>,
+    /// Its answer as JSON, when a schema was asked for and the answer fit it.
+    pub structured: Option<serde_json::Value>,
 }
 
 /// Process-wide registry of subagents. In-process only — no cross-window,
@@ -85,6 +135,12 @@ impl SubagentRegistry {
         REG.get_or_init(Self::new)
     }
 
+    #[cfg(test)]
+    fn register_for_test(&self, handle: Arc<Mutex<SubagentHandle>>) {
+        let id = handle.lock().unwrap().id.clone();
+        self.inner.lock().unwrap().insert(id, handle);
+    }
+
     pub fn register(&self, handle: SubagentHandle) -> Arc<Mutex<SubagentHandle>> {
         let id = handle.id.clone();
         let arc = Arc::new(Mutex::new(handle));
@@ -92,8 +148,38 @@ impl SubagentRegistry {
         arc
     }
 
+    /// By id, or else by name (the newest one with that name).
     pub fn get(&self, id: &str) -> Option<Arc<Mutex<SubagentHandle>>> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
+        let by_id = self.inner.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned();
+        by_id.or_else(|| {
+            self.all()
+                .into_iter()
+                .filter(|h| h.lock().unwrap_or_else(|e| e.into_inner()).name == id)
+                .max_by_key(|h| h.lock().unwrap_or_else(|e| e.into_inner()).started_at_epoch_ms)
+        })
+    }
+
+    /// The next free `agent-N` for a thread.
+    pub fn next_name(&self, thread: Option<&str>) -> String {
+        let taken: Vec<String> = self.names_in(thread);
+        (1..).map(|n| format!("agent-{n}")).find(|n| !taken.contains(n)).unwrap_or_default()
+    }
+
+    /// The names in use on a thread, finished or not: a name is never reused while it can still be asked about.
+    pub fn names_in(&self, thread: Option<&str>) -> Vec<String> {
+        self.all()
+            .iter()
+            .map(|h| h.lock().unwrap_or_else(|e| e.into_inner()))
+            .filter(|h| h.thread.as_deref() == thread)
+            .map(|h| h.name.clone())
+            .collect()
+    }
+
+    /// Everything started on a thread, oldest first.
+    pub fn on_thread(&self, thread: Option<&str>) -> Vec<Arc<Mutex<SubagentHandle>>> {
+        let mut v: Vec<_> = self.all().into_iter().filter(|h| h.lock().unwrap_or_else(|e| e.into_inner()).thread.as_deref() == thread).collect();
+        v.sort_by_key(|h| h.lock().unwrap_or_else(|e| e.into_inner()).started_at_epoch_ms);
+        v
     }
 
     pub fn all(&self) -> Vec<Arc<Mutex<SubagentHandle>>> {
@@ -103,6 +189,92 @@ impl SubagentRegistry {
     /// How many subagents are still working (not yet completed, failed or cancelled).
     pub fn active_count(&self) -> usize {
         self.all().iter().filter(|h| !h.lock().unwrap_or_else(|e| e.into_inner()).status.is_terminal()).count()
+    }
+}
+
+tokio::task_local! {
+    /// The subagent whose loop is running, so a subagent it starts knows its parent.
+    pub static CURRENT_SUBAGENT: String;
+}
+
+/// The id of the subagent the running code belongs to, if it belongs to one.
+pub fn current_subagent() -> Option<String> {
+    CURRENT_SUBAGENT.try_with(|s| s.clone()).ok()
+}
+
+/// Read an answer that was asked for as JSON matching `schema`: the whole reply, or one fenced block. Checks what a parent relies on:
+/// it is an object (when the schema says so), every required key is present, and listed properties have the declared simple type.
+pub fn parse_structured(output: &str, schema: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let text = output.trim();
+    let body = match text.find("```") {
+        Some(start) => {
+            let after = &text[start + 3..];
+            let after = after.strip_prefix("json").unwrap_or(after);
+            after.split("```").next().unwrap_or(after).trim()
+        }
+        None => text,
+    };
+    let value: serde_json::Value = serde_json::from_str(body).map_err(|e| format!("the reply isn't valid JSON ({e})"))?;
+    let kind_ok = |v: &serde_json::Value, want: &str| match want {
+        "object" => v.is_object(),
+        "array" => v.is_array(),
+        "string" => v.is_string(),
+        "number" => v.is_number(),
+        "integer" => v.is_i64() || v.is_u64(),
+        "boolean" => v.is_boolean(),
+        "null" => v.is_null(),
+        _ => true,
+    };
+    if let Some(want) = schema.get("type").and_then(|t| t.as_str()) {
+        if !kind_ok(&value, want) {
+            return Err(format!("the reply should be a JSON {want}"));
+        }
+    }
+    if let Some(obj) = value.as_object() {
+        for key in schema.get("required").and_then(|r| r.as_array()).into_iter().flatten().filter_map(|k| k.as_str()) {
+            if !obj.contains_key(key) {
+                return Err(format!("the required field `{key}` is missing"));
+            }
+        }
+        for (key, prop) in schema.get("properties").and_then(|p| p.as_object()).into_iter().flatten() {
+            if let (Some(v), Some(want)) = (obj.get(key), prop.get("type").and_then(|t| t.as_str())) {
+                if !kind_ok(v, want) {
+                    return Err(format!("the field `{key}` should be a {want}"));
+                }
+            }
+        }
+    }
+    Ok(value)
+}
+
+/// Record a finished run on its handle: the status, why it stopped (from how its last reply ended), and — when a schema was asked
+/// for — the structured answer, or a failure if the reply didn't fit it. A cancelled subagent keeps its cancelled status.
+pub fn settle(handle: &Arc<Mutex<SubagentHandle>>, output: String, tool_calls: u32, turns: u32, schema: Option<&serde_json::Value>) {
+    let mut g = handle.lock().unwrap_or_else(|e| e.into_inner());
+    if g.cancelled {
+        return;
+    }
+    let last = g.messages.lock().unwrap_or_else(|e| e.into_inner()).iter().rev().find_map(|m| match m {
+        AgentMessage::Assistant { stop_reason, .. } => Some(stop_reason.clone()),
+        _ => None,
+    });
+    let reason = last.as_deref().map(StopReason::from_model).unwrap_or(StopReason::Completed);
+    match schema.map(|s| parse_structured(&output, s)) {
+        Some(Err(why)) => {
+            let error = format!("It was asked for JSON matching a schema, but {why}.");
+            g.diagnostic = Some(cap_bytes(&error, DIAGNOSTIC_BYTES).to_string());
+            g.stop_reason = Some(StopReason::Error);
+            g.status = SubagentStatus::Failed { error };
+        }
+        Some(Ok(v)) => {
+            g.structured = Some(v);
+            g.stop_reason = Some(reason);
+            g.status = SubagentStatus::Completed { output, tool_calls, turns };
+        }
+        None => {
+            g.stop_reason = Some(reason);
+            g.status = SubagentStatus::Completed { output, tool_calls, turns };
+        }
     }
 }
 
@@ -124,17 +296,132 @@ fn cap_bytes(s: &str, max: usize) -> &str {
 }
 
 /// The notice a parent receives when a background subagent settles, so its answer is never left unread.
-pub fn settlement_note(id: &str, description: &str, status: &SubagentStatus) -> String {
+pub fn settlement_note(id: &str, description: &str, status: &SubagentStatus, stop: Option<StopReason>, structured: Option<&serde_json::Value>) -> String {
     let body = match status {
         SubagentStatus::Completed { output, .. } if output.trim().is_empty() || output.contains("(sub-task produced no final answer)") => {
             "It left no closing message.".to_string()
         }
-        SubagentStatus::Completed { output, .. } => format!("It finished. Its answer:\n\n{}", output.trim()),
+        SubagentStatus::Completed { output, .. } => {
+            let how = match stop {
+                Some(StopReason::MaxTokens) => " It ran out of tokens, so the answer may be cut short.",
+                Some(StopReason::Refusal) => " The model declined to continue, so this may be incomplete.",
+                _ => "",
+            };
+            match structured {
+                Some(v) => format!("It finished.{how} Its structured answer:\n\n{v}"),
+                None => format!("It finished.{how} Its answer:\n\n{}", output.trim()),
+            }
+        }
         SubagentStatus::Failed { error } => format!("It failed: {}", cap_bytes(error, DIAGNOSTIC_BYTES)),
         SubagentStatus::Cancelled { reason } => format!("It was cancelled{}.", reason.as_ref().map(|r| format!(": {r}")).unwrap_or_default()),
         SubagentStatus::Initializing | SubagentStatus::Running { .. } => "It is still running.".to_string(),
     };
     format!("<subagent_settled id=\"{id}\">\nThe background subagent \"{description}\" has settled. {body}\n</subagent_settled>")
+}
+
+/// The agents on a thread as a tree, for the model to see who is doing what: the root first, children indented under their parent.
+pub fn render_tree(handles: &[Arc<Mutex<SubagentHandle>>]) -> String {
+    struct Row {
+        id: String,
+        parent: Option<String>,
+        line: String,
+    }
+    let rows: Vec<Row> = handles
+        .iter()
+        .map(|h| {
+            let g = h.lock().unwrap_or_else(|e| e.into_inner());
+            let status = match &g.status {
+                SubagentStatus::Initializing => "starting".to_string(),
+                SubagentStatus::Running { turns, tool_calls } => format!("running, {turns} turns, {tool_calls} tool calls"),
+                SubagentStatus::Completed { .. } => "completed".to_string(),
+                SubagentStatus::Failed { .. } => "failed".to_string(),
+                SubagentStatus::Cancelled { .. } => "cancelled".to_string(),
+            };
+            let why = g.stop_reason.map(|r| format!(" ({})", serde_json::to_value(r).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default())).unwrap_or_default();
+            Row { id: g.id.clone(), parent: g.parent.clone(), line: format!("{} [{status}]{why} — {}", g.name, g.description) }
+        })
+        .collect();
+    fn walk(rows: &[Row], parent: Option<&str>, indent: usize, out: &mut Vec<String>) {
+        for r in rows.iter().filter(|r| r.parent.as_deref() == parent) {
+            out.push(format!("{}{}", "  ".repeat(indent), r.line));
+            walk(rows, Some(&r.id), indent + 1, out);
+        }
+    }
+    let mut out = vec!["lead [you] — root agent".to_string()];
+    walk(&rows, None, 1, &mut out);
+    out.join("\n")
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+
+    fn handle(id: &str, name: &str, parent: Option<&str>, thread: &str, status: SubagentStatus) -> Arc<Mutex<SubagentHandle>> {
+        Arc::new(Mutex::new(SubagentHandle {
+            id: id.into(),
+            subagent_type: "general-purpose".into(),
+            description: format!("{name}'s job"),
+            prompt: String::new(),
+            cwd: String::new(),
+            started_at: Instant::now(),
+            started_at_epoch_ms: 0,
+            status,
+            cancelled: false,
+            notify: Arc::new(tokio::sync::Notify::new()),
+            messages: Mutex::new(Vec::new()),
+            steering: None,
+            abort: None,
+            name: name.into(),
+            parent: parent.map(String::from),
+            thread: Some(thread.into()),
+            depth: 1,
+            stop_reason: None,
+            diagnostic: None,
+            structured: None,
+        }))
+    }
+
+    #[test]
+    fn names_follow_the_rules_and_never_collide() {
+        for ok in ["agent-1", "audit", "a", "reviewer-2"] {
+            assert!(valid_name(ok), "{ok}");
+        }
+        for bad in ["lead", "Agent", "1agent", "has space", "under_score", "", &"x".repeat(33)] {
+            assert!(!valid_name(bad), "{bad:?}");
+        }
+        let reg = SubagentRegistry::new();
+        reg.register_for_test(handle("1", "agent-1", None, "t", SubagentStatus::Running { turns: 0, tool_calls: 0 }));
+        reg.register_for_test(handle("2", "agent-2", None, "t", SubagentStatus::Cancelled { reason: None }));
+        assert_eq!(reg.next_name(Some("t")), "agent-3", "a finished name is still taken");
+        assert_eq!(reg.next_name(Some("other")), "agent-1", "names are per thread");
+    }
+
+    #[test]
+    fn a_child_is_found_by_its_name_as_well_as_its_id() {
+        let reg = SubagentRegistry::new();
+        reg.register_for_test(handle("uuid-1", "auditor", None, "t", SubagentStatus::Running { turns: 0, tool_calls: 0 }));
+        assert!(reg.get("uuid-1").is_some() && reg.get("auditor").is_some() && reg.get("nobody").is_none());
+    }
+
+    #[test]
+    fn the_tree_shows_helpers_under_the_agent_that_started_them() {
+        let a = handle("1", "lead-dev", None, "t", SubagentStatus::Running { turns: 2, tool_calls: 5 });
+        let b = handle("2", "helper", Some("1"), "t", SubagentStatus::Completed { output: "x".into(), tool_calls: 1, turns: 1 });
+        b.lock().unwrap().stop_reason = Some(StopReason::Completed);
+        let tree = render_tree(&[a, b]);
+        let lines: Vec<&str> = tree.lines().collect();
+        assert_eq!(lines[0], "lead [you] — root agent");
+        assert!(lines[1].starts_with("  lead-dev [running"), "{}", lines[1]);
+        assert!(lines[2].starts_with("    helper [completed] (completed)"), "{}", lines[2]);
+    }
+
+    #[test]
+    fn stop_reasons_come_from_how_the_model_ended() {
+        assert_eq!(StopReason::from_model("stop"), StopReason::Completed);
+        assert_eq!(StopReason::from_model("length"), StopReason::MaxTokens);
+        assert_eq!(StopReason::from_model("refusal"), StopReason::Refusal);
+        assert_eq!(StopReason::from_model("error"), StopReason::Error);
+    }
 }
 
 #[cfg(test)]
@@ -143,14 +430,14 @@ mod settlement_tests {
 
     #[test]
     fn a_finished_subagent_hands_its_answer_to_the_parent() {
-        let n = settlement_note("t1", "audit the rail", &SubagentStatus::Completed { output: "Found 3 issues.".into(), tool_calls: 4, turns: 2 });
+        let n = settlement_note("t1", "audit the rail", &SubagentStatus::Completed { output: "Found 3 issues.".into(), tool_calls: 4, turns: 2 }, None, None);
         assert!(n.contains("t1") && n.contains("audit the rail") && n.contains("Found 3 issues."));
     }
 
     #[test]
     fn an_empty_or_placeholder_answer_says_so() {
         for out in ["", "  ", "(sub-task produced no final answer)"] {
-            let n = settlement_note("t", "d", &SubagentStatus::Completed { output: out.into(), tool_calls: 0, turns: 0 });
+            let n = settlement_note("t", "d", &SubagentStatus::Completed { output: out.into(), tool_calls: 0, turns: 0 }, None, None);
             assert!(n.contains("left no closing message"), "{out:?}");
         }
     }
@@ -158,14 +445,48 @@ mod settlement_tests {
     #[test]
     fn a_failure_diagnostic_is_capped_on_a_character_boundary() {
         let long = "é".repeat(5000);
-        let n = settlement_note("t", "d", &SubagentStatus::Failed { error: long });
+        let n = settlement_note("t", "d", &SubagentStatus::Failed { error: long }, None, None);
         assert!(n.len() < 4096 + 200);
         assert!(n.is_char_boundary(n.len()));
     }
 
     #[test]
+    fn a_truncated_answer_says_it_may_be_cut_short() {
+        let n = settlement_note("t", "d", &SubagentStatus::Completed { output: "half".into(), tool_calls: 0, turns: 1 }, Some(StopReason::MaxTokens), None);
+        assert!(n.contains("ran out of tokens"));
+    }
+
+    #[test]
+    fn a_structured_answer_must_fit_the_schema() {
+        let schema = serde_json::json!({ "type": "object", "required": ["count", "files"], "properties": { "count": { "type": "integer" }, "files": { "type": "array" } } });
+        let ok = parse_structured("```json\n{\"count\": 2, \"files\": [\"a\", \"b\"]}\n```", &schema).expect("a fenced block is read");
+        assert_eq!(ok["count"], 2);
+        assert!(parse_structured("{\"count\": 2}", &schema).unwrap_err().contains("files"), "a missing field is named");
+        assert!(parse_structured("{\"count\": \"two\", \"files\": []}", &schema).unwrap_err().contains("count"), "a wrong type is named");
+        assert!(parse_structured("not json", &schema).is_err());
+        assert!(parse_structured("[1]", &schema).is_err(), "an array is not an object");
+    }
+
+    #[test]
+    fn a_reply_that_misses_its_schema_is_a_failure_not_a_success() {
+        use std::sync::{Arc, Mutex};
+        let h = Arc::new(Mutex::new(SubagentHandle {
+            id: "1".into(), subagent_type: String::new(), description: String::new(), prompt: String::new(), cwd: String::new(),
+            started_at: Instant::now(), started_at_epoch_ms: 0, status: SubagentStatus::Running { turns: 0, tool_calls: 0 }, cancelled: false,
+            notify: Arc::new(tokio::sync::Notify::new()), messages: Mutex::new(Vec::new()), steering: None, abort: None,
+            name: "a".into(), parent: None, thread: None, depth: 1, stop_reason: None, diagnostic: None, structured: None,
+        }));
+        let schema = serde_json::json!({ "type": "object", "required": ["x"] });
+        settle(&h, "plain prose".into(), 1, 1, Some(&schema));
+        let g = h.lock().unwrap();
+        assert!(matches!(g.status, SubagentStatus::Failed { .. }));
+        assert_eq!(g.stop_reason, Some(StopReason::Error));
+        assert!(g.diagnostic.is_some());
+    }
+
+    #[test]
     fn a_cancelled_subagent_names_the_reason() {
-        let n = settlement_note("t", "d", &SubagentStatus::Cancelled { reason: Some("stopped by you".into()) });
+        let n = settlement_note("t", "d", &SubagentStatus::Cancelled { reason: Some("stopped by you".into()) }, None, None);
         assert!(n.contains("cancelled: stopped by you"));
     }
 }
@@ -362,6 +683,7 @@ pub fn cancel_subagent(handle: &Arc<Mutex<SubagentHandle>>, reason: Option<Strin
         return false;
     }
     g.cancelled = true;
+    g.stop_reason = Some(StopReason::Aborted);
     g.status = SubagentStatus::Cancelled { reason };
     if let Some(abort) = &g.abort {
         abort.store(true, std::sync::atomic::Ordering::SeqCst);

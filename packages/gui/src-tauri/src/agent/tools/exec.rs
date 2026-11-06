@@ -1945,6 +1945,19 @@ pub(crate) async fn execute_task_tool(
             crate::agent::runtime::subagents::MAX_ACTIVE_SUBAGENTS
         ));
     }
+    // Named by the parent, or `agent-N`: the name is how the child is asked about, interrupted or stopped afterwards.
+    let thread_now = crate::agent::orchestration::turn_thread();
+    let chosen_name = match args.get("name").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()) {
+        Some(n) if !crate::agent::runtime::subagents::valid_name(n) => {
+            return text_result(format!("Error: '{n}' isn't a valid name. Use lower-case letters, digits and dashes, starting with a letter, up to 32 characters, and not 'lead'."));
+        }
+        Some(n) if SubagentRegistry::global().names_in(thread_now.as_deref()).iter().any(|x| x == n) => {
+            return text_result(format!("Error: a subagent called '{n}' already exists in this thread. Pick another name."));
+        }
+        Some(n) => n.to_string(),
+        None => SubagentRegistry::global().next_name(thread_now.as_deref()),
+    };
+    let output_schema = args.get("output_schema").filter(|v| v.is_object()).cloned();
     let id = uuid::Uuid::new_v4().to_string();
     let handle = SubagentHandle {
         id: id.clone(),
@@ -1960,6 +1973,13 @@ pub(crate) async fn execute_task_tool(
         messages: std::sync::Mutex::new(Vec::new()),
         steering: None,
         abort: None,
+        name: chosen_name,
+        parent: crate::agent::runtime::subagents::current_subagent(),
+        thread: crate::agent::orchestration::turn_thread(),
+        depth: depth + 1,
+        stop_reason: None,
+        diagnostic: None,
+        structured: None,
     };
     let arc = SubagentRegistry::global().register(handle);
     // An employee's own subagents are recorded under the employee's run, so
@@ -2060,6 +2080,7 @@ pub(crate) async fn execute_task_tool(
 
     if run_in_background {
         let parent_thread = crate::agent::orchestration::turn_thread();
+        let (schema_bg, name_bg) = (output_schema.clone(), arc.lock().unwrap_or_else(|e| e.into_inner()).name.clone());
         let app = app.clone();
         let arc_bg = arc.clone();
         let id_bg = id.clone();
@@ -2085,17 +2106,15 @@ pub(crate) async fn execute_task_tool(
                 }
             };
             let (output, tool_calls, turns) =
-                rt.block_on(drive_subagent(app.clone(), sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc_bg));
-            let mut g = arc_bg.lock().unwrap_or_else(|e| e.into_inner());
-            if !g.cancelled {
-                g.status = SubagentStatus::Completed { output, tool_calls, turns };
-            }
+                rt.block_on(crate::agent::runtime::subagents::CURRENT_SUBAGENT.scope(id_bg.clone(), drive_subagent(app.clone(), sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc_bg)));
+            crate::agent::runtime::subagents::settle(&arc_bg, output, tool_calls, turns, schema_bg.as_ref());
+            let g = arc_bg.lock().unwrap_or_else(|e| e.into_inner());
             let notify = g.notify.clone();
-            let (settled, description) = (g.status.clone(), g.description.clone());
+            let (settled, description, stop, structured) = (g.status.clone(), g.description.clone(), g.stop_reason, g.structured.clone());
             drop(g);
             // Tell the parent: otherwise a background answer sits unread unless the model remembers to poll for it.
             if let Some(thread) = parent_thread.clone() {
-                let note = crate::agent::runtime::subagents::settlement_note(&id_bg, &description, &settled);
+                let note = crate::agent::runtime::subagents::settlement_note(&name_bg, &description, &settled, stop, structured.as_ref());
                 let app2 = app.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = crate::agent::thread_msgs::deliver_note(&app2, &thread, &note).await {
@@ -2122,11 +2141,12 @@ pub(crate) async fn execute_task_tool(
         };
     }
 
-    let (output, tool_calls, turns) =
-        drive_subagent(app.clone(), sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc).await;
+    let (output, tool_calls, turns) = crate::agent::runtime::subagents::CURRENT_SUBAGENT
+        .scope(id.clone(), drive_subagent(app.clone(), sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc))
+        .await;
     {
-        let mut g = arc.lock().unwrap_or_else(|e| e.into_inner());
-        g.status = SubagentStatus::Completed { output: output.clone(), tool_calls, turns };
+        crate::agent::runtime::subagents::settle(&arc, output.clone(), tool_calls, turns, output_schema.as_ref());
+        let g = arc.lock().unwrap_or_else(|e| e.into_inner());
         let notify = g.notify.clone();
         drop(g);
         if let Some(run_id) = &run_record {
