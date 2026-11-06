@@ -94,6 +94,10 @@ pub struct RunLedger {
     /// still ahead and not only what is behind.
     #[serde(default)]
     pub todos: Vec<(String, String)>,
+    /// The run's goal as the model last left it (refined objective, phase, blocked reason). Written with every step, and read back when the
+    /// run is re-attached, so a restart doesn't replace it with a truncation of the first message.
+    #[serde(default)]
+    pub goal: Option<crate::agent::runtime::types::Goal>,
 }
 
 /// Runs the user asked to pause (rather than stop), by ledger key.
@@ -152,6 +156,7 @@ impl RunLedger {
             status_reason: None,
             milestones: Vec::new(),
             todos: Vec::new(),
+            goal: None,
         }
     }
 
@@ -351,11 +356,22 @@ pub async fn cmd_long_task_get(
     let found = resumable().into_iter().filter(|l| l.thread == thread && l.workspace == workspace).max_by_key(|l| l.updated_at);
     if let Some(l) = &found {
         state.agent_state.set_long_task(Some(l.key.clone())).await;
-        if state.agent_state.goal().await.is_none() {
-            state.agent_state.create_goal(l.objective.clone()).await;
-        }
+        restore_goal(&state.agent_state, l).await;
     }
     Ok(found)
+}
+
+/// Put the run's goal back on the conversation when it has none: the one the ledger saved, or else one made from the objective.
+async fn restore_goal(state: &crate::agent::runtime::state::AgentState, ledger: &RunLedger) {
+    if state.goal().await.is_some() {
+        return;
+    }
+    match ledger.goal.clone() {
+        Some(saved) => state.set_goal(Some(saved)).await,
+        None => {
+            let _ = state.create_goal(ledger.objective.clone()).await;
+        }
+    }
 }
 
 /// Pause, stop, raise the caps of, or ready to resume this conversation's
@@ -393,7 +409,7 @@ pub async fn cmd_long_task_control(
             }
             ledger.set_status(RunStatus::Running, None);
             if state.agent_state.goal().await.is_none() {
-                state.agent_state.create_goal(ledger.objective.clone()).await;
+                restore_goal(&state.agent_state, &ledger).await;
             } else {
                 let _ = state.agent_state.goal_action(crate::agent::runtime::types::GoalAction::Resume).await;
             }
@@ -474,6 +490,26 @@ mod tests {
         assert_eq!(back, l);
         assert!(back.status.resumes_on_launch());
         assert!(!RunStatus::Paused.resumes_on_launch());
+    }
+
+    #[test]
+    fn the_goal_is_saved_with_the_run_and_comes_back_as_the_model_left_it() {
+        use crate::agent::runtime::types::{Goal, GoalPhase};
+        let mut l = RunLedger::new("g", "the first message, truncated…", None, None);
+        l.goal = Some(Goal { objective: "the refined objective".into(), phase: GoalPhase::Blocked, blocked_reason: Some("needs an API key".into()) });
+        let back: RunLedger = serde_json::from_str(&serde_json::to_string(&l).unwrap()).unwrap();
+        let goal = back.goal.expect("the goal survives");
+        assert_eq!(goal.objective, "the refined objective");
+        assert_eq!(goal.phase, GoalPhase::Blocked);
+        assert_eq!(goal.blocked_reason.as_deref(), Some("needs an API key"));
+    }
+
+    #[test]
+    fn a_ledger_saved_before_goals_were_kept_still_loads() {
+        let mut v = serde_json::to_value(RunLedger::new("old", "x", None, None)).unwrap();
+        v.as_object_mut().unwrap().remove("goal");
+        let l: RunLedger = serde_json::from_value(v).unwrap();
+        assert!(l.goal.is_none());
     }
 
     #[test]

@@ -239,7 +239,7 @@ impl PersonaMode {
 // `get_goal`, and persisting state no consumer reads is worse than not
 // having it. Cleared with the rest of the session (see `AgentState::clear`).
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GoalPhase {
     Active,
@@ -248,7 +248,7 @@ pub enum GoalPhase {
     Complete,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Goal {
     pub objective: String,

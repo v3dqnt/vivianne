@@ -390,6 +390,11 @@ impl AgentState {
         Ok(goal)
     }
 
+    /// Put a goal back exactly as it was saved (a re-attached run), or take it away.
+    pub async fn set_goal(&self, goal: Option<Goal>) {
+        self.inner.write().await.goal = goal;
+    }
+
     /// Apply a legal action to the current goal; an illegal one is refused with the reason.
     pub async fn goal_action(&self, action: crate::agent::runtime::types::GoalAction) -> Result<Goal, String> {
         let mut inner = self.inner.write().await;

@@ -1038,6 +1038,10 @@ pub async fn run_agent_loop_continue(
             l.steps += 1;
             l.model = Some(format!("{}/{}", used_model.provider, used_model.id));
         }
+        // The goal is saved with the run, so it comes back with it after a restart.
+        if let Some(l) = ledger.as_mut() {
+            l.goal = state.goal().await;
+        }
 
         // If the model signalled error/aborted, end the turn immediately without
         // running any tool calls it may have partially emitted (mirrors agent-loop.ts:
