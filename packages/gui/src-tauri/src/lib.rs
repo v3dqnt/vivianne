@@ -308,6 +308,8 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::sessions::thread_worktree::cmd_thread_project_path,
       crate::agent::sessions::thread_worktree::cmd_thread_worktree_finish,
       crate::agent::orchestration::cmd_thread_consumed_work,
+      crate::agent::orchestration::cmd_thread_usage,
+      crate::agent::orchestration::cmd_limit_recovery_candidates,
       crate::agent::runtime::prompt_sections::cmd_prompt_section_set,
       crate::agent::runtime::prompt_sections::cmd_prompt_section_remove,
       crate::agent::changes::git_checkpoints::cmd_git_checkpoints,

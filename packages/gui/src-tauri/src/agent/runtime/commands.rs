@@ -243,6 +243,17 @@ pub async fn run_turn(
     images: Vec<ImageInput>,
     turn: Turn,
 ) -> Result<Vec<AgentMessage>, String> {
+    crate::agent::orchestration::TURN_THREAD.scope(thread_id.to_string(), run_turn_inner(app, state, thread_id, text, images, turn)).await
+}
+
+async fn run_turn_inner(
+    app: &tauri::AppHandle,
+    state: Arc<AppState>,
+    thread_id: &str,
+    text: String,
+    images: Vec<ImageInput>,
+    turn: Turn,
+) -> Result<Vec<AgentMessage>, String> {
     use tauri::Emitter;
     if turn.main {
         // Alongside the reply, never in front of it: a first message also gets a title.

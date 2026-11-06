@@ -404,6 +404,134 @@ pub fn fold_consumed_work(events: &[Event]) -> ConsumedWork {
     w
 }
 
+/// What one thread has spent, folded from its `usage` events.
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadUsage {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub requests: u32,
+    /// Dollars, over the requests whose model has a known price.
+    pub cost: f64,
+    /// True when some request's model had no price, so `cost` is partial.
+    pub has_unknown_cost: bool,
+}
+
+/// Fold a thread's events into its total usage.
+pub fn fold_usage(events: &[Event]) -> ThreadUsage {
+    let mut u = ThreadUsage::default();
+    let n = |e: &Event, k: &str| e.payload.get(k).and_then(Value::as_u64).unwrap_or(0);
+    for e in events.iter().filter(|e| e.kind == "usage") {
+        u.input += n(e, "input");
+        u.output += n(e, "output");
+        u.cache_read += n(e, "cacheRead");
+        u.cache_write += n(e, "cacheWrite");
+        u.requests += 1;
+        match e.payload.get("cost").and_then(Value::as_f64) {
+            Some(c) => u.cost += c,
+            None => u.has_unknown_cost = true,
+        }
+    }
+    u
+}
+
+/// How long to wait for a limit that said nothing about when it lifts.
+const DEFAULT_LIMIT_WAIT_MS: i64 = 60 * 60 * 1000;
+
+/// A thread stopped by a usage or rate limit that hasn't been picked up since.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LimitRecovery {
+    pub thread_id: String,
+    pub resume_at_ms: i64,
+    pub reason: String,
+}
+
+/// The open limit on a thread, if one stopped it and nothing has happened since:
+/// a later request, queued input or an earlier resume all close it.
+pub fn fold_limit(thread: &str, events: &[Event]) -> Option<LimitRecovery> {
+    let at = events.iter().rposition(|e| e.kind == "run.limited")?;
+    if events[at + 1..].iter().any(|e| matches!(e.kind.as_str(), "usage" | "inbox.queued" | "run.resumed")) {
+        return None;
+    }
+    let p = &events[at].payload;
+    let since = p.get("atMs").and_then(Value::as_i64).unwrap_or(0);
+    let wait = p.get("retryAfterSecs").and_then(Value::as_i64).map(|s| s * 1000 + 1000).unwrap_or(DEFAULT_LIMIT_WAIT_MS);
+    Some(LimitRecovery { thread_id: thread.to_string(), resume_at_ms: since + wait, reason: p.get("reason").and_then(Value::as_str).unwrap_or("").to_string() })
+}
+
+impl Store {
+    /// Threads stopped by a limit, whether or not it has lifted yet.
+    pub fn limited_threads(&self) -> Result<Vec<LimitRecovery>, String> {
+        let mut out = Vec::new();
+        for t in self.threads()? {
+            if let Some(l) = fold_limit(&t.id, &self.events_of(&t.id)?) {
+                out.push(l);
+            }
+        }
+        Ok(out)
+    }
+}
+
+#[tauri::command]
+pub async fn cmd_limit_recovery_candidates() -> Result<Vec<LimitRecovery>, String> {
+    with_store(|s| s.limited_threads())
+}
+
+/// Pick up threads whose limit has lifted: mark each resumed first (so it happens once), then
+/// continue it through the ordinary send path.
+async fn resume_lifted_limits(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let due: Vec<LimitRecovery> = match with_store(|s| s.limited_threads()) {
+        Ok(l) => l.into_iter().filter(|l| l.resume_at_ms <= now_ms()).collect(),
+        Err(_) => return,
+    };
+    for l in due {
+        let registry = app.state::<crate::agent::runtime::commands::AgentRegistry>();
+        let state = registry.resolve(Some(&l.thread_id)).await;
+        if !state.is_idle() {
+            continue;
+        }
+        record_new(&l.thread_id, "run.resumed", serde_json::json!({ "after": "limit" }));
+        let app = app.clone();
+        let thread = l.thread_id.clone();
+        tokio::spawn(async move {
+            let turn = crate::agent::runtime::commands::Turn { main: true, source_tag: None, on_event: None, forced_routing: false };
+            let text = "The usage limit that stopped you has lifted. Carry on where you left off.".to_string();
+            if let Err(e) = crate::agent::runtime::commands::run_turn(&app, state, &thread, text, Vec::new(), turn).await {
+                log::warn!("[orchestration] couldn't resume {thread} after its limit: {e}");
+            }
+        });
+    }
+}
+
+tokio::task_local! {
+    /// The thread whose turn is running, for code deep in the loop that needs to attribute work to it.
+    pub static TURN_THREAD: String;
+}
+
+/// The thread of the turn this code runs under, if it runs under one.
+pub fn turn_thread() -> Option<String> {
+    TURN_THREAD.try_with(|t| t.clone()).ok().filter(|t| !t.is_empty())
+}
+
+/// Record one model request's usage against a thread.
+pub fn record_usage(thread: &str, provider: &str, model: &str, usage: &crate::ai::types::Usage) {
+    let cost = usage.cost.as_ref().map(|c| c.total);
+    record_new(
+        thread,
+        "usage",
+        serde_json::json!({ "provider": provider, "model": model, "input": usage.input, "output": usage.output, "cacheRead": usage.cache_read, "cacheWrite": usage.cache_write, "cost": cost }),
+    );
+}
+
+#[tauri::command]
+pub async fn cmd_thread_usage(#[allow(non_snake_case)] threadId: String) -> Result<ThreadUsage, String> {
+    with_store(|s| s.events_of(&threadId)).map(|e| fold_usage(&e))
+}
+
 /// A thread's title, project and parent, if the thread is known.
 pub fn thread_info(thread: &str) -> Option<(Option<String>, Option<String>, Option<String>)> {
     with_store(|s| Ok(s.threads()?.into_iter().find(|r| r.id == thread))).ok().flatten().map(|r| (r.title, r.project_id, r.parent_id))
@@ -483,6 +611,15 @@ pub async fn start(app: tauri::AppHandle) {
         }
         Err(e) => log::warn!("[orchestration] couldn't reconcile: {e}"),
     }
+    // Every minute, pick up threads whose limit has lifted.
+    if let Some(app) = APP.get().cloned() {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                resume_lifted_limits(&app).await;
+            }
+        });
+    }
     // Copy transcripts in, off the startup path. Session files stay the source of truth.
     tokio::task::spawn_blocking(|| match crate::agent::transcripts::import_all() {
         Ok(r) if r.imported > 0 => log::info!("[transcripts] imported {} sessions ({} unchanged, {} failed)", r.imported, r.unchanged, r.failed),
@@ -536,6 +673,37 @@ mod tests {
 
     fn fx() -> NewEffect {
         NewEffect { kind: "provider.send".into(), payload: json!({}) }
+    }
+
+    #[test]
+    fn a_threads_usage_is_the_sum_of_its_requests_and_flags_unpriced_ones() {
+        let e = |p: Value| Event { seq: 1, thread_id: "t1".into(), kind: "usage".into(), payload: p };
+        let events = vec![
+            e(json!({ "input": 100, "output": 10, "cacheRead": 50, "cacheWrite": 0, "cost": 0.25 })),
+            e(json!({ "input": 200, "output": 20, "cacheRead": 0, "cacheWrite": 5, "cost": null })),
+            Event { seq: 3, thread_id: "t1".into(), kind: "inbox.queued".into(), payload: json!({}) },
+        ];
+        let u = fold_usage(&events);
+        assert_eq!((u.input, u.output, u.cache_read, u.cache_write, u.requests), (300, 30, 50, 5, 2));
+        assert!((u.cost - 0.25).abs() < 1e-9);
+        assert!(u.has_unknown_cost);
+        assert_eq!(fold_usage(&[]), ThreadUsage::default());
+    }
+
+    #[test]
+    fn a_limit_stays_open_until_something_happens_after_it() {
+        let e = |seq: i64, kind: &str, p: Value| Event { seq, thread_id: "t1".into(), kind: kind.into(), payload: p };
+        let limited = e(1, "run.limited", json!({ "atMs": 1_000, "retryAfterSecs": 30, "reason": "429" }));
+        let open = fold_limit("t1", &[limited.clone()]).unwrap();
+        assert_eq!(open.resume_at_ms, 1_000 + 31_000);
+        // No hint: an hour.
+        let unhinted = fold_limit("t1", &[e(1, "run.limited", json!({ "atMs": 0 }))]).unwrap();
+        assert_eq!(unhinted.resume_at_ms, DEFAULT_LIMIT_WAIT_MS);
+        for closing in ["usage", "inbox.queued", "run.resumed"] {
+            assert!(fold_limit("t1", &[limited.clone(), e(2, closing, json!({}))]).is_none(), "{closing} should close it");
+        }
+        assert!(fold_limit("t1", &[limited, e(2, "thread.renamed", json!({}))]).is_some());
+        assert!(fold_limit("t1", &[]).is_none());
     }
 
     #[test]

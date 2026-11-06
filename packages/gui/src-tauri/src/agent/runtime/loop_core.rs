@@ -941,6 +941,16 @@ pub async fn run_agent_loop_continue(
                     continue;
                 }
             }
+            if let crate::agent::runtime::recovery::Failure::RateLimited { retry_after } = &kind {
+                // The run stops here for good; leave a mark so it can be picked up when the limit lifts.
+                if let Some(thread) = crate::agent::orchestration::turn_thread() {
+                    crate::agent::orchestration::record_new(
+                        &thread,
+                        "run.limited",
+                        serde_json::json!({ "atMs": now_ms(), "retryAfterSecs": retry_after.map(|d| d.as_secs()), "reason": crate::ai::utils::truncate_error_text(err, 200) }),
+                    );
+                }
+            }
             ended_on = Some(if kind == crate::agent::runtime::recovery::Failure::Transient {
                 format!(
                     "the connection failed {} more times after retrying ({})",
@@ -2658,6 +2668,9 @@ async fn call_provider_stream_and_await(
         let source_tag = source_tag.to_string();
         let provider = model.provider.clone();
         let model_id = model.id.clone();
+        if let Some(thread) = crate::agent::orchestration::turn_thread() {
+            crate::agent::orchestration::record_usage(&thread, &provider, &model_id, &usage);
+        }
         tokio::spawn(async move {
             crate::agent::models::usage_store::record_usage(&usage, &provider, &model_id).await;
             crate::agent::models::usage_store::record_usage_tagged(&usage, &provider, &model_id, &source_tag).await;
