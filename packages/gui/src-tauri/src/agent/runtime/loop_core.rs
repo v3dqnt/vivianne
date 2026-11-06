@@ -81,7 +81,7 @@ const REFLECTION_PROMPT: &str = "You have repeated the same tool call several ti
 const MAX_REFLECTIONS: u32 = 3;
 
 /// Said to the model when it ends a turn while its goal is still open.
-const CONTINUE_PROMPT: &str = "Your goal is not complete yet, so keep working — nobody is waiting to reply. Check where things stand against the goal and your todo list below, then take the next concrete step. When the whole goal is done and verified, call update_goal with action \"complete\"; if you cannot proceed without the user, call update_goal with action \"blocked\" and say what you need.";
+const CONTINUE_PROMPT: &str = "Your goal is not complete yet, so keep working — nobody is waiting to reply. Treat the workspace, tool results and the todo list below as the truth, and inspect them instead of assuming your earlier narration is still current; then take the next concrete step. Before you claim the goal is done, gather evidence that it is (run the check, read the file, see the output). When the whole goal is done and verified, call update_goal with action \"complete\". Difficulty, uncertainty or useful work that remains is not a reason to stop: call update_goal with action \"blocked\", with a reason, only when you truly cannot proceed without the user, and say what you need.";
 /// Turns in a row a long task may end without doing anything before it is
 /// marked blocked instead of being nudged again.
 const MAX_IDLE_CONTINUATIONS: u32 = 3;

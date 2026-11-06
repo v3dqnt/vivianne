@@ -188,7 +188,7 @@ pub(crate) async fn assemble_capability_blocks(
     let goal_block = state
         .goal()
         .await
-        .map(|goal| format!("\n\n<vivianne_goal phase=\"{:?}\">\n{}\n</vivianne_goal>", goal.phase, goal.objective));
+        .map(|goal| format!("\n\n<vivianne_goal phase=\"{}\">\n{}\n</vivianne_goal>", format!("{:?}", goal.phase).to_lowercase(), goal.objective));
     // Where the repository stands, so the agent branches, commits and opens
     // pull requests the way developers do. Last with the goal: it changes.
     let git_block = match state.primary_workspace_folder().await {
