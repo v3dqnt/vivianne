@@ -2,6 +2,30 @@
 
 All notable changes to Vivianne are documented here.
 
+## [1.9.1-rdv2] — 2026-11-06
+
+### Changed
+
+- **Threads and tabs.** The left sidebar is gone. Open as many threads as you like in the tab bar: a new tab is a blank thread, and you file it under a project (or add a new project) from the project rail. Home groups threads by project.
+- **One branch per thread.** In a git project each thread works in its own worktree and branch, cut from where you were. A checkpoint is saved around every turn on a hidden ref, so you can see what a turn changed or roll it back without touching your branch. Merge or remove the branch from the rail.
+- **A new project rail.** One card beside the chat holds the project and its folders, version control (commit, create pull request, history, the pull requests a thread opened) and context. In a large window it is a wide card with the project on the left and context on the right; in a narrow one the sections stack with dividers. The rail follows the window's width.
+- **Threads can work together.** A thread can start, message, ask and interrupt other threads, up to five hops deep, and a person's message ends any chain.
+- **Compaction v2.** Long conversations are compacted by a call that reuses the conversation's cached prefix, so it costs a fraction of before. There is no Compact button: it happens on its own.
+- **Steadier runs.** Tool arguments are checked before a tool runs, malformed or broken tool calls are repaired, every tool has a time limit, and queued messages come back after a restart. A thread stopped by a usage limit picks itself up when the limit lifts, and usage is recorded per thread.
+- **Errors where they happened.** A failed turn is a yellow checkpoint in the chat at the point the model stopped, not a red banner above the composer.
+- **A quieter composer.** Two colours, a plus for attachments, shorter and taller, and no project picker (it moved to the rail). Icons are Solar.
+- **A new logo.** The app icon, taskbar icon and in-app mark are now the Vivianne tesseract.
+- **Old sessions import.** Sessions saved by older versions are now read when conversations are copied into the new thread database.
+- **24/7 agents:** approvals appear as cards in the chat, Stop works mid-task, and there is a Widget Lab.
+
+### Removed
+
+- The Review changes and Publish branch buttons, the usage-limits setting, and the left sidebar.
+
+### Note
+
+- This is a pre-release build. Windows ships as an installer (NSIS); the MSI is not built for it.
+
 ## [1.9.0] — 2026-10-25
 
 ### Changed
