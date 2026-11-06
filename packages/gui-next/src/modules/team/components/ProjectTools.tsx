@@ -38,6 +38,11 @@ export const CARD = {
   borderColor: 'divider',
 } as const
 
+/** The rail grows with the window and gives way as it shrinks: 17% of the width, never under 216px or over 340px. */
+export const RAIL_WIDTH = 'clamp(216px, 17vw, 340px)'
+/** What the chat leaves free for it: the rail plus a 24px gutter either side. */
+export const RAIL_RESERVE = `calc(${RAIL_WIDTH} + 48px)`
+
 export const LABEL = { fontSize: '0.6875rem', fontWeight: 500, color: 'text.disabled', px: '8px', pb: '4px' } as const
 
 const KEY = 'viv.projectRail.closed'
@@ -99,7 +104,7 @@ export function ProjectTools() {
         position: 'absolute',
         right: 24,
         top: 24,
-        width: 248,
+        width: RAIL_WIDTH,
         zIndex: 3,
         p: '12px 10px',
         ...CARD,
