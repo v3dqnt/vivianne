@@ -185,6 +185,17 @@ pub const GROUPS: &[CapabilityGroup] = &[
         triggers: &["in parallel", "delegate", "subagent"],
     },
     CapabilityGroup {
+        name: "Work with other threads",
+        when: "A piece of work that could run in parallel, or something another of the user's threads already knows or did.",
+        tools: &["list_threads", "read_thread", "message_thread", "ask_thread", "spawn_thread"],
+        how: Some(
+            "list_threads to find one, read_thread to see what it did without interrupting. message_thread wakes an idle thread; \
+             ask_thread waits for the answer. spawn_thread starts a new thread on its own branch for a separate task. \
+             A thread can't see your conversation: put everything it needs in the message.",
+        ),
+        triggers: &["other thread", "another thread", "in parallel", "spin up a thread", "ask the other"],
+    },
+    CapabilityGroup {
         name: "Plan and track work",
         when: "A task with several steps, so progress is visible rather than held in your head.",
         tools: &["todo_write", "submit_plan", "assign_plan_steps", "team_run", "message_agent", "team_post", "team_read"],

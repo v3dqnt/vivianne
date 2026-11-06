@@ -84,6 +84,8 @@ const MIGRATIONS: &[&str] = &["
     CREATE VIRTUAL TABLE transcript_fts USING fts5(text, session_id UNINDEXED, ordinal UNINDEXED);
 ", "
     ALTER TABLE projection_threads ADD COLUMN model TEXT;
+", "
+    ALTER TABLE projection_threads ADD COLUMN parent_id TEXT;
 "];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -123,6 +125,8 @@ pub struct ThreadRow {
     pub title: Option<String>,
     pub project_id: Option<String>,
     pub last_seq: i64,
+    /// The thread that started this one, if one did.
+    pub parent_id: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -281,8 +285,8 @@ impl Store {
 
     /// Every thread in the read model.
     pub fn threads(&self) -> Result<Vec<ThreadRow>, String> {
-        let mut stmt = self.conn.prepare("SELECT thread_id, title, project_id, last_seq FROM projection_threads ORDER BY thread_id").map_err(err)?;
-        let rows = stmt.query_map([], |r| Ok(ThreadRow { id: r.get(0)?, title: r.get(1)?, project_id: r.get(2)?, last_seq: r.get(3)? })).map_err(err)?;
+        let mut stmt = self.conn.prepare("SELECT thread_id, title, project_id, last_seq, parent_id FROM projection_threads ORDER BY thread_id").map_err(err)?;
+        let rows = stmt.query_map([], |r| Ok(ThreadRow { id: r.get(0)?, title: r.get(1)?, project_id: r.get(2)?, last_seq: r.get(3)?, parent_id: r.get(4)? })).map_err(err)?;
         rows.collect::<Result<_, _>>().map_err(err)
     }
 
@@ -322,6 +326,23 @@ impl Store {
         Ok(text.flatten().and_then(|t| serde_json::from_str(&t).ok()))
     }
 
+    /// The threads above this one, nearest first. Stops at a loop or after ten.
+    pub fn ancestors(&self, id: &str) -> Result<Vec<String>, String> {
+        let mut out: Vec<String> = vec![];
+        let mut at = id.to_string();
+        while out.len() < 10 {
+            let parent: Option<Option<String>> = self.conn.query_row("SELECT parent_id FROM projection_threads WHERE thread_id = ?1", [&at], |r| r.get(0)).optional().map_err(err)?;
+            match parent.flatten() {
+                Some(p) if p != id && !out.contains(&p) => {
+                    out.push(p.clone());
+                    at = p;
+                }
+                _ => break,
+            }
+        }
+        Ok(out)
+    }
+
     /// Every event of one thread, oldest first.
     pub fn events_of(&self, thread_id: &str) -> Result<Vec<Event>, String> {
         match self.catch_up(thread_id, 0)? {
@@ -350,6 +371,7 @@ fn project(tx: &Transaction, seq: i64, thread: &str, kind: &str, payload: &Value
             .map_err(err),
         "thread.renamed" => run("UPDATE projection_threads SET title = ?2, last_seq = ?3 WHERE thread_id = ?1", text("title")),
         "thread.assigned" => run("UPDATE projection_threads SET project_id = ?2, last_seq = ?3 WHERE thread_id = ?1", text("project_id")),
+        "thread.spawned" => run("UPDATE projection_threads SET parent_id = ?2, last_seq = ?3 WHERE thread_id = ?1", text("parent")),
         "model.selected" => run("UPDATE projection_threads SET model = ?2, last_seq = ?3 WHERE thread_id = ?1", Some(payload.to_string())),
         "thread.deleted" => tx.execute("DELETE FROM projection_threads WHERE thread_id = ?1", [thread]).map(|_| ()).map_err(err),
         _ => Ok(()),
@@ -380,6 +402,16 @@ pub fn fold_consumed_work(events: &[Event]) -> ConsumedWork {
     }
     w.pending = w.queued.saturating_sub(w.consumed + w.cancelled);
     w
+}
+
+/// A thread's title, project and parent, if the thread is known.
+pub fn thread_info(thread: &str) -> Option<(Option<String>, Option<String>, Option<String>)> {
+    with_store(|s| Ok(s.threads()?.into_iter().find(|r| r.id == thread))).ok().flatten().map(|r| (r.title, r.project_id, r.parent_id))
+}
+
+/// The threads above `thread`, nearest first.
+pub fn ancestors(thread: &str) -> Vec<String> {
+    with_store(|s| s.ancestors(thread)).unwrap_or_default()
 }
 
 /// The model last chosen for a thread, if one was.
@@ -607,6 +639,28 @@ mod tests {
         assert_eq!(s.thread_model("nobody").unwrap(), None);
         s.rebuild_projections().unwrap();
         assert_eq!(s.thread_model("t1").unwrap().unwrap()["id"], "m2");
+    }
+
+    #[test]
+    fn a_thread_started_by_another_knows_its_ancestors_and_a_loop_cannot_hang_the_walk() {
+        let (mut s, _) = temp();
+        let on = |t: &str, kind: &str, payload: Value| NewEvent { thread_id: t.into(), kind: kind.into(), payload };
+        s.dispatch("c1", 1, || {
+            Ok((vec![
+                on("a", "thread.created", json!({})),
+                on("b", "thread.created", json!({})),
+                on("c", "thread.created", json!({})),
+                on("b", "thread.spawned", json!({ "parent": "a" })),
+                on("c", "thread.spawned", json!({ "parent": "b" })),
+            ], vec![]))
+        })
+        .unwrap();
+        assert_eq!(s.ancestors("c").unwrap(), ["b", "a"]);
+        assert!(s.ancestors("a").unwrap().is_empty());
+        assert!(s.ancestors("nobody").unwrap().is_empty());
+        assert_eq!(s.threads().unwrap().iter().find(|t| t.id == "c").unwrap().parent_id.as_deref(), Some("b"));
+        s.dispatch("c2", 2, || Ok((vec![on("a", "thread.spawned", json!({ "parent": "c" }))], vec![]))).unwrap();
+        assert_eq!(s.ancestors("c").unwrap(), ["b", "a"], "the loop back to c is not followed");
     }
 
     #[test]

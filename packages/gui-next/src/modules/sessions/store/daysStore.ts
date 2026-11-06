@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { call } from '../../../ipc'
+import { call, on } from '../../../ipc'
 import { usePlanStore } from '../../plan/store/planStore'
 import { useAgentStore, agentStoreFor, setActiveThread, onTurnEnd } from '../../ai/store/agentStore'
 import { activeThreadId, PRIMARY_THREAD_ID } from '../../ai/store/activeThread'
@@ -102,6 +102,12 @@ function setTabs(tabs: string[]) {
     // storage unavailable: the tabs just won't come back next launch
   }
 }
+
+// A thread started by another thread gets a tab as soon as it exists.
+void on<{ id: string }>('thread:spawned', ({ id }) => {
+  const { tabs } = useDaysStore.getState()
+  if (!tabs.includes(id)) setTabs([...tabs, id])
+})
 
 /** Make a scope current without opening anything in it. */
 function enterScope(scope: string) {

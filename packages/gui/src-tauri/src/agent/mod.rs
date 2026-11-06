@@ -21,6 +21,7 @@ pub mod changes;
 pub mod models;
 pub mod orchestration;
 pub mod scope;
+pub mod thread_msgs;
 pub mod transcripts;
 pub mod profiles;
 pub mod runtime;

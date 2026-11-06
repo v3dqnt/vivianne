@@ -89,6 +89,11 @@ impl AgentRegistry {
         }
     }
 
+    /// The thread if it is already open, without making one.
+    pub async fn peek(&self, thread_id: &str) -> Option<Arc<AppState>> {
+        self.extra.lock().await.get(thread_id).cloned()
+    }
+
     /// Stop every thread's run, for a reason (the app is closing).
     pub async fn cancel_all(&self, kind: crate::agent::runtime::cancel::CancelKind, reason: &str) {
         let mut all = vec![self.primary.clone()];
@@ -206,6 +211,8 @@ pub async fn cmd_agent_prompt(
 ) -> Result<Vec<AgentMessage>, String> {
     let state = registry.resolve(threadId.as_deref()).await;
     let turn = Turn { main: true, source_tag: None, on_event: None, forced_routing: automation.unwrap_or(false) };
+    // A person speaking ends any chain of thread-to-thread messages this thread was in.
+    crate::agent::thread_msgs::user_turn(threadId.as_deref().unwrap_or_default());
     run_turn(&app, state, threadId.as_deref().unwrap_or_default(), text, images.unwrap_or_default(), turn).await?;
     Ok(Vec::new())
 }
@@ -718,7 +725,7 @@ pub async fn cmd_agent_messages(
     Ok(state.agent_state.messages().await)
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

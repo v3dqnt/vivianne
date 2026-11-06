@@ -807,6 +807,58 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
             }
         }),
         serde_json::json!({
+            "name": "list_threads",
+            "description": "List the user's other threads (separate chats): id, title, project, whether each is running right now, and which thread started it. Use it to find a thread to read, message or ask.",
+            "parameters": { "type": "object", "properties": {}, "required": [] }
+        }),
+        serde_json::json!({
+            "name": "read_thread",
+            "description": "Read the last messages of another thread, to see what it has done or decided, without interrupting it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thread_id": { "type": "string", "description": "The thread's id from list_threads" },
+                    "last": { "type": "number", "description": "How many recent messages (1 to 30, default 10)" }
+                },
+                "required": ["thread_id"]
+            }
+        }),
+        serde_json::json!({
+            "name": "message_thread",
+            "description": "Send a message to another thread. If it is idle it wakes and works on the message; if it is busy it reads the message when its current turn ends. You don't wait for an answer. A message passed along between threads more than 5 times is stopped.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thread_id": { "type": "string" },
+                    "text": { "type": "string", "description": "What the other thread needs to know or do. It can't see your conversation, so include what it needs." }
+                },
+                "required": ["thread_id", "text"]
+            }
+        }),
+        serde_json::json!({
+            "name": "ask_thread",
+            "description": "Ask another thread something and wait for its answer (up to 10 minutes). Works when the thread is idle; if it is busy the question is queued and can't be waited for.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thread_id": { "type": "string" },
+                    "text": { "type": "string", "description": "The question, with the context the other thread needs." }
+                },
+                "required": ["thread_id", "text"]
+            }
+        }),
+        serde_json::json!({
+            "name": "spawn_thread",
+            "description": "Start a new thread in the same project to work on a separate piece of work in parallel, and give it its instruction. It works on its own branch and keeps going while you do. Collect results with read_thread or ask_thread. Threads started by threads can go 3 levels deep.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "instruction": { "type": "string", "description": "What the new thread should do, complete enough that it needs nothing else from you." }
+                },
+                "required": ["instruction"]
+            }
+        }),
+        serde_json::json!({
             "name": "message_agent",
             "description": "Send a message to a teammate in this team run, or to everyone. It reaches them between their steps. Use it to split work, share what another member needs, ask something only they know, or flag a conflict.",
             "parameters": {
