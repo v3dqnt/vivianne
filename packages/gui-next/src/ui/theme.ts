@@ -1,4 +1,6 @@
 import { spacePx, WEIGHT_NUDGE } from './sx'
+import type { Mode, Tokens } from './tokens.ts'
+export type { Mode, Tokens }
 import { alpha, darken, getContrastRatio, lighten } from './color'
 
 /**
@@ -16,7 +18,6 @@ import { alpha, darken, getContrastRatio, lighten } from './color'
  * `palette.tokens` for components that want them by name.
  */
 
-export type Mode = 'light' | 'dark'
 
 export interface PaletteColor {
   main: string
@@ -28,24 +29,6 @@ export interface PaletteColor {
 export type ColorName = 'primary' | 'secondary' | 'error' | 'warning' | 'info' | 'success'
 
 /** The Terax token set (shadcn naming). */
-export interface Tokens {
-  background: string
-  foreground: string
-  card: string
-  popover: string
-  primary: string
-  primaryForeground: string
-  secondary: string
-  muted: string
-  mutedForeground: string
-  accent: string
-  destructive: string
-  border: string
-  input: string
-  ring: string
-  /** The window background around the panes: one tone off `card`. */
-  frame: string
-}
 
 export interface Palette extends Record<ColorName, PaletteColor> {
   mode: Mode

@@ -1,4 +1,4 @@
-import type { Mode, Tokens } from './ui'
+import type { Mode, Tokens } from './ui/tokens.ts'
 
 /**
  * The single source of visual truth: Terax's design language (see
