@@ -2,7 +2,6 @@ import { Alert, Box, useTheme } from '../../ui'
 import { hasTauri } from '../../ipc'
 import { SURFACE_RADIUS } from '../../theme'
 import { ChatView } from '../ai/components/ChatView'
-import { useProjectsStore } from '../sessions/store/projectsStore'
 import { ProjectTools } from '../team/components/ProjectTools'
 
 /** Every panel fills its box and scrolls itself; the group never scrolls. */
@@ -17,7 +16,6 @@ function Fill({ children }: { children: React.ReactNode }) {
 }
 
 function Chat() {
-  const project = useProjectsStore((s) => s.projects.find((p) => p.id === s.activeProjectId))
   if (!hasTauri()) {
     return (
       <Fill>
@@ -33,7 +31,6 @@ function Chat() {
   // The threads rail lives on the workspace's chrome (see Workspace), for
   // General and for threads projects alike, so the dark surface starts at
   // the conversation itself. Only a project brings tools to its right.
-  const isThreads = !!project?.path
   return (
     <Fill>
       <Box
@@ -45,10 +42,10 @@ function Chat() {
           flexDirection: 'column',
           // The tools strip sits on the pane's right; the threads are not on
           // the pane at all, so nothing is reserved on the left.
-          pr: isThreads && project?.path ? '296px' : 0,
+          pr: '296px',
         }}
       >
-        {isThreads && project?.path && <ProjectTools />}
+        <ProjectTools />
         <ChatView />
       </Box>
     </Fill>

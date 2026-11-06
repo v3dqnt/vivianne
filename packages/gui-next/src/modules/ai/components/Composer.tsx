@@ -10,7 +10,6 @@ import { ChatComposer, type ChatComposerHandle, type ComposerAttachments } from 
 import { ThinkingLevelControl as ThinkingLevelControlImpl } from './ThinkingLevelControl'
 import { ModePill as ModePillImpl } from './ModePill'
 import { CHAT_COLUMN } from '../lib/chatStyle'
-import { ProjectPill } from '../../sessions/components/ProjectPicker'
 import { ContextUsageBar as ContextUsageBarImpl } from './ContextUsageBar'
 import { StreamStatusLine as StreamStatusLineImpl } from './StreamStatusLine'
 import { RunStatusBar as RunStatusBarImpl } from './RunStatusBar'
@@ -352,7 +351,6 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
           top={<RunStatusBar />}
           left={
             <>
-              {!toolbar && <ProjectPill />}
               <ModePill />
             </>
           }

@@ -26,7 +26,7 @@ const ROW = {
 
 /** Which project the open thread is filed under, and the way to change it:
  * a registered project, a new one, or none. */
-export function ProjectPill() {
+export function ProjectPill({ variant = 'pill' }: { variant?: 'pill' | 'row' }) {
   const todayId = useDaysStore((s) => s.todayId)
   const projects = useProjectsStore((s) => s.projects)
   const projectId = useProjectsStore((s) => (todayId ? s.sessionProjectMap[todayId] : undefined))
@@ -52,10 +52,19 @@ export function ProjectPill() {
     <>
       <Tooltip title={busy ? 'Wait for the current turn to finish' : project ? 'Change project' : 'Add this thread to a project'}>
         <span>
-          <ButtonBase aria-label="Project" disabled={busy || !todayId} onClick={() => setOpen(true)} sx={{ ...TOOLBAR_PILL, maxWidth: 160, whiteSpace: 'nowrap' }}>
-            {project ? <ProjectMark project={project} size={14} /> : <FolderLinear size={14} color="currentColor" />}
-            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {project?.name ?? 'No project'}
+          <ButtonBase
+            aria-label="Project"
+            disabled={busy || !todayId}
+            onClick={() => setOpen(true)}
+            sx={
+              variant === 'row'
+                ? { display: 'flex', width: '100%', justifyContent: 'flex-start', alignItems: 'center', gap: '8px', height: 32, px: '8px', borderRadius: '6px', fontSize: '0.8125rem', fontWeight: 500, color: project ? 'text.primary' : 'text.secondary', whiteSpace: 'nowrap', overflow: 'hidden', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' }, '&:disabled': { opacity: 0.5 } }
+                : { ...TOOLBAR_PILL, maxWidth: 160, whiteSpace: 'nowrap' }
+            }
+          >
+            {project ? <ProjectMark project={project} size={variant === 'row' ? 18 : 14} /> : <FolderLinear size={variant === 'row' ? 16 : 14} color="currentColor" />}
+            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, textAlign: 'left' }}>
+              {project?.name ?? 'Choose a project'}
             </Box>
           </ButtonBase>
         </span>

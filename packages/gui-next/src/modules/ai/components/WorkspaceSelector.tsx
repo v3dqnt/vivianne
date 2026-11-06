@@ -7,7 +7,8 @@ function folderName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() || path
 }
 
-export function WorkspaceSelector() {
+/** `title` replaces the folder name on the button, for places that already say which project this is. */
+export function WorkspaceSelector({ title }: { title?: string } = {}) {
   const folders = useWorkspaceStore((s) => s.folders)
   const accessMode = useWorkspaceStore((s) => s.accessMode)
   const loading = useWorkspaceStore((s) => s.loading)
@@ -32,7 +33,9 @@ export function WorkspaceSelector() {
     setCreating(false)
   }
 
-  const label = wholeComputer
+  const label = title
+    ? title
+    : wholeComputer
     ? 'This PC'
     : folders.length === 0
       ? 'No workspace'

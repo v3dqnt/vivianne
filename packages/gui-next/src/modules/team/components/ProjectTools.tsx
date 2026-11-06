@@ -6,6 +6,9 @@ import { GitStatusChip, GitQuickActions } from '../../git/components/GitActions'
 import { useAppView } from '../../git/components/GitView'
 import { ContextBreakdown, ContextPercent } from '../../ai/components/ContextUsageBar'
 import { ThreadWorktree } from './ThreadWorktree'
+import { ProjectPill } from '../../sessions/components/ProjectPicker'
+import { useDaysStore } from '../../sessions/store/daysStore'
+import { useProjectsStore } from '../../sessions/store/projectsStore'
 
 /** Every action in the column is the same row: left-aligned on one edge,
  * one line, muted until hovered. */
@@ -85,6 +88,11 @@ function Section({ id, title, right, children }: { id: string; title: string; ri
 /** The project rail, on the chat's right: the folder the project works in,
  * version control and the context window. */
 export function ProjectTools() {
+  const todayId = useDaysStore((s) => s.todayId)
+  const hasFolder = useProjectsStore((s) => {
+    const id = todayId ? s.sessionProjectMap[todayId] : undefined
+    return !!s.projects.find((p) => p.id === id)?.path
+  })
   return (
     <Box
       sx={{
@@ -98,18 +106,27 @@ export function ProjectTools() {
       }}
     >
       <Stack sx={{ gap: '8px' }}>
-        <Section id="workspace" title="Workspace">
-          <Box sx={{ ml: '-2px' }}>
-            <WorkspaceSelector />
-          </Box>
+        {/* The project and its folders are one thing: the project's name, with the
+            folders it works in managed from the row under it. */}
+        <Section id="project" title="Project">
+          <ProjectPill variant="row" />
+          {hasFolder && (
+            <Box sx={{ ml: '-2px' }}>
+              <WorkspaceSelector title="Folders and access" />
+            </Box>
+          )}
         </Section>
 
-        <ThreadWorktree />
+        {hasFolder && (
+          <>
+            <Divider />
 
-        <Divider />
+            <ThreadWorktree />
 
-        <Section
-          id="git"
+            <Divider />
+
+            <Section
+              id="git"
           title="Version control"
           right={
             <Box sx={{ minWidth: 0, '& .ui-ButtonBase': { height: 20, px: '4px' } }}>
@@ -139,7 +156,9 @@ export function ProjectTools() {
           <ButtonBase onClick={() => useAppView.setState({ view: 'git' })} sx={ROW}>
             History and pull requests
           </ButtonBase>
-        </Section>
+            </Section>
+          </>
+        )}
 
         <Divider />
 
