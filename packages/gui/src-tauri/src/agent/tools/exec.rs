@@ -1930,6 +1930,13 @@ pub(crate) async fn execute_task_tool(
         }
     };
 
+    let active = SubagentRegistry::global().active_count();
+    if active >= crate::agent::runtime::subagents::MAX_ACTIVE_SUBAGENTS {
+        return text_result(format!(
+            "Error: {active} subagents are already working (the limit is {}). Wait for some to finish (task_output) or kill one (kill_task) before starting another.",
+            crate::agent::runtime::subagents::MAX_ACTIVE_SUBAGENTS
+        ));
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let handle = SubagentHandle {
         id: id.clone(),
@@ -2044,6 +2051,7 @@ pub(crate) async fn execute_task_tool(
     let source_tag = subagent_source_tag(app, "task").await;
 
     if run_in_background {
+        let parent_thread = crate::agent::orchestration::turn_thread();
         let app = app.clone();
         let arc_bg = arc.clone();
         let id_bg = id.clone();
@@ -2075,7 +2083,18 @@ pub(crate) async fn execute_task_tool(
                 g.status = SubagentStatus::Completed { output, tool_calls, turns };
             }
             let notify = g.notify.clone();
+            let (settled, description) = (g.status.clone(), g.description.clone());
             drop(g);
+            // Tell the parent: otherwise a background answer sits unread unless the model remembers to poll for it.
+            if let Some(thread) = parent_thread.clone() {
+                let note = crate::agent::runtime::subagents::settlement_note(&id_bg, &description, &settled);
+                let app2 = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = crate::agent::thread_msgs::deliver_note(&app2, &thread, &note).await {
+                        log::warn!("[subagent] couldn't deliver a settlement note to {thread}: {e}");
+                    }
+                });
+            }
             if let Some(run_id) = &run_record {
                 crate::agent::team::runs::finish(&app, run_id);
             }

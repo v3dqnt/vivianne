@@ -99,6 +99,75 @@ impl SubagentRegistry {
     pub fn all(&self) -> Vec<Arc<Mutex<SubagentHandle>>> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
     }
+
+    /// How many subagents are still working (not yet completed, failed or cancelled).
+    pub fn active_count(&self) -> usize {
+        self.all().iter().filter(|h| !h.lock().unwrap_or_else(|e| e.into_inner()).status.is_terminal()).count()
+    }
+}
+
+/// The most subagents that may work at once. A runaway fan-out fails loudly at this line instead of starving the machine.
+pub const MAX_ACTIVE_SUBAGENTS: usize = 8;
+
+/// A failure's diagnostic is kept to this many bytes, cut on a character boundary.
+const DIAGNOSTIC_BYTES: usize = 4096;
+
+fn cap_bytes(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// The notice a parent receives when a background subagent settles, so its answer is never left unread.
+pub fn settlement_note(id: &str, description: &str, status: &SubagentStatus) -> String {
+    let body = match status {
+        SubagentStatus::Completed { output, .. } if output.trim().is_empty() || output.contains("(sub-task produced no final answer)") => {
+            "It left no closing message.".to_string()
+        }
+        SubagentStatus::Completed { output, .. } => format!("It finished. Its answer:\n\n{}", output.trim()),
+        SubagentStatus::Failed { error } => format!("It failed: {}", cap_bytes(error, DIAGNOSTIC_BYTES)),
+        SubagentStatus::Cancelled { reason } => format!("It was cancelled{}.", reason.as_ref().map(|r| format!(": {r}")).unwrap_or_default()),
+        SubagentStatus::Initializing | SubagentStatus::Running { .. } => "It is still running.".to_string(),
+    };
+    format!("<subagent_settled id=\"{id}\">\nThe background subagent \"{description}\" has settled. {body}\n</subagent_settled>")
+}
+
+#[cfg(test)]
+mod settlement_tests {
+    use super::*;
+
+    #[test]
+    fn a_finished_subagent_hands_its_answer_to_the_parent() {
+        let n = settlement_note("t1", "audit the rail", &SubagentStatus::Completed { output: "Found 3 issues.".into(), tool_calls: 4, turns: 2 });
+        assert!(n.contains("t1") && n.contains("audit the rail") && n.contains("Found 3 issues."));
+    }
+
+    #[test]
+    fn an_empty_or_placeholder_answer_says_so() {
+        for out in ["", "  ", "(sub-task produced no final answer)"] {
+            let n = settlement_note("t", "d", &SubagentStatus::Completed { output: out.into(), tool_calls: 0, turns: 0 });
+            assert!(n.contains("left no closing message"), "{out:?}");
+        }
+    }
+
+    #[test]
+    fn a_failure_diagnostic_is_capped_on_a_character_boundary() {
+        let long = "é".repeat(5000);
+        let n = settlement_note("t", "d", &SubagentStatus::Failed { error: long });
+        assert!(n.len() < 4096 + 200);
+        assert!(n.is_char_boundary(n.len()));
+    }
+
+    #[test]
+    fn a_cancelled_subagent_names_the_reason() {
+        let n = settlement_note("t", "d", &SubagentStatus::Cancelled { reason: Some("stopped by you".into()) });
+        assert!(n.contains("cancelled: stopped by you"));
+    }
 }
 
 
