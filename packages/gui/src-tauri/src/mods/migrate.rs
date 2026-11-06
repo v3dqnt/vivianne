@@ -112,7 +112,7 @@ pub fn migrate(from: &Path, to: &Path) -> Vec<(String, Vec<String>)> {
 }
 
 fn playbooks_dir() -> PathBuf {
-    crate::agent::paths::viv_home_path(&["playbooks"])
+    crate::agent::system::paths::viv_home_path(&["playbooks"])
 }
 
 /// Run the migration the first time mods are listed in a process, if the
@@ -137,7 +137,7 @@ pub fn migrate_playbooks_once() {
             }
             let _ = super::write_state(&state);
         }
-        let dest = crate::agent::paths::viv_home_path(&["playbooks.migrated"]);
+        let dest = crate::agent::system::paths::viv_home_path(&["playbooks.migrated"]);
         if let Err(e) = std::fs::rename(&from, &dest) {
             log::warn!("[mods] converted playbooks, but couldn't rename the old folder: {e}");
         }

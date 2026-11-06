@@ -1,8 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Box, ButtonBase } from '../../../ui'
 import { call, on } from '../../../ipc'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import type { RobotHeadState } from 'robot-heads'
 import { NotchFace } from './NotchFace'
+import { useInstantStore } from '../store/instantStore'
+import { useCountUp, useStaggerIn, usePop, reducedMotion, EASE_OUT } from '../lib/motion'
+import gsap from 'gsap'
 
 /** Mirrors `notch::AgentStatus`. */
 export interface AgentStatus {
@@ -47,7 +51,7 @@ function faceOf(a: AgentStatus): RobotHeadState {
 
 /** An agent as a small robot head, in its own outline, showing its state. */
 function Face({ a, size }: { a: AgentStatus; size: number }) {
-  return <NotchFace state={faceOf(a)} size={size} name={a.kind === 'chat' ? 'Vivianne' : a.name} />
+  return <NotchFace state={faceOf(a)} size={size} name={a.kind === 'chat' ? 'Vivianne' : a.name} vivianne={a.kind === 'chat'} />
 }
 
 function Pill({ children, onClick, title }: { children: React.ReactNode; onClick: () => void; title?: string }) {
@@ -123,8 +127,121 @@ export interface NotchPrefs {
 
 export const DEFAULT_PREFS: NotchPrefs = { position: 'center', scale: 1, showAgents: true, showActivity: true, showMic: true }
 
+/** Mirrors the `cmd_get_usage_history` day rows. */
+interface UsageDay {
+  input: number
+  output: number
+  cost: number
+  requests: number
+  hasUnknownCost: boolean
+}
+
+/** Local `YYYY-MM-DD`, the key `agent::usage_store` files each day under. */
+function dayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function compact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(Math.round(n))
+}
+
+interface Usage {
+  /** Tokens per day, oldest first, ending today. */
+  week: number[]
+  today: UsageDay | null
+}
+
+function usageFrom(history: Record<string, UsageDay>): Usage {
+  const week: number[] = []
+  const d = new Date()
+  d.setDate(d.getDate() - 6)
+  for (let i = 0; i < 7; i++) {
+    const day = history[dayKey(d)]
+    week.push(day ? day.input + day.output : 0)
+    d.setDate(d.getDate() + 1)
+  }
+  return { week, today: history[dayKey(new Date())] ?? null }
+}
+
+/** Today's tokens and spend, with the last seven days as bars. */
+function UsageStrip({ usage }: { usage: Usage }) {
+  const tokens = useCountUp(usage.today ? usage.today.input + usage.today.output : 0)
+  const cost = useCountUp(usage.today?.cost ?? 0)
+  const bars = useRef<HTMLDivElement | null>(null)
+  const max = Math.max(1, ...usage.week)
+  const weekKey = usage.week.join()
+  useLayoutEffect(() => {
+    if (!bars.current || reducedMotion()) return
+    const t = gsap.from(bars.current.children, { scaleY: 0, duration: 0.6, ease: EASE_OUT, stagger: 0.04, transformOrigin: 'bottom', clearProps: 'transform' })
+    return () => void t.revert()
+  }, [weekKey])
+  const unknown = usage.today?.hasUnknownCost
+  return (
+    <Box data-anim sx={{ display: 'flex', alignItems: 'flex-end', gap: 1.25, py: 0.75, mb: 0.5 }}>
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Box sx={{ fontSize: 10.5, color: FAINT, textTransform: 'uppercase', letterSpacing: '0.06em', mb: 0.25 }}>Today</Box>
+        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
+          <Box component="span" sx={{ fontSize: 15, fontWeight: 600 }}>
+            {compact(tokens)}
+          </Box>
+          <Box component="span" sx={{ fontSize: 11, color: MUTED }}>
+            tokens ·
+          </Box>
+          <Box
+            component="span"
+            sx={{ fontSize: 12, fontWeight: 600 }}
+            title={unknown ? 'Some models have no known price, so the real total is at least this.' : undefined}
+          >
+            {unknown && !usage.today?.cost ? '—' : `$${cost.toFixed(2)}${unknown ? '+' : ''}`}
+          </Box>
+        </Box>
+      </Box>
+      <Box ref={bars} title="Tokens, last 7 days" sx={{ display: 'flex', alignItems: 'flex-end', gap: '3px', height: 24 }}>
+        {usage.week.map((v, i) => (
+          <Box
+            key={i}
+            sx={{
+              width: 5,
+              height: `${Math.max(8, (v / max) * 100)}%`,
+              borderRadius: '2px',
+              bgcolor: i === 6 ? INK : 'rgba(255,255,255,0.22)',
+              opacity: v ? 1 : 0.5,
+            }}
+          />
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+/** The fields of `agent::automation::Automation` the notch uses. */
+interface Automation {
+  id: string
+  name: string
+  enabled: boolean
+}
+
+/** One-tap asks, run by Viv Instant right here in the notch. */
+const QUICK: { label: string; ask: string }[] = [
+  { label: 'Explain my screen', ask: 'Take a screenshot of my screen and tell me briefly what is on it and anything worth acting on.' },
+  { label: 'Catch me up', ask: 'What are my agents doing?' },
+]
+
+/** The last part of a path, either separator. */
+const nameOf = (p: string) => p.split(/[\\/]/).pop() || p
+
+/** What to ask about files dropped on the notch. */
+const DROP_ACTIONS: { label: string; ask: (files: string) => string }[] = [
+  { label: 'Summarize', ask: (f) => `Summarize ${f} briefly.` },
+  { label: 'Explain', ask: (f) => `Explain what ${f} is and what's worth knowing about it.` },
+]
+
 export function RestingNotch() {
   const [agents, setAgents] = useState<AgentStatus[]>([])
+  // Files over the notch (still held) or dropped on it (waiting for a choice).
+  const [drop, setDrop] = useState<{ held: boolean; paths: string[] } | null>(null)
   const [open, setOpen] = useState(false)
   const [now, setNow] = useState(Date.now())
   const [chord, setChord] = useState('the wake keys')
@@ -137,8 +254,62 @@ export function RestingNotch() {
     void call<string>('cmd_instant_shortcut_label').then((l) => l && setChord(l)).catch(() => {})
     void call<NotchPrefs>('cmd_notch_prefs').then((p) => p && setPrefs(p)).catch(() => {})
     const offs: Array<Promise<() => void>> = [on<AgentStatus[]>('notch:status', setAgents), on<NotchPrefs>('notch:prefs', setPrefs)]
+    // Files dragged from the desktop or a file manager arrive as paths.
+    try {
+      offs.push(
+        getCurrentWebview().onDragDropEvent((e) => {
+          const p = e.payload
+          if (p.type === 'enter') setDrop({ held: true, paths: p.paths })
+          else if (p.type === 'drop') setDrop(p.paths.length ? { held: false, paths: p.paths } : null)
+          else if (p.type === 'leave') setDrop((d) => (d?.held ? null : d))
+        }),
+      )
+    } catch {
+      // No webview (a plain browser tab): nothing to drop on.
+    }
     return () => offs.forEach((p) => void p.then((off) => off()))
   }, [])
+
+  // A drop nobody answers goes away on its own.
+  useEffect(() => {
+    if (!drop || drop.held) return
+    const t = window.setTimeout(() => setDrop(null), 20_000)
+    return () => window.clearTimeout(t)
+  }, [drop])
+
+  // Run something through Viv Instant and switch the notch to its working
+  // view, so the run shows its steps and answer like a spoken one does.
+  const runInstant = (instruction: string, said: string) => {
+    const s = useInstantStore.getState()
+    s.activate()
+    s.setTranscript(said)
+    s.setPhase('working')
+    void call('cmd_instant_run', { instruction }).catch((e) => useInstantStore.getState().fail(e instanceof Error ? e.message : String(e)))
+  }
+  const askAbout = (paths: string[], ask: (files: string) => string) => {
+    const files = paths.map((p) => `"${p}"`).join(', ')
+    setDrop(null)
+    runInstant(ask(files), ask(files))
+  }
+  const openInChat = (paths: string[]) => {
+    setDrop(null)
+    void call('cmd_notch_open_with_files', { paths }).catch(() => {})
+  }
+
+  const [usage, setUsage] = useState<Usage | null>(null)
+  const [automations, setAutomations] = useState<Automation[]>([])
+  // Fresh each time it opens: cheap local reads, and the numbers move.
+  useEffect(() => {
+    if (!open) return
+    void call<Record<string, UsageDay>>('cmd_get_usage_history').then((h) => h && setUsage(usageFrom(h))).catch(() => {})
+    void call<Automation[]>('cmd_automation_list').then((a) => a && setAutomations(a.filter((x) => x.enabled).slice(0, 3))).catch(() => {})
+  }, [open])
+  const [ran, setRan] = useState<string | null>(null)
+  const runAutomation = (a: Automation) => {
+    setRan(a.id)
+    void call('cmd_automation_run_now', { id: a.id }).catch(() => {})
+    window.setTimeout(() => setRan((r) => (r === a.id ? null : r)), 1600)
+  }
 
   const live = agents.filter((a) => a.state === 'working' || a.state === 'needs_you')
   useEffect(() => {
@@ -184,13 +355,18 @@ export function RestingNotch() {
     closeTimer.current = window.setTimeout(() => setOpen(false), 250)
   }
 
+  const panel = useRef<HTMLDivElement | null>(null)
+  useStaggerIn(panel, `${open}:${!!drop}:${drop?.held}`)
+  const leadFace = useRef<HTMLDivElement | null>(null)
+
   const needsYou = live.filter((a) => a.state === 'needs_you')
   const lead = needsYou[0] ?? live[0]
   const recent = agents.filter((a) => !live.includes(a))
   const earliest = live.reduce((m, a) => Math.min(m, a.startedAt), Number.POSITIVE_INFINITY)
+  usePop(leadFace, lead ? `${lead.id}:${faceOf(lead)}` : null)
 
   return (
-    <Box sx={{ display: 'inline-flex', transform: prefs.scale === 1 ? undefined : `scale(${prefs.scale})`, transformOrigin: 'top left' }}>
+    <Box sx={{ display: 'flex', alignItems: 'flex-start', width: 'fit-content', lineHeight: 0, transform: prefs.scale === 1 ? undefined : `scale(${prefs.scale})`, transformOrigin: 'top left' }}>
       <Box
         ref={ref}
         onMouseEnter={enter}
@@ -203,15 +379,46 @@ export function RestingNotch() {
           borderTop: 0,
           overflow: 'hidden',
           userSelect: 'none',
+          lineHeight: 'normal',
           width: open ? 360 : 'fit-content',
-          transition: 'border-radius 120ms',
+          transition: 'border-radius 240ms cubic-bezier(0.22, 1, 0.36, 1), width 240ms cubic-bezier(0.22, 1, 0.36, 1)',
         }}
       >
-        {!open && !lead && <Box sx={{ width: 120, height: 8 }} />}
+        {!open && !lead && !drop && <Box sx={{ width: 160, height: 10 }} />}
 
-        {!open && lead && (
+        {drop && (
+          <Box ref={panel} sx={{ width: 320, px: 1.5, py: 1.25 }}>
+            {drop.held ? (
+              <Box data-anim sx={{ fontSize: 12, fontWeight: 600, textAlign: 'center', py: 0.5 }}>
+                Drop {drop.paths.length === 1 ? nameOf(drop.paths[0]) : `${drop.paths.length} files`} to ask Vivianne
+              </Box>
+            ) : (
+              <>
+                <Box data-anim sx={{ fontSize: 12, fontWeight: 600, mb: 0.25 }}>
+                  {drop.paths.length === 1 ? nameOf(drop.paths[0]) : `${drop.paths.length} files`}
+                </Box>
+                <Box data-anim sx={{ fontSize: 11, color: MUTED, mb: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {drop.paths.length === 1 ? drop.paths[0] : drop.paths.map(nameOf).join(', ')}
+                </Box>
+                <Box data-anim sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+                  {DROP_ACTIONS.map((a) => (
+                    <Pill key={a.label} onClick={() => askAbout(drop.paths, a.ask)}>
+                      {a.label}
+                    </Pill>
+                  ))}
+                  <Pill onClick={() => openInChat(drop.paths)}>Open in chat</Pill>
+                  <Pill onClick={() => setDrop(null)}>Never mind</Pill>
+                </Box>
+              </>
+            )}
+          </Box>
+        )}
+
+        {!open && !drop && lead && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, height: 26, px: 1.25, maxWidth: 380 }}>
-            <Face a={lead} size={18} />
+            <Box ref={leadFace} sx={{ display: 'flex', flexShrink: 0 }}>
+              <Face a={lead} size={18} />
+            </Box>
             <Box component="span" sx={{ fontSize: 11.5, fontWeight: 600, flexShrink: 0 }}>
               {needsYou.length ? 'Needs you' : live.length === 1 ? (lead.project ?? lead.name) : `${live.length} agents`}
             </Box>
@@ -228,9 +435,9 @@ export function RestingNotch() {
           </Box>
         )}
 
-        {open && (
-          <Box sx={{ px: 1.5, pt: 1, pb: 1.25 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+        {open && !drop && (
+          <Box ref={panel} sx={{ px: 1.5, pt: 1, pb: 1.25 }}>
+            <Box data-anim sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
               <Box component="span" sx={{ fontSize: 12, fontWeight: 600, flex: 1 }}>
                 {live.length ? `${live.length} working` : 'Vivianne'}
               </Box>
@@ -241,16 +448,27 @@ export function RestingNotch() {
               )}
               <Pill onClick={() => void call('cmd_notch_open_main')}>Open</Pill>
             </Box>
-            {prefs.showAgents &&
-              live.map((a) => (
-                <Row key={a.id} a={a} now={now} />
+            {usage && <UsageStrip usage={usage} />}
+            <Box data-anim sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', pb: 0.75, mb: 0.25, borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+              {QUICK.map((q) => (
+                <Pill key={q.label} onClick={() => runInstant(q.ask, q.label)}>
+                  {q.label}
+                </Pill>
               ))}
+              {automations.map((a) => (
+                <Pill key={a.id} onClick={() => runAutomation(a)} title="Run this automation now">
+                  {ran === a.id ? 'Started ✓' : `▸ ${a.name}`}
+                </Pill>
+              ))}
+            </Box>
             {prefs.showAgents &&
-              recent.slice(0, 3).map((a) => (
-                <Row key={a.id} a={a} now={now} />
+              [...live, ...recent.slice(0, 3)].map((a) => (
+                <Box data-anim key={a.id}>
+                  <Row a={a} now={now} />
+                </Box>
               ))}
             {!agents.length && (
-              <Box sx={{ fontSize: 11.5, color: MUTED, py: 0.5 }}>
+              <Box data-anim sx={{ fontSize: 11.5, color: MUTED, py: 0.5 }}>
                 Nothing running. Hold {chord} and ask anything, or tell an agent what to do.
               </Box>
             )}

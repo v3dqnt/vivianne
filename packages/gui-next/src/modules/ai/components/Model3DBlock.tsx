@@ -234,7 +234,7 @@ export function Model3DBlock({ code }: { code: string }) {
   if (error) {
     return (
       <Box sx={{ my: 1, p: 1.5, border: 1, borderColor: 'divider', borderRadius: '12px' }}>
-        <Typography variant="caption" color="error.main" sx={{ fontWeight: 600, display: 'block' }}>
+        <Typography variant="caption" color="error.main" sx={{ fontWeight: 500, display: 'block' }}>
           3D scene problem
         </Typography>
         <Typography variant="caption" color="text.secondary">
@@ -248,7 +248,7 @@ export function Model3DBlock({ code }: { code: string }) {
     <Box sx={{ my: 1, border: 1, borderColor: 'divider', borderRadius: '12px', overflow: 'hidden', bgcolor: 'background.paper' }}>
       {spec?.title && (
         <Stack direction="row" sx={{ alignItems: 'center', px: 1.5, py: 0.75, borderBottom: 1, borderColor: 'divider' }}>
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>
             {spec.title}
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>

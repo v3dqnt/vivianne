@@ -80,8 +80,8 @@ export function ContactTab({ root, agent }: { root: string; agent: TeamAgent }) 
       <Stack sx={{ gap: 1 }}>
         <SectionLabel>Email</SectionLabel>
         {contact.email ? (
-          <Stack direction="row" sx={{ alignItems: 'center', gap: 1, p: 1.25, borderRadius: '10px', border: 1, borderColor: 'divider' }}>
-            <Typography variant="body2" sx={{ fontWeight: 600, flex: 1, minWidth: 0, fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.8125rem' }} noWrap>
+          <Stack direction="row" sx={{ alignItems: 'center', gap: 1, p: 1.25, borderRadius: '8px', border: 1, borderColor: 'divider' }}>
+            <Typography variant="body2" sx={{ fontWeight: 500, flex: 1, minWidth: 0, fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.8125rem' }} noWrap>
               {contact.email.address}
             </Typography>
             <Button size="small" onClick={() => void navigator.clipboard.writeText(contact.email!.address)}>
@@ -150,8 +150,8 @@ export function ContactTab({ root, agent }: { root: string; agent: TeamAgent }) 
       <Stack sx={{ gap: 1 }}>
         <SectionLabel>Phone</SectionLabel>
         {contact.phone ? (
-          <Stack direction="row" sx={{ alignItems: 'center', gap: 1, p: 1.25, borderRadius: '10px', border: 1, borderColor: 'divider' }}>
-            <Typography variant="body2" sx={{ fontWeight: 600, flex: 1, fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.8125rem' }}>
+          <Stack direction="row" sx={{ alignItems: 'center', gap: 1, p: 1.25, borderRadius: '8px', border: 1, borderColor: 'divider' }}>
+            <Typography variant="body2" sx={{ fontWeight: 500, flex: 1, fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.8125rem' }}>
               {contact.phone.number}
             </Typography>
             <Button size="small" color="error" onClick={() => setConfirm('phone')}>
@@ -208,7 +208,7 @@ export function ContactTab({ root, agent }: { root: string; agent: TeamAgent }) 
               </Button>
             </Stack>
             {offer && (
-              <Stack sx={{ gap: 0.25, border: 1, borderColor: 'divider', borderRadius: '10px', p: 0.5 }}>
+              <Stack sx={{ gap: 0.25, border: 1, borderColor: 'divider', borderRadius: '8px', p: 0.5 }}>
                 {offer.numbers.length === 0 && (
                   <Typography variant="caption" color="text.secondary" sx={{ p: 1 }}>
                     None available there. Try another area code.
@@ -240,10 +240,10 @@ export function ContactTab({ root, agent }: { root: string; agent: TeamAgent }) 
 
       {/* ── Inbound ── */}
       {(contact.email || contact.phone) && (
-        <Box sx={{ p: 1.25, borderRadius: '10px', bgcolor: alpha(theme.palette.text.primary, 0.04) }}>
+        <Box sx={{ p: 1.25, borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.04) }}>
           <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
             <Stack sx={{ flex: 1 }}>
-              <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem' }}>
+              <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }}>
                 Handle what comes in
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.45 }}>
@@ -271,7 +271,7 @@ export function ContactTab({ root, agent }: { root: string; agent: TeamAgent }) 
       )}
 
       <Dialog open={!!buying} onClose={() => busy !== 'buy' && setBuying(null)} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ fontSize: '1rem', fontWeight: 700 }}>Buy {buying}?</DialogTitle>
+        <DialogTitle sx={{ fontSize: '1rem', fontWeight: 600 }}>Buy {buying}?</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary">
             It's bought on your Twilio account and billed monthly{offer?.monthlyPrice ? ` (${offer.monthlyPrice})` : ''} until you release it, plus
@@ -301,7 +301,7 @@ export function ContactTab({ root, agent }: { root: string; agent: TeamAgent }) 
       </Dialog>
 
       <Dialog open={!!confirm} onClose={() => setConfirm(null)} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ fontSize: '1rem', fontWeight: 700 }}>{confirm === 'email' ? 'Remove this address?' : 'Release this number?'}</DialogTitle>
+        <DialogTitle sx={{ fontSize: '1rem', fontWeight: 600 }}>{confirm === 'email' ? 'Remove this address?' : 'Release this number?'}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary">
             {confirm === 'email'

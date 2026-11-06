@@ -3,7 +3,7 @@ import { create } from 'zustand'
 import { Box, Stack, Typography, Button, IconButton, Tooltip, ButtonBase, alpha, useTheme } from '../../../ui'
 import { MaximizeLinear, UndoLinear, RedoLinear } from '../../../icons'
 import { useWorkspaceStore } from '../store/workspaceStore'
-import { useAgentStore } from '../store/agentStore'
+import { onTurnEnd } from '../store/agentStore'
 import {
   displayPath,
   loadChanges,
@@ -31,11 +31,7 @@ const useReviewVersion = create<{ v: number; bump: () => void }>((set) => ({
   bump: () => set((s) => ({ v: s.v + 1 })),
 }))
 
-let wasBusy = false
-useAgentStore.subscribe((s) => {
-  if (wasBusy && !s.isBusy) useReviewVersion.getState().bump()
-  wasBusy = s.isBusy
-})
+onTurnEnd(() => useReviewVersion.getState().bump())
 
 /**
  * What one assignment changed, shown under its last message.
@@ -157,7 +153,7 @@ export function ChangeSummary({
       }}
     >
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, py: 0.875 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem' }}>
+        <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }}>
           {changed.length === 0
             ? 'No net changes'
             : `Changed ${changed.length} file${changed.length === 1 ? '' : 's'}`}

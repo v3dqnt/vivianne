@@ -2,13 +2,12 @@ import { useEffect } from 'react'
 import { ButtonBase, Typography } from '../../../ui'
 import { ClipboardTextLinear } from '../../../icons'
 import { usePlanStore } from '../store/planStore'
-import { usePanelStore } from '../../dock/store/panelStore'
 
 /**
  * Plan mode for the conversation. While on, the agent only researches — the
  * project, its dependencies, the web — and ends by proposing a plan in the
- * Plan panel for review. Nothing is changed until a plan is approved, which
- * turns plan mode off again by itself.
+ * chat for review. Nothing is changed until a plan is approved, which turns
+ * plan mode off again by itself.
  */
 export function PlanPill() {
   const on = usePlanStore((s) => s.planMode)
@@ -21,10 +20,7 @@ export function PlanPill() {
 
   return (
     <ButtonBase
-      onClick={() => {
-        void setPlanMode(!on)
-        if (!on) usePanelStore.getState().openRight('plan')
-      }}
+      onClick={() => void setPlanMode(!on)}
       aria-pressed={on}
       title={on ? 'Plan mode — the agent researches and proposes a plan, and changes nothing. Click to turn off.' : 'Plan first: research and propose a plan for review before doing anything'}
       sx={{

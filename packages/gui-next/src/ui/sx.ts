@@ -80,6 +80,10 @@ const COLORS = new Set([
 ])
 const BORDERS = new Set(['border', 'borderTop', 'borderRight', 'borderBottom', 'borderLeft', 'outline'])
 const BREAKPOINTS: Breakpoint[] = ['xs', 'sm', 'md', 'lg', 'xl']
+/** The UI face (General Sans) is variable and reads a touch light at its
+ * nominal weights, so every weight sits this much heavier: 400 draws at 450,
+ * 500 at 550. */
+export const WEIGHT_NUDGE = 50
 const FONT_WEIGHTS: Record<string, number> = { fontWeightLight: 300, fontWeightRegular: 400, fontWeightMedium: 500, fontWeightBold: 700 }
 
 const isPlainObject = (v: unknown): v is SxObject => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -104,8 +108,22 @@ export function paletteColor(theme: Theme, value: SxValue): SxValue {
   return value
 }
 
+/** The spacing unit: `p: 2` is two of these, before snapping (below). */
+export const SPACING_UNIT = 7
+
+/**
+ * A spacing number in pixels, on the 4px grid: the unit's length rounded
+ * to a multiple of 4, leaning tighter (`1` is 8px, `1.5` 8px, `2` 12px,
+ * `3` 20px). Below 3px it stays a hairline step (`0.25` is 2px).
+ */
+export function spacePx(n: number): number {
+  const raw = Math.abs(n * SPACING_UNIT)
+  const snapped = raw < 3 ? Math.round(raw) : Math.max(4, Math.round((raw - 1) / 4) * 4)
+  return n < 0 ? -snapped : snapped
+}
+
 function spacing(value: SxValue): SxValue {
-  return typeof value === 'number' ? `${value * 8}px` : value
+  return typeof value === 'number' ? `${spacePx(value)}px` : value
 }
 
 /** One property after theme mapping. Returns style entries to merge. */
@@ -136,7 +154,7 @@ function property(key: string, value: SxValue, theme: Theme): SxObject {
     // Terax uses two weights: 400 and 500. Anything heavier is capped, so
     // emphasis comes from weight 500 and tone, never bold.
     const w = typeof value === 'string' ? (FONT_WEIGHTS[value] ?? (value === 'bold' ? 700 : Number(value))) : value
-    return { [key]: typeof w === 'number' && w > 500 ? 500 : (w ?? value) }
+    return { [key]: typeof w === 'number' ? Math.min(w, 500) + WEIGHT_NUDGE : (w ?? value) }
   }
   if (key === 'fontFamily' && value === 'monospace') return { [key]: '"Geist Mono", ui-monospace, monospace' }
   return { [key]: value }

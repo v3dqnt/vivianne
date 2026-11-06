@@ -7,16 +7,8 @@ import { useAuthStore } from '../store/authStore'
 import { useCustomProviderStore } from '../store/customProviderStore'
 import { ProviderRow } from './ProviderRow'
 import { ChatGptPlanPanel, chatGptStatus } from './ChatGptPlanPanel'
-
-// Deterministic color per provider id — same trick `ModelSelector.tsx` uses
-// for its picker marks, duplicated locally rather than shared since it's a
-// five-line pure function and the two call sites want slightly different
-// sizes/contexts.
-function markColor(id: string): string {
-  let hash = 0
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0
-  return `hsl(${hash % 360}, 55%, 55%)`
-}
+import { RoutingPanel } from './RoutingPanel'
+import { CodingAgentsPanel } from './CodingAgentsPanel'
 
 function Mark({ id, size = 20 }: { id: string; size?: number }) {
   return (
@@ -29,10 +21,10 @@ function Mark({ id, size = 20 }: { id: string; size?: number }) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        bgcolor: markColor(id),
-        color: 'rgba(0,0,0,0.75)',
+        bgcolor: 'action.selected',
+        color: 'text.secondary',
         fontSize: size * 0.5,
-        fontWeight: 700,
+        fontWeight: 600,
         lineHeight: 1,
       }}
     >
@@ -51,7 +43,7 @@ function ListRow({ label, markId, connected, selected, onClick }: { label: strin
         gap: 1,
         px: 1,
         py: 0.75,
-        borderRadius: 1.5,
+        borderRadius: 1.6,
         width: '100%',
         justifyContent: 'flex-start',
         bgcolor: selected ? 'action.selected' : 'transparent',
@@ -103,7 +95,7 @@ function AddModelDialog({ open, onClose, onAdd }: { open: boolean; onClose: () =
           />
           <ButtonBase
             onClick={() => setAdvancedOpen((v) => !v)}
-            sx={{ display: 'flex', alignItems: 'center', gap: 0.5, alignSelf: 'flex-start', color: 'text.secondary', fontSize: '0.8125rem', fontWeight: 600 }}
+            sx={{ display: 'flex', alignItems: 'center', gap: 0.5, alignSelf: 'flex-start', color: 'text.secondary', fontSize: '0.8125rem', fontWeight: 500 }}
           >
             <ArrowDownLinear size={12} color="currentColor" style={{ transform: advancedOpen ? 'rotate(180deg)' : undefined, transition: 'transform 0.15s' }} />
             Advanced
@@ -205,7 +197,7 @@ function CustomProviderForm({ providerId, onSaved, onRemoved }: { providerId: st
   return (
     <Stack sx={{ gap: 2.5, maxWidth: 480 }}>
       <Stack sx={{ gap: 0.5 }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+        <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
           {existing ? 'Edit model provider' : 'Add model provider'}
         </Typography>
         <Typography variant="caption" color="text.secondary">
@@ -214,21 +206,21 @@ function CustomProviderForm({ providerId, onSaved, onRemoved }: { providerId: st
       </Stack>
 
       <Stack sx={{ gap: 0.5 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           Name
         </Typography>
         <TextField size="small" placeholder="e.g. DeepSeek" value={name} onChange={(e) => setName(e.target.value)} />
       </Stack>
 
       <Stack sx={{ gap: 0.5 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           Base URL
         </Typography>
         <TextField size="small" placeholder="https://api.example.com/v1" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
       </Stack>
 
       <Stack sx={{ gap: 0.5 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           API key
         </Typography>
         <TextField
@@ -241,7 +233,7 @@ function CustomProviderForm({ providerId, onSaved, onRemoved }: { providerId: st
       </Stack>
 
       <Stack sx={{ gap: 0.5 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           API format
         </Typography>
         <Select size="small" value={apiFormat} disabled={!!existing} onChange={(e) => setApiFormat(e.target.value as CustomApiFormat)}>
@@ -259,7 +251,7 @@ function CustomProviderForm({ providerId, onSaved, onRemoved }: { providerId: st
       </Stack>
 
       <Stack sx={{ gap: 0.75 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           Model list
         </Typography>
         {models.length === 0 ? (
@@ -268,7 +260,7 @@ function CustomProviderForm({ providerId, onSaved, onRemoved }: { providerId: st
           </Typography>
         ) : (
           models.map((m) => (
-            <Stack key={m.id} direction="row" sx={{ alignItems: 'center', gap: 1, py: 0.5, px: 1, borderRadius: 1.5, bgcolor: 'action.hover' }}>
+            <Stack key={m.id} direction="row" sx={{ alignItems: 'center', gap: 1, py: 0.5, px: 1, borderRadius: 1.6, bgcolor: 'action.hover' }}>
               <Typography variant="body2" sx={{ flex: 1, minWidth: 0, fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem' }} noWrap>
                 {m.id}
               </Typography>
@@ -354,6 +346,67 @@ export function ProvidersSection() {
             color="text.secondary"
             sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.6875rem', px: 1, mb: 0.5 }}
           >
+            Models
+          </Typography>
+          <ButtonBase
+            onClick={() => setSelected('__routing__')}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              px: 1,
+              py: 0.75,
+              borderRadius: 1.6,
+              width: '100%',
+              justifyContent: 'flex-start',
+              bgcolor: selected === '__routing__' ? 'action.selected' : 'transparent',
+              '&:hover': { bgcolor: 'action.hover' },
+            }}
+          >
+            <Typography variant="body2" sx={{ flex: 1, textAlign: 'left' }}>
+              Cost-aware routing
+            </Typography>
+            <Typography variant="caption" sx={{ fontWeight: 500, color: 'warning.main', fontSize: '0.6875rem' }}>
+              BETA
+            </Typography>
+          </ButtonBase>
+        </Stack>
+
+        <Stack sx={{ gap: 0.25 }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.6875rem', px: 1, mb: 0.5 }}
+          >
+            Coding agents
+          </Typography>
+          <ButtonBase
+            onClick={() => setSelected('__agents__')}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              px: 1,
+              py: 0.75,
+              borderRadius: 1.6,
+              width: '100%',
+              justifyContent: 'flex-start',
+              bgcolor: selected === '__agents__' ? 'action.selected' : 'transparent',
+              '&:hover': { bgcolor: 'action.hover' },
+            }}
+          >
+            <Typography variant="body2" sx={{ flex: 1, textAlign: 'left' }}>
+              Claude Code, Codex, Gemini…
+            </Typography>
+          </ButtonBase>
+        </Stack>
+
+        <Stack sx={{ gap: 0.25 }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.6875rem', px: 1, mb: 0.5 }}
+          >
             Custom providers
           </Typography>
           {customProviders.map((p) => (
@@ -367,7 +420,7 @@ export function ProvidersSection() {
               gap: 1,
               px: 1,
               py: 0.75,
-              borderRadius: 1.5,
+              borderRadius: 1.6,
               width: '100%',
               justifyContent: 'flex-start',
               border: 1,
@@ -395,7 +448,9 @@ export function ProvidersSection() {
         )}
         {showCustomForm && <CustomProviderForm providerId={selectedCustom ? selectedCustom.id : null} onSaved={setSelected} onRemoved={() => setSelected(null)} />}
         {selected === '__chatgpt__' && <ChatGptPlanPanel onChange={(s) => setPlanConnected(!!s?.signedIn && s.sharing)} />}
-        {!selectedCloud && !showCustomForm && selected !== '__chatgpt__' && (
+        {selected === '__routing__' && <RoutingPanel />}
+        {selected === '__agents__' && <CodingAgentsPanel />}
+        {!selectedCloud && !showCustomForm && selected !== '__chatgpt__' && selected !== '__routing__' && selected !== '__agents__' && (
           <Stack sx={{ height: '100%', alignItems: 'center', justifyContent: 'center' }}>
             <Typography variant="body2" color="text.secondary">
               Select a provider to configure it.

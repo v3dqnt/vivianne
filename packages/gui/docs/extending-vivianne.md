@@ -12,17 +12,6 @@ an earlier version of this app had one (`~/.viv/panels/`, its own Settings
 tab), and it was merged into playbooks because the two were doing the same
 "drop a manifest, get an extension" job with needless duplication.
 
-> **Note on scope.** `packages/gui/docs/playbooks-plan.md` in this repo
-> describes a much larger, unbuilt vision — "playbooks" as installable
-> packages bundling skills + MCP servers + tools + a whole custom tab/panel
-> layout. That plan predates the current frontend (it references
-> `app/page.tsx`/`AgentProvider.tsx`, which no longer exist — the app was
-> rewritten as `gui-next`) and was never implemented. This guide documents
-> what's actually built today: three separate, focused extension points, not
-> that unified package system. Worth knowing the bigger vision exists if
-> you're ever picking up that project again, but don't confuse it with what's
-> described below.
-
 ---
 
 ## 1. Playbooks (tools *and* panels)

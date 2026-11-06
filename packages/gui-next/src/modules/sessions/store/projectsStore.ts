@@ -20,15 +20,20 @@ export interface Project {
   multiplayer: MultiplayerProjectInfo | null
   /** How work is organised (`projects::Project::mode`). Absent on projects
    * made before the choice existed; those work as `company`. */
-  mode?: ProjectMode | null
+  mode?: ProjectMode | 'company' | 'team' | null
+  /** A picture for the rail, as a small PNG data URL; the initial when absent. */
+  icon?: string | null
+  /** The banner over the project's threads: `preset:<id>`, `file:<ext>` or none. */
+  banner?: string | null
 }
 
-/** Threads: separate chats. Company: a master that hires and delegates.
- * Team: agents the user builds, working a task in parallel and talking. */
-export type ProjectMode = 'threads' | 'company' | 'team'
+/** Threads: separate chats you run. Tree: a team of bots with roles, a
+ * lead (a promoted bot, or you), circles and DMs. Projects made as a
+ * Company or an Agent team are trees. */
+export type ProjectMode = 'threads' | 'tree'
 
 export function modeOf(project: Pick<Project, 'mode'> | null | undefined): ProjectMode {
-  return project?.mode ?? 'company'
+  return project?.mode === 'threads' ? 'threads' : 'tree'
 }
 
 /** Accent colors for the sidebar project rail. */
@@ -75,7 +80,7 @@ interface ProjectsStoreState {
   activeProjectId: string | null
   loading: boolean
   refresh: () => Promise<void>
-  create: (name: string, path?: string | null, color?: string | null, mode?: ProjectMode | null) => Promise<Project | null>
+  create: (name: string, path?: string | null, color?: string | null, mode?: ProjectMode | null, activate?: boolean) => Promise<Project | null>
   createMultiplayer: (
     name: string,
     path: string,
@@ -86,6 +91,13 @@ interface ProjectsStoreState {
   ) => Promise<Project | null>
   update: (id: string, name: string, path?: string | null, color?: string | null) => Promise<void>
   remove: (id: string) => Promise<void>
+  /** Set (a data URL) or clear (null) a project's rail picture. */
+  setIcon: (id: string, icon: string | null) => Promise<void>
+  /** The user's own banner pictures, loaded on demand (`file:` banners only). */
+  bannerUrls: Record<string, string | null>
+  loadBanner: (id: string) => Promise<void>
+  /** A `preset:<id>`, a picture as a data URL, or null for the gradient. */
+  setBanner: (id: string, banner: string | null) => Promise<void>
   /** Assign (or clear, with null) a session's project. */
   assign: (sessionId: string, projectId: string | null) => Promise<void>
   setActiveProject: (id: string | null) => void
@@ -129,6 +141,7 @@ export const useProjectsStore = create<ProjectsStoreState>((set, get) => ({
   projects: [],
   sessionProjectMap: {},
   activeProjectId: null,
+  bannerUrls: {},
   loading: false,
 
   refresh: async () => {
@@ -149,25 +162,24 @@ export const useProjectsStore = create<ProjectsStoreState>((set, get) => ({
         activeProjectId:
           s.activeProjectId === GENERAL_PROJECT_ID || list.some((p) => p.id === s.activeProjectId)
             ? s.activeProjectId
-            : (list[0]?.id ?? null),
+            : GENERAL_PROJECT_ID,
       }))
       // Covers app start, where the first project resolves here rather than
       // through an explicit click.
       syncWorkspaceToProject(list.find((p) => p.id === get().activeProjectId))
-      openActiveDay(get().activeProjectId)
     } finally {
       set({ loading: false })
     }
   },
 
-  create: async (name, path = null, color = null, mode = null) => {
+  create: async (name, path = null, color = null, mode = null, activate = true) => {
     const trimmed = name.trim()
     if (!trimmed) return null
     const project = await call<Project>('cmd_create_project', { name: trimmed, path, color, mode })
     await get().refresh()
     // Via the action, not a raw `set` — a new project should point the
     // workspace at its folder straight away.
-    if (project) get().setActiveProject(project.id)
+    if (project && activate) get().setActiveProject(project.id)
     return project
   },
 
@@ -187,6 +199,23 @@ export const useProjectsStore = create<ProjectsStoreState>((set, get) => ({
     return project
   },
 
+  setIcon: async (id, icon) => {
+    await call('cmd_set_project_icon', { id, icon })
+    set((s) => ({ projects: s.projects.map((p) => (p.id === id ? { ...p, icon } : p)) }))
+  },
+  loadBanner: async (id) => {
+    if (id in get().bannerUrls) return
+    set((s) => ({ bannerUrls: { ...s.bannerUrls, [id]: null } }))
+    const url = await call<string | null>('cmd_get_project_banner', { id }).catch(() => null)
+    set((s) => ({ bannerUrls: { ...s.bannerUrls, [id]: url ?? null } }))
+  },
+  setBanner: async (id, banner) => {
+    const stored = await call<string | null>('cmd_set_project_banner', { id, banner })
+    set((s) => ({
+      projects: s.projects.map((p) => (p.id === id ? { ...p, banner: stored ?? null } : p)),
+      bannerUrls: { ...s.bannerUrls, [id]: stored?.startsWith('file:') ? banner : null },
+    }))
+  },
   update: async (id, name, path = null, color = null) => {
     const trimmed = name.trim()
     if (!trimmed) return

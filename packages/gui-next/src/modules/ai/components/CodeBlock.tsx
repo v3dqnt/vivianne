@@ -156,11 +156,13 @@ export function CodeBlock({
           '& pre code': { counterReset: 'line' },
           '& pre code > .line': {
             counterIncrement: 'line',
+            // A wrapped line hangs past the numbers instead of running under them.
+            ...(wrap && { display: 'inline-block', width: '100%', pl: '3.25em', textIndent: '-3.25em' }),
             '&::before': {
               content: 'counter(line)',
               display: 'inline-block',
               width: '2.25em',
-              mr: 1.5,
+              mr: '1em',
               textAlign: 'right',
               color: 'text.disabled',
               userSelect: 'none',

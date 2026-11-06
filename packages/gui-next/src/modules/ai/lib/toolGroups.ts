@@ -7,7 +7,7 @@ type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
  * folded under one heading. */
 export type TranscriptItem =
   | { kind: 'message'; index: number }
-  | { kind: 'group'; start: number; indices: number[]; toolIndices: number[] }
+  | { kind: 'group'; start: number; indices: number[]; toolIndices: number[]; thoughts: number }
   /** Part of the plan got done at this message (see `checkpoints.ts`). */
   | { kind: 'checkpoint'; index: number }
 
@@ -22,6 +22,10 @@ function isSilentAssistant(m: AgentMessage): boolean {
     m.content.some((c) => c.type === 'toolCall') &&
     contentToText(m.content).trim().length === 0
   )
+}
+
+function hasThinking(m: AgentMessage): boolean {
+  return m.type === 'assistant' && m.content.some((c) => c.type === 'thinking' && c.thinking.trim().length > 0)
 }
 
 /** Folds consecutive tool activity into groups.
@@ -42,8 +46,11 @@ export function groupTranscript(
 
   const flush = () => {
     const toolIndices = run.filter((i) => messages[i].type === 'toolResult')
-    if (toolIndices.length >= 2) {
-      items.push({ kind: 'group', start: run[0], indices: run, toolIndices })
+    // Steps that reasoned before acting: their thinking folds in with the
+    // calls, so a run of think-act-think-act reads as one block.
+    const thoughts = run.filter((i) => hasThinking(messages[i])).length
+    if (toolIndices.length >= 2 || (toolIndices.length >= 1 && thoughts >= 1)) {
+      items.push({ kind: 'group', start: run[0], indices: run, toolIndices, thoughts })
     } else {
       for (const index of run) items.push({ kind: 'message', index })
     }
@@ -95,6 +102,7 @@ const FAMILY: Record<string, Family> = {
   powershell: 'run',
   run_script: 'run',
   sandbox_execute: 'run',
+  terminal: 'run',
   terminal_open: 'run',
   terminal_send: 'run',
   math: 'run',

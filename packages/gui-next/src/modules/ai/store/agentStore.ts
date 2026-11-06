@@ -1,14 +1,14 @@
-import { create, type StoreApi, type UseBoundStore } from 'zustand'
+import { create, useStore, type StoreApi, type UseBoundStore } from 'zustand'
 import { call, on } from '../../../ipc'
 import type { AgentEvent, AgentMessage, ImageAttachment, MessageContent, QuestionSpec, RunLedger } from '../lib/types'
 import { useModelStore } from './modelStore'
 import { useSubagentStore } from './subagentStore'
 import { useShellTaskStore, isShellTool } from '../../dock/store/shellTaskStore'
-import { useWebPreviewStore } from './webPreviewStore'
-import { usePanelStore, type RightPanelKind } from '../../dock/store/panelStore'
-import { useModsStore } from '../../mods/store/modsStore'
 import { notifyFileChanged, resolveAgentPath } from '../../ide/lib/fileChangeBus'
 import { useWorkspaceStore } from './workspaceStore'
+import { activeThreadId, useActiveThread, PRIMARY_THREAD_ID } from './activeThread'
+
+export { PRIMARY_THREAD_ID }
 
 /** Wall-clock start of the current streaming assistant message — set on
  * `message_start`, consumed on `message_end` to compute tokens/sec. Plain
@@ -144,7 +144,10 @@ interface AgentStoreState {
   /** Pause, stop, raise the caps of, or resume the long task. */
   controlLongTask: (action: 'pause' | 'stop' | 'extend' | 'resume', add?: { usd?: number; hours?: number }) => Promise<void>
   init: () => Promise<void>
-  sendMessage: (text: string, images?: ImageAttachment[]) => Promise<void>
+  /** `opts.automation` marks the turn an unattended automation step: the
+   * backend then forces model routing regardless of the selected chat model
+   * instead of running (at full cost) on whatever model was selected. */
+  sendMessage: (text: string, images?: ImageAttachment[], opts?: { automation?: boolean }) => Promise<void>
   /** Fold older history into a summary. Returns how many messages were folded (0 = nothing to compact). */
   compactNow: () => Promise<number>
   respondPermission: (approved: boolean) => Promise<void>
@@ -159,24 +162,22 @@ interface AgentStoreState {
   /** Queue a message to run after the current turn finishes. */
   queueFollowUp: (text: string) => Promise<void>
   /** Interrupt the running turn and redirect it with this message now. */
-  steer: (text: string) => Promise<void>
+  steer: (text: string, images?: ImageAttachment[]) => Promise<void>
   /** Stop the current turn (end the task). */
   abort: () => Promise<void>
   /** Revert the transcript to a message index (checkpoint). */
   revertToIndex: (index: number) => Promise<void>
 }
 
-/** Only these four backend commands are thread-scoped today (see
- * `AgentRegistry` in `agent/commands.rs`) — everything else (abort, steer,
- * queues, revert, compaction, permission responses) still only ever touches
- * the backend's single primary `AppState`. Calling them from a secondary
- * thread's store would silently act on the WRONG thread, so those actions
- * are gated to primary-only below instead of quietly misrouting — a real,
- * disclosed gap to close in a follow-up, not a silent correctness bug. */
-const PRIMARY_THREAD_ID = ''
+/** Every conversation command takes the thread it acts on (`AgentRegistry`
+ * in `agent/runtime/commands.rs`; `''` = the primary). The app around the
+ * chat (panels, the browser preview, the model bar) follows the thread on
+ * screen. */
 
-function isPrimary(threadId: string): boolean {
-  return threadId === PRIMARY_THREAD_ID
+/** Whether a thread is the one on screen, which is the one whose events may
+ * open panels and refresh the model bar. */
+function isOnScreen(threadId: string): boolean {
+  return threadId === activeThreadId()
 }
 
 /** Wraps `agent_event`'s payload — every emit from the backend now carries
@@ -195,6 +196,35 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
   // window has looked, a task in "running" is one this session runs (or just
   // stopped), never one to start again on its own.
   let launchResumeChecked = false
+  // Streaming tokens not yet in the transcript (`message_update`), and the
+  // frame that will put them there.
+  const pending = { text: '', thinking: '' }
+  let frame = 0
+  const flushTokens = () => {
+    if (frame) cancelAnimationFrame(frame)
+    frame = 0
+    if (!pending.text && !pending.thinking) return
+    const { text, thinking } = pending
+    pending.text = ''
+    pending.thinking = ''
+    set((s) => {
+      if (s.streamingIndex === null) return s
+      const current = s.messages[s.streamingIndex]
+      if (!current || current.type !== 'assistant') return s
+      // Thinking and text stream as separate blocks; each delta extends its
+      // own, and any other block the message started with is left as it is.
+      let content: MessageContent[] = current.content.map((c) => {
+        if (c.type === 'thinking' && thinking) return { ...c, thinking: c.thinking + thinking }
+        if (c.type === 'text' && text) return { ...c, text: c.text + text }
+        return c
+      })
+      if (thinking && !content.some((c) => c.type === 'thinking')) content = [{ type: 'thinking', thinking }, ...content]
+      if (text && !content.some((c) => c.type === 'text')) content = [...content, { type: 'text', text }]
+      const messages = [...s.messages]
+      messages[s.streamingIndex] = { ...current, content }
+      return { messages }
+    })
+  }
   const resumeLongTask = async () => {
     const prompt = await call<string | null>('cmd_long_task_resume_prompt', { threadId })
     if (prompt) await get().sendMessage(prompt)
@@ -221,7 +251,6 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
     longTask: null,
 
     refreshLongTask: async () => {
-      if (!isPrimary(threadId)) return
       const ledger = (await call<RunLedger | null>('cmd_long_task_get', { threadId })) ?? null
       set({ longTask: ledger })
       // A task that was running (or waiting out a rate limit) when the app
@@ -234,7 +263,6 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
     },
 
     controlLongTask: async (action, add) => {
-      if (!isPrimary(threadId)) return
       if (action === 'stop') return get().abort()
       if (action === 'pause' && get().isBusy) set({ stopping: true })
       const ledger = await call<RunLedger | null>('cmd_long_task_control', {
@@ -252,8 +280,8 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
       if (get().initialized) return
       set({ initialized: true })
 
-      await on<ThreadScopedEvent>('agent_event', ({ threadId: eventThreadId, event }) => {
-        if (eventThreadId !== threadId) return
+      await listen(threadId, (event) => {
+        if (event.type !== 'message_update') flushTokens()
         // `retryStatus` is explicitly transient — clear it on anything except
         // another retry tick, so a resolved retry doesn't linger forever.
         if (event.type !== 'retry_status') {
@@ -280,37 +308,13 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             break
           }
           case 'message_update': {
-            set((s) => {
-              if (s.streamingIndex === null) return s
-              const messages = [...s.messages]
-              const current = messages[s.streamingIndex]
-              if (!current || current.type !== 'assistant') return s
-              // Each update carries a single-block delta message tagged with
-              // its own kind (thinking vs text) — NOT the full accumulated
-              // message. Merge into whichever running block matches that kind
-              // and keep the other block (if any) untouched, so reasoning
-              // streams live instead of only appearing once the final message
-              // lands (the two kinds were previously being mashed into one
-              // text block regardless of which the delta actually was).
-              const delta = event.payload.message.content[0]
-              if (!delta) return s
-              const prevText = current.content.find((c): c is Extract<MessageContent, { type: 'text' }> => c.type === 'text')
-              const prevThinking = current.content.find(
-                (c): c is Extract<MessageContent, { type: 'thinking' }> => c.type === 'thinking',
-              )
-              let content: MessageContent[]
-              if (delta.type === 'thinking') {
-                const thinking: MessageContent = { type: 'thinking', thinking: (prevThinking?.thinking ?? '') + delta.thinking }
-                content = prevText ? [thinking, prevText] : [thinking]
-              } else if (delta.type === 'text') {
-                const text: MessageContent = { type: 'text', text: (prevText?.text ?? '') + delta.text }
-                content = prevThinking ? [prevThinking, text] : [text]
-              } else {
-                return s
-              }
-              messages[s.streamingIndex] = { ...current, content }
-              return { messages }
-            })
+            // Buffered: tokens can arrive hundreds a second, and each set()
+            // re-renders the transcript. They land once per frame instead.
+            const delta = event.payload.message.content[0]
+            if (delta?.type === 'thinking') pending.thinking += delta.thinking
+            else if (delta?.type === 'text') pending.text += delta.text
+            else break
+            if (!frame) frame = requestAnimationFrame(flushTokens)
             break
           }
           case 'message_end': {
@@ -350,21 +354,16 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
           }
           case 'agent_end': {
             set({ isBusy: false, stopping: false, streamingIndex: null, memoryRecalled: null })
-            if (isPrimary(threadId)) {
-              void useModelStore.getState().refreshStats()
-              // QueuePanel only polls while `isBusy`, so without this the
-              // panel keeps rendering whatever was queued at the last poll
-              // — including messages the run has since drained and answered,
-              // which reads as "queued but never sent". This is the one
-              // refresh that runs after the drain, so it's what makes the
-              // panel reflect reality once a run ends.
-              void get().refreshQueues()
-            }
+            if (isOnScreen(threadId)) void useModelStore.getState().refreshStats()
+            // QueuePanel only polls while `isBusy`, so without this the panel
+            // keeps showing what was queued at the last poll, including
+            // messages the run has since drained and answered.
+            void get().refreshQueues()
             break
           }
           case 'tool_execution_start': {
             if (isComputerUseTool(event.payload.tool_name)) set({ computerUseActive: true })
-            if (isPrimary(threadId) && event.payload.tool_name === 'task') void useSubagentStore.getState().refresh()
+            if (isOnScreen(threadId) && event.payload.tool_name === 'task') void useSubagentStore.getState().refresh()
             // Shell tools run as one-shot processes, not PTY sessions, so the
             // Background Tasks panel (which lists terminal sessions) can only
             // learn about them from here.
@@ -403,7 +402,7 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             if (isShellTool(event.payload.tool_name)) {
               useShellTaskStore.getState().finish(event.payload.tool_call_id, !!event.payload.is_error)
             }
-            if (isPrimary(threadId) && event.payload.tool_name === 'task') void useSubagentStore.getState().refresh()
+            if (isOnScreen(threadId) && event.payload.tool_name === 'task') void useSubagentStore.getState().refresh()
             set((s) => {
               const idx = s.messages.findIndex(
                 (m) => m.type === 'toolResult' && m.toolCallId === event.payload.tool_call_id,
@@ -515,79 +514,27 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
             })
             break
           }
-          case 'web_preview_requested': {
-            if (!isPrimary(threadId)) break
-            const p = event.payload
-            useWebPreviewStore.getState().requested(p.url, p.screenshot_base64, p.error)
-            // Pop the merged Preview panel open in Browser mode so agent-driven
-            // browsing (web_preview, or any browser_* interaction tool) is
-            // actually visible without the user having to go find it.
-            usePanelStore.getState().openRight('preview')
-            // 'live', not 'browser'. The agent now drives the embedded webview,
-            // so this is the same page and the same session the user can click
-            // — not a parallel screenshot feed of a second browser. Sending them
-            // to 'browser' here is what kept the live view unreachable in
-            // practice, however many times it was built.
-            usePanelStore.getState().setPreviewMode('live')
+          // The agent browses in its own view; with no side panel there is
+          // nowhere in the window to show it.
+          case 'web_preview_requested':
             break
-          }
-          case 'panel_focus_requested': {
-            if (!isPrimary(threadId)) break
-            const p = event.payload
-            const RIGHT_PANEL_KINDS: RightPanelKind[] = ['review', 'files', 'preview', 'tasks', 'plan']
-            if (p.panel.startsWith('mod:')) {
-              // A mod's panel, `mod:<key>/<panel id>` — set_panel's backend
-              // side already confirmed it's running. With no panel id, the
-              // mod's first panel.
-              const [key, id] = p.panel.slice('mod:'.length).split('/')
-              const mod = useModsStore.getState().mods.find((m) => m.key === key)
-              const panelId = id || mod?.manifest?.contributes.panels[0]?.id
-              if (p.action === 'open' && panelId) usePanelStore.getState().openCustomPanel(`${key}/${panelId}`)
-              else usePanelStore.getState().closeRight()
-            } else if (p.panel === 'terminal') {
-              if (p.action === 'open') usePanelStore.getState().openBottom()
-              else usePanelStore.getState().closeBottom()
-            } else if (p.panel === 'documents') {
-              // Documents are a mode of the Preview panel.
-              if (p.action === 'open') {
-                usePanelStore.getState().openRight('preview')
-                usePanelStore.getState().setPreviewMode('documents')
-              } else {
-                usePanelStore.getState().closeRight('preview')
-              }
-            } else if (p.panel === 'preview_dev' || p.panel === 'preview_browser') {
-              if (p.action === 'open') {
-                usePanelStore.getState().openRight('preview')
-                usePanelStore.getState().setPreviewMode(p.panel === 'preview_dev' ? 'dev' : 'browser')
-              } else {
-                usePanelStore.getState().closeRight()
-              }
-            } else if ((RIGHT_PANEL_KINDS as string[]).includes(p.panel)) {
-              if (p.action === 'open') usePanelStore.getState().openRight(p.panel as RightPanelKind)
-              else usePanelStore.getState().closeRight()
-            }
+          // No side panels: nothing to open.
+          case 'panel_focus_requested':
             break
-          }
           default:
             break
         }
       })
     },
 
-    sendMessage: async (text: string, images) => {
+    sendMessage: async (text: string, images, opts) => {
       const trimmed = text.trim()
       if (!trimmed && !images?.length) return
       // Sending while a turn is already running no longer blocks — the message
       // goes to the steering queue instead, so typing and submitting mid-task
       // doesn't end the current run (mirrors the old app's steer-while-busy).
-      // Secondary threads have no steering queue yet (not backend-scoped) —
-      // block instead of silently queuing into the wrong thread.
       if (get().isBusy) {
-        if (!isPrimary(threadId)) {
-          console.warn('[agent] steering queue is not yet thread-scoped — ignoring send while a secondary thread is busy')
-          return
-        }
-        await call('cmd_agent_steering_queue', { text: trimmed })
+        await call('cmd_agent_steering_queue', { text: trimmed, images: images?.length ? images : null, threadId })
         await get().refreshQueues()
         return
       }
@@ -597,8 +544,22 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
       // optimistic append here duplicated every sent message once that event
       // landed. `isBusy` alone gives instant composer feedback.
       set({ isBusy: true })
+      const own = senders.get(threadId)
+      if (own) {
+        // It runs when its owner gets to it; `agent_end` clears busy.
+        await own(trimmed, images?.length ? images : null).catch((err) => {
+          console.error('[agent] send failed:', err)
+          set({ isBusy: false })
+        })
+        return
+      }
       try {
-        await call('cmd_agent_prompt', { text: trimmed, images: images?.length ? images : null, threadId })
+        await call('cmd_agent_prompt', {
+          text: trimmed,
+          images: images?.length ? images : null,
+          threadId,
+          ...opts,
+        })
       } catch (err) {
         console.error('[agent] send failed:', err)
         set({ isBusy: false })
@@ -610,47 +571,39 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
     },
 
     refreshQueues: async () => {
-      if (!isPrimary(threadId)) return
       // Old frontend read camelCase `followUp`; Rust serializes `follow_up`
       // unless the struct renames. Read both defensively rather than guessing.
-      const snap = await call<{ steering?: AgentMessage[]; followUp?: AgentMessage[]; follow_up?: AgentMessage[] }>('cmd_agent_get_queues')
+      const snap = await call<{ steering?: AgentMessage[]; followUp?: AgentMessage[]; follow_up?: AgentMessage[] }>('cmd_agent_get_queues', { threadId })
       if (!snap) return
       set({ queuedMessages: { steering: snap.steering ?? [], followUp: snap.followUp ?? snap.follow_up ?? [] } })
     },
 
     removeQueued: async (queue, index) => {
-      if (!isPrimary(threadId)) return
       // Backend accepts "steering" and either "followUp"/"follow_up" — the
       // old app used "followUp", kept here for wire compatibility.
       const wireQueue = queue === 'steering' ? 'steering' : 'followUp'
-      await call('cmd_agent_remove_queued', { queue: wireQueue, index })
+      await call('cmd_agent_remove_queued', { queue: wireQueue, index, threadId })
       await get().refreshQueues()
     },
 
     clearQueues: async () => {
-      if (!isPrimary(threadId)) return
-      await call('cmd_agent_clear_queues')
+      await call('cmd_agent_clear_queues', { threadId })
       set({ queuedMessages: { steering: [], followUp: [] } })
     },
 
     queueFollowUp: async (text) => {
-      if (!isPrimary(threadId)) return
       const trimmed = text.trim()
       if (!trimmed) return
-      await call('cmd_agent_follow_up_queue', { text: trimmed })
+      await call('cmd_agent_follow_up_queue', { text: trimmed, threadId })
       await get().refreshQueues()
     },
 
-    steer: async (text) => {
-      if (!isPrimary(threadId)) {
-        console.warn('[agent] steer is not yet thread-scoped — ignoring on a secondary thread')
-        return
-      }
+    steer: async (text, images) => {
       const trimmed = text.trim()
       if (!trimmed) return
       set({ isBusy: true })
       try {
-        await call('cmd_agent_steer', { text: trimmed })
+        await call('cmd_agent_steer', { text: trimmed, images: images?.length ? images : null, threadId })
       } catch (err) {
         console.error('[agent] steer failed:', err)
         set({ isBusy: false })
@@ -658,10 +611,6 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
     },
 
     abort: async () => {
-      if (!isPrimary(threadId)) {
-        console.warn('[agent] abort is not yet thread-scoped — ignoring on a secondary thread')
-        return
-      }
       // One stop for every control (the composer, the status bar's End):
       // the task is marked ended before the run is interrupted, so nothing
       // that later sees it can mistake it for one to carry on.
@@ -676,7 +625,7 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
         console.error('[agent] ending the task failed:', err)
       }
       try {
-        await call('cmd_agent_abort')
+        await call('cmd_agent_abort', { threadId })
       } catch (err) {
         console.error('[agent] abort failed:', err)
         set({ stopping: false })
@@ -687,18 +636,16 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
     },
 
     revertToIndex: async (index) => {
-      if (!isPrimary(threadId)) return
-      await call('cmd_agent_revert_to_index', { index })
+      await call('cmd_agent_revert_to_index', { index, threadId })
       const messages = await call<AgentMessage[]>('cmd_agent_messages', { threadId })
       set({ messages: messages ?? [], streamingIndex: null })
     },
 
     compactNow: async () => {
-      if (!isPrimary(threadId)) return 0
       if (get().compacting || get().isBusy) return 0
       set({ compacting: true })
       try {
-        const folded = (await call<number>('cmd_compact_now')) ?? 0
+        const folded = (await call<number>('cmd_compact_now', { threadId })) ?? 0
         // Compaction rewrites the transcript server-side (drains the folded
         // messages, inserts one summary in their place) but emits no event, so
         // the local copy has to be re-fetched rather than patched — and the
@@ -717,7 +664,6 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
     // harmless no-op against the already-cleared state (or the real clear, if
     // the request was resolved from elsewhere — e.g. bypass mode toggled on).
     respondPermission: async (approved) => {
-      if (!isPrimary(threadId)) return
       const p = get().pendingPermission
       if (!p) return
       set({ pendingPermission: null })
@@ -725,7 +671,6 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
     },
 
     answerQuestion: async (answers) => {
-      if (!isPrimary(threadId)) return
       const p = get().pendingQuestion
       if (!p) return
       set({ pendingQuestion: null })
@@ -733,7 +678,6 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
     },
 
     respondConfirmation: async (approved) => {
-      if (!isPrimary(threadId)) return
       const p = get().pendingConfirmation
       if (!p) return
       set({ pendingConfirmation: null })
@@ -743,10 +687,86 @@ export function createAgentStore(threadId: string): UseBoundStore<StoreApi<Agent
   })
 }
 
-/** The app's one live conversation — the active project's today.
- *
- * `createAgentStore` still takes a thread id because the backend's
- * `AgentRegistry` is keyed that way (Viv Instant runs on its own id), but the
- * frontend no longer opens secondary threads: split panes and tabs went away
- * with daily conversations. */
-export const useAgentStore = createAgentStore(PRIMARY_THREAD_ID)
+type AgentStore = UseBoundStore<StoreApi<AgentStoreState>>
+
+const stores = new Map<string, AgentStore>()
+
+/** Threads that send their own way: a bot's DM goes through the bot (its
+ * queue, its rules), not straight to the agent. */
+type Send = (text: string, images: ImageAttachment[] | null) => Promise<unknown>
+const senders = new Map<string, Send>()
+export function sendThrough(threadId: string, send: Send | null) {
+  if (send) senders.set(threadId, send)
+  else senders.delete(threadId)
+}
+
+/** One `agent_event` listener for every thread, handing each event to its
+ * thread's store. */
+const handlers = new Map<string, (event: AgentEvent) => void>()
+let listening: Promise<unknown> | null = null
+function listen(threadId: string, handle: (event: AgentEvent) => void): Promise<unknown> {
+  handlers.set(threadId, handle)
+  listening ??= on<ThreadScopedEvent>('agent_event', ({ threadId, event }) => handlers.get(threadId)?.(event))
+  return listening
+}
+
+/** Called when a turn ends on any thread (busy, then not). */
+const turnEnded = new Set<(threadId: string, s: AgentStoreState) => void>()
+export function onTurnEnd(f: (threadId: string, s: AgentStoreState) => void): () => void {
+  turnEnded.add(f)
+  return () => void turnEnded.delete(f)
+}
+
+/** One thread's store, made (and listening for its events) the first time
+ * it is asked for. */
+export function agentStoreFor(threadId: string): AgentStore {
+  let store = stores.get(threadId)
+  if (!store) {
+    store = createAgentStore(threadId)
+    stores.set(threadId, store)
+    store.subscribe((s, prev) => {
+      if (prev.isBusy && !s.isBusy) turnEnded.forEach((f) => f(threadId, s))
+    })
+    // The primary's `init` runs at startup, from the app.
+    if (threadId !== PRIMARY_THREAD_ID) void store.getState().init()
+  }
+  return store
+}
+
+/** Put a thread on screen. Others keep running where they are. */
+export function setActiveThread(threadId: string) {
+  agentStoreFor(threadId)
+  useActiveThread.setState({ threadId })
+}
+
+function useActiveAgentStore(): AgentStoreState
+function useActiveAgentStore<T>(selector: (s: AgentStoreState) => T): T
+function useActiveAgentStore<T>(selector?: (s: AgentStoreState) => T) {
+  const threadId = useActiveThread((s) => s.threadId)
+  // `useStore`, not calling the store: the React Compiler only keeps calls
+  // named use* as hooks, and caching this one would skip a hook.
+  return useStore(agentStoreFor(threadId), (selector ?? ((s: AgentStoreState) => s)) as (s: AgentStoreState) => T)
+}
+
+/** The conversation on screen: the store of whichever thread is active, as
+ * a hook and through `getState`/`setState`/`subscribe`. */
+export const useAgentStore = Object.assign(useActiveAgentStore, {
+  getState: () => agentStoreFor(activeThreadId()).getState(),
+  setState: ((...args: Parameters<AgentStore['setState']>) => agentStoreFor(activeThreadId()).setState(...args)) as AgentStore['setState'],
+  /** Follows the thread on screen; a switch reports the new thread's state
+   * as unchanged. For "a turn ended" use `onTurnEnd`. */
+  subscribe: (listener: (s: AgentStoreState, prev: AgentStoreState) => void) => {
+    let store = agentStoreFor(activeThreadId())
+    let unsub = store.subscribe(listener)
+    const off = useActiveThread.subscribe(() => {
+      unsub()
+      store = agentStoreFor(activeThreadId())
+      unsub = store.subscribe(listener)
+      listener(store.getState(), store.getState())
+    })
+    return () => {
+      unsub()
+      off()
+    }
+  },
+})

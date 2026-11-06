@@ -3,7 +3,6 @@
 // Uses reqwest + SSE streaming; api-key auth header; api-version query param.
 #![allow(dead_code, unused_variables)]
 
-use reqwest::Client;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -339,7 +338,7 @@ pub async fn stream_azure_openai(
             }
         };
 
-        let client = Client::new();
+        let client = crate::ai::http::client();
         let response = match client
             .post(&url)
             .header("content-type", "application/json")

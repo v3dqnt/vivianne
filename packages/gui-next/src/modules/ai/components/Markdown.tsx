@@ -1,4 +1,8 @@
 import { memo, type ReactNode } from 'react'
+import type React from 'react'
+import { ChatImage } from './ImageBlock'
+import { InteractiveBlock } from './InteractiveBlock'
+import { WidgetBlock } from './WidgetBlock'
 import { Box, Link } from '../../../ui'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -19,6 +23,10 @@ import { useThrottledValue } from '../../../lib/useThrottledValue'
 import { normalizeMath } from '../lib/mathText'
 import { useModsStore, chatRenderer } from '../../mods/store/modsStore'
 import { ModChatBlock } from '../../mods/components/ModChatBlock'
+import { remarkFiles } from '../lib/remarkFiles'
+import { FileLink } from './FileLink'
+import { CHAT_FONT } from '../lib/chatStyle'
+import { onWebLinkClick } from '../lib/openLink'
 
 const VIDEO_EXT = /\.(mp4|webm|mov|m4v)$/i
 const AUDIO_EXT = /\.(mp3|wav|ogg|m4a|flac)$/i
@@ -36,7 +44,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   // parse cost grows with message length. Throttling the actual parse to
   // ~100ms keeps the visible text live-feeling while cutting redundant
   // full-message reparses during long replies.
-  const throttledText = useThrottledValue(text, 100)
+  const throttledText = useThrottledValue(text, 50)
   // Re-render when mods load or change: a fence may have gained a renderer.
   const mods = useModsStore((s) => s.mods)
   const healed = normalizeMath(remend(throttledText))
@@ -45,65 +53,87 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
     <Box
       className="select-text"
       sx={{
-        '& > *:first-of-type': { mt: 0 },
-        '& > *:last-of-type': { mb: 0 },
-        '& p': { m: 0, mb: 1, lineHeight: 1.6, fontSize: '0.875rem' },
-        '& ul, & ol': { mt: 0, mb: 1, pl: 3, fontSize: '0.875rem' },
-        '& li': { mb: 0.25 },
+        // The chat's type follows the size set in Settings → Appearance
+        // (`CHAT_FONT.text`), on a line of about φ times it; headings are
+        // modest steps above it, and every gap a multiple of 4.
+        fontSize: CHAT_FONT.text,
+        lineHeight: 1.6,
+        '& > :first-child': { mt: 0 },
+        '& > :last-child': { mb: 0 },
+        '& p': { m: 0, mb: '12px', fontSize: 'inherit', lineHeight: 'inherit' },
+        '& ul, & ol': { mt: 0, mb: '12px', pl: '20px', fontSize: 'inherit', lineHeight: 'inherit' },
+        '& li': { mb: '4px', pl: '4px' },
+        '& li::marker': { color: 'text.secondary' },
         '& li > p': { mb: 0 },
-        '& h1, & h2, & h3, & h4': { mt: 1.5, mb: 0.75, fontWeight: 600, lineHeight: 1.35 },
-        '& h1': { fontSize: '1.25rem' },
-        '& h2': { fontSize: '1.125rem' },
-        '& h3': { fontSize: '1rem' },
-        '& h4': { fontSize: '0.9375rem' },
+        '& li > ul, & li > ol': { mt: '4px', mb: 0 },
+        '& h1, & h2, & h3, & h4': { mt: '20px', mb: '8px', fontWeight: 600, letterSpacing: '-0.01em', color: 'text.primary' },
+        '& h1': { fontSize: '1.428em', lineHeight: 1.3 },
+        '& h2': { fontSize: '1.214em', lineHeight: 1.35 },
+        '& h3': { fontSize: '1.071em', lineHeight: 1.45 },
+        '& h4': { fontSize: '0.857em', lineHeight: 1.5, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.04em' },
+        '& strong': { fontWeight: 600, color: 'text.primary' },
+        '& em': { fontStyle: 'italic' },
         '& blockquote': {
           m: 0,
-          mb: 1,
-          pl: 1.5,
-          borderLeft: 3,
-          borderColor: 'divider',
+          mb: '12px',
+          py: '4px',
+          pl: '12px',
+          borderLeft: '2px solid',
+          borderColor: 'primary.main',
           color: 'text.secondary',
+          '& p': { mb: '4px' },
         },
-        '& hr': { border: 0, borderTop: 1, borderColor: 'divider', my: 1.5 },
-        '& table': { borderCollapse: 'collapse', mb: 1, fontSize: '0.8125rem', display: 'block', overflowX: 'auto' },
-        '& th, & td': { border: 1, borderColor: 'divider', px: 1, py: 0.5, textAlign: 'left' },
-        '& th': { bgcolor: 'action.hover', fontWeight: 600 },
+        '& hr': { border: 0, borderTop: 1, borderColor: 'divider', my: '24px' },
+        '& table': { borderCollapse: 'separate', borderSpacing: 0, mb: '12px', fontSize: '0.929em', lineHeight: 1.5, display: 'block', overflowX: 'auto', border: 1, borderColor: 'divider', borderRadius: '8px', width: 'fit-content', maxWidth: '100%' },
+        '& th, & td': { px: '12px', py: '8px', textAlign: 'left' },
+        '& tr + tr td, & tbody tr:first-of-type td': { borderTop: 1, borderColor: 'divider' },
+        '& th': { bgcolor: 'action.hover', fontWeight: 600, color: 'text.secondary' },
+        // Inline code reads as code at a glance: the accent colour on a
+        // tint of it, not prose grey.
         '& code:not(pre code)': {
           fontFamily: '"Geist Mono", ui-monospace, monospace',
-          fontSize: '0.8125em',
+          fontSize: '0.857em',
+          color: 'text.primary',
           bgcolor: 'action.hover',
-          borderRadius: 1,
-          px: 0.5,
-          py: 0.15,
+          borderRadius: '4px',
+          px: '4px',
+          py: '1px',
         },
-        '& a': { color: 'primary.main' },
+        '& a': { color: 'primary.main', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } },
         // Display maths scrolls sideways instead of overflowing the bubble;
         // a long derivation is still readable, and the page never widens.
-        '& .katex-display': { overflowX: 'auto', overflowY: 'hidden', py: 0.5, my: 1 },
+        '& .katex-display': { overflowX: 'auto', overflowY: 'hidden', py: '4px', my: '8px' },
         '& .katex': { fontSize: '1.05em' },
       }}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
+        remarkPlugins={[remarkGfm, remarkMath, remarkFiles]}
         components={{
+          // File names and paths (see `remarkFiles`) open in the Preview.
+          span: ({ children, ...rest }) => {
+            const file = (rest as Record<string, unknown>)['data-file']
+            if (typeof file === 'string') return <FileLink path={file} label={String(children)} prose />
+            return <span>{children}</span>
+          },
           a: ({ href, children }) => {
             // The model has no real way to emit a native <video>/<audio> tag
             // through markdown — a plain link to a media file is the only
             // signal available, so linked media renders as a player instead
             // of a bare "click here" link.
-            if (href && VIDEO_EXT.test(href)) return <Box component="video" src={href} controls sx={{ maxWidth: '100%', borderRadius: 1.5, my: 1 }} />
+            if (href && VIDEO_EXT.test(href)) return <Box component="video" src={href} controls sx={{ maxWidth: '100%', borderRadius: 1.6, my: 1 }} />
             if (href && AUDIO_EXT.test(href)) return <Box component="audio" src={href} controls sx={{ width: '100%', my: 1 }} />
             return (
-              <Link href={href} target="_blank" rel="noopener noreferrer">
+              <Link href={href} target="_blank" rel="noopener noreferrer" title={href ? `${href}
+Click: open in Preview · Ctrl-click: open in your browser` : undefined} onClick={(e: React.MouseEvent) => onWebLinkClick(e, href)}>
                 {children}
               </Link>
             )
           },
           img: ({ src, alt }) => {
             const url = typeof src === 'string' ? src : ''
-            if (VIDEO_EXT.test(url)) return <Box component="video" src={url} controls sx={{ maxWidth: '100%', borderRadius: 1.5, my: 1 }} />
+            if (VIDEO_EXT.test(url)) return <Box component="video" src={url} controls sx={{ maxWidth: '100%', borderRadius: 1.6, my: 1 }} />
             if (AUDIO_EXT.test(url)) return <Box component="audio" src={url} controls sx={{ width: '100%', my: 1 }} />
-            return <Box component="img" src={url} alt={alt} sx={{ maxWidth: '100%', borderRadius: 1.5, my: 1 }} />
+            return url ? <ChatImage src={url} alt={alt} inline /> : null
           },
           code(props) {
             const { children, className } = props
@@ -121,6 +151,8 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
             // the explanation is, not buried in a collapsed tool card.
             if (match[1] === 'mermaid') return <MermaidBlock code={code} />
             if (match[1] === 'chart') return <ChartBlock code={code} />
+            if (match[1] === 'ui') return <InteractiveBlock code={code} />
+            if (match[1] === 'widget') return <WidgetBlock code={code} />
             if (match[1] === 'model3d') return <Model3DBlock code={code} />
             if (match[1] === 'chem') return <ChemBlock code={code} />
             if (match[1] === 'bio') return <BioBlock code={code} />

@@ -1,6 +1,5 @@
 import { Component, type ReactNode } from 'react'
 import { Stack, Typography, Button } from '../ui'
-import { forgetSavedLayout } from '../modules/workspace/layout'
 
 /**
  * Catches a render crash in the panel workspace and falls back to a
@@ -33,7 +32,6 @@ export class LayoutErrorBoundary extends Component<{ children: ReactNode }, { er
     // The saved layout is what a fresh launch restores before this component
     // ever mounts, so resetting only in-memory state would let this same
     // crash greet the user again on their next restart.
-    forgetSavedLayout()
     window.location.reload()
   }
 

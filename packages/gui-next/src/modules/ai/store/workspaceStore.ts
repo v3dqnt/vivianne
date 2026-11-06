@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { activeThreadId } from './activeThread'
 import { call } from '../../../ipc'
 
 export type WorkspaceAccessMode = 'full' | 'readOnly'
@@ -43,7 +44,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
   loading: false,
 
   refresh: async () => {
-    const res = await call<WorkspaceGetResult>('cmd_agent_get_workspace')
+    const res = await call<WorkspaceGetResult>('cmd_agent_get_workspace', { threadId: activeThreadId() })
     if (res) set({ folders: res.folders, accessMode: res.accessMode })
     void refreshBranch(res?.folders[0], set)
   },
@@ -51,7 +52,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
   setWorkspace: async (folders, accessMode) => {
     set({ loading: true })
     try {
-      await call('cmd_agent_set_workspace', { folders, accessMode })
+      await call('cmd_agent_set_workspace', { folders, accessMode, threadId: activeThreadId() })
       set({ folders, accessMode, wholeComputer: false })
       void refreshBranch(folders[0], set)
     } finally {

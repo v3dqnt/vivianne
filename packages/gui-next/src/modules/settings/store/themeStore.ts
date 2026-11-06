@@ -29,9 +29,9 @@ export interface Appearance {
 
 export const DEFAULT_APPEARANCE: Appearance = {
   modePref: 'dark',
-  paletteId: 'terax',
+  paletteId: 'aero',
   accent: null,
-  font: 'geist',
+  font: 'general',
   uiScale: 1,
   radius: 10,
   density: 'comfortable',
@@ -75,16 +75,35 @@ function resolve(pref: ModePref): ThemeMode {
   return pref
 }
 
+/** Aero is the new default: it is applied once, whatever was saved before;
+ * a later pick sticks. */
+const EDITION_THEMED_KEY = 'viv.palette.aero'
+/** General Sans became the default face in the better-newer update: everyone moves to it once, then their choice stands. */
+const DEFAULT_FONT_KEY = 'viv.font.general'
+
 function initial(): Appearance {
   const saved = loadPersisted<Partial<Appearance> | null>(STORAGE_KEY, null)
-  if (saved) return { ...DEFAULT_APPEARANCE, ...saved }
-  // From the old theme-only store.
-  const old = loadPersisted<{ mode: ThemeMode; paletteId: string }>(OLD_KEY, { mode: 'dark', paletteId: 'terax' })
-  if (!loadPersisted<boolean>(MIGRATED_KEY, false)) {
-    savePersisted(MIGRATED_KEY, true)
-    if (old.paletteId === 'vivianne') old.paletteId = 'terax'
+  const base = (() => {
+    if (saved) return { ...DEFAULT_APPEARANCE, ...saved }
+    // From the old theme-only store; a fresh install takes the default palette.
+    const old = loadPersisted<{ mode: ThemeMode; paletteId: string } | null>(OLD_KEY, null)
+    if (!loadPersisted<boolean>(MIGRATED_KEY, false)) savePersisted(MIGRATED_KEY, true)
+    if (!old) return { ...DEFAULT_APPEARANCE }
+    return { ...DEFAULT_APPEARANCE, modePref: old.mode, paletteId: old.paletteId === 'vivianne' ? DEFAULT_APPEARANCE.paletteId : old.paletteId }
+  })()
+  if (!loadPersisted<boolean>(DEFAULT_FONT_KEY, false)) {
+    savePersisted(DEFAULT_FONT_KEY, true)
+    base.font = 'general'
+    persist(base)
   }
-  return { ...DEFAULT_APPEARANCE, modePref: old.mode, paletteId: old.paletteId }
+  if (!loadPersisted<boolean>(EDITION_THEMED_KEY, false)) {
+    savePersisted(EDITION_THEMED_KEY, true)
+    const themed = { ...base, paletteId: DEFAULT_APPEARANCE.paletteId }
+    // Saved now, so it is the user's setting from here on, not re-derived.
+    persist(themed)
+    return themed
+  }
+  return base
 }
 
 function persist(s: Appearance) {

@@ -823,9 +823,22 @@ pub async fn auth_resolve_api_key(
 /// hardcoded model list.
 #[tauri::command]
 pub async fn cmd_list_available_models(
+    app: tauri::AppHandle,
+    refresh: Option<bool>,
     state: State<'_, Arc<AuthState>>,
 ) -> Result<Vec<crate::ai::model_discovery::DiscoveredModel>, String> {
-    Ok(crate::ai::model_discovery::discover_all(&state).await)
+    use tauri::Emitter;
+    // The last list comes back at once; an old one is refreshed behind it and
+    // the picker is told when the new one is ready.
+    let (models, stale) = crate::ai::model_discovery::list_cached_or_fresh(&state, refresh.unwrap_or(false)).await;
+    if stale {
+        let auth = state.inner().clone();
+        tauri::async_runtime::spawn(async move {
+            let fresh = crate::ai::model_discovery::refresh(&auth).await;
+            let _ = app.emit("models_refreshed", fresh);
+        });
+    }
+    Ok(models)
 }
 
 // ============================================================================

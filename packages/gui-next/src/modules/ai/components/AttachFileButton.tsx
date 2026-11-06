@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { IconButton, Tooltip } from '../../../ui'
-import { PaperclipLinear } from '../../../icons'
+import { AddLinear } from '../../../icons'
 import type { ImageAttachment, FileAttachment } from '../lib/types'
 import { buildAttachments } from '../lib/attachments'
 
@@ -34,7 +34,7 @@ export function AttachFileButton({
       />
       <Tooltip title="Attach file or image">
         <IconButton size="small" onClick={() => inputRef.current?.click()}>
-          <PaperclipLinear size={17} color="currentColor" />
+          <AddLinear size={17} color="currentColor" />
         </IconButton>
       </Tooltip>
     </>

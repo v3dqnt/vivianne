@@ -28,7 +28,7 @@ export function MyCode() {
   if (!myId) return null
   return (
     <Stack sx={{ gap: 1 }}>
-      <Typography variant="caption" sx={{ fontWeight: 600 }}>
+      <Typography variant="caption" sx={{ fontWeight: 500 }}>
         Your invite
       </Typography>
       <Stack direction="row" sx={{ gap: 1, alignItems: 'center' }}>
@@ -74,7 +74,7 @@ function ConnectForm() {
 
   return (
     <Stack sx={{ gap: 1 }}>
-      <Typography variant="caption" sx={{ fontWeight: 600 }}>
+      <Typography variant="caption" sx={{ fontWeight: 500 }}>
         Connect to a peer
       </Typography>
       <Stack direction="row" sx={{ gap: 1 }}>

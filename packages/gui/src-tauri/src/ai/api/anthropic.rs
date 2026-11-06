@@ -5,7 +5,6 @@
 use std::collections::HashMap;
 
 use futures::StreamExt;
-use reqwest::Client;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::AppHandle;
@@ -175,14 +174,14 @@ fn normalize_tool_call_id(id: &str) -> String {
     normalized.chars().take(64).collect()
 }
 
-fn convert_messages(context: &Context) -> Vec<Value> {
+fn convert_messages(context: &Context, provider: &str, model_id: &str) -> Vec<Value> {
     use crate::ai::api::transform_messages::{transform_messages, TransformOptions};
 
     let opts = TransformOptions {
         supports_images: true,
-        target_provider: String::new(),
+        target_provider: provider.to_string(),
         target_api: "anthropic-messages".to_string(),
-        target_model_id: String::new(),
+        target_model_id: model_id.to_string(),
         normalize_tool_call_id: Some(Box::new(|id: &str| normalize_tool_call_id(id))),
     };
 
@@ -331,6 +330,24 @@ fn convert_messages(context: &Context) -> Vec<Value> {
             }
         }
     }
+    // A rolling cache breakpoint on the newest message: Anthropic only reads a
+    // cache back from an explicit breakpoint, so without this every turn
+    // re-processed the whole conversation.
+    if let Some(last) = result.last_mut() {
+        let mark = json!({ "type": "ephemeral" });
+        match last.get_mut("content") {
+            Some(Value::String(text)) if !text.is_empty() => {
+                let text = std::mem::take(text);
+                last["content"] = json!([{ "type": "text", "text": text, "cache_control": mark }]);
+            }
+            Some(Value::Array(blocks)) => {
+                if let Some(Value::Object(b)) = blocks.last_mut() {
+                    b.insert("cache_control".into(), mark);
+                }
+            }
+            _ => {}
+        }
+    }
     result
 }
 
@@ -420,7 +437,7 @@ async fn stream_inner(
     let base = base_url.as_deref().unwrap_or("https://api.anthropic.com");
     let url = format!("{}/v1/messages", base.trim_end_matches('/'));
 
-    let messages = convert_messages(&context);
+    let messages = convert_messages(&context, &provider, &model_id);
     let tools = convert_tools(&context);
 
     // System prompt — marked as a cache breakpoint: it's the largest, most
@@ -462,7 +479,7 @@ async fn stream_inner(
 
     let body_json = serde_json::to_string(&req_body).map_err(|e| e.to_string())?;
 
-    let client = Client::new();
+    let client = crate::ai::http::client();
     let mut req = client
         .post(&url)
         .header("content-type", "application/json")
@@ -474,6 +491,10 @@ async fn stream_inner(
         for (k, v) in hdrs {
             req = req.header(k.as_str(), v.as_str());
         }
+    }
+
+    if let Some(ms) = options.timeout_ms {
+        req = req.timeout(std::time::Duration::from_millis(ms));
     }
 
     let resp = req.body(body_json).send().await.map_err(|e| e.to_string())?;
@@ -532,7 +553,7 @@ async fn stream_inner(
             }
 
             let line = buffer[..nl_idx].to_string();
-            buffer = buffer[end..].to_string();
+            buffer.drain(..end);
 
             if let Some((event, data)) = sse_state.feed_line(&line) {
                 if event == "error" {

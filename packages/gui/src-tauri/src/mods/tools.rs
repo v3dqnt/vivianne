@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use std::time::Duration;
 
 use super::manifest::ToolContribution;
-use crate::coding_agent::tool_exec::{Tool, ToolResult};
+use crate::agent::tools::builtin::{Tool, ToolResult};
 
 pub const DEFAULT_TIMEOUT_SECS: u64 = 120;
 pub const MAX_TIMEOUT_SECS: u64 = 600;
@@ -77,7 +77,7 @@ impl Tool for ModTool {
             return ToolResult { content: format!("The mod that provides '{}' is off.", self.def.name), is_error: true, details: None };
         }
         let command = substitute(&self.def.command, args);
-        if let Some(reason) = crate::coding_agent::sandbox::check_command(&command) {
+        if let Some(reason) = crate::agent::tools::code::sandbox::check_command(&command) {
             return ToolResult { content: reason.to_string(), is_error: true, details: None };
         }
         // Mod commands are POSIX shell. Windows has bash only with Git Bash
@@ -94,7 +94,7 @@ impl Tool for ModTool {
         }
         let mut cmd = tokio::process::Command::new("bash");
         cmd.arg("-c").arg(&command).current_dir(&self.cwd).kill_on_drop(true);
-        cmd.env_clear().envs(crate::coding_agent::sandbox::filtered_env());
+        cmd.env_clear().envs(crate::agent::tools::code::sandbox::filtered_env());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
         let child = match cmd.spawn() {
@@ -107,7 +107,7 @@ impl Tool for ModTool {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 let combined = if stderr.is_empty() { stdout } else { format!("{stdout}\n{stderr}") };
-                let text = crate::coding_agent::context_shaping::spill_and_trim_middle_bytes(&combined, HEAD_BYTES, TAIL_BYTES).await;
+                let text = crate::agent::runtime::context_shaping::spill_and_trim_middle_bytes(&combined, HEAD_BYTES, TAIL_BYTES).await;
                 ToolResult { content: text, is_error: !output.status.success(), details: None }
             }
             Ok(Err(e)) => ToolResult { content: format!("Error running '{}': {e}", self.def.name), is_error: true, details: None },

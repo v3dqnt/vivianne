@@ -1,16 +1,21 @@
 import { memo, useState } from 'react'
-import { Box, Paper, Typography, Stack, Alert, IconButton, Tooltip } from '../../../ui'
-import { UndoLinear, CopyLinear, EditLinear, TickCircleLinear } from '../../../icons'
+import { Box, Typography, Stack, Alert, IconButton, Tooltip, alpha, type Theme } from '../../../ui'
+import { UndoLinear, CopyLinear, EditLinear, TickCircleLinear, VolumeLinear, VolumeOffLinear } from '../../../icons'
+import { toggleRead, useReading } from '../lib/readAloud'
 import type { AgentMessage } from '../lib/types'
 import { contentToText, contentToThinking, contentImages } from '../lib/types'
 import { Markdown } from './Markdown'
+import { ReportMarkdown } from './ReportMarkdown'
+import { FileLink } from './FileLink'
+import { splitFilePaths } from '../lib/filePaths'
 import { ToolCallCard } from './ToolCallCard'
 import { TeamRunCard } from '../../team/components/TeamRunCard'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ImageBlock } from './ImageBlock'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { HandoffDivider, isHandoffText, SummaryDivider, isSummaryText, PairActivityDivider, isPairActivityText, ResumeDivider, isResumeText, PlanNoteDivider, isPlanNoteText } from './HandoffDivider'
-import { CHAT_FONT, CHAT_MAX_WIDTH, CHAT_RADIUS } from '../lib/chatStyle'
+import { CHAT_FONT, CHAT_GUTTER, CHAT_MAX_WIDTH, CHAT_RADIUS } from '../lib/chatStyle'
+import { StoppedCard } from './StoppedCard'
 
 // Memoized — `MessageList` re-renders on every streamed token (the store
 // replaces its `messages` array each time), but non-streaming message
@@ -34,6 +39,7 @@ function MessageBubbleImpl({
   onRevert,
   onEdit,
   compact = false,
+  turnEnd = false,
 }: {
   message: AgentMessage
   index?: number
@@ -43,9 +49,13 @@ function MessageBubbleImpl({
   onEdit?: (index: number, text: string) => void
   /** Rendered inside a tool group (see `ToolGroup`). */
   compact?: boolean
+  /** This is the last thing the agent said before the next user message, so
+   * it is where the turn's single timestamp belongs. */
+  turnEnd?: boolean
 }) {
   const [hovered, setHovered] = useState(false)
   const [copied, setCopied] = useState(false)
+  const reading = useReading((s) => index !== undefined && s.id === index)
 
   if (message.type === 'toolResult' && message.toolName === 'team_run') {
     const details = message.details as { teamRun?: string } | null
@@ -60,7 +70,9 @@ function MessageBubbleImpl({
   }
 
   const isUser = message.type === 'user'
-  const text = contentToText(message.content)
+  // The backend adds "(N images attached to this message ...)" so models don't claim
+  // they can't see an image; it's for the model, not for the reader.
+  const text = contentToText(message.content).replace(/\n\n\(\d+ images? attached to this message — look at it\/them before answering\.\)$/, '')
   // A new day's handoff note rides in a user message but isn't from the user.
   if (isUser && isHandoffText(text)) return <HandoffDivider text={text} />
   if (isUser && isSummaryText(text)) return <SummaryDivider text={text} />
@@ -70,6 +82,10 @@ function MessageBubbleImpl({
   // Stops are left out of the transcript (`groupTranscript`); this covers any
   // other path that renders a message directly.
   if (message.type === 'assistant' && message.stopReason === 'aborted') return null
+  // A failed turn is a checkpoint where the model stopped, in yellow rather than red.
+  if (message.type === 'assistant' && message.stopReason === 'error') {
+    return <StoppedCard text={(message.errorMessage || text).replace(/^Error:\s*/, '').trim()} ts={message.timestamp} />
+  }
   const thinking = contentToThinking(message.content)
   const images = contentImages(message.content)
   // A failed turn ends with `errorMessage` set and (usually) empty content —
@@ -96,6 +112,10 @@ function MessageBubbleImpl({
   // Hidden while a reply is still streaming: the text isn't final yet, so
   // copying it would silently grab a partial message.
   const showActions = !isEmptyStreamingAssistant && text.length > 0
+  // One clock per turn, not one per message: a turn that took six steps
+  // would otherwise print six timestamps down the page. The clock belongs to
+  // the message that closes the turn, and only once it has finished.
+  const showTime = !!turnEnd && !compact && !isUser && !streaming
 
   return (
     <Stack
@@ -123,64 +143,80 @@ function MessageBubbleImpl({
         </Typography>
       )}
       {(text.length > 0 || isEmptyStreamingAssistant) && (
-        <Paper
-          elevation={0}
-          sx={{
-            maxWidth: CHAT_MAX_WIDTH,
-            minWidth: 0,
-            px: 1.75,
-            py: 1,
-            // The same box as the cards around it; your own messages are
-            // filled instead, so who said what reads at a glance.
-            border: 1,
-            borderColor: isUser ? 'transparent' : 'divider',
-            bgcolor: isUser ? 'primary.main' : 'background.paper',
-            color: isUser ? 'primary.contrastText' : 'text.primary',
-            borderRadius: CHAT_RADIUS,
-            fontSize: CHAT_FONT.text,
-          }}
+        <Box
+          sx={
+            // Yours in a filled bubble; Vivianne's as plain text across the
+            // column, so who said what reads at a glance.
+            isUser
+              ? { maxWidth: CHAT_MAX_WIDTH, minWidth: 0, px: 2, py: 1, border: 0, bgcolor: (t: Theme) => alpha(t.palette.text.primary, t.palette.mode === 'dark' ? 0.09 : 0.06), color: 'text.primary', borderRadius: '16px', fontSize: CHAT_FONT.text }
+              : { width: '100%', minWidth: 0, px: CHAT_GUTTER, py: 0, border: 0, bgcolor: 'transparent', color: 'text.primary', borderRadius: 0, fontSize: CHAT_FONT.text }
+          }
         >
           {isEmptyStreamingAssistant ? (
             <ThinkingIndicator />
           ) : isUser ? (
             <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontSize: CHAT_FONT.text, lineHeight: 1.6 }}>
-              {text}
+              {splitFilePaths(text).map((p, i) =>
+                typeof p === 'string' ? p : <FileLink key={i} path={p.path} label={p.path} prose />,
+              )}
             </Typography>
           ) : (
-            <Markdown text={text} />
+            // A reply that reads like a report becomes a card once it is complete.
+            streaming ? <Markdown text={text} /> : <ReportMarkdown text={text} />
           )}
-        </Paper>
+        </Box>
       )}
       {showActions && (
         <Stack
           direction="row"
           sx={{
             alignItems: 'center',
-            gap: 0.25,
-            px: 0.5,
-            minHeight: 22,
+            gap: 0.5,
+            // Vivianne's meta lines up with her prose; yours with the edge of
+            // your block, since it hangs off the right.
+            px: isUser ? 0 : CHAT_GUTTER,
+            // The clock keeps its row; every other message reveals its
+            // actions on hover in a row that costs no height until it does.
+            height: showTime || hovered ? 20 : 0,
+            opacity: showTime || hovered ? 1 : 0,
+            overflow: 'hidden',
+            transition: 'height 0.12s, opacity 0.12s',
             // The timestamp stays legible at rest; the buttons only appear on
             // hover so a long conversation isn't a wall of icons.
             color: 'text.disabled',
           }}
         >
-          <Typography variant="caption" sx={{ fontSize: '0.6875rem', mr: 0.5 }}>
-            {formatTimestamp(message.timestamp)}
-          </Typography>
-          {tokensPerSec !== undefined && (
-            <Typography variant="caption" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.6875rem', mr: 0.5 }}>
+          {showTime && (
+            <Typography variant="caption" sx={{ fontSize: '0.6875rem' }}>
+              {formatTimestamp(message.timestamp)}
+            </Typography>
+          )}
+          {showTime && tokensPerSec !== undefined && (
+            <Typography variant="caption" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.6875rem' }}>
               {tokensPerSec.toFixed(1)} tok/s
             </Typography>
           )}
           <Stack
             direction="row"
-            sx={{ alignItems: 'center', gap: 0.25, opacity: hovered ? 1 : 0, transition: 'opacity 0.12s' }}
+            sx={{ alignItems: 'center', gap: 0.5, opacity: hovered ? 1 : 0, transition: 'opacity 0.12s' }}
           >
             <Tooltip title={copied ? 'Copied' : 'Copy'}>
               <IconButton size="small" onClick={copy} sx={{ width: 22, height: 22, color: 'inherit' }}>
                 {copied ? <TickCircleLinear size={12} color="currentColor" /> : <CopyLinear size={12} color="currentColor" />}
               </IconButton>
             </Tooltip>
+            {!isUser && index !== undefined && (
+              <Tooltip title={reading ? 'Stop reading' : 'Read aloud'}>
+                <IconButton
+                  size="small"
+                  aria-label={reading ? 'Stop reading' : 'Read aloud'}
+                  onClick={() => void toggleRead(index, text)}
+                  sx={{ width: 22, height: 22, color: reading ? 'primary.main' : 'inherit' }}
+                >
+                  {reading ? <VolumeOffLinear size={12} color="currentColor" /> : <VolumeLinear size={12} color="currentColor" />}
+                </IconButton>
+              </Tooltip>
+            )}
             {isUser && onEdit && index !== undefined && (
               <Tooltip title="Edit and resend — removes everything after this">
                 <IconButton

@@ -1,7 +1,8 @@
 import { lazy, Suspense, useMemo } from 'react'
 import { Box } from '../../../ui'
 import type { RobotHeadShape, RobotHeadState } from 'robot-heads'
-import { shapeFor } from '../../team/components/AgentFace'
+import { hash01, shapeFor } from '../../team/components/AgentFace'
+import { useFacePrefs } from '../../team/store/faceStore'
 
 /** The robot head (robot-heads, MIT), loaded on first use. */
 const RobotHead = lazy(() => import('robot-heads').then((m) => ({ default: m.RobotHead })))
@@ -21,27 +22,31 @@ export function NotchFace({
   size = 20,
   name = 'Vivianne',
   shape,
+  vivianne = name === 'Vivianne',
 }: {
   state: RobotHeadState
   size?: number
   /** Whose head: picks the agent's own outline and offsets its blinks. */
   name?: string
   shape?: RobotHeadShape
+  /** Wears Vivianne's customized head (Settings → Appearance). */
+  vivianne?: boolean
 }) {
-  const seed = useMemo(() => {
-    let h = 0
-    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
-    return (h % 1000) / 1000
-  }, [name])
-  const still = state === 'idle' || state === 'sleeping'
+  const seed = useMemo(() => hash01(name), [name])
+  const viv = useFacePrefs((s) => s.viv)
+  const motion = useFacePrefs((s) => s.motion)
+  // Vivianne's own head is the one Settings → Appearance customizes.
+  const own = vivianne ? viv : {}
+  const still = motion === 'never' || (motion !== 'always' && (state === 'idle' || state === 'sleeping'))
   return (
     <Suspense fallback={<Box sx={{ width: size, height: size, flexShrink: 0 }} />}>
       <RobotHead
-        shape={shape ?? shapeFor(name)}
+        shape={shape ?? own.shape ?? shapeFor(name)}
         state={state}
         size={size}
-        color={SHELL}
-        trimColor={TRIM}
+        color={own.color ?? SHELL}
+        trimColor={own.trim ?? TRIM}
+        screenColor={own.screen}
         seed={seed}
         paused={still}
         interactive={false}

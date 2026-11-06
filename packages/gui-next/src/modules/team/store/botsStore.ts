@@ -61,7 +61,15 @@ export interface BotSettings {
   alwaysOn: boolean
   checkinHours: number
   lastCheckin: number | null
+  /** Where it does hands-on work (`bots::Workplace`). */
+  workplace?: Workplace
+  /** A folder the user chose for it; absent = its own private folder. */
+  folder?: string | null
+  /** How it comes across, in your words; empty is warm and brief. */
+  personality?: string
 }
+
+export type Workplace = 'auto' | 'this_pc' | 'browser' | 'private_desktop' | 'cloud_desktop' | 'off'
 
 export interface Routine {
   id: string
@@ -71,6 +79,8 @@ export interface Routine {
   enabled: boolean
   nextRun: number | null
   runs: { at: number; ok: boolean; summary: string }[]
+  /** Runs once at the next time its schedule names, then turns itself off. */
+  once?: boolean
 }
 
 export interface PendingApproval {
@@ -104,12 +114,30 @@ interface BotsState {
   loadRoom: (root: string) => Promise<void>
   loadDm: (root: string, botId: string) => Promise<void>
   loadStatus: (root: string) => Promise<void>
-  post: (root: string, text: string) => Promise<void>
+  /** Post in Everyone (`room`) or a group (`group:<id>`). */
+  post: (root: string, text: string, channel?: string) => Promise<void>
+  /** The groups the user made, by root. Everyone isn't one of them. */
+  groups: Record<string, BotGroup[]>
+  loadGroups: (root: string) => Promise<void>
+  saveGroup: (root: string, group: BotGroup) => Promise<BotGroup | null>
+  deleteGroup: (root: string, id: string) => Promise<void>
+  /** A group's messages, kept beside DMs under `root::group:<id>`. */
+  loadGroupChat: (root: string, channel: string) => Promise<void>
   sendDm: (root: string, botId: string, text: string, attachments?: DmAttachments) => Promise<void>
   respond: (requestId: string, approved: boolean) => Promise<void>
 }
 
 let listening = false
+
+/** A group chat between the user and some of the bots. */
+export interface BotGroup {
+  id: string
+  name: string
+  members: string[]
+}
+
+export const GROUP_PREFIX = 'group:'
+export const isGroup = (channel: string) => channel.startsWith(GROUP_PREFIX)
 
 function append(list: BotMessage[] | undefined, m: BotMessage): BotMessage[] {
   const cur = list ?? []
@@ -125,10 +153,12 @@ export const useBotsStore = create<BotsState>((set, get) => ({
   approvals: [],
   channel: {},
   unread: {},
+  groups: {},
 
   setChannel: (root, channel) => {
     set((s) => ({ channel: { ...s.channel, [root]: channel }, unread: { ...s.unread, [key(root, channel)]: 0 } }))
-    if (channel !== 'room' && !get().dm[key(root, channel)]) void get().loadDm(root, channel)
+    if (isGroup(channel)) void get().loadGroupChat(root, channel)
+    else if (channel !== 'room' && !get().dm[key(root, channel)]) void get().loadDm(root, channel)
   },
 
   init: () => {
@@ -195,8 +225,31 @@ export const useBotsStore = create<BotsState>((set, get) => ({
     })
   },
 
-  post: async (root, text) => {
-    await call('cmd_bots_post', { root, text })
+  post: async (root, text, channel) => {
+    await call('cmd_bots_post', { root, text, channel: channel ?? null })
+  },
+
+  loadGroups: async (root) => {
+    const list = (await call<BotGroup[]>('cmd_bots_groups', { root })) ?? []
+    set((s) => ({ groups: { ...s.groups, [root]: list } }))
+  },
+
+  saveGroup: async (root, group) => {
+    const saved = await call<BotGroup>('cmd_bots_save_group', { root, group })
+    await get().loadGroups(root)
+    return saved
+  },
+
+  deleteGroup: async (root, id) => {
+    await call('cmd_bots_delete_group', { root, id })
+    await get().loadGroups(root)
+    if (get().channel[root] === `${GROUP_PREFIX}${id}`) get().setChannel(root, 'room')
+  },
+
+  loadGroupChat: async (root, channel) => {
+    get().init()
+    const msgs = (await call<BotMessage[]>('cmd_bots_room', { root, channel })) ?? []
+    set((s) => ({ dm: { ...s.dm, [key(root, channel)]: msgs } }))
   },
 
   sendDm: async (root, botId, text, attachments) => {

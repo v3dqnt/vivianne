@@ -1,13 +1,10 @@
 import { useState } from 'react'
 import { Box, Stack, Typography, ButtonBase, Collapse, alpha, useTheme } from '../../../ui'
 import { Markdown } from './Markdown'
+import { isHandoffText, isSummaryText, isPairActivityText, isAppText, isResumeText, isPlanNoteText } from '../lib/appText'
+export { HANDOFF_TAG } from '../lib/appText'
+export { isHandoffText, isSummaryText, isPairActivityText, isAppText, isResumeText, isPlanNoteText }
 
-/** Matches `agent::days::HANDOFF_TAG`. */
-export const HANDOFF_TAG = '<previous_day'
-
-export function isHandoffText(text: string): boolean {
-  return text.trimStart().startsWith(HANDOFF_TAG)
-}
 
 /** Pull the date, kind and body out of a `<previous_day …>…</previous_day>` note. */
 function parse(text: string): { date: string | null; kind: string | null; body: string } {
@@ -62,7 +59,7 @@ export function HandoffDivider({ text }: { text: string }) {
         }}
       >
         <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
-        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, whiteSpace: 'nowrap' }}>
+        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 500, whiteSpace: 'nowrap' }}>
           {label}
         </Typography>
         <Typography variant="caption" sx={{ color: 'text.disabled', whiteSpace: 'nowrap' }}>
@@ -98,14 +95,6 @@ export function HandoffDivider({ text }: { text: string }) {
   )
 }
 
-/** Matches `agent::conversation::SUMMARY_TAG` — the note compaction puts at
- * the front of the model's context in place of the messages it removed. */
-const SUMMARY_TAG = '<compacted_history>'
-
-export function isSummaryText(text: string): boolean {
-  return text.trimStart().startsWith(SUMMARY_TAG)
-}
-
 /**
  * Where the model's memory of the conversation switches from word-for-word to
  * a summary. Everything above it is still shown to the user in full; this is
@@ -131,7 +120,7 @@ export function SummaryDivider({ text }: { text: string }) {
         }}
       >
         <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
-        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, whiteSpace: 'nowrap' }}>
+        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 500, whiteSpace: 'nowrap' }}>
           Above this, the agent works from a summary
         </Typography>
         <Typography variant="caption" sx={{ color: 'text.disabled', whiteSpace: 'nowrap' }}>
@@ -153,13 +142,6 @@ export function SummaryDivider({ text }: { text: string }) {
   )
 }
 
-/** Matches `multiplayer::collab::PAIR_ACTIVITY_TAG`: what the partner's
- * agent did, added to the conversation right before a run so this agent
- * knows. Shown as a divider — it isn't something the user said. */
-export function isPairActivityText(text: string): boolean {
-  return text.trimStart().startsWith('<pair_activity')
-}
-
 export function PairActivityDivider({ text }: { text: string }) {
   const theme = useTheme()
   const [open, setOpen] = useState(false)
@@ -178,7 +160,7 @@ export function PairActivityDivider({ text }: { text: string }) {
         sx={{ display: 'flex', alignItems: 'center', gap: 1.25, width: '100%', borderRadius: '8px', py: 0.5 }}
       >
         <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
-        <Typography variant="caption" sx={{ color: 'success.main', fontWeight: 600, whiteSpace: 'nowrap' }}>
+        <Typography variant="caption" sx={{ color: 'success.main', fontWeight: 500, whiteSpace: 'nowrap' }}>
           {partner}: {updates || 'an'} update{updates === 1 ? '' : 's'} shared with your agent
         </Typography>
         <Typography variant="caption" sx={{ color: 'text.disabled', whiteSpace: 'nowrap' }}>
@@ -199,19 +181,6 @@ export function PairActivityDivider({ text }: { text: string }) {
   )
 }
 
-/** A user-role message the app wrote, not the person: day handoffs,
- * compaction summaries, resumes, plan notes, team messages. Never shown as
- * "what you asked". */
-export function isAppText(text: string): boolean {
-  return /^\s*<(previous_day|compacted_history|pair_activity|long_task_resumed|long_task|plan_feedback|plan_approved|team_message|user_comment)\b/.test(text)
-}
-
-/** Matches `run_ledger::cmd_long_task_resume_prompt`: the message that picks
- * a long task back up. It is the app speaking, not the user. */
-export function isResumeText(text: string): boolean {
-  return text.trimStart().startsWith('<long_task_resumed>')
-}
-
 export function ResumeDivider({ text }: { text: string }) {
   const theme = useTheme()
   const [open, setOpen] = useState(false)
@@ -224,7 +193,7 @@ export function ResumeDivider({ text }: { text: string }) {
         sx={{ display: 'flex', alignItems: 'center', gap: 1.25, width: '100%', borderRadius: '8px', py: 0.5 }}
       >
         <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
-        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, whiteSpace: 'nowrap' }}>
+        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 500, whiteSpace: 'nowrap' }}>
           Picked up where it left off
         </Typography>
         <Typography variant="caption" sx={{ color: 'text.disabled', whiteSpace: 'nowrap' }}>
@@ -253,14 +222,6 @@ export function ResumeDivider({ text }: { text: string }) {
   )
 }
 
-/** Plan review traffic: the comments sent back on a plan, or its approval.
- * Written by the app on the user's behalf (see `plan/store/planStore.ts` and
- * `plans::cmd_plan_approve`), so shown as a marker, not a wall of XML. */
-export function isPlanNoteText(text: string): boolean {
-  const t = text.trimStart()
-  return t.startsWith('<plan_feedback') || t.startsWith('<plan_approved')
-}
-
 export function PlanNoteDivider({ text }: { text: string }) {
   const theme = useTheme()
   const [open, setOpen] = useState(false)
@@ -281,7 +242,7 @@ export function PlanNoteDivider({ text }: { text: string }) {
         sx={{ display: 'flex', alignItems: 'center', gap: 1.25, width: '100%', borderRadius: '8px', py: 0.5 }}
       >
         <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
-        <Typography variant="caption" sx={{ color: approved ? 'success.main' : 'text.secondary', fontWeight: 600, whiteSpace: 'nowrap' }}>
+        <Typography variant="caption" sx={{ color: approved ? 'success.main' : 'text.secondary', fontWeight: 500, whiteSpace: 'nowrap' }}>
           {label}
         </Typography>
         {!approved && (

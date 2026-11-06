@@ -1,3 +1,4 @@
+import { spacePx, WEIGHT_NUDGE } from './sx'
 import { alpha, darken, getContrastRatio, lighten } from './color'
 
 /**
@@ -195,7 +196,9 @@ function frameOf(card: string, foreground: string): string {
 
 export function createTheme({ mode, tokens: t0, fontFamily, monoFamily, radius = 10 }: ThemeOptions): Theme {
   const dark = mode === 'dark'
-  const tokens: Tokens = { ...t0, frame: frameOf(t0.card, t0.foreground) }
+  // The frame is the outermost step: darker than the panes in dark mode (they
+  // sit on it, lighter), a shade off the card in light mode.
+  const tokens: Tokens = { ...t0, frame: dark ? darken(t0.background, 0.4) : frameOf(t0.card, t0.foreground) }
   const fg = tokens.foreground
   const getContrastText = (bg: string) => (getContrastRatio(bg, tokens.background) >= getContrastRatio(bg, fg) ? tokens.background : fg)
   const color = (main: string, light?: string, contrastText?: string): PaletteColor => ({
@@ -219,7 +222,9 @@ export function createTheme({ mode, tokens: t0, fontFamily, monoFamily, radius =
     warning: color(status.warning.main, status.warning.light),
     info: color(status.info.main, status.info.light),
     success: color(status.success.main, status.success.light),
-    text: { primary: fg, secondary: tokens.mutedForeground, disabled: alpha(fg, dark ? 0.4 : 0.38) },
+    // `disabled` is the tertiary level (captions, counts, placeholders) and clears 4.5:1 on every surface;
+    // a control that is switched off is dimmed with `action.disabled`, not with this.
+    text: { primary: fg, secondary: tokens.mutedForeground, disabled: alpha(fg, dark ? 0.57 : 0.64) },
     divider: tokens.border,
     background: { default: tokens.frame, paper: tokens.popover, chrome: tokens.frame, pane: tokens.background, card: tokens.card },
     action: {
@@ -243,7 +248,7 @@ export function createTheme({ mode, tokens: t0, fontFamily, monoFamily, radius =
   const pxToRem = (px: number) => `${px / 16}rem`
   const v = (weight: number, size: number, lineHeight: number, extra?: Pick<TypeStyle, 'textTransform' | 'letterSpacing'>): TypeStyle => ({
     fontFamily,
-    fontWeight: weight,
+    fontWeight: weight + WEIGHT_NUDGE,
     fontSize: pxToRem(size),
     lineHeight,
     ...extra,
@@ -284,7 +289,7 @@ export function createTheme({ mode, tokens: t0, fontFamily, monoFamily, radius =
       '4xl': radius * 2.6,
       full: 9999,
     },
-    spacing: (...values) => (values.length ? values : [1]).map((n) => (typeof n === 'number' ? `${n * 8}px` : n)).join(' '),
+    spacing: (...values) => (values.length ? values : [1]).map((n) => (typeof n === 'number' ? `${spacePx(n)}px` : n)).join(' '),
     shadows: SHADOWS,
     elevation: {
       sm: `0 1px 2px rgba(0,0,0,${dark ? 0.3 : 0.06})`,

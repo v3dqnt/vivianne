@@ -14,7 +14,7 @@
 //!
 //! The vectors of the two aren't comparable; each stored vector is tagged
 //! with its model (`embedding_model`), and sleep-time work re-embeds the
-//! store after a switch (`agent::memory_sleep`).
+//! store after a switch (`agent::memory::sleep`).
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -105,7 +105,7 @@ impl LocalModel {
         if let Some(root) = std::env::var_os("VIV_MODELS_DIR") {
             return PathBuf::from(root).join(self.dir_name());
         }
-        crate::agent::paths::viv_home_path(&["models", self.dir_name()])
+        crate::agent::system::paths::viv_home_path(&["models", self.dir_name()])
     }
 
     pub fn installed(self) -> bool {
@@ -447,7 +447,7 @@ pub async fn cmd_local_embedder_install(app: tauri::AppHandle, model: String) ->
     install(Some(&app), which).await?;
     // Prove it loads before anything is re-embedded with it.
     embed_local("ready", Purpose::Document).await?.ok_or("the model installed but didn't load")?;
-    crate::agent::memory_sleep::reembed_everywhere(app);
+    crate::agent::memory::sleep::reembed_everywhere(app);
     Ok(())
 }
 
@@ -465,7 +465,7 @@ pub async fn cmd_local_embedder_remove(app: tauri::AppHandle, model: String) -> 
     if dir.exists() {
         tokio::fs::remove_dir_all(&dir).await.map_err(|e| format!("failed to remove {}: {e}", dir.display()))?;
     }
-    crate::agent::memory_sleep::reembed_everywhere(app);
+    crate::agent::memory::sleep::reembed_everywhere(app);
     Ok(())
 }
 

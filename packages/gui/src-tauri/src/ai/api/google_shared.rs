@@ -173,7 +173,18 @@ pub fn convert_messages(model_id: &str, model_provider: &str, model_api: &str, c
                             }
                         }
                         MessageContent::ToolCall(tc) => {
-                            let sig = resolve_thought_signature(is_same, tc.thought_signature.as_deref());
+                            // A signature Google itself issued goes back as it came, even
+                            // when the history no longer records which model made the
+                            // turn. Gemini 3 refuses a function call without one, so a
+                            // call that has none (it came from another model, or from
+                            // before signatures were kept) carries Google's documented
+                            // placeholder instead.
+                            let sig = if is_valid_thought_signature(tc.thought_signature.as_deref()) {
+                                tc.thought_signature.clone()
+                            } else {
+                                resolve_thought_signature(is_same, tc.thought_signature.as_deref())
+                                    .or_else(|| model_id.contains("gemini-3").then(|| "skip_thought_signature_validator".to_string()))
+                            };
                             let mut fc = json!({
                                 "name": tc.name,
                                 "args": tc.arguments

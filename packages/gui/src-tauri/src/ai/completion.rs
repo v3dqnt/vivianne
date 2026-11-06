@@ -13,7 +13,7 @@
 use std::sync::Arc;
 use tauri::AppHandle;
 
-use crate::agent::types::ModelRef;
+use crate::agent::runtime::types::ModelRef;
 use crate::ai::auth::{AuthState, Credential};
 use crate::ai::provider_registry::{provider_spec, resolve_base_url, ApiKind};
 
@@ -49,6 +49,14 @@ async fn resolve_api_key(auth_state: &Arc<AuthState>, provider: &str) -> Option<
     crate::ai::env_api_keys::get_env_api_key(provider, None)
 }
 
+/// `complete_text` for background work (summaries, memory upkeep, routing
+/// decisions): uses the quick model when cost-aware routing is on, otherwise
+/// `model` exactly as before. Not for anything the user reads as the answer.
+pub async fn complete_background(app: &AppHandle, model: &ModelRef, system_prompt: &str, user_prompt: &str) -> Result<String, String> {
+    let routed = crate::agent::models::routing::route(crate::agent::models::routing::Role::Background, model).await;
+    complete_text(app, &routed, system_prompt, user_prompt).await
+}
+
 /// Ask `model` a single system+user question and return its plain-text
 /// answer. No tools, no history, no streaming.
 pub async fn complete_text(app: &AppHandle, model: &ModelRef, system_prompt: &str, user_prompt: &str) -> Result<String, String> {
@@ -63,7 +71,7 @@ pub async fn complete_text(app: &AppHandle, model: &ModelRef, system_prompt: &st
         .await
         .ok_or_else(|| format!("No API key configured for provider '{}'.", model.provider))?;
 
-    let client = reqwest::Client::new();
+    let client = crate::ai::http::client();
 
     match spec.api_kind {
         // Direct OpenAI still fully supports the legacy Chat Completions
@@ -302,6 +310,16 @@ pub fn extract_json_array(raw: &str) -> Option<serde_json::Value> {
         return None;
     }
     serde_json::from_str::<serde_json::Value>(&cleaned[start..=end]).ok().filter(|v| v.is_array())
+}
+
+/// The first JSON object in a model's reply, fenced or not.
+pub fn extract_json_object(raw: &str) -> Option<serde_json::Value> {
+    let start = raw.find('{')?;
+    let end = raw.rfind('}')?;
+    if end < start {
+        return None;
+    }
+    serde_json::from_str::<serde_json::Value>(&raw[start..=end]).ok().filter(|v| v.is_object())
 }
 
 #[cfg(test)]

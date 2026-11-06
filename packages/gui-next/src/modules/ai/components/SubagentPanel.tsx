@@ -39,11 +39,11 @@ function SubagentTranscript({ agent, onClose }: { agent: SubagentSummary; onClos
   }, [agent.id, running, getMessages])
 
   return (
-    <Dialog open onClose={onClose} maxWidth="md" fullWidth slotProps={{ paper: { sx: { height: 620, borderRadius: 2 } } }}>
+    <Dialog open onClose={onClose} maxWidth="md" fullWidth slotProps={{ paper: { sx: { height: 620, borderRadius: 1.6 } } }}>
       <DialogTitle sx={{ pb: 1 }}>
         <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
           {running && <CircularProgress size={13} thickness={5} />}
-          <Typography variant="subtitle2" sx={{ fontWeight: 600, flex: 1, minWidth: 0 }} noWrap>
+          <Typography variant="subtitle2" sx={{ fontWeight: 500, flex: 1, minWidth: 0 }} noWrap>
             {agent.description}
           </Typography>
           <Typography variant="caption" color="text.secondary">
@@ -88,7 +88,7 @@ function SubagentRow({ agent }: { agent: SubagentSummary }) {
       <Stack
         direction="row"
         onClick={() => setShowTranscript(true)}
-        sx={{ alignItems: 'center', gap: 1, py: 0.75, px: 0.5, borderRadius: 1, cursor: 'pointer', '&:hover': { bgcolor: 'action.hover' } }}
+        sx={{ alignItems: 'center', gap: 1, py: 0.75, px: 0.5, borderRadius: 0.8, cursor: 'pointer', '&:hover': { bgcolor: 'action.hover' } }}
       >
         {running ? <CircularProgress size={12} thickness={5} /> : null}
         <Stack sx={{ flex: 1, minWidth: 0 }}>
@@ -129,14 +129,14 @@ export function SubagentPanel() {
   if (subagents.length === 0) return null
 
   return (
-    <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 2, overflow: 'hidden', bgcolor: 'background.paper' }}>
+    <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1.6, overflow: 'hidden', bgcolor: 'background.paper' }}>
       <Stack
         direction="row"
         onClick={() => setOpen((v) => !v)}
         sx={{ alignItems: 'center', gap: 1, px: 1.5, py: 0.75, cursor: 'pointer', '&:hover': { bgcolor: 'action.hover' } }}
       >
         <UserOctagonLinear size={14} color="currentColor" />
-        <Typography variant="caption" sx={{ fontWeight: 600 }}>
+        <Typography variant="caption" sx={{ fontWeight: 500 }}>
           {running > 0 ? `${running} subagent${running === 1 ? '' : 's'} running` : `${subagents.length} subagent${subagents.length === 1 ? '' : 's'}`}
         </Typography>
         <Box sx={{ flex: 1 }} />

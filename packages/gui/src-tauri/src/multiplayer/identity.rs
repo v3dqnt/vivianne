@@ -13,7 +13,7 @@
 use iroh::SecretKey;
 
 fn key_path() -> Result<std::path::PathBuf, String> {
-    Ok(crate::agent::paths::viv_agent_dir()?.join("multiplayer_key"))
+    Ok(crate::agent::system::paths::viv_agent_dir()?.join("multiplayer_key"))
 }
 
 pub async fn load_or_create() -> Result<SecretKey, String> {

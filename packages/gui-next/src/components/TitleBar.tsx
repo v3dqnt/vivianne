@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
-import { Box, Stack, Typography, IconButton, Tooltip, Menu, MenuItem, Divider, ListItemIcon } from '../ui'
+import { Box, Stack, IconButton, Tooltip, Menu, MenuItem } from '../ui'
 import { call, hasTauri } from '../ipc'
 import { fileManagerName, terminalAppName } from '../lib/platform'
-import { FolderLinear, CommandSquareLinear, TickCircleLinear, PanelsLinear, LayoutLinear, SidebarLinear } from '../icons'
-import { useSidebarStore } from '../modules/sessions/store/sidebarStore'
-import { PRESET_LABELS, ZONE_LABELS, applyPreset, resetLayout, toggleZone, useWorkspace, type Preset, type Zone } from '../modules/workspace/layout'
+import { FolderLinear, CommandSquareLinear, HomeLinear, SettingsLinear } from '../icons'
+import { useSettingsUi } from '../modules/settings/store/uiStore'
+
 import { useProjectsStore } from '../modules/sessions/store/projectsStore'
 import { PairChip } from '../modules/multiplayer/components/PairChip'
+import { useAppView } from '../modules/git/components/GitView'
+import { ThreadTabs } from '../modules/sessions/components/ThreadTabs'
+import { useDaysStore } from '../modules/sessions/store/daysStore'
 
 const TRAFFIC_LIGHT_SIZE = 12
 
@@ -14,12 +17,11 @@ const TRAFFIC_LIGHT_SIZE = 12
  * used to be a permanent vertical icon rail pinned to the window's right
  * edge; moving them here gives that column back to actual content. */
 function TitleBarActions() {
-  const zones = useWorkspace((s) => s.zones)
-  const [panelsAnchor, setPanelsAnchor] = useState<HTMLElement | null>(null)
-  const [layoutAnchor, setLayoutAnchor] = useState<HTMLElement | null>(null)
   const openExternal = useProjectsStore((s) => s.openExternal)
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const projects = useProjectsStore((s) => s.projects)
+  const view = useAppView((s) => s.view)
+  const openSettings = useSettingsUi((s) => s.openSettings)
   const [openAnchor, setOpenAnchor] = useState<HTMLElement | null>(null)
 
   const hasFolder = !!projects.find((p) => p.id === activeProjectId)?.path
@@ -68,69 +70,26 @@ function TitleBarActions() {
           Open in {terminalAppName}
         </MenuItem>
       </Menu>
-
-      {/* Panels live wherever the user docks them now, so the title bar no
-          longer toggles "the right dock" — it shows or hides panels by name,
-          and offers starting arrangements. */}
-      <Tooltip title="Panels">
-        <IconButton size="small" aria-label="Panels" onClick={(e) => setPanelsAnchor(e.currentTarget)} sx={iconSx(!!panelsAnchor)}>
-          <PanelsLinear size={14} color="currentColor" />
-        </IconButton>
-      </Tooltip>
-      {/* Just the two panels. What goes IN them is chosen from each panel's
-          own "+" and its empty state, where you are already looking. */}
-      <Menu anchorEl={panelsAnchor} open={!!panelsAnchor} onClose={() => setPanelsAnchor(null)}>
-        {(['right', 'bottom'] as Zone[]).map((zone) => (
-          <MenuItem
-            key={zone}
-            onClick={() => {
-              toggleZone(zone)
-              setPanelsAnchor(null)
-            }}
-            sx={{ gap: 1, fontSize: '0.8125rem', minWidth: 190 }}
-          >
-            <Box sx={{ flex: 1 }}>{ZONE_LABELS[zone]}</Box>
-            {zones[zone] && (
-              <ListItemIcon sx={{ minWidth: 0, color: 'primary.main' }}>
-                <TickCircleLinear size={13} color="currentColor" />
-              </ListItemIcon>
-            )}
-          </MenuItem>
-        ))}
-      </Menu>
-
-      <Tooltip title="Layout">
-        <IconButton size="small" aria-label="Layout" onClick={(e) => setLayoutAnchor(e.currentTarget)} sx={iconSx(!!layoutAnchor)}>
-          <LayoutLinear size={14} color="currentColor" />
-        </IconButton>
-      </Tooltip>
-      <Menu anchorEl={layoutAnchor} open={!!layoutAnchor} onClose={() => setLayoutAnchor(null)}>
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 2, pt: 0.5, pb: 0.75, maxWidth: 260 }}>
-          Start from an arrangement — then drag tabs anywhere to rearrange.
-        </Typography>
-        {(Object.keys(PRESET_LABELS) as Preset[]).map((preset) => (
-          <MenuItem
-            key={preset}
-            onClick={() => {
-              applyPreset(preset)
-              setLayoutAnchor(null)
-            }}
-            sx={{ fontSize: '0.8125rem' }}
-          >
-            {PRESET_LABELS[preset]}
-          </MenuItem>
-        ))}
-        <Divider />
-        <MenuItem
+      <Tooltip title={view === 'home' ? 'Back to chat' : 'Home'}>
+        <IconButton
+          size="small"
+          aria-label="Home"
           onClick={() => {
-            resetLayout()
-            setLayoutAnchor(null)
+            if (view !== 'home') return useAppView.setState({ view: 'home' })
+            // Nothing open yet (just launched): back to chat means a blank thread.
+            if (!useDaysStore.getState().todayId) void useDaysStore.getState().newBlankThread()
+            useAppView.setState({ view: 'chat' })
           }}
-          sx={{ fontSize: '0.8125rem', color: 'text.secondary' }}
+          sx={iconSx(view === 'home')}
         >
-          Reset to default
-        </MenuItem>
-      </Menu>
+          <HomeLinear size={14} color="currentColor" />
+        </IconButton>
+      </Tooltip>
+      <Tooltip title="Settings">
+        <IconButton size="small" aria-label="Settings" onClick={() => openSettings()} sx={iconSx(false)}>
+          <SettingsLinear size={14} color="currentColor" />
+        </IconButton>
+      </Tooltip>
     </Stack>
   )
 }
@@ -144,25 +103,6 @@ function TitleBarActions() {
  * ones stay off (`decorations: false`) there too rather than being
  * re-enabled — two sets of traffic lights would be worse than one.
  */
-/** Folds the project sidebar away (Ctrl+B), for more room to work. */
-function SidebarToggle() {
-  const collapsed = useSidebarStore((s) => s.collapsed)
-  const toggle = useSidebarStore((s) => s.toggle)
-  return (
-    <Tooltip title={collapsed ? 'Show sidebar (Ctrl+B)' : 'Hide sidebar (Ctrl+B)'}>
-      <IconButton
-        size="small"
-        aria-label={collapsed ? 'Show sidebar' : 'Hide sidebar'}
-        aria-pressed={!collapsed}
-        onClick={toggle}
-        sx={{ ml: 1.25, width: 28, height: 28, borderRadius: 0.8, color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' } }}
-      >
-        <SidebarLinear size={16} color="currentColor" />
-      </IconButton>
-    </Tooltip>
-  )
-}
-
 export function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false)
 
@@ -224,8 +164,8 @@ export function TitleBar() {
       data-tauri-drag-region=""
       sx={{
         position: 'relative',
-        // Terax's header: 40px.
-        height: 40,
+        // Tight: it holds the window controls and a few icons.
+        height: 36,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -267,15 +207,9 @@ export function TitleBar() {
         >
           <path d="M1 5 L5 1 M1.2 2.5 V1.2 H2.5 M4.8 3.5 V4.8 H3.5" />
         </TrafficLight>
-        <SidebarToggle />
       </Box>
 
-      <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500 }}>
-          Vivianne
-        </Typography>
-      </Box>
-
+      <ThreadTabs />
       <TitleBarActions />
     </Box>
   )

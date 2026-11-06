@@ -88,7 +88,7 @@ export function findAssignments(messages: AgentMessage[]): Assignment[] {
       for (const c of m.content) {
         if (c.type !== 'toolCall') continue
         if (TRACKED_TOOLS.has(c.name)) editedFiles = true
-        if (SHELL_TOOLS.has(c.name)) ranShell = true
+        if (SHELL_TOOLS.has(c.name) || (c.name === 'terminal' && c.arguments?.action === 'send')) ranShell = true
       }
     }
     const from = messages[start]

@@ -98,7 +98,7 @@ export function DocumentViewer({ path }: { path: string }) {
     <Stack className="select-text" sx={{ height: '100%', minHeight: 0 }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.25, py: 0.75, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
         <Stack sx={{ minWidth: 0, flex: 1 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem' }} noWrap title={path}>
+          <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }} noWrap title={path}>
             {fileName(path)}
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }} noWrap>
@@ -218,7 +218,7 @@ function EditParts({ path, version, onSave }: { path: string; version: string; o
           return (
             <Box key={p.id}>
               {heading && (
-                <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, color: 'text.secondary', pt: 1, pb: 0.5 }}>
+                <Typography variant="caption" sx={{ display: 'block', fontWeight: 500, color: 'text.secondary', pt: 1, pb: 0.5 }}>
                   {heading}
                 </Typography>
               )}
@@ -285,11 +285,11 @@ function PartEditor({ part, onSave }: { part: DocPart; onSave: (part: string, te
                 setSaving(false)
               }
             }}
-            sx={{ minWidth: 0, fontSize: '0.7rem', py: 0.125, borderRadius: '6px' }}
+            sx={{ minWidth: 0, fontSize: '0.6875rem', py: 0.125, borderRadius: '6px' }}
           >
             Save
           </Button>
-          <Button size="small" color="inherit" disabled={saving} onClick={() => setText(part.text)} sx={{ minWidth: 0, fontSize: '0.7rem', py: 0.125, borderRadius: '6px' }}>
+          <Button size="small" color="inherit" disabled={saving} onClick={() => setText(part.text)} sx={{ minWidth: 0, fontSize: '0.6875rem', py: 0.125, borderRadius: '6px' }}>
             Reset
           </Button>
         </Stack>

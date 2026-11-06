@@ -1,13 +1,19 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import type { AgentMessage } from '../../ai/lib/types'
+import { usePlanStore } from '../../plan/store/planStore'
 import { Button, ButtonBase, Stack, Tooltip, Typography } from '../../../ui'
+import { NewAgentDialog } from './NewAgentDialog'
 import { call } from '../../../ipc'
-import { ModelPicker } from './ModelPicker'
-import { useTeamStore, type TeamAgent } from '../store/teamStore'
-import { useBotsStore, botKey, type BotStatus } from '../store/botsStore'
-import { usePanelStore } from '../../dock/store/panelStore'
+import { ModelPicker } from '../../ai/components/ModelPicker'
+import { useTeamStore, LEAD_CHANNEL, type TeamAgent } from '../store/teamStore'
+import { useBotsStore, botKey, isGroup, GROUP_PREFIX, type BotStatus } from '../store/botsStore'
 import { useBotFace } from './AgentFace'
-import { Avatar, colorOf } from './bits'
+import { Avatar, faceOf } from './bits'
 import { BotChat } from './BotChat'
+import { ChatView } from '../../ai/components/ChatView'
+import { agentStoreFor, sendThrough, setActiveThread } from '../../ai/store/agentStore'
+import { activeThreadId } from '../../ai/store/activeThread'
+import { AgentMessenger } from './AgentMessenger'
 
 const EMPTY_AGENTS: TeamAgent[] = []
 const EMPTY_MSGS: never[] = []
@@ -24,7 +30,7 @@ export function BotChip({ root, agent, onOpen }: { root: string; agent: TeamAgen
   return (
     <Tooltip title={tip}>
       <ButtonBase onClick={onOpen} sx={{ position: 'relative', borderRadius: '50%' }}>
-        <Avatar name={agent.name} color={colorOf(agent)} size={34} state={face} />
+        <Avatar {...faceOf(agent)} size={34} state={face} animate />
       </ButtonBase>
     </Tooltip>
   )
@@ -36,35 +42,84 @@ export function BotChip({ root, agent, onOpen }: { root: string; agent: TeamAgen
  * `@everyone`. Bots hand work to each other here, post routine results and
  * check-ins, and ask for decisions.
  */
-export function TeamRoom({ root }: { root: string }) {
+export function TeamRoom({ root, readOnly = false, messenger = false }: { root: string; readOnly?: boolean; messenger?: boolean }) {
   const channel = useBotsStore((s) => s.channel[root] ?? 'room')
   const team = useTeamStore((s) => (s.byRoot[root] ?? EMPTY_AGENTS)).filter((a) => a.status === 'active')
+  const groups = useBotsStore((s) => s.groups[root])
+  if (isGroup(channel)) {
+    const group = groups?.find((g) => `${GROUP_PREFIX}${g.id}` === channel)
+    const members = team.filter((a) => group?.members.includes(a.id))
+    return <Room key={channel} root={root} team={members} channel={channel} name={group?.name ?? 'Group'} />
+  }
   const bot = channel !== 'room' ? team.find((a) => a.id === channel) : undefined
-  if (bot) return <DirectMessage key={bot.id} root={root} bot={bot} team={team} />
+  if (bot) return <DirectMessage key={bot.id} root={root} bot={bot} team={team} readOnly={readOnly} messenger={messenger} />
   return <Room root={root} team={team} />
 }
 
-/** One teammate, alone: the conversation it keeps from day to day. */
-function DirectMessage({ root, bot, team }: { root: string; bot: TeamAgent; team: TeamAgent[] }) {
-  const messages = useBotsStore((s) => s.dm[botKey(root, bot.id)] ?? EMPTY_MSGS)
-  const approvals = useBotsStore((s) => s.approvals).filter((a) => a.root === root && a.botId === bot.id)
+/** One teammate, alone: the conversation it keeps from day to day. It is
+ * the bot's own thread, shown in the chat view with everything the chat has
+ * (tool calls, plans, to-dos, checkpoints, approvals, cards); sending goes
+ * through the bot. */
+function DirectMessage({ root, bot, team, readOnly, messenger }: { root: string; bot: TeamAgent; team: TeamAgent[]; readOnly: boolean; messenger: boolean }) {
   const st = useBotsStore((s) => s.status[botKey(root, bot.id)])
-  const { loadDm, loadStatus, sendDm } = useBotsStore.getState()
-  const focus = useTeamStore((s) => s.focus)
+  const { loadStatus, sendDm } = useBotsStore.getState()
   const save = useTeamStore((s) => s.save)
-  useEffect(() => {
-    void loadDm(root, bot.id)
-    void loadStatus(root)
-  }, [root, bot.id, loadDm, loadStatus])
-
+  const thread = `bot:${root}:${bot.id}`
+  const [editing, setEditing] = useState(false)
   const state = st?.state ?? 'idle'
+  // What compaction folded away, and its DM from before bots were threads.
+  const [archive, setArchive] = useState<{ messages: AgentMessage[]; start: number }>({ messages: [], start: 0 })
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const loadArchive = async (before?: number) => {
+    const page = await call<{ messages: AgentMessage[]; start: number }>('cmd_bots_archive', { root, botId: bot.id, before: before ?? null })
+    if (page) setArchive((a) => ({ messages: before === undefined ? page.messages : [...page.messages, ...a.messages], start: page.start }))
+  }
+
+  useEffect(() => {
+    const back = activeThreadId()
+    const reload = async () => {
+      const messages = (await call<AgentMessage[]>('cmd_bots_thread', { root, botId: bot.id })) ?? []
+      // Opened mid-run (work its lead handed it): busy until the run's end
+      // arrives, its steps streaming in from here.
+      const working = useBotsStore.getState().status[botKey(root, bot.id)]?.state === 'working'
+      agentStoreFor(thread).setState({ messages, streamingIndex: null, isBusy: working })
+    }
+    sendThrough(thread, (text, images) => call('cmd_bots_dm_send', { root, botId: bot.id, text, images }))
+    setActiveThread(thread)
+    void reload().then(() => loadArchive())
+    void loadStatus(root)
+    // Its plans, not the open thread's, while this conversation is showing.
+    void usePlanStore.getState().setScope({ root, send: (t) => sendDm(root, bot.id, t) })
+    return () => {
+      void usePlanStore.getState().setScope(null)
+      sendThrough(thread, null)
+      setActiveThread(back)
+    }
+  }, [root, bot.id, thread, loadStatus, sendDm])
+
+  const revertTo = async (index: number) => {
+    await call('cmd_bots_revert', { root, botId: bot.id, index })
+    const messages = (await call<AgentMessage[]>('cmd_bots_thread', { root, botId: bot.id })) ?? []
+    agentStoreFor(thread).setState({ messages, streamingIndex: null })
+  }
+
+  if (messenger) {
+    const line = state === 'working' ? (st?.activity ?? 'Working…') : state === 'paused' ? 'Paused' : bot.role || 'Here for you'
+    return (
+      <Stack direction="row" sx={{ flex: 1, minHeight: 0 }}>
+        <AgentMessenger root={root} agent={bot} team={team} status={line} onEdit={() => setEditing(true)} />
+        {editing && <NewAgentDialog root={root} open agent={bot} onClose={() => setEditing(false)} />}
+      </Stack>
+    )
+  }
+
   return (
     <Stack sx={{ flex: 1, minHeight: 0 }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1.25, px: 2, py: 1, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
         <BotChip root={root} agent={bot} onOpen={() => {}} />
         <Stack sx={{ minWidth: 0, flex: 1 }}>
           <Stack direction="row" sx={{ alignItems: 'baseline', gap: 0.75 }}>
-            <Typography variant="body2" sx={{ fontWeight: 700 }} noWrap>
+            <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
               {bot.name}
             </Typography>
             <Typography variant="caption" color="text.secondary">
@@ -75,70 +130,59 @@ function DirectMessage({ root, bot, team }: { root: string; bot: TeamAgent; team
             {state === 'working' ? (st?.activity ?? 'Working…') : state === 'paused' ? 'Paused' : bot.role}
           </Typography>
         </Stack>
-        {state === 'working' && (
-          <Button size="small" variant="outlined" color="error" onClick={() => void call('cmd_bots_stop', { root, botId: bot.id })} sx={{ borderRadius: '8px', flexShrink: 0 }}>
-            Stop
-          </Button>
-        )}
-        <Tooltip title="Routines, rules, memory">
-          <Button
-            size="small"
-            variant="outlined"
-            onClick={() => {
-              focus(root, bot.id)
-              usePanelStore.getState().openRight('agents')
-            }}
-            sx={{ borderRadius: '8px', flexShrink: 0 }}
-          >
-            Profile
+        <Tooltip title="Name, look, job, model and instructions">
+          <Button size="small" variant="outlined" onClick={() => setEditing(true)}>
+            Edit
           </Button>
         </Tooltip>
       </Stack>
-      <BotChat
-        root={root}
-        channel={bot.id}
-        messages={messages}
-        team={team}
-        approvals={approvals}
-        onSend={(t, att) => sendDm(root, bot.id, t, att)}
-        attachments
-        toolbar={<ModelPicker compact value={bot.model} onChange={(model) => void save(root, { ...bot, model }, bot.id)} />}
-        allowEveryone={false}
-        placeholder={`Message ${bot.name}`}
-        empty={
-          <Stack sx={{ alignItems: 'center', textAlign: 'center', gap: 1, py: 8, color: 'text.secondary' }}>
-            <Avatar name={bot.name} color={colorOf(bot)} size={72} animate />
-            <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary' }}>
-              {bot.name}
-            </Typography>
-            <Typography variant="caption" sx={{ maxWidth: 360, lineHeight: 1.5 }}>
-              {bot.role ? `${bot.role}. ` : ''}Talk to {bot.name} on its own here. It keeps this conversation, and what it learns,
-              from one day to the next.
-            </Typography>
-          </Stack>
-        }
+      {editing && <NewAgentDialog root={root} open agent={bot} onClose={() => setEditing(false)} />}
+      <ChatView
+        own={{
+          toolbar: <ModelPicker mode="agent" value={bot.model} onChange={(model) => void save(root, { ...bot, model }, bot.id)} />,
+          onRevertTo: revertTo,
+          readOnly: readOnly ? (
+            <Stack direction="row" sx={{ alignItems: 'center', gap: 1, mx: 2, mb: 2, px: 1.5, py: 1, borderRadius: '8px', border: 1, borderColor: 'divider', bgcolor: 'action.hover' }}>
+              <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+                {bot.name}'s live work. To direct it, message the lead.
+              </Typography>
+              <Button size="small" variant="outlined" onClick={() => useBotsStore.getState().setChannel(root, LEAD_CHANNEL)}>
+                Message the lead
+              </Button>
+            </Stack>
+          ) : undefined,
+          earlier: archive.messages,
+          earlierStart: archive.start,
+          loadingOlder,
+          onLoadOlder: () => {
+            setLoadingOlder(true)
+            void loadArchive(archive.start).finally(() => setLoadingOlder(false))
+          },
+        }}
       />
     </Stack>
   )
 }
 
-function Room({ root, team }: { root: string; team: TeamAgent[] }) {
+/** Everyone (the room), or a group: the user and some of the bots. */
+function Room({ root, team, channel = 'room', name }: { root: string; team: TeamAgent[]; channel?: string; name?: string }) {
   const loadTeam = useTeamStore((s) => s.load)
   const focus = useTeamStore((s) => s.focus)
-  const messages = useBotsStore((s) => s.room[root] ?? EMPTY_MSGS)
+  const setChannel = useBotsStore((s) => s.setChannel)
+  const messages = useBotsStore((s) => (channel === 'room' ? s.room[root] : s.dm[botKey(root, channel)]) ?? EMPTY_MSGS)
   const approvals = useBotsStore((s) => s.approvals).filter((a) => a.root === root)
   const status = useBotsStore((s) => s.status)
-  const { loadRoom, loadStatus, post } = useBotsStore.getState()
+  const { loadRoom, loadGroupChat, loadStatus, post } = useBotsStore.getState()
 
   useEffect(() => {
     void loadTeam(root)
-    void loadRoom(root)
+    void (channel === 'room' ? loadRoom(root) : loadGroupChat(root, channel))
     void loadStatus(root)
-  }, [root, loadTeam, loadRoom, loadStatus])
+  }, [root, channel, loadTeam, loadRoom, loadGroupChat, loadStatus])
 
   const open = (id: string) => {
     focus(root, id)
-    usePanelStore.getState().openRight('agents')
+    setChannel(root, id)
   }
   const working = team.filter((a) => status[botKey(root, a.id)]?.state === 'working')
 
@@ -160,22 +204,30 @@ function Room({ root, team }: { root: string; team: TeamAgent[] }) {
       </Stack>
       <BotChat
         root={root}
-        channel="room"
+        channel={channel}
         messages={messages}
         team={team}
         approvals={approvals}
-        onSend={(t) => post(root, t)}
+        onSend={(t) => post(root, t, channel)}
         allowEveryone
-        placeholder={team.length ? 'Message the team — @ to mention a teammate' : 'Add a teammate in Agents to start'}
+        placeholder={
+          name
+            ? team.length
+              ? `Message ${name} — @ to mention someone in it`
+              : 'Add people to this group to start'
+            : team.length
+              ? 'Message everyone — @ to mention a teammate'
+              : 'Hire a teammate to start'
+        }
         empty={
           <Stack sx={{ alignItems: 'center', textAlign: 'center', gap: 1, py: 8, color: 'text.secondary' }}>
             <Stack direction="row" sx={{ gap: 0.5 }}>
               {team.slice(0, 5).map((a) => (
-                <Avatar key={a.id} name={a.name} color={colorOf(a)} size={34} />
+                <Avatar key={a.id} {...faceOf(a)} size={34} />
               ))}
             </Stack>
-            <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary' }}>
-              Your team's room
+            <Typography variant="body2" sx={{ fontWeight: 500, color: 'text.primary' }}>
+              {name ?? 'Everyone'}
             </Typography>
             <Typography variant="caption" sx={{ maxWidth: 380, lineHeight: 1.5 }}>
               Say what you need and the right teammate picks it up. @mention someone to hand it to them, or @everyone for the

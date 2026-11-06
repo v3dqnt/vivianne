@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::StreamExt;
-use reqwest::Client;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 
@@ -297,13 +296,17 @@ async fn stream_inner(
     let body = build_request_body(&model_id, &model_provider, &model_api, model_reasoning, &context, &options);
     let body_json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
 
-    let client = Client::new();
+    let client = crate::ai::http::client();
     let mut req = client.post(&url).header("content-type", "application/json");
 
     if let Some(ref hdrs) = options.headers {
         for (k, v) in hdrs {
             req = req.header(k.as_str(), v.as_str());
         }
+    }
+
+    if let Some(ms) = options.timeout_ms {
+        req = req.timeout(std::time::Duration::from_millis(ms));
     }
 
     let resp = req.body(body_json).send().await.map_err(|e| e.to_string())?;
@@ -359,7 +362,7 @@ async fn stream_inner(
                 end = nl_idx + 2;
             }
             let line = buffer[..nl_idx].to_string();
-            buffer = buffer[end..].to_string();
+            buffer.drain(..end);
 
             if let Some((_event, data)) = sse_state.feed_line(&line) {
                 if data == "[DONE]" {

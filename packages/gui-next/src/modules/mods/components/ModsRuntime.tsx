@@ -47,7 +47,7 @@ export function ModsRuntime() {
             gap: 1,
             px: 1.5,
             py: 1,
-            borderRadius: 2,
+            borderRadius: 1.6,
             bgcolor: 'background.paper',
             border: 1,
             borderColor: 'divider',
@@ -57,7 +57,7 @@ export function ModsRuntime() {
           <Typography variant="body2" sx={{ flex: 1, fontSize: '0.8125rem' }}>
             {t.text}
           </Typography>
-          <ButtonBase aria-label="Dismiss" onClick={() => dismiss(t.id)} sx={{ borderRadius: 1, color: 'text.secondary' }}>
+          <ButtonBase aria-label="Dismiss" onClick={() => dismiss(t.id)} sx={{ borderRadius: 0.8, color: 'text.secondary' }}>
             <CloseLinear size={14} color="currentColor" />
           </ButtonBase>
         </Box>

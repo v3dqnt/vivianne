@@ -78,7 +78,7 @@ lazy_static::lazy_static! {
 /// known, accepted limitation (matching this app's credentials.json
 /// plaintext-fallback precedent) rather than a half-built secrets store.
 fn configs_path() -> Option<std::path::PathBuf> {
-    crate::agent::paths::viv_agent_dir().ok().map(|d| d.join("mcp_servers.json"))
+    crate::agent::system::paths::viv_agent_dir().ok().map(|d| d.join("mcp_servers.json"))
 }
 
 async fn persist_configs() {

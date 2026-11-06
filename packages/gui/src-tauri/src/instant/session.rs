@@ -1,6 +1,6 @@
 //! Running one Viv Instant instruction to completion.
 //!
-//! Modelled closely on `agent::tool_exec::drive_subagent` — same private event
+//! Modelled closely on `agent::tools::exec::drive_subagent` — same private event
 //! bus, same dedicated-OS-thread trick — because that function already solves
 //! "run the agent loop off to the side with its own tool set and its own
 //! transcript", which is exactly what this needs.
@@ -11,9 +11,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
-use crate::agent::commands::{AgentRegistry, AppState};
-use crate::agent::events::AgentEvent;
-use crate::agent::types::{AgentContext, AgentMessage, MessageContent, PersonaMode, QueueMode};
+use crate::agent::runtime::commands::{AgentRegistry, AppState};
+use crate::agent::runtime::events::AgentEvent;
+use crate::agent::runtime::types::{AgentContext, AgentMessage, MessageContent, QueueMode};
 
 /// Thread id for Viv Instant's isolated agent state.
 ///
@@ -302,7 +302,8 @@ pub async fn cmd_instant_run(
     let _ = app.emit_to(crate::instant::window::LABEL, "instant:route", &route);
     match (&route.kind, &route.project) {
         (Kind::Status, _) => {
-            finish(&app, Ok(crate::notch::spoken_summary()));
+            let names: Vec<String> = crate::instant::route::projects().await.into_iter().map(|p| p.name).collect();
+            finish(&app, Ok(crate::notch::spoken_summary(&names)));
             return Ok(());
         }
         (Kind::Project, Some(project)) if route.work => {
@@ -330,35 +331,26 @@ pub async fn cmd_instant_run(
 
     // Inherit whatever model the user has selected for chat — one model picker,
     // not two.
-    state.agent_state.set_model(primary.agent_state.model().await).await;
-    state.agent_state.set_thinking_level(primary.agent_state.thinking_level().await).await;
+    state.agent_state.inherit_from(&primary.agent_state).await;
     // A project question is answered from inside that project.
     let folders = match &route.project {
         Some(p) if route.kind == Kind::Project => p.path.clone().map(|path| vec![path]).unwrap_or_default(),
         _ => primary.agent_state.workspace_folders().await,
     };
     state.agent_state.set_workspace(folders, primary.agent_state.access_mode().await).await;
-    // `Agent` is the only persona whose `restricted_tools()` is empty; any
-    // other would strip `dip` and leave Viv Instant unable to do the one thing
-    // it exists for.
-    state.agent_state.set_persona_mode(PersonaMode::Agent).await;
-    state
-        .agent_state
-        .set_subagent_allowed_tools(Some(
-            match route.kind {
-                Kind::Computer => ALLOWED_TOOLS,
-                Kind::Project => PROJECT_TOOLS,
-                _ => ANSWER_TOOLS,
-            }
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-        ))
+    // Unattended, with the tools for this kind of request. Its persona is
+    // `Agent`, the only one that withholds nothing, so `dip` stays.
+    let tools = match route.kind {
+        Kind::Computer => ALLOWED_TOOLS,
+        Kind::Project => PROJECT_TOOLS,
+        _ => ANSWER_TOOLS,
+    };
+    crate::agent::profiles::AgentProfile::unattended(Some(tools.iter().map(|s| s.to_string()).collect()))
+        .apply(&state.agent_state)
         .await;
-    state.agent_state.set_auto_approve(true).await;
 
     let auth = app.state::<Arc<crate::ai::auth::AuthState>>().inner().clone();
-    let capability_blocks = crate::agent::directive::assemble_capability_blocks(
+    let capability_blocks = crate::agent::runtime::directive::assemble_capability_blocks(
         &state.agent_state,
         None,
         &instruction,
@@ -441,7 +433,7 @@ async fn run(
     };
     state.agent_state.set_system_prompt(system_prompt).await;
 
-    let queues = crate::agent::loop_core::QueueHandles {
+    let queues = crate::agent::runtime::loop_core::QueueHandles {
         steering_queue: Arc::new(tokio::sync::RwLock::new(Vec::new())),
         steering_mode: QueueMode::OneAtATime,
         follow_up_queue: Arc::new(tokio::sync::RwLock::new(Vec::new())),
@@ -452,7 +444,7 @@ async fn run(
     // A PRIVATE event bus. Emitting on the app-wide `agent_event` channel
     // instead would surface Viv Instant's steps inside the user's chat
     // transcript, since `agentStore` listens for that globally.
-    let (tx, mut rx) = crate::agent::events::event_bus();
+    let (tx, mut rx) = crate::agent::runtime::events::event_bus();
     let app_events = app.clone();
     let drain = tokio::spawn(async move {
         let sess = match app_events.try_state::<Arc<InstantSession>>() {
@@ -489,7 +481,7 @@ async fn run(
         }
     });
 
-    let messages = Box::pin(crate::agent::loop_core::run_agent_loop_with_prompts(
+    let messages = Box::pin(crate::agent::runtime::loop_core::run_agent_loop_with_prompts(
         vec![AgentMessage::User {
             content: vec![MessageContent::Text { text: instruction }],
             timestamp: now_ms(),

@@ -98,7 +98,7 @@ export function ReliabilitySection() {
   return (
     <Stack sx={{ gap: 2.5 }}>
       <Stack sx={{ gap: 0.5 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           Reliability
         </Typography>
         <Typography variant="caption" color="text.secondary">
@@ -126,7 +126,7 @@ export function ReliabilitySection() {
           <Stack
             key={keyOf(m)}
             direction="row"
-            sx={{ alignItems: 'center', gap: 1, px: 1.25, py: 0.75, border: 1, borderColor: 'divider', borderRadius: '10px' }}
+            sx={{ alignItems: 'center', gap: 1, px: 1.25, py: 0.75, border: 1, borderColor: 'divider', borderRadius: '8px' }}
           >
             <Typography variant="caption" color="text.disabled" sx={{ width: 16 }}>
               {i + 1}

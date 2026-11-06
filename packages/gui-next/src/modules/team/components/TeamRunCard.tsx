@@ -44,7 +44,7 @@ function MemberRow({ m }: { m: TeamRunMember }) {
       >
         <AgentMark color={color} size={22} title={m.name} />
         <Stack sx={{ minWidth: 0, flex: 1 }}>
-          <Typography variant="caption" sx={{ fontWeight: 600 }} noWrap>
+          <Typography variant="caption" sx={{ fontWeight: 500 }} noWrap>
             {m.name}
           </Typography>
           <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: '0.6875rem' }}>
@@ -121,7 +121,7 @@ export function TeamRunCard({ runId, pending }: { runId: string | null; pending:
             <AgentMark key={m.id} color={hex(m.color)} size={18} />
           ))}
         </Stack>
-        <Typography variant="caption" sx={{ fontWeight: 600, flex: 1, minWidth: 0 }} noWrap title={run.task}>
+        <Typography variant="caption" sx={{ fontWeight: 500, flex: 1, minWidth: 0 }} noWrap title={run.task}>
           {run.status === 'running' ? 'The team is working' : run.status === 'stopped' ? 'The team was stopped' : 'The team finished'}
           <Box component="span" sx={{ color: 'text.secondary', fontWeight: 400 }}>
             {' '}
@@ -140,7 +140,7 @@ export function TeamRunCard({ runId, pending }: { runId: string | null; pending:
       {run.messages.length > 0 && (
         <Box sx={{ borderTop: 1, borderColor: 'divider' }}>
           <ButtonBase onClick={() => setShowTalk((v) => !v)} sx={{ gap: 0.5, px: 1.5, py: 0.75, color: 'text.secondary', width: '100%', justifyContent: 'flex-start' }}>
-            <Typography variant="caption" sx={{ fontWeight: 600 }}>
+            <Typography variant="caption" sx={{ fontWeight: 500 }}>
               {run.messages.length} message{run.messages.length === 1 ? '' : 's'} between them
             </Typography>
             <Box sx={{ display: 'flex', transform: showTalk ? 'rotate(180deg)' : 'none' }}>

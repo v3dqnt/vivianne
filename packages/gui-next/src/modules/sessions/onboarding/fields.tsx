@@ -7,7 +7,7 @@ export function Question({ label, hint, children }: { label: string; hint?: Reac
   return (
     <Stack sx={{ gap: 1 }}>
       <Stack sx={{ gap: 0.25 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           {label}
         </Typography>
         {hint && (
@@ -33,7 +33,7 @@ function OptionChip({ label, selected, onClick, disabled }: { label: string; sel
       sx={{
         borderRadius: '8px',
         fontSize: '0.8125rem',
-        height: 30,
+        height: 32,
         fontWeight: selected ? 600 : 400,
         ...(selected
           ? {
@@ -127,7 +127,7 @@ export function Choices(
               }
             }}
             placeholder="Type and press Enter"
-            sx={{ fontSize: '0.8125rem', px: 1.25, height: 30, border: 1, borderColor: 'primary.main', borderRadius: '8px', minWidth: 200 }}
+            sx={{ fontSize: '0.8125rem', px: 1.25, height: 32, border: 1, borderColor: 'primary.main', borderRadius: '8px', minWidth: 200 }}
           />
         ) : (
           <Chip
@@ -135,7 +135,7 @@ export function Choices(
             variant="outlined"
             onClick={() => setOtherOpen(true)}
             disabled={!!atMax}
-            sx={{ borderRadius: '8px', fontSize: '0.8125rem', height: 30, borderStyle: 'dashed', color: 'text.secondary' }}
+            sx={{ borderRadius: '8px', fontSize: '0.8125rem', height: 32, borderStyle: 'dashed', color: 'text.secondary' }}
           />
         ))}
       {props.multi && props.max !== undefined && (

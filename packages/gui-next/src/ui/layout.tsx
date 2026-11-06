@@ -2,7 +2,7 @@ import { forwardRef, type AllHTMLAttributes, type ElementType, type ReactNode } 
 import { jsx } from '@emotion/react'
 import { Separator } from 'radix-ui'
 import { useTheme } from './ThemeProvider'
-import { paletteColor, resolve, type SxObject, type SxProps } from './sx'
+import { spacePx, paletteColor, resolve, type SxObject, type SxProps } from './sx'
 import type { Breakpoint, Theme, TypographyVariant } from './theme'
 
 // biome-ignore lint/suspicious/noExplicitAny: polymorphic element props
@@ -68,7 +68,7 @@ export const Stack = forwardRef<Any, StackProps>(function Stack({ component = 'd
     const styles: SxObject = { flexDirection: dir }
     if (gap !== undefined) {
       styles['& > :not(style):not(style)'] = { margin: 0 }
-      styles['& > :not(style) ~ :not(style)'] = { [MARGIN_SIDE[dir]]: typeof gap === 'number' ? `${gap * 8}px` : gap }
+      styles['& > :not(style) ~ :not(style)'] = { [MARGIN_SIDE[dir]]: typeof gap === 'number' ? `${spacePx(gap)}px` : gap }
     }
     if (bp === 'xs') Object.assign(base, styles)
     else base[theme.breakpoints.up(bp)] = styles

@@ -13,13 +13,13 @@ function Step({ n, title, done, children }: { n: number; title: string; done: bo
       <Box
         sx={{
           width: 22,
-          height: 22,
+          height: 24,
           borderRadius: '50%',
           flexShrink: 0,
           display: 'grid',
           placeItems: 'center',
           fontSize: '0.6875rem',
-          fontWeight: 700,
+          fontWeight: 500,
           bgcolor: done ? alpha(theme.palette.success.main, 0.15) : 'action.hover',
           color: done ? 'success.main' : 'text.secondary',
           mt: 0.125,
@@ -28,7 +28,7 @@ function Step({ n, title, done, children }: { n: number; title: string; done: bo
         {done ? <TickCircleLinear size={14} color="currentColor" /> : n}
       </Box>
       <Stack sx={{ flex: 1, minWidth: 0, gap: 1 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           {title}
         </Typography>
         {children}
@@ -95,7 +95,7 @@ export function PairProjectDialog({ open, onClose }: { open: boolean; onClose: (
     }
   }
 
-  const useTestPartner = async () => {
+  const startTestPartner = async () => {
     setError(null)
     try {
       const id = await call<string>('cmd_multiplayer_test_partner_id')
@@ -127,7 +127,7 @@ export function PairProjectDialog({ open, onClose }: { open: boolean; onClose: (
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle sx={{ fontSize: '1rem', fontWeight: 700 }}>Work together</DialogTitle>
+      <DialogTitle sx={{ fontSize: '1rem', fontWeight: 600 }}>Work together</DialogTitle>
       <DialogContent>
         <Stack sx={{ gap: 2.5, pt: 0.5 }}>
           <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.55 }}>
@@ -183,7 +183,7 @@ export function PairProjectDialog({ open, onClose }: { open: boolean; onClose: (
                   }
                   slotProps={{ input: { sx: { fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem' } } }}
                 />
-                <ButtonBase onClick={() => void useTestPartner()} sx={{ alignSelf: 'flex-start', fontSize: '0.75rem', color: 'text.secondary', borderRadius: '6px', px: 0.5, '&:hover': { color: 'text.primary' } }}>
+                <ButtonBase onClick={() => void startTestPartner()} sx={{ alignSelf: 'flex-start', fontSize: '0.75rem', color: 'text.secondary', borderRadius: '6px', px: 0.5, '&:hover': { color: 'text.primary' } }}>
                   No one to pair with yet? Try it with a test partner on this computer
                 </ButtonBase>
               </>

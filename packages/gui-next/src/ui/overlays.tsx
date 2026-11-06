@@ -268,7 +268,7 @@ export function Menu({ open, anchorEl, onClose, anchorOrigin = { vertical: 'top'
               'div',
               {
                 className: cx('ui-Menu-paper', slotProps?.paper?.className),
-                children: render('div', { className: 'ui-Menu-list', children }, { padding: 6, outline: 0, minWidth: 192 }, slotProps?.list?.sx, theme),
+                children: render('div', { className: 'ui-Menu-list', children }, { padding: 4, outline: 0, minWidth: 180 }, slotProps?.list?.sx, theme),
               },
               styles,
               slotProps?.paper?.sx,
@@ -529,31 +529,37 @@ export function Tooltip({ title, children, placement = 'bottom', enterDelay, dis
   const theme = useTheme()
   if (title === '' || title === null || title === undefined || title === false) return children
   const [side, align] = placement.split('-') as ['top' | 'bottom' | 'left' | 'right', 'start' | 'end' | undefined]
-  // Terax tooltips are inverted (ink on the page colour) and slide 2px in
-  // from the side they sit on.
+  // A small label beside the control, never on it: it doesn't take the
+  // pointer (so the button under the cursor stays clickable), it can't be
+  // hovered open, and it sits 8px off the side it was asked for, flipping to
+  // the other side rather than sliding over the trigger when there's no room.
   const t = theme.palette.tokens
   const from = { top: 'translateY(2px)', bottom: 'translateY(-2px)', left: 'translateX(2px)', right: 'translateX(-2px)' }[side]
   const styles: SxObject = {
-    backgroundColor: t.foreground,
-    color: t.background,
-    borderRadius: theme.radius.xl,
+    backgroundColor: theme.palette.background.paper,
+    color: theme.palette.text.primary,
+    border: `1px solid ${theme.palette.divider}`,
+    boxShadow: theme.elevation.lg,
+    borderRadius: 6,
     fontFamily: theme.typography.fontFamily,
-    padding: '6px 12px',
-    fontSize: theme.typography.pxToRem(12),
-    lineHeight: 1.35,
-    maxWidth: 300,
+    padding: '4px 8px',
+    fontSize: '0.75rem',
+    lineHeight: 1.4,
+    maxWidth: 260,
     wordWrap: 'break-word',
     fontWeight: 500,
+    pointerEvents: 'none',
+    userSelect: 'none',
     zIndex: theme.zIndex.tooltip,
-    '&[data-state="delayed-open"], &[data-state="instant-open"]': { animation: `${keyframes({ from: { opacity: 0, transform: from }, to: { opacity: 1, transform: 'none' } })} 140ms ${PREMIUM}` },
+    '&[data-state="delayed-open"], &[data-state="instant-open"]': { animation: `${keyframes({ from: { opacity: 0, transform: from }, to: { opacity: 1, transform: 'none' } })} 120ms ${PREMIUM}` },
     '&[data-state="closed"]': { animation: `${fadeOut} 80ms linear` },
-    '& kbd': { fontFamily: 'inherit', fontSize: '0.9em', padding: '1px 5px', borderRadius: theme.radius.sm, backgroundColor: alpha(t.background, 0.2) },
+    '& kbd': { fontFamily: 'inherit', fontSize: '0.9em', padding: '0 4px', marginLeft: 4, borderRadius: 4, color: theme.palette.text.secondary, backgroundColor: alpha(t.foreground, 0.08) },
   }
   return (
-    <RadixTooltip.Root delayDuration={enterDelay} disableHoverableContent={disableInteractive} open={open}>
+    <RadixTooltip.Root delayDuration={enterDelay ?? 400} disableHoverableContent={disableInteractive ?? true} open={open}>
       <RadixTooltip.Trigger asChild>{children}</RadixTooltip.Trigger>
       <RadixTooltip.Portal>
-        <RadixTooltip.Content asChild side={side} align={align ?? 'center'} sideOffset={6} collisionPadding={8}>
+        <RadixTooltip.Content asChild side={side} align={align ?? 'center'} sideOffset={8} collisionPadding={8} hideWhenDetached>
           {render('div', { className: 'ui-Tooltip', children: title }, styles, undefined, theme)}
         </RadixTooltip.Content>
       </RadixTooltip.Portal>
@@ -727,14 +733,16 @@ export function Alert({ severity = 'success', action, icon, sx, children, classN
   const c = severity === 'info' ? p.tokens.mutedForeground : p[severity as ColorName].main
   const styles: SxObject = {
     ...theme.typography.body2,
+    // One compact size everywhere: errors and notices read as the same thing.
+    fontSize: '0.8125rem',
     backgroundColor: severity === 'error' ? alpha(p.error.main, p.mode === 'dark' ? 0.1 : 0.06) : p.background.card,
     color: severity === 'error' ? p.error.main : p.text.primary,
     border: `1px solid ${severity === 'error' ? alpha(p.error.main, 0.25) : p.divider}`,
     borderRadius: theme.radius['2xl'],
     display: 'flex',
     gap: 10,
-    padding: '8px 14px',
-    '& .ui-Alert-icon': { padding: '3px 0', display: 'flex', fontSize: 16, color: c, flexShrink: 0 },
+    padding: '6px 12px',
+    '& .ui-Alert-icon': { padding: '3px 0', display: 'flex', fontSize: '1rem', color: c, flexShrink: 0 },
     '& .ui-Alert-message': { padding: '2px 0', minWidth: 0, overflow: 'auto', lineHeight: 1.5 },
     '& .ui-Alert-action': { display: 'flex', alignItems: 'flex-start', paddingLeft: 12, marginLeft: 'auto', marginRight: -6 },
   }

@@ -71,7 +71,7 @@ export function AskQuestionDialog() {
                         gap: 1,
                         px: 1.5,
                         py: 1,
-                        borderRadius: 2,
+                        borderRadius: 1.6,
                         border: 1,
                         borderColor: selected ? 'primary.main' : 'divider',
                         bgcolor: selected ? 'action.selected' : 'transparent',

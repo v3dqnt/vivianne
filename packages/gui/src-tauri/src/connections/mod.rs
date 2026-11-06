@@ -157,7 +157,7 @@ pub async fn cmd_connections_connect(app: tauri::AppHandle, id: String, fields: 
     };
     match crate::mcp::add_server(config).await {
         Ok(tools) => {
-            crate::agent::tool_exec::invalidate_tool_defs_cache();
+            crate::agent::tools::exec::invalidate_tool_defs_cache();
             Ok(Connected { tools: tools.len(), account })
         }
         Err(e) => {
@@ -179,7 +179,7 @@ pub async fn cmd_connections_cancel() -> Result<(), String> {
 pub async fn cmd_connections_disconnect(id: String) -> Result<(), String> {
     crate::mcp::remove_server(&id).await;
     secrets::delete(&secret_key(&id)).await;
-    crate::agent::tool_exec::invalidate_tool_defs_cache();
+    crate::agent::tools::exec::invalidate_tool_defs_cache();
     Ok(())
 }
 
@@ -190,7 +190,7 @@ pub async fn cmd_connections_icon(domain: String) -> Result<String, String> {
     if !domain.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
         return Err("bad domain".into());
     }
-    let dir = crate::agent::paths::viv_home().map_err(|e| e.to_string())?.join("icons");
+    let dir = crate::agent::system::paths::viv_home().map_err(|e| e.to_string())?.join("icons");
     let path = dir.join(format!("{domain}.png"));
     let bytes = match tokio::fs::read(&path).await {
         Ok(b) => b,
