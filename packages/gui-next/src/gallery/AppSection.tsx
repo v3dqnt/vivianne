@@ -1,5 +1,5 @@
 import { Component, Suspense, createElement, useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
-import { Box, Stack, Typography } from '../ui'
+import { Box, Button, Stack, Typography } from '../ui'
 import { FIXTURES, NOT_COMPONENTS } from './fixtures'
 
 type Loader = () => Promise<Record<string, unknown>>
@@ -10,6 +10,9 @@ const files = import.meta.glob(['../modules/**/*.tsx', '../components/**/*.tsx',
 // A component is a function, or a memo / forwardRef object (which carries `$$typeof`); anything else exported in capitals is a constant.
 // `Composer` is skipped: it is `ChatComposer` wired to the app's stores, so it would show the same composer twice.
 const SKIP = new Set(['Composer'])
+// Components that open over the whole page (dialogs, panels, the theme builder, overlay windows). Rendering them in a card would
+// cover the page as you scroll, so they wait behind an Open button and close again.
+const OVERLAY = /(Dialog|Modal|Overlay|Popover|Menu|Builder|Toast|Widget|Widgets)$|^(ReviewPanel|ThemeBuilder|SettingsPanel|AgentSettingsPanel|RestingNotch|Notch)$/
 const isComponent = (name: string, v: unknown) =>
   /^[A-Z]/.test(name) && !SKIP.has(name) && !NOT_COMPONENTS.test(name) && (typeof v === 'function' || (typeof v === 'object' && v !== null && '$$typeof' in v))
 
@@ -32,6 +35,8 @@ class Boundary extends Component<{ children: ReactNode }, { error: string | null
 function Card({ path, name, load }: Entry) {
   const [Comp] = useState(() => await_(load, name))
   const [near, setNear] = useState(false)
+  const [opened, setOpened] = useState(false)
+  const overlay = OVERLAY.test(name)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const el = ref.current
@@ -47,10 +52,13 @@ function Card({ path, name, load }: Entry) {
         <Typography noWrap sx={{ fontSize: '0.6875rem', color: 'text.disabled' }}>{path.replace('../', '')}</Typography>
       </Box>
       <Box sx={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'auto', p: '8px', borderRadius: '8px', bgcolor: 'action.hover' }}>
-        {near && (
+        {overlay && (
+          <Button size="small" variant="outlined" onClick={() => setOpened(true)}>Open</Button>
+        )}
+        {(overlay ? opened : near) && (
           <Boundary>
             <Suspense fallback={<Typography variant="caption">Loading…</Typography>}>
-              <Comp />
+              <Comp onClose={() => setOpened(false)} />
             </Suspense>
           </Boundary>
         )}
@@ -60,16 +68,16 @@ function Card({ path, name, load }: Entry) {
 }
 
 /** A component that loads its module on first render, so the card needs no separate loading state. */
-function await_(load: Loader, name: string): ComponentType {
+function await_(load: Loader, name: string): ComponentType<{ onClose?: () => void }> {
   let mod: Record<string, unknown> | null = null
   let pending: Promise<void> | null = null
-  return function Lazy() {
+  return function Lazy(props: Record<string, unknown>) {
     if (!mod) {
       pending ??= load().then((m) => void (mod = m))
       throw pending
     }
-    const C = mod[name] as ComponentType
-    return createElement(C, FIXTURES[name])
+    const C = mod[name] as ComponentType<Record<string, unknown>>
+    return createElement(C, { ...FIXTURES[name], ...(props.onClose && 'onClose' in (FIXTURES[name] ?? {}) ? { onClose: props.onClose } : {}) })
   }
 }
 
