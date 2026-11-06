@@ -83,10 +83,10 @@ function Section({ id, title, right, children }: { id: string; title: string; ri
           aria-expanded={!closed}
           sx={{ flex: '1 0 auto', justifyContent: 'flex-start', gap: '4px', px: '8px', height: 20, borderRadius: '6px', color: 'text.disabled', '& .chev': { opacity: closed ? 1 : 0, transition: 'opacity 0.15s' }, '&:hover': { color: 'text.primary' }, '&:hover .chev': { opacity: 1 } }}
         >
+          <Typography noWrap sx={{ fontSize: '0.6875rem', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'inherit', flexShrink: 0 }}>{title}</Typography>
           <Box className="chev" sx={{ display: 'flex', transform: closed ? 'none' : 'rotate(90deg)', transition: 'transform 0.15s ease, opacity 0.15s' }}>
             <ChevronRightLinear size={12} color="currentColor" />
           </Box>
-          <Typography noWrap sx={{ fontSize: '0.6875rem', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'inherit', flexShrink: 0 }}>{title}</Typography>
         </ButtonBase>
         <Box sx={{ minWidth: 0, flexShrink: 1, overflow: 'hidden', pr: '8px' }}>{right}</Box>
       </Stack>
@@ -125,12 +125,12 @@ export function ProjectTools() {
           display: 'grid',
           gridTemplateColumns: 'minmax(0, 1fr)',
           gap: '12px',
-          '& > .col + .col, & .git, & .wt': { borderTop: 1, borderColor: 'divider', pt: '12px' },
+          '& > .col + .col, & .git': { borderTop: 1, borderColor: 'divider', pt: '12px' },
           '@container (min-width: 500px)': {
             display: 'flex',
             '& > .col': { flex: '1 1 0', minWidth: 0 },
             '& > .col:last-child': { flex: '1.2 1 0' },
-            '& .git, & .wt': { borderTop: 0, pt: 0 },
+            '& .git': { borderTop: 0, pt: 0 },
             columnGap: '20px',
             '& > .col + .col': { borderTop: 0, pt: 0, borderLeft: 1, borderColor: 'divider', pl: '20px' },
           },
@@ -147,18 +147,14 @@ export function ProjectTools() {
               </Box>
             )}
           </Section>
-          {hasFolder && <ThreadWorktree />}
           {hasFolder && (
           <Box className="git" sx={{ minWidth: 0 }}>
             <Section
               id="git"
               title="Version control"
-              right={
-                <Box sx={{ minWidth: 0, '& .ui-ButtonBase': { height: 20, px: '4px' } }}>
-                  <GitStatusChip branchOnly />
-                </Box>
-              }
             >
+              {/* The branch first: this thread's own (with how to finish it), or the project's. */}
+              <ThreadWorktree fallback={<Box sx={{ px: '8px', pb: '4px' }}><GitStatusChip branchOnly /></Box>} />
               {/* The quick actions (commit, sync, pull request), drawn as the column's
                   rows rather than as their own buttons. */}
               <Box
@@ -173,7 +169,6 @@ export function ProjectTools() {
                     transform: 'none',
                     '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
                   },
-                  '& .ui-Button:first-of-type': { color: 'text.primary', fontWeight: 500 },
                 }}
               >
                 <GitQuickActions />

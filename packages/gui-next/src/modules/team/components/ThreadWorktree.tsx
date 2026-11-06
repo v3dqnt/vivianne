@@ -27,7 +27,7 @@ const ROW = {
 } as const
 
 /** The open thread's own branch: where it works, and the two ways to finish with it. */
-export function ThreadWorktree() {
+export function ThreadWorktree({ fallback = null }: { fallback?: React.ReactNode } = {}) {
   const openId = useDaysStore((s) => s.todayId)
   const [wt, setWt] = useState<Worktree | null>(null)
   const [busy, setBusy] = useState(false)
@@ -51,7 +51,7 @@ export function ThreadWorktree() {
     return () => void off.then((f) => f())
   }, [read])
 
-  if (!wt) return null
+  if (!wt) return <>{fallback}</>
 
   const finish = async (action: 'merge' | 'remove') => {
     setBusy(true)
@@ -73,8 +73,7 @@ export function ThreadWorktree() {
   }
 
   return (
-    <Box className="wt" sx={{ borderTop: 1, borderColor: 'divider', pt: '12px' }}>
-      <Typography sx={{ fontSize: '0.6875rem', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'text.disabled', px: '8px', pb: '4px' }}>This thread's branch</Typography>
+    <Box>
       <Typography noWrap title={wt.branch} sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem', px: '8px' }}>
         {wt.branch}
       </Typography>
