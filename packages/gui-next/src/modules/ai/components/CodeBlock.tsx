@@ -22,10 +22,22 @@ const DENSE_COLLAPSE_LINES = 12
 // an unknown/unsupported lang falls back to plain text rather than throwing.
 async function highlight(code: string, lang: string, theme: string): Promise<string> {
   try {
-    return await codeToHtml(code, { lang, theme })
+    const html = await codeToHtml(code, { lang, theme })
+    return lang === 'diff' ? markDiffLines(html) : html
   } catch {
     return await codeToHtml(code, { lang: 'text', theme })
   }
+}
+
+/** Tag each line of a highlighted diff as added, removed or a hunk header, so the block can shade whole rows. */
+export function markDiffLines(html: string): string {
+  return html.replace(/<span class="line">([\s\S]*?)(?=<span class="line">|<\/code>)/g, (whole, inner: string) => {
+    const text = inner.replace(/<[^>]*>/g, '').replace(/&#x([0-9a-f]+);/gi, (_m, h: string) => String.fromCharCode(parseInt(h, 16)))
+    const first = text[0]
+    const head = /^(\+\+\+|---) /.test(text)
+    const kind = head ? 'file' : first === '+' ? 'add' : first === '-' ? 'del' : first === '@' ? 'hunk' : ''
+    return kind ? whole.replace('<span class="line">', `<span class="line diff-${kind}">`) : whole
+  })
 }
 
 /**
@@ -150,6 +162,11 @@ export function CodeBlock({
             : { overflowX: 'auto' }),
         },
         '& code': { fontFamily: '"Geist Mono", ui-monospace, monospace' },
+        // A diff shades whole rows: added green, removed red, hunk headers muted. The text keeps shiki's colours.
+        '& .line.diff-add': { display: 'inline-block', width: '100%', bgcolor: alpha(theme.palette.success.main, 0.12) },
+        '& .line.diff-del': { display: 'inline-block', width: '100%', bgcolor: alpha(theme.palette.error.main, 0.12) },
+        '& .line.diff-hunk': { display: 'inline-block', width: '100%', color: 'text.disabled' },
+        '& .line.diff-file': { fontWeight: 600 },
         // Line numbers are drawn from the counter rather than injected into
         // the text, so copying still yields clean code.
         ...(showLineNumbers && {

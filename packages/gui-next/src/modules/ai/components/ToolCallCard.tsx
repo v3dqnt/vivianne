@@ -119,6 +119,27 @@ export function iconFor(name: string) {
   return CodeLinear
 }
 
+/** File extensions shiki knows, by the grammar to use. */
+const EXT_LANG: Record<string, string> = {
+  ts: 'ts', tsx: 'tsx', js: 'js', jsx: 'jsx', mjs: 'js', cjs: 'js', json: 'json', rs: 'rust', py: 'python', go: 'go', java: 'java', kt: 'kotlin',
+  c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp', cs: 'csharp', rb: 'ruby', php: 'php', swift: 'swift', css: 'css', scss: 'scss', html: 'html',
+  md: 'markdown', yml: 'yaml', yaml: 'yaml', toml: 'toml', sh: 'bash', ps1: 'powershell', sql: 'sql', xml: 'xml', vue: 'vue', svelte: 'svelte',
+}
+
+/**
+ * The grammar for a tool's output: a diff is coloured as one, a file that was read in its own language, JSON as JSON.
+ * Anything else (shell output, search hits) stays plain, since colouring arbitrary text only adds noise.
+ */
+export function outputLangFor(tool: string, output: string, file: string | null): string {
+  if (/^diff --git |^@@ -\d/m.test(output) || /^(---|\+\+\+) [ab]\//m.test(output)) return 'diff'
+  if (tool === 'read' && file) {
+    const ext = file.split('.').pop()?.toLowerCase() ?? ''
+    if (EXT_LANG[ext]) return EXT_LANG[ext]
+  }
+  if (['read', 'code_search', 'grep', 'glob'].includes(tool)) return 'text'
+  return looksLikeJson(output) ? 'json' : 'text'
+}
+
 export function argSummary(args: Record<string, unknown> | undefined): string | null {
   if (!args) return null
   const key = ['path', 'file_path', 'command', 'query', 'pattern', 'url', 'name'].find((k) => typeof args[k] === 'string')
@@ -210,7 +231,7 @@ export function ToolCallCard({
   // Shell output is not any language shiki knows; tagging it `text` avoids
   // spurious highlighting of arbitrary stdout. Structured tools that really
   // do emit JSON get the JSON grammar.
-  const outputLang = ['read', 'code_search', 'grep', 'glob'].includes(message.toolName) ? 'text' : looksLikeJson(output) ? 'json' : 'text'
+  const outputLang = outputLangFor(message.toolName, output, file)
   // Only a completed, successful call has real before/after content — a
   // failed `edit` (e.g. old_string not found) changed nothing, so there's
   // nothing to diff. `extractDiffs` itself is cheap (just reshapes

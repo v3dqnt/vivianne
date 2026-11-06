@@ -7,6 +7,16 @@ import {
 } from '../ui'
 import { AgentMark } from '../ui/brand/AgentMark'
 import { SettingsLinear } from '../icons'
+import { CodeBlock } from '../modules/ai/components/CodeBlock'
+
+const DIFF = `diff --git a/src/App.tsx b/src/App.tsx
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -3,7 +3,7 @@
+ import { TitleBar } from './TitleBar'
+-import { useProjectsStore, modeOf } from './store'
++import { useProjectsStore } from './store'
+ import { HomeView } from './HomeView'`
 
 function Demo({ name, children }: { name: string; children: ReactNode }) {
   return (
@@ -142,6 +152,10 @@ export function KitSection() {
             <Typography variant="caption">{s}</Typography>
           </Stack>
         ))}
+      </Demo>
+      <Demo name="CodeBlock: TypeScript and a diff">
+        <Box sx={{ width: '100%' }}><CodeBlock code={'const x: number = 1\nexport function f() { return x }'} lang="ts" /></Box>
+        <Box sx={{ width: '100%' }}><CodeBlock code={DIFF} lang="diff" /></Box>
       </Demo>
       <Demo name="AgentMark">
         {['#e5484d', '#3e63dd', '#30a46c', '#f76b15'].map((c) => <AgentMark key={c} color={c} size={32} title={c} />)}

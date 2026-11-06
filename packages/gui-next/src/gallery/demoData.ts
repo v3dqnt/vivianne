@@ -28,6 +28,15 @@ export const DEMO_MESSAGES = [
     ],
     stopReason: 'toolUse', errorMessage: null, timestamp: 3,
   },
+  { type: 'assistant', content: [call('c4', 'bash', { command: 'git diff HEAD -- src/App.tsx' })], stopReason: 'toolUse', errorMessage: null, timestamp: 3 },
+  result('c4', 'bash', `diff --git a/src/App.tsx b/src/App.tsx
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -3,7 +3,7 @@ import { ModsRuntime }
+ import { TitleBar } from './components/TitleBar'
+-import { useProjectsStore, modeOf } from './store'
++import { useProjectsStore } from './store'
+ import { HomeView } from './HomeView'`),
   result('c3', 'bash', "src/a.ts(2,3): error TS2304: Cannot find name 'x'.", true),
   { type: 'assistant', content: text('One type error remains; fixing it now.'), stopReason: 'error', errorMessage: 'Rate limit reached. Waiting for it to lift.', timestamp: 4 },
 ] as unknown as AgentMessage[]
