@@ -522,8 +522,8 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
         text_result(if is_error { format!("Error: {text}") } else { text })
     }),
     tool!("get_goal" => |cx| execute_get_goal_tool(cx.state).await),
-    tool!("create_goal" => |cx| execute_create_goal_tool(cx.args, cx.state).await),
-    tool!("update_goal" => |cx| execute_update_goal_tool(cx.args, cx.state).await),
+    tool!("create_goal" => |cx| { let r = execute_create_goal_tool(cx.args, cx.state).await; crate::agent::goal::announce(cx.app, crate::agent::orchestration::turn_thread().as_deref()); r }),
+    tool!("update_goal" => |cx| { let r = execute_update_goal_tool(cx.args, cx.state).await; crate::agent::goal::announce(cx.app, crate::agent::orchestration::turn_thread().as_deref()); r }),
     tool!("terminal" => |cx| match cx.args.get("action").and_then(|a| a.as_str()).unwrap_or("") {
         "open" => execute_terminal_open_tool(cx.args, cx.app).await,
         "send" => execute_terminal_send_tool(cx.args, cx.app).await,

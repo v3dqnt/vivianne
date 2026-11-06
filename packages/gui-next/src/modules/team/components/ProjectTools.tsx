@@ -7,6 +7,7 @@ import { useAppView } from '../../git/components/GitView'
 import { ContextBreakdown, ContextPercent } from '../../ai/components/ContextUsageBar'
 import { ThreadWorktree } from './ThreadWorktree'
 import { ThreadPrs } from './ThreadPrs'
+import { ThreadGoal } from './ThreadGoal'
 import { ProjectPill } from '../../sessions/components/ProjectPicker'
 import { useDaysStore } from '../../sessions/store/daysStore'
 import { useProjectsStore } from '../../sessions/store/projectsStore'
@@ -147,6 +148,11 @@ export function ProjectTools() {
               </Box>
             )}
           </Section>
+          <Box className="git" sx={{ minWidth: 0 }}>
+            <Section id="goal" title="Goal">
+              <ThreadGoal />
+            </Section>
+          </Box>
           {hasFolder && (
           <Box className="git" sx={{ minWidth: 0 }}>
             <Section

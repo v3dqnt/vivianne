@@ -23,6 +23,7 @@ pub mod orchestration;
 pub mod scope;
 pub mod thread_msgs;
 pub mod transcripts;
+pub mod goal;
 pub mod profiles;
 pub mod runtime;
 pub mod sessions;
