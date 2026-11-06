@@ -9,7 +9,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "icons": "node scripts/gen-icons.mjs",
-    "test": "node --test \"src/**/*.test.ts\""
+    "test": "node --test \"src/**/*.test.ts\"",
+    "gallery": "vite --config vite.gallery.config.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.39",
