@@ -121,9 +121,8 @@ export function ProjectTools() {
           <>
             <Divider />
 
+            {/* Draws its own divider, so nothing doubles when the thread has no branch. */}
             <ThreadWorktree />
-
-            <Divider />
 
             <Section
               id="git"

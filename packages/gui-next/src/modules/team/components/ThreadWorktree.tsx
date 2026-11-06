@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Box, ButtonBase, Stack, Typography } from '../../../ui'
+import { Box, ButtonBase, Divider, Stack, Typography } from '../../../ui'
 import { call, on } from '../../../ipc'
 import { activeThreadId } from '../../ai/store/activeThread'
 import { useDaysStore } from '../../sessions/store/daysStore'
@@ -73,6 +73,7 @@ export function ThreadWorktree() {
   }
 
   return (
+    <>
     <Box>
       <Typography sx={{ fontSize: '0.6875rem', fontWeight: 500, color: 'text.disabled', px: '8px', pb: '4px' }}>This thread's branch</Typography>
       <Typography noWrap title={wt.branch} sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem', px: '8px' }}>
@@ -93,5 +94,7 @@ export function ThreadWorktree() {
         <Typography sx={{ fontSize: '0.75rem', lineHeight: 1.5, px: '8px', pt: '4px', color: said.bad ? 'warning.main' : 'text.secondary' }}>{said.text}</Typography>
       )}
     </Box>
+    <Divider />
+    </>
   )
 }
