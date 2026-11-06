@@ -72,11 +72,11 @@ export function ScenesSection() {
         <Box sx={{ display: 'flex', height: 40, alignItems: 'center' }}><ThreadTabs /></Box>
       </Scene>
 
-      <Scene title="Project rail, narrow window" note="Sections stacked with dividers." height={520}>
+      <Scene title="Project rail, narrow window" note="Sections stacked with dividers." height={640}>
         <Box sx={{ ...RAIL_VARS, '--rail-w': '240px', position: 'relative', flex: 1 }}><ProjectTools /></Box>
       </Scene>
 
-      <Scene title="Project rail, large window" note="Project and version control side by side with context." height={340}>
+      <Scene title="Project rail, large window" note="Project, goal and version control side by side with context." height={420}>
         <Box sx={{ ...RAIL_VARS, '--rail-w': '620px', position: 'relative', flex: 1 }}><ProjectTools /></Box>
       </Scene>
 
