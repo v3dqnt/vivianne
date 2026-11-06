@@ -2,7 +2,7 @@ import { Alert, Box, useTheme } from '../../ui'
 import { hasTauri } from '../../ipc'
 import { SURFACE_RADIUS } from '../../theme'
 import { ChatView } from '../ai/components/ChatView'
-import { ProjectTools, RAIL_RESERVE } from '../team/components/ProjectTools'
+import { ProjectTools, RAIL_RESERVE, RAIL_VARS } from '../team/components/ProjectTools'
 
 /** Every panel fills its box and scrolls itself; the group never scrolls. */
 function Fill({ children }: { children: React.ReactNode }) {
@@ -42,6 +42,7 @@ function Chat() {
           flexDirection: 'column',
           // The tools strip sits on the pane's right; the threads are not on
           // the pane at all, so nothing is reserved on the left.
+          ...RAIL_VARS,
           pr: RAIL_RESERVE,
         }}
       >
