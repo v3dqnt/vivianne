@@ -44,7 +44,7 @@ export const CARD = {
  * space the chat leaves for it both read it, so they always agree. */
 export const RAIL_VARS = {
   '--rail-w': 'clamp(216px, 17vw, 340px)',
-  '@media (min-width: 1700px)': { '--rail-w': 'clamp(560px, 34vw, 700px)' },
+  '@media (min-width: 1700px)': { '--rail-w': 'clamp(520px, 32vw, 640px)' },
 } as const
 /** The chat leaves the rail plus a 24px gutter either side. */
 export const RAIL_RESERVE = 'calc(var(--rail-w) + 48px)'
@@ -124,17 +124,18 @@ export function ProjectTools() {
           display: 'grid',
           gridTemplateColumns: 'minmax(0, 1fr)',
           gap: '12px',
-          '& > .col + .col': { borderTop: 1, borderColor: 'divider', pt: '12px' },
+          '& > .col + .col, & .git, & .wt': { borderTop: 1, borderColor: 'divider', pt: '12px' },
           '@container (min-width: 500px)': {
             display: 'flex',
             '& > .col': { flex: '1 1 0', minWidth: 0 },
-            '& > .col:last-child': { flex: '1.6 1 0' },
+            '& > .col:last-child': { flex: '1.2 1 0' },
+            '& .git, & .wt': { borderTop: 0, pt: 0 },
             columnGap: '20px',
             '& > .col + .col': { borderTop: 0, pt: 0, borderLeft: 1, borderColor: 'divider', pl: '20px' },
           },
         }}
       >
-        <Box className="col" sx={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0 }}>
+        <Box className="col" sx={{ display: 'flex', flexDirection: 'column', gap: '12px', minWidth: 0 }}>
           {/* The project and its folders are one thing: the project's name, with the
               folders it works in managed from the row under it. */}
           <Section id="project" title="Project">
@@ -146,10 +147,8 @@ export function ProjectTools() {
             )}
           </Section>
           {hasFolder && <ThreadWorktree />}
-        </Box>
-
-        {hasFolder && (
-          <Box className="col" sx={{ minWidth: 0 }}>
+          {hasFolder && (
+          <Box className="git" sx={{ minWidth: 0 }}>
             <Section
               id="git"
               title="Version control"
@@ -179,11 +178,12 @@ export function ProjectTools() {
                 <GitQuickActions />
               </Box>
               <ButtonBase onClick={() => useAppView.setState({ view: 'git' })} sx={ROW}>
-                History
+                History and PRs
               </ButtonBase>
             </Section>
           </Box>
-        )}
+          )}
+        </Box>
 
         <Box className="col" sx={{ minWidth: 0 }}>
           <Section id="context" title="Context" right={<ContextPercent />}>

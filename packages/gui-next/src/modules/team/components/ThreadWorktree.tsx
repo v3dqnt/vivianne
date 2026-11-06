@@ -73,7 +73,7 @@ export function ThreadWorktree() {
   }
 
   return (
-    <Box sx={{ borderTop: 1, borderColor: 'divider', pt: '12px' }}>
+    <Box className="wt" sx={{ borderTop: 1, borderColor: 'divider', pt: '12px' }}>
       <Typography sx={{ fontSize: '0.6875rem', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'text.disabled', px: '8px', pb: '4px' }}>This thread's branch</Typography>
       <Typography noWrap title={wt.branch} sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem', px: '8px' }}>
         {wt.branch}
