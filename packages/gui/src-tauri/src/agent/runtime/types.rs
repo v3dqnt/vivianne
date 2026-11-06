@@ -73,6 +73,8 @@ pub enum Message {
     #[serde(rename_all = "camelCase")]
     Assistant {
         content: Vec<MessageContent>,
+        /// Sessions saved before this existed have none: they read as a normal stop.
+        #[serde(default = "default_stop")]
         stop_reason: String,
         error_message: Option<String>,
         timestamp: u64,
@@ -110,6 +112,10 @@ impl Message {
             Message::System { .. } => 0,
         }
     }
+}
+
+fn default_stop() -> String {
+    "stop".to_string()
 }
 
 // ============================================================================
@@ -568,4 +574,21 @@ pub struct PrepareNextTurnContext {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+#[cfg(test)]
+mod old_format_tests {
+    use super::*;
+
+    #[test]
+    fn an_assistant_message_saved_before_stop_reason_and_cache_counts_still_loads() {
+        let old = serde_json::json!({ "role": "assistant", "content": [], "errorMessage": null, "timestamp": 5 });
+        let m: Message = serde_json::from_value(old).expect("old messages must still load");
+        match m {
+            Message::Assistant { stop_reason, .. } => assert_eq!(stop_reason, "stop"),
+            _ => panic!("not an assistant message"),
+        }
+        let usage: crate::ai::types::Usage = serde_json::from_value(serde_json::json!({ "input": 3, "output": 1 })).expect("partial usage loads");
+        assert_eq!((usage.input, usage.cache_read), (3, 0));
+    }
 }

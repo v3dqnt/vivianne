@@ -15,7 +15,7 @@ pub enum Role {
 // ── Usage tracking ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct Usage {
     pub input: u32,
     pub output: u32,

@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://vivianne.dev">
-    <img alt="Vivianne" src="https://vivianne.dev/logo-auto.svg" width="112">
+    <img alt="Vivianne" src="packages/gui-next/public/logo.svg" width="112">
   </a>
 </p>
 
@@ -29,6 +29,12 @@ Vivianne is a native desktop app (Tauri 2, Rust and React). You talk to it in a 
 - **Plan mode.** Vivianne researches and writes a plan you can comment on paragraph by paragraph; approving it hands the steps to the team.
 - **Memory.** Standing instructions and facts you asked it to keep are always in view; everything else is recalled when relevant. New facts are reconciled with what it already knows instead of piling up.
 - **Tools it writes itself.** When a task needs something no tool does, it writes one in Python, tests it, and keeps it for every model to use.
+
+**Threads, each on its own branch**
+- Open as many threads as you like in the tab bar. A thread starts blank; file it under a project (or add a new one) and it is grouped there on Home.
+- In a git project, each thread works in its own worktree and branch, cut from where you were. A checkpoint is saved around every turn on a hidden ref, so you can see what a turn changed or roll it back without touching your branch. Merge or drop the branch from the project rail.
+- Threads can start, message and ask each other. The project rail also shows each thread's context, its pull requests, and what it has spent.
+- A thread stopped by a usage limit picks itself up when the limit lifts.
 
 **Teams of agents**
 - A project can be a set of threads, a **company** (a master agent with employees), or an **agent team**: teammates you define, each with its own job, model, tools, rules and memory.
@@ -110,6 +116,10 @@ cd packages/gui-next && npx tsc -p tsconfig.app.json --noEmit
 | `packages/helium-extension` | The browser extension, for any Chromium browser |
 | `packages/gesture-control` | A standalone tray app that turns webcam hand gestures into mouse and keyboard input |
 | `docs` | Privacy policy, terms, design notes |
+
+## Credits
+
+Icons are from [Solar](https://github.com/480-Design/Solar-Icon-Set) by 480 Design, used under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 ## Privacy and safety
 
