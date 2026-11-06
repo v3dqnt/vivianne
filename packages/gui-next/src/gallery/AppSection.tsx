@@ -1,12 +1,15 @@
 import { Component, Suspense, createElement, useEffect, useState, type ComponentType, type ReactNode } from 'react'
 import { Box, Button, Stack, Typography } from '../ui'
+import { FIXTURES, NOT_COMPONENTS } from './fixtures'
 
 type Loader = () => Promise<Record<string, unknown>>
 type Entry = { path: string; name: string; load: Loader }
 
 const files = import.meta.glob(['../modules/**/*.tsx', '../components/**/*.tsx', '!../**/*.test.tsx']) as Record<string, Loader>
 
-const isComponent = (name: string, v: unknown) => /^[A-Z]/.test(name) && (typeof v === 'function' || (typeof v === 'object' && v !== null))
+// A component is a function, or a memo / forwardRef object (which carries `$$typeof`); anything else exported in capitals is a constant.
+const isComponent = (name: string, v: unknown) =>
+  /^[A-Z]/.test(name) && !NOT_COMPONENTS.test(name) && (typeof v === 'function' || (typeof v === 'object' && v !== null && '$$typeof' in v))
 
 class Boundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null }
@@ -58,7 +61,7 @@ function await_(load: Loader, name: string): ComponentType {
       throw pending
     }
     const C = mod[name] as ComponentType
-    return createElement(C)
+    return createElement(C, FIXTURES[name])
   }
 }
 
