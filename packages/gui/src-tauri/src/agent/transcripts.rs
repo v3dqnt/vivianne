@@ -171,7 +171,7 @@ pub fn import_all() -> Result<ImportReport, String> {
             report.unchanged += 1;
             continue;
         }
-        let parsed = std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| serde_json::from_str::<crate::agent::runtime::commands::SessionInfo>(&t).map_err(|e| e.to_string()));
+        let parsed = std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| read_session(&t));
         match parsed {
             Ok(session) => {
                 with_store(|s| import_session(s.conn(), &id, &session.messages, len, mtime))?;
@@ -204,7 +204,7 @@ pub fn sync_in_background(path: std::path::PathBuf, json: String) {
     }
     let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(String::from) else { return };
     std::thread::spawn(move || {
-        let Ok(session) = serde_json::from_str::<crate::agent::runtime::commands::SessionInfo>(&json) else { return };
+        let Ok(session) = read_session(&json) else { return };
         let Ok(meta) = std::fs::metadata(&path) else { return };
         let (len, mtime) = (meta.len() as i64, mtime_ms(&meta));
         if let Err(e) = with_store(|s| import_session(s.conn(), &id, &session.messages, len, mtime)) {
@@ -268,10 +268,78 @@ pub async fn cmd_thread_search(query: String, limit: Option<usize>) -> Result<Ve
     with_store(|s| search(s.conn(), &query, limit.unwrap_or(30).min(200)))
 }
 
+/// Read a saved session, including ones written by older versions, whose messages used
+/// snake_case names (`stop_reason`, `tool_call_id`) and a snake_case type (`tool_result`).
+/// Those are rewritten to today's names first; a session already in today's shape passes unchanged.
+pub fn read_session(text: &str) -> Result<crate::agent::runtime::commands::SessionInfo, String> {
+    let mut value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    if let Some(messages) = value.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        for m in messages.iter_mut().filter_map(|m| m.as_object_mut()) {
+            let renamed: Vec<(String, serde_json::Value)> = std::mem::take(m)
+                .into_iter()
+                .map(|(k, v)| match (k.as_str(), v.as_str()) {
+                    ("type", Some(t)) => (k, serde_json::Value::String(camel(t))),
+                    _ => (camel(&k), v),
+                })
+                .collect();
+            m.extend(renamed);
+        }
+    }
+    serde_json::from_value(value).map_err(|e| e.to_string())
+}
+
+/// `stop_reason` to `stopReason`; a word without underscores is left alone.
+fn camel(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut up = false;
+    for c in s.chars() {
+        if c == '_' {
+            up = true;
+        } else if up {
+            out.extend(c.to_uppercase());
+            up = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent::orchestration::Store;
+
+    #[test]
+    fn a_session_in_the_old_shape_is_read() {
+        let old = r#"{ "id": "s", "name": "n", "created_at": "x", "messages": [
+            { "type": "user", "content": [{ "type": "text", "text": "hi" }], "timestamp": 1 },
+            { "type": "assistant", "content": [], "stop_reason": "error", "error_message": "boom", "timestamp": 2 },
+            { "type": "tool_result", "tool_call_id": "c", "tool_name": "t", "content": [], "timestamp": 3 } ] }"#;
+        let s = read_session(old).expect("old shape reads");
+        assert_eq!(s.messages.len(), 3);
+        assert!(matches!(s.messages[1], crate::agent::runtime::types::AgentMessage::Assistant { .. }));
+        assert!(matches!(s.messages[2], crate::agent::runtime::types::AgentMessage::ToolResult { .. }));
+    }
+
+    #[test]
+    #[ignore = "reads the real ~/.viv sessions"]
+    fn every_real_session_reads() {
+        let dir = crate::agent::system::paths::viv_home_path(&["agent", "sessions"]);
+        let mut bad = Vec::new();
+        for d in std::fs::read_dir(&dir).unwrap().flatten() {
+            let Ok(files) = std::fs::read_dir(d.path()) else { continue };
+            for f in files.flatten().filter(|f| f.path().extension().is_some_and(|e| e == "json") && !f.path().to_string_lossy().ends_with(".meta.json")) {
+                if let Err(e) = read_session(&std::fs::read_to_string(f.path()).unwrap()) {
+                    bad.push(format!("{}: {e}", f.path().display()));
+                }
+            }
+        }
+        for b in bad.iter().take(10) {
+            eprintln!("{b}");
+        }
+        assert!(bad.is_empty(), "{} sessions don't read", bad.len());
+    }
 
     fn store() -> Store {
         let dir = std::env::temp_dir().join(format!("viv-tr-{}-{:?}", std::process::id(), std::thread::current().id()));
