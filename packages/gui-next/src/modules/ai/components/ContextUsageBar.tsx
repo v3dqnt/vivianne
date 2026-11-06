@@ -150,7 +150,7 @@ export function ContextBreakdown() {
       <Stack sx={{ pt: '6px' }}>
         {rows.map((r) => (
           <Tooltip key={r.key} title={r.hint} placement="left">
-            <Stack direction="row" sx={{ alignItems: 'center', gap: '8px', height: 28, px: '8px', borderRadius: '6px', '&:hover': { bgcolor: 'action.hover' } }}>
+            <Stack direction="row" sx={{ alignItems: 'center', gap: '8px', height: 24, px: '8px', borderRadius: '6px', '&:hover': { bgcolor: 'action.hover' } }}>
               <Box sx={{ width: 8, height: 8, borderRadius: '2px', bgcolor: colors[r.key], flexShrink: 0 }} />
               <Typography noWrap sx={{ fontSize: '0.8125rem', flex: 1, minWidth: 0, color: 'text.secondary' }}>
                 {r.label}

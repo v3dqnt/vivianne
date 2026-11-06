@@ -44,7 +44,7 @@ export const CARD = {
  * space the chat leaves for it both read it, so they always agree. */
 export const RAIL_VARS = {
   '--rail-w': 'clamp(216px, 17vw, 340px)',
-  '@media (min-width: 1700px)': { '--rail-w': 'clamp(520px, 30vw, 640px)' },
+  '@media (min-width: 1700px)': { '--rail-w': 'clamp(560px, 34vw, 700px)' },
 } as const
 /** The chat leaves the rail plus a 24px gutter either side. */
 export const RAIL_RESERVE = 'calc(var(--rail-w) + 48px)'
@@ -80,12 +80,12 @@ function Section({ id, title, right, children }: { id: string; title: string; ri
         <ButtonBase
           onClick={toggle}
           aria-expanded={!closed}
-          sx={{ flex: '1 0 auto', justifyContent: 'flex-start', gap: '4px', px: '8px', height: 20, borderRadius: '6px', color: 'text.disabled', '&:hover': { color: 'text.primary' } }}
+          sx={{ flex: '1 0 auto', justifyContent: 'flex-start', gap: '4px', px: '8px', height: 20, borderRadius: '6px', color: 'text.disabled', '& .chev': { opacity: closed ? 1 : 0, transition: 'opacity 0.15s' }, '&:hover': { color: 'text.primary' }, '&:hover .chev': { opacity: 1 } }}
         >
-          <Box sx={{ display: 'flex', transform: closed ? 'none' : 'rotate(90deg)', transition: 'transform 0.15s ease' }}>
+          <Box className="chev" sx={{ display: 'flex', transform: closed ? 'none' : 'rotate(90deg)', transition: 'transform 0.15s ease, opacity 0.15s' }}>
             <ChevronRightLinear size={12} color="currentColor" />
           </Box>
-          <Typography noWrap sx={{ fontSize: '0.6875rem', fontWeight: 500, color: 'inherit', flexShrink: 0 }}>{title}</Typography>
+          <Typography noWrap sx={{ fontSize: '0.6875rem', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'inherit', flexShrink: 0 }}>{title}</Typography>
         </ButtonBase>
         <Box sx={{ minWidth: 0, flexShrink: 1, overflow: 'hidden', pr: '8px' }}>{right}</Box>
       </Stack>
@@ -113,7 +113,7 @@ export function ProjectTools() {
         width: 'var(--rail-w)',
         containerType: 'inline-size',
         zIndex: 3,
-        p: '12px 10px',
+        p: '16px 14px',
         ...CARD,
       }}
     >
@@ -123,14 +123,14 @@ export function ProjectTools() {
         sx={{
           display: 'grid',
           gridTemplateColumns: 'minmax(0, 1fr)',
-          gap: '8px',
-          '& > .col + .col': { borderTop: 1, borderColor: 'divider', pt: '8px' },
+          gap: '12px',
+          '& > .col + .col': { borderTop: 1, borderColor: 'divider', pt: '12px' },
           '@container (min-width: 500px)': {
-            gridAutoFlow: 'column',
-            gridAutoColumns: 'minmax(0, 1fr)',
-            gridTemplateColumns: 'none',
-            columnGap: '16px',
-            '& > .col + .col': { borderTop: 0, pt: 0, borderLeft: 1, borderColor: 'divider', pl: '16px' },
+            display: 'flex',
+            '& > .col': { flex: '1 1 0', minWidth: 0 },
+            '& > .col:last-child': { flex: '1.6 1 0' },
+            columnGap: '20px',
+            '& > .col + .col': { borderTop: 0, pt: 0, borderLeft: 1, borderColor: 'divider', pl: '20px' },
           },
         }}
       >
@@ -179,7 +179,7 @@ export function ProjectTools() {
                 <GitQuickActions />
               </Box>
               <ButtonBase onClick={() => useAppView.setState({ view: 'git' })} sx={ROW}>
-                History and pull requests
+                History
               </ButtonBase>
             </Section>
           </Box>
