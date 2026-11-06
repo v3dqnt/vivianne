@@ -1,11 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Box, ButtonBase, Stack, Typography, alpha, useTheme } from '../../../ui'
+import { Box, Stack, Typography, alpha, useTheme } from '../../../ui'
 import { Markdown } from '../../ai/components/Markdown'
 import { ReportMarkdown } from '../../ai/components/ReportMarkdown'
 import { ChatComposer, AttachmentChip } from '../../ai/components/ChatComposer'
 import type { TeamAgent } from '../store/teamStore'
 import { useBotsStore, type BotMessage, type DmAttachments, type PendingApproval } from '../store/botsStore'
 import { Avatar, LiveAvatar, colorOf, faceOf } from './bits'
+import { ApprovalWidget } from './ApprovalWidget'
+import { describeApproval } from '../lib/widgets'
 import { LiveRunCard, StepsToggle } from './BotSteps'
 import { MentionShell, MentionRow } from '../../ai/components/MentionMenu'
 import { FollowUpContext } from '../../ai/components/InteractiveBlock'
@@ -80,7 +82,8 @@ function Message({ m, team, prev, root }: { m: BotMessage; team: TeamAgent[]; pr
       <Stack sx={{ minWidth: 0, flex: 1 }}>
         {!grouped && (
           <Stack direction="row" sx={{ alignItems: 'baseline', gap: 0.75 }}>
-            <Typography variant="caption" sx={{ fontWeight: 500, color }}>
+            {/* Names are plain ink: an agent's colour lives on its face, so the chat stays monochrome. */}
+            <Typography variant="caption" sx={{ fontWeight: 500, color: 'text.primary' }}>
               {bot?.name ?? m.from}
             </Typography>
             {label && (
@@ -105,7 +108,7 @@ function Message({ m, team, prev, root }: { m: BotMessage; team: TeamAgent[]; pr
         <Box
           sx={{
             fontSize: '0.875rem',
-            ...(needs ? { mt: 0.5, p: 1.25, borderRadius: '8px', border: 1, borderColor: alpha(theme.palette.warning.main, 0.4), bgcolor: alpha(theme.palette.warning.main, 0.06) } : {}),
+            ...(needs ? { mt: 0.5, pl: 1.25, borderLeft: 2, borderColor: 'warning.main' } : {}),
           }}
         >
           {needs ? <Markdown text={m.text} /> : <ReportMarkdown text={m.text} />}
@@ -116,38 +119,19 @@ function Message({ m, team, prev, root }: { m: BotMessage; team: TeamAgent[]; pr
   )
 }
 
+/** An approval a teammate is waiting on: the same card as in a DM and the Widget Lab, so there is one approval look. */
 function ApprovalCard({ a, team }: { a: PendingApproval; team: TeamAgent[] }) {
-  const theme = useTheme()
   const respond = useBotsStore((s) => s.respond)
   const bot = team.find((x) => x.id === a.botId)
-  const detail = String(a.args.command ?? a.args.path ?? a.args.action ?? a.args.url ?? a.args.query ?? '')
   return (
-    <Stack sx={{ gap: 1, p: 1.25, my: 1, borderRadius: '12px', border: 1, borderColor: alpha(theme.palette.warning.main, 0.45), bgcolor: alpha(theme.palette.warning.main, 0.06) }}>
-      <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
-        {bot && <Avatar {...faceOf(bot)} size={22} />}
-        <Typography variant="body2" sx={{ fontWeight: 500, flex: 1, minWidth: 0 }}>
-          {bot?.name ?? a.botId} wants to use <code>{a.toolName}</code>
-        </Typography>
-      </Stack>
-      {detail && (
-        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', wordBreak: 'break-all' }}>
-          {detail.slice(0, 300)}
-        </Typography>
-      )}
-      {a.reason && (
-        <Typography variant="caption" color="text.secondary">
-          {a.reason}
-        </Typography>
-      )}
-      <Stack direction="row" sx={{ gap: 1 }}>
-        <ButtonBase onClick={() => void respond(a.requestId, true)} sx={{ px: 1.5, height: 28, borderRadius: '8px', bgcolor: 'text.primary', color: 'background.paper', fontSize: '0.75rem', fontWeight: 500 }}>
-          Allow
-        </ButtonBase>
-        <ButtonBase onClick={() => void respond(a.requestId, false)} sx={{ px: 1.5, height: 28, borderRadius: '8px', border: 1, borderColor: 'divider', fontSize: '0.75rem', fontWeight: 500 }}>
-          Deny
-        </ButtonBase>
-      </Stack>
-    </Stack>
+    <Box sx={{ my: 1 }}>
+      <ApprovalWidget
+        widget={describeApproval({ toolName: a.toolName, args: a.args, reason: a.reason }, bot?.name ?? a.botId)}
+        state="pending"
+        accent={bot ? colorOf(bot) : ''}
+        onAnswer={(yes) => respond(a.requestId, yes)}
+      />
+    </Box>
   )
 }
 

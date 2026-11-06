@@ -155,7 +155,7 @@ export function ProjectTools() {
               title="Version control"
               right={
                 <Box sx={{ minWidth: 0, '& .ui-ButtonBase': { height: 20, px: '4px' } }}>
-                  <GitStatusChip />
+                  <GitStatusChip branchOnly />
                 </Box>
               }
             >

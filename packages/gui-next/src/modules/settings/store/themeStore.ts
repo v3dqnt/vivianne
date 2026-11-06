@@ -29,7 +29,7 @@ export interface Appearance {
 
 export const DEFAULT_APPEARANCE: Appearance = {
   modePref: 'dark',
-  paletteId: 'aero',
+  paletteId: 'silver',
   accent: null,
   font: 'general',
   uiScale: 1,
@@ -75,9 +75,9 @@ function resolve(pref: ModePref): ThemeMode {
   return pref
 }
 
-/** Aero is the new default: it is applied once, whatever was saved before;
+/** Silver is the new default: it is applied once, whatever was saved before;
  * a later pick sticks. */
-const EDITION_THEMED_KEY = 'viv.palette.aero'
+const EDITION_THEMED_KEY = 'viv.palette.silver'
 /** General Sans became the default face in the better-newer update: everyone moves to it once, then their choice stands. */
 const DEFAULT_FONT_KEY = 'viv.font.general'
 

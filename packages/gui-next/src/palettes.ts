@@ -93,6 +93,42 @@ export const SLATE = {
 } satisfies Record<Mode, Partial<TokenSet>>
 
 export const PALETTES: PaletteDef[] = [
+  // Vivianne's own: silver and black, no hue. The accent is the metal itself: silver on the dark theme,
+  // ink on the light one. Colour is kept for state only (done, needs you, failed), never for decoration.
+  {
+    id: 'silver',
+    label: 'Silver',
+    symbol: '◇',
+    swatches: ['#d9dbde', '#0c0d0f', '#141518', '#eef0f2'],
+    light: {
+      background: '#e4e6e9',
+      card: '#eceef0',
+      popover: '#f4f5f6',
+      foreground: '#0e0f11',
+      mutedForeground: '#44474d',
+      secondary: '#d6d8dc',
+      muted: '#dcdee1',
+      accent: '#d2d5d9',
+      border: 'rgba(14, 15, 17, 0.12)',
+      input: 'rgba(14, 15, 17, 0.2)',
+      ...accent('#0e0f11', '#eef0f2'),
+      ring: '#44474d',
+    },
+    dark: {
+      background: '#0c0d0f',
+      card: '#141518',
+      popover: '#18191c',
+      foreground: '#eef0f2',
+      mutedForeground: '#a9acb1',
+      secondary: '#202226',
+      muted: '#141518',
+      accent: '#202226',
+      border: 'rgba(255, 255, 255, 0.09)',
+      input: 'rgba(255, 255, 255, 0.14)',
+      ...accent('#d9dbde', '#0e0f11'),
+      ring: '#a9acb1',
+    },
+  },
   {
     id: 'aero',
     label: 'Aero',

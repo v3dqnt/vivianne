@@ -16,9 +16,9 @@ export function WidgetLab() {
   const [states, setStates] = useState<Record<number, WidgetState>>({})
   const reset = () => setStates({})
   return (
-    <Stack sx={{ flex: 1, minHeight: 0, background: `radial-gradient(120% 60% at 0% 0%, ${LAB_COLOR}22, transparent 60%)` }}>
+    <Stack sx={{ flex: 1, minHeight: 0, bgcolor: 'background.default' }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: '12px', px: '20px', py: '14px' }}>
-        <Box sx={{ width: 44, height: 44, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: `${LAB_COLOR}33`, fontSize: '1.25rem' }}>🧪</Box>
+        <Box sx={{ width: 44, height: 44, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: 'action.hover', fontSize: '1.25rem' }}>🧪</Box>
         <Stack sx={{ flex: 1, minWidth: 0 }}>
           <Typography sx={{ fontSize: '1rem', fontWeight: 600 }}>Widget Lab</Typography>
           <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>Every card an agent can show, in every state</Typography>
@@ -37,7 +37,7 @@ export function WidgetLab() {
                   {card.label} · {card.state}
                 </Typography>
                 <Stack direction="row" sx={{ alignItems: 'flex-end', gap: '8px' }}>
-                  <Box sx={{ width: 36, height: 36, borderRadius: '50%', bgcolor: `${LAB_COLOR}33`, flexShrink: 0 }} />
+                  <Box sx={{ width: 36, height: 36, borderRadius: '50%', bgcolor: 'action.hover', flexShrink: 0 }} />
                   <ApprovalWidget
                     widget={describeApproval(card.approval, 'Lab')}
                     state={state}

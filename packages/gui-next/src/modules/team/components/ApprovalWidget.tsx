@@ -63,7 +63,10 @@ export function ApprovalWidget({
 }) {
   const theme = useTheme()
   const [busy, setBusy] = useState<null | boolean>(null)
-  const tone = widget.danger === 'high' ? theme.palette.warning.main : accent
+  // Monochrome like the rest of the app: the action is the metal (primary). Colour is spent only on the icon of a risky action.
+  void accent
+  const risky = widget.danger === 'high'
+  const iconColor = risky ? theme.palette.warning.main : theme.palette.text.primary
   const Icon = ICON[widget.kind]
   const pending = state === 'pending'
 
@@ -81,17 +84,16 @@ export function ApprovalWidget({
     <Box
       sx={{
         width: 'min(100%, 420px)',
-        borderRadius: '16px',
+        borderRadius: '12px',
         overflow: 'hidden',
         bgcolor: 'background.paper',
         border: 1,
-        borderColor: pending ? alpha(tone, 0.45) : 'divider',
-        boxShadow: pending ? `0 10px 30px ${alpha(tone, 0.16)}` : 'none',
+        borderColor: pending ? 'text.disabled' : 'divider',
         opacity: pending ? 1 : 0.82,
       }}
     >
-      <Stack direction="row" sx={{ alignItems: 'center', gap: '10px', px: '16px', py: '12px', bgcolor: alpha(tone, pending ? 0.12 : 0.06) }}>
-        <Box sx={{ width: 30, height: 32, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: alpha(tone, 0.2), color: tone, flexShrink: 0 }}>
+      <Stack direction="row" sx={{ alignItems: 'center', gap: '10px', px: '16px', py: '12px', borderBottom: 1, borderColor: 'divider' }}>
+        <Box sx={{ width: 30, height: 32, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: alpha(iconColor, 0.1), color: iconColor, flexShrink: 0 }}>
           <Icon size={16} color="currentColor" />
         </Box>
         <Typography sx={{ flex: 1, minWidth: 0, fontSize: '0.875rem', fontWeight: 600, lineHeight: 1.35 }}>{widget.title}</Typography>
@@ -123,14 +125,14 @@ export function ApprovalWidget({
           <ButtonBase
             onClick={() => void answer(false)}
             disabled={busy !== null || !onAnswer}
-            sx={{ flex: 1, height: 38, borderRadius: '12px', fontSize: '0.8125rem', fontWeight: 500, bgcolor: 'action.hover', '&:hover': { bgcolor: 'action.selected' } }}
+            sx={{ flex: 1, height: 36, borderRadius: '8px', fontSize: '0.8125rem', fontWeight: 500, bgcolor: 'action.hover', '&:hover': { bgcolor: 'action.selected' } }}
           >
             {busy === false ? <CircularProgress size={14} /> : suggestion ? 'Not now' : 'Decline'}
           </ButtonBase>
           <ButtonBase
             onClick={() => void answer(true)}
             disabled={busy !== null || !onAnswer}
-            sx={{ flex: 1, height: 38, borderRadius: '12px', fontSize: '0.8125rem', fontWeight: 500, bgcolor: tone, color: theme.palette.getContrastText(tone), '&:hover': { filter: 'brightness(1.08)' }, '&:active': { transform: 'scale(0.98)' } }}
+            sx={{ flex: 1, height: 36, borderRadius: '8px', fontSize: '0.8125rem', fontWeight: 500, bgcolor: 'primary.main', color: 'primary.contrastText', '&:hover': { filter: 'brightness(1.08)' }, '&:active': { transform: 'scale(0.98)' } }}
           >
             {busy === true ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : suggestion ? 'Do it' : VERB[widget.kind]}
           </ButtonBase>

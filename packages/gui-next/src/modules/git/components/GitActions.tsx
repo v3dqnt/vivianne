@@ -50,10 +50,17 @@ export function PrChip({ pr, onClick }: { pr: BranchPr; onClick?: () => void }) 
  * unpushed (↑) and unpulled (↓), what's uncommitted (●), and this branch's
  * pull request with its checks. Click to open the Git view.
  */
-export function GitStatusChip() {
+export function GitStatusChip({ branchOnly = false }: { branchOnly?: boolean } = {}) {
   const s = useGitStatus((x) => x.summary)
   const pr = useGitStatus((x) => x.pr)
   if (!s) return null
+  // Where the counts are already said below (the rail's Commit 4 / Push ↑2), only the branch is shown.
+  if (branchOnly)
+    return (
+      <Box component="span" title={s.branch} sx={{ display: 'block', fontFamily: MONO_FONT, ...T.meta, color: 'text.disabled', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {s.branch || 'detached'}
+      </Box>
+    )
   const changed = changedCount(s)
   return (
     <Stack direction="row" sx={{ alignItems: 'center', gap: u(1), minWidth: 0 }}>
@@ -68,7 +75,7 @@ export function GitStatusChip() {
         {s.ahead > 0 && <Box component="span" title={`${s.ahead} to push`}>↑{s.ahead}</Box>}
         {s.behind > 0 && <Box component="span" title={`${s.behind} to pull`}>↓{s.behind}</Box>}
         {changed > 0 && (
-          <Box component="span" title={`${changed} uncommitted`} sx={{ color: s.conflicted ? 'error.main' : 'warning.main' }}>
+          <Box component="span" title={`${changed} uncommitted`} sx={{ color: s.conflicted ? 'error.main' : 'text.secondary' }}>
             ●{changed}
           </Box>
         )}
