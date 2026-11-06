@@ -1,8 +1,6 @@
-import { useMemo, useState } from 'react'
-import { Box, Stack, Tooltip, Typography, ButtonBase, Snackbar, CircularProgress, alpha, useTheme } from '../../../ui'
-import { ArchiveLinear } from '../../../icons'
+import { useMemo } from 'react'
+import { Box, Stack, Tooltip, Typography, alpha, useTheme } from '../../../ui'
 import { useModelStore } from '../store/modelStore'
-import { useAgentStore } from '../store/agentStore'
 import { TOOLBAR_PILL } from '../lib/toolbarPill'
 
 function formatTokens(n: number): string {
@@ -134,22 +132,9 @@ export function ContextBreakdown() {
   const theme = useTheme()
   const c = useContextRows()
   const sessionCost = useModelStore((s) => s.sessionCost)
-  const compacting = useAgentStore((s) => s.compacting)
-  const isBusy = useAgentStore((s) => s.isBusy)
-  const messageCount = useAgentStore((s) => s.messages.length)
-  const compactNow = useAgentStore((s) => s.compactNow)
-  const [toast, setToast] = useState<string | null>(null)
   if (!c) return null
-  const { stats, colors, pct, accent, rows, accounted } = c
+  const { stats, colors, pct, accent, rows } = c
   void accent
-  const runCompact = async () => {
-    try {
-      const folded = await compactNow()
-      setToast(folded > 0 ? `Compacted ${folded} messages into a summary.` : 'Nothing to compact yet.')
-    } catch (e) {
-      setToast(String(e instanceof Error ? e.message : e).replace(/^busy:\s*/, ''))
-    }
-  }
   return (
     <>
       <Typography noWrap sx={{ ...NUM, fontSize: '0.75rem', color: 'text.secondary', px: '8px', pb: '8px' }}>
@@ -174,30 +159,12 @@ export function ContextBreakdown() {
             </Stack>
           </Tooltip>
         ))}
-        {accounted > stats.contextTokens && (
-          <Typography sx={{ px: '8px', pt: '4px', fontSize: '0.75rem', lineHeight: 1.5, color: 'text.disabled' }}>
-            Prompt and tool schemas ({formatTokens(accounted - stats.contextTokens)}) are sent with every request and not counted in the percentage.
-          </Typography>
-        )}
         <Typography noWrap sx={{ ...NUM, fontSize: '0.75rem', color: 'text.disabled', px: '8px', pt: '6px' }}>
           {formatTokens(stats.inputTokens)} in, {formatTokens(stats.outputTokens)} out
           {stats.cacheRead > 0 && `, ${formatTokens(stats.cacheRead)} cached`}
           {sessionCost && `, ${formatCost(sessionCost.cost)}`}
         </Typography>
-        <Tooltip title={isBusy ? 'Wait for the current turn to finish' : 'Fold older history into a summary to free room'}>
-          <Box component="span" sx={{ display: 'flex' }}>
-            <ButtonBase
-              disabled={compacting || isBusy || messageCount === 0}
-              onClick={() => void runCompact()}
-              sx={{ display: 'flex', width: '100%', justifyContent: 'flex-start', alignItems: 'center', gap: '8px', height: 28, px: '8px', borderRadius: '6px', fontSize: '0.8125rem', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' }, '&:disabled': { opacity: 0.5 } }}
-            >
-              {compacting ? <CircularProgress size={12} /> : <ArchiveLinear size={13} color="currentColor" />}
-              Compact history
-            </ButtonBase>
-          </Box>
-        </Tooltip>
       </Stack>
-      <Snackbar open={!!toast} autoHideDuration={3000} onClose={() => setToast(null)} message={toast} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }} />
     </>
   )
 }
