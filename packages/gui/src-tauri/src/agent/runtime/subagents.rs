@@ -338,6 +338,25 @@ pub async fn message_parent(app: &tauri::AppHandle, text: &str) -> Result<String
     Ok("Sent to your parent.".into())
 }
 
+/// What a forked subagent starts from: the parent's conversation so far, cut where it is whole. A tool call the parent has made but not
+/// yet got a result for (the `task` call itself, and anything alongside it) would be rejected by a provider, so the cut is made before
+/// the assistant message that holds one.
+pub fn fork_seed(messages: &[AgentMessage]) -> Vec<AgentMessage> {
+    use crate::agent::runtime::types::MessageContent;
+    let answered: std::collections::HashSet<&str> = messages
+        .iter()
+        .filter_map(|m| match m {
+            AgentMessage::ToolResult { tool_call_id, .. } => Some(tool_call_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    let cut = messages.iter().position(|m| match m {
+        AgentMessage::Assistant { content, .. } => content.iter().any(|c| matches!(c, MessageContent::ToolCall(tc) if !answered.contains(tc.id.as_str()))),
+        _ => false,
+    });
+    messages[..cut.unwrap_or(messages.len())].to_vec()
+}
+
 /// The most subagents that may work at once. A runaway fan-out fails loudly at this line instead of starving the machine.
 pub const MAX_ACTIVE_SUBAGENTS: usize = 8;
 
@@ -481,6 +500,43 @@ mod tree_tests {
         assert_eq!(StopReason::from_model("length"), StopReason::MaxTokens);
         assert_eq!(StopReason::from_model("refusal"), StopReason::Refusal);
         assert_eq!(StopReason::from_model("error"), StopReason::Error);
+    }
+}
+
+#[cfg(test)]
+mod fork_tests {
+    use super::*;
+    use crate::agent::runtime::types::{MessageContent, ToolCall};
+
+    fn user(t: &str) -> AgentMessage {
+        AgentMessage::User { content: vec![MessageContent::Text { text: t.into() }], timestamp: 0 }
+    }
+    fn calling(id: &str) -> AgentMessage {
+        AgentMessage::Assistant {
+            content: vec![MessageContent::ToolCall(ToolCall { id: id.into(), name: "task".into(), arguments: serde_json::json!({}), thought_signature: None })],
+            stop_reason: "toolUse".into(),
+            error_message: None,
+            timestamp: 0,
+            usage: None,
+        }
+    }
+    fn result(id: &str) -> AgentMessage {
+        AgentMessage::ToolResult { tool_call_id: id.into(), tool_name: "t".into(), content: vec![], arguments: None, details: None, is_error: Some(false), timestamp: 0 }
+    }
+
+    #[test]
+    fn a_fork_starts_from_the_conversation_up_to_the_call_that_made_it() {
+        let history = vec![user("hi"), calling("a"), result("a"), user("now fork"), calling("fork-call")];
+        let seed = fork_seed(&history);
+        assert_eq!(seed.len(), 4, "the unanswered task call is cut off");
+        assert!(matches!(seed.last(), Some(AgentMessage::User { .. })));
+    }
+
+    #[test]
+    fn a_whole_conversation_is_kept_whole() {
+        let history = vec![user("hi"), calling("a"), result("a")];
+        assert_eq!(fork_seed(&history).len(), 3);
+        assert!(fork_seed(&[]).is_empty());
     }
 }
 

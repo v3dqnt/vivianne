@@ -1982,6 +1982,8 @@ pub(crate) async fn execute_task_tool(
         None => SubagentRegistry::global().next_name(thread_now.as_deref()),
     };
     let output_schema = args.get("output_schema").filter(|v| v.is_object()).cloned();
+    // A fork starts from this conversation instead of a blank page: it already knows what you do.
+    let seed = if args.get("fork").and_then(|v| v.as_bool()).unwrap_or(false) { crate::agent::runtime::subagents::fork_seed(&parent_state.messages().await) } else { Vec::new() };
     let id = uuid::Uuid::new_v4().to_string();
     let handle = SubagentHandle {
         id: id.clone(),
@@ -2155,7 +2157,7 @@ pub(crate) async fn execute_task_tool(
             let (output, tool_calls, turns) =
                 rt.block_on(crate::agent::orchestration::TURN_THREAD.scope(
                     parent_thread.clone().unwrap_or_default(),
-                    crate::agent::runtime::subagents::CURRENT_SUBAGENT.scope(id_bg.clone(), drive_subagent(app.clone(), sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc_bg)),
+                    crate::agent::runtime::subagents::CURRENT_SUBAGENT.scope(id_bg.clone(), drive_subagent(app.clone(), sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc_bg, seed)),
                 ));
             crate::agent::runtime::subagents::settle(&arc_bg, output, tool_calls, turns, schema_bg.as_ref());
             let g = arc_bg.lock().unwrap_or_else(|e| e.into_inner());
@@ -2192,7 +2194,7 @@ pub(crate) async fn execute_task_tool(
     }
 
     let (output, tool_calls, turns) = crate::agent::runtime::subagents::CURRENT_SUBAGENT
-        .scope(id.clone(), drive_subagent(app.clone(), sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc))
+        .scope(id.clone(), drive_subagent(app.clone(), sub_state, sub_system_prompt, prompt, depth + 1, source_tag, &arc, seed))
         .await;
     {
         crate::agent::runtime::subagents::settle(&arc, output.clone(), tool_calls, turns, output_schema.as_ref());
@@ -2247,10 +2249,12 @@ async fn drive_subagent(
     child_depth: usize,
     source_tag: String,
     handle: &std::sync::Arc<std::sync::Mutex<crate::agent::runtime::subagents::SubagentHandle>>,
+    seed: Vec<AgentMessage>,
 ) -> (String, u32, u32) {
     let mut sub_context = AgentContext {
         system_prompt: sub_system_prompt.clone(),
-        messages: Vec::new(),
+        // Empty for an ordinary subagent; a fork starts from its parent's conversation.
+        messages: seed,
         delegate_depth: child_depth,
         ..Default::default()
     };
