@@ -1020,13 +1020,22 @@ pub async fn execute_tool_calls(
                     // Started while the model was still writing this call?
                     let res = match super::speculation::take(cwd, &tc.name, &tc.arguments).await {
                         Some(res) => res,
-                        None => match super::timeouts::limit_for(&timeout_settings, &tc.name) {
-                            Some(limit) => match tokio::time::timeout(limit, tool.execute(&tc.arguments, ".")).await {
-                                Ok(res) => res,
-                                Err(_) => return timed_out_result(&tc.name, limit),
-                            },
-                            None => tool.execute(&tc.arguments, ".").await,
-                        },
+                        None => {
+                            let _ = tool;
+                            // Through the background runner, so a slow search can be sent to the background too.
+                            let run = super::background::run(app, crate::agent::orchestration::turn_thread(), cwd.clone(), tc.name.clone(), tc.arguments.clone(), tc.id.clone());
+                            let ran = match super::timeouts::limit_for(&timeout_settings, &tc.name) {
+                                Some(limit) => match tokio::time::timeout(limit, run).await {
+                                    Ok(res) => res,
+                                    Err(_) => return timed_out_result(&tc.name, limit),
+                                },
+                                None => run.await,
+                            };
+                            match ran {
+                                Some((res, _)) => res,
+                                None => crate::agent::tools::builtin::ToolResult { content: format!("Error: `{}` couldn't run.", tc.name), is_error: true, details: None },
+                            }
+                        }
                     };
                     tool_result_to_agent_result(res, vision_capable)
                 } else {
@@ -1118,9 +1127,12 @@ pub async fn execute_tool_calls(
                 disabled: &disabled_tools,
             };
             (tool.run)(&cx).await
-        } else if let Some(tool) = tools.iter().find(|t| t.name() == tool_call.name) {
-            let res = tool.execute(&tool_call.arguments, ".").await;
-            tool_result_to_agent_result(res, vision_capable)
+        } else if tools.iter().any(|t| t.name() == tool_call.name) {
+            // Run where the user can send it to the background (the Background button on a running call).
+            match super::background::run(app, crate::agent::orchestration::turn_thread(), cwd.clone(), tool_call.name.clone(), tool_call.arguments.clone(), tool_call.id.clone()).await {
+                Some((res, _)) => tool_result_to_agent_result(res, vision_capable),
+                None => AgentToolResult { content: vec![MessageContent::Text { text: format!("Error: `{}` couldn't run.", tool_call.name) }], details: serde_json::json!({ FAILED_KEY: true }), terminate: None },
+            }
         } else if let Some((server, real_name)) = tool_call.name.strip_prefix("mcp__").and_then(|rest| rest.split_once("__")) {
             match crate::mcp::call_tool(server, real_name, tool_call.arguments.clone()).await {
                 Ok(text) => AgentToolResult {

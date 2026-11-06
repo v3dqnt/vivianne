@@ -100,6 +100,23 @@ pub async fn deliver(app: &tauri::AppHandle, from: &str, to: &str, text: &str) -
     }
 }
 
+/// Put a note into a thread from outside any thread (a background tool finishing): wakes the thread if it is idle, queues it otherwise.
+pub async fn deliver_note(app: &tauri::AppHandle, thread: &str, text: &str) -> Result<(), String> {
+    let registry = app.state::<AgentRegistry>();
+    let target = registry.resolve(if thread.is_empty() { None } else { Some(thread) }).await;
+    if target.is_idle() {
+        let (app2, to, text) = (app.clone(), thread.to_string(), text.to_string());
+        // Boxed: a turn can start a tool that ends up here, so the future type would otherwise contain itself.
+        let turn: std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<AgentMessage>, String>> + Send>> =
+            Box::pin(async move { run_turn(&app2, target, &to, text, vec![], Turn { main: true, source_tag: None, on_event: None, forced_routing: false }).await });
+        tokio::spawn(turn);
+    } else {
+        target.follow_up_queue.write().await.push(AgentMessage::User { content: vec![MessageContent::Text { text: text.to_string() }], timestamp: crate::agent::runtime::commands::now_ms() });
+        crate::agent::runtime::inbox::persist(if thread.is_empty() { None } else { Some(thread) }, &target.steering_queue, &target.follow_up_queue).await;
+    }
+    Ok(())
+}
+
 /// One line per thread: id, title, project, whether it is running, and whose child it is.
 pub fn format_threads(rows: &[crate::agent::orchestration::ThreadRow], projects: &HashMap<String, String>, running: &dyn Fn(&str) -> bool, me: &str) -> String {
     if rows.is_empty() {

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { call } from '../../../ipc'
 import { Box, Button, Collapse, CircularProgress, Typography, Stack } from '../../../ui'
 import {
   CommandLinear,
@@ -82,6 +83,9 @@ const DECLARATIONS: Record<string, [string, string]> = {
 }
 
 /** `[label, target]` for the card header. */
+/** Tools that can be sent to the background while they run: the ones that wait on a process or the network. */
+const CAN_BACKGROUND = new Set(['bash', 'powershell', 'code_search', 'grep', 'glob', 'web_fetch', 'web_search'])
+
 export function declarationFor(name: string, pending: boolean, summary: string | null): [string, string | null] {
   if (pending && name in MEMORY_TOOLS) return [MEMORY_TOOLS[name], null]
   const phrasing = DECLARATIONS[name]
@@ -212,6 +216,7 @@ export function ToolCallCard({
   compact?: boolean
 }) {
   const [open, setOpen] = useState(false)
+  const [sentToBackground, setSentToBackground] = useState(false)
   // `isError` is the wire type's in-flight sentinel: null until the tool
   // finishes, then true/false. Nothing else needs checking for "pending."
   const pending = message.isError === null
@@ -295,6 +300,22 @@ export function ToolCallCard({
           )
         )}
         {pending && <CircularProgress size={11} thickness={5} />}
+        {pending && CAN_BACKGROUND.has(message.toolName) && !sentToBackground && (
+          <Box
+            component="span"
+            role="button"
+            tabIndex={0}
+            title="Let it keep running; the agent carries on and you're told when it finishes"
+            onClick={(e) => {
+              e.stopPropagation()
+              setSentToBackground(true)
+              void call('cmd_tool_background', { callId: message.toolCallId })
+            }}
+            sx={{ ml: 'auto', flexShrink: 0, px: '8px', height: 20, display: 'inline-flex', alignItems: 'center', borderRadius: '6px', fontSize: '0.75rem', color: 'text.secondary', bgcolor: 'action.hover', '&:hover': { color: 'text.primary', bgcolor: 'action.selected' } }}
+          >
+            Background
+          </Box>
+        )}
         {isError && (
           <Box sx={{ display: 'flex', flexShrink: 0 }}>
             <DangerLinear size={13} color="currentColor" />

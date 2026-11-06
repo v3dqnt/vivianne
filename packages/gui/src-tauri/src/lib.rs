@@ -309,6 +309,7 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::sessions::thread_worktree::cmd_thread_worktree_finish,
       crate::agent::orchestration::cmd_thread_consumed_work,
       crate::agent::orchestration::cmd_thread_usage,
+      crate::agent::tools::background::cmd_tool_background,
       crate::agent::orchestration::cmd_thread_pr_link,
       crate::agent::orchestration::cmd_thread_prs,
       crate::agent::orchestration::cmd_limit_recovery_candidates,
