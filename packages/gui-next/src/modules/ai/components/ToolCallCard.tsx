@@ -222,7 +222,10 @@ export function ToolCallCard({
   const pending = message.isError === null
   const isError = message.isError === true
   const Icon = iconFor(message.toolName)
-  const summary = argSummary(message.arguments)
+  // A program is described by what it says it does; the code itself is in the body.
+  const program = message.toolName === 'run_script' && typeof message.arguments?.code === 'string' ? (message.arguments.code as string) : null
+  const programNote = program && typeof message.arguments?.description === 'string' ? (message.arguments.description as string) : null
+  const summary = programNote ?? argSummary(message.arguments)
   const [label, target] = declarationFor(message.toolName, pending, summary)
   const file = target !== null ? filePathArg(message.arguments) : null
   const output = contentToText(message.content).trim()
@@ -248,7 +251,7 @@ export function ToolCallCard({
   // Some tools say something to the model, not to the user: their result is
   // replaced by a view of what they did, always shown, never the raw text.
   const special = !pending && !isError ? specialBody(message) : null
-  const hasBody = !special && (!!output || diffs.length > 0)
+  const hasBody = !special && (!!output || diffs.length > 0 || !!program)
 
   return (
     // Open, a card takes the full width it's given: its output shouldn't be
@@ -321,6 +324,9 @@ export function ToolCallCard({
             <DangerLinear size={13} color="currentColor" />
           </Box>
         )}
+        {isError && typeof (message.details as { failure?: unknown } | null | undefined)?.failure === 'string' && (
+          <Box component="span" sx={{ flexShrink: 0, fontSize: '0.75rem', color: 'error.main' }}>{String((message.details as { failure: string }).failure).replace(/-/g, ' ')}</Box>
+        )}
         {hasBody && (
           <Box sx={{ display: 'flex', flexShrink: 0, ml: 'auto', opacity: 0.7, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>
             <ChevronRightLinear size={12} color="currentColor" />
@@ -364,6 +370,7 @@ export function ToolCallCard({
                   <DiffView before={d.before} after={d.after} />
                 </Box>
               ))}
+              {program && <CodeBlock code={program} lang="javascript" wrap bare dense collapsible />}
               {output && <ToolOutput code={output} lang={outputLang} />}
             </Stack>
           )}

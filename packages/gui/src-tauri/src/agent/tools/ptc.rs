@@ -51,17 +51,83 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const DEFAULT_TIMEOUT_SECS: u64 = 30;
-const MAX_TIMEOUT_SECS: u64 = 120;
-const MEMORY_LIMIT_BYTES: usize = 256 * 1024 * 1024;
+const DEFAULT_TIMEOUT_SECS: u64 = 120;
+const MAX_TIMEOUT_SECS: u64 = 600;
+const MEMORY_LIMIT_BYTES: usize = 512 * 1024 * 1024;
+
+/// What one program may make: a call a minute at 1024 a minute of its own time limit (2048 at the default two minutes), never fewer than 64.
+/// Past it the program is stopped, because a runaway loop of approved tool calls is the failure the wall clock alone doesn't catch.
+pub fn call_budget(timeout_secs: u64) -> u32 {
+    (((timeout_secs as f64 / 60.0) * 1024.0).floor() as u32).max(64)
+}
+
+/// Why a program ended badly, as a fact the UI and the model can act on, not a sentence to parse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PtcFailure {
+    /// The program threw, or didn't parse.
+    Exception,
+    /// It ran past its time limit.
+    Timeout,
+    /// The turn was stopped, so the program was too.
+    Abort,
+    /// It finished, but what it returned can't be shown (a function, a cycle…).
+    InvalidOutput,
+    /// The script thread or runtime couldn't start or died.
+    WorkerExit,
+    /// It made more tool calls than one program may.
+    CallLimit,
+}
+
+#[derive(Debug)]
+pub struct PtcError {
+    pub kind: PtcFailure,
+    pub message: String,
+}
+
+impl PtcError {
+    fn new(kind: PtcFailure, message: impl Into<String>) -> Self {
+        Self { kind, message: message.into() }
+    }
+}
+
+/// What a running program shares with the tool calls it makes: its call allowance, whether it was told to stop, and any images its
+/// tools returned (a script can't use them, so they ride on the program's own result).
+pub(crate) struct Session {
+    budget: u32,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    exceeded: std::sync::atomic::AtomicBool,
+    images: std::sync::Mutex<Vec<MessageContent>>,
+}
+
+impl Session {
+    fn new(budget: u32, cancel: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self { budget, cancel, exceeded: Default::default(), images: Default::default() }
+    }
+    /// For a caller with no program-level limits (a compiled program's bridge).
+    fn unlimited() -> Self {
+        Self::new(u32::MAX, Default::default())
+    }
+}
+
+/// Stops the program when the call that awaits it goes away (the turn was stopped), instead of leaving it running to its deadline.
+struct StopOnDrop(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
 
 /// The typed per-tool functions the model calls. Keep in sync with the
 /// `run_script` description in `tool_schemas.rs` — that description is the
 /// only place the model learns these signatures.
 const SHIM: &str = r#"
+globalThis.ToolCallError = class ToolCallError extends Error {
+  constructor(message, toolName) { super(message); this.name = "ToolCallError"; this.toolName = toolName; }
+};
 globalThis.__t = async (n, a) => {
   const r = JSON.parse(await __vivTool(n, JSON.stringify(a)));
-  if (!r.ok) throw new Error(r.error);
+  if (!r.ok) throw new ToolCallError(r.error, n);
   return r.text;
 };
 globalThis.bash  = (command, timeoutSeconds) => __t("bash", { command, timeout: timeoutSeconds });
@@ -149,29 +215,46 @@ pub(crate) async fn execute_ptc_tool(
 
     let (state, emit, app) = (state.clone(), emit.clone(), app.clone());
     let outer_id = outer_call_id.to_string();
-    let (tx, rx) = tokio::sync::oneshot::channel::<Result<String, String>>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<String, PtcError>>();
+    let session = Arc::new(Session::new(call_budget(timeout_secs), Default::default()));
+    // Held until the program is done: if this call is dropped first (the turn was stopped), the program is told to stop.
+    let _stop = StopOnDrop(session.cancel.clone());
+    let thread_session = session.clone();
 
     std::thread::spawn(move || {
         let result = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-            Ok(local_rt) => local_rt.block_on(run_script(code, timeout_secs, delegate_depth, state, emit, app, outer_id)),
-            Err(e) => Err(format!("Error: failed to start script thread runtime: {e}")),
+            Ok(local_rt) => local_rt.block_on(run_script(code, timeout_secs, delegate_depth, state, emit, app, outer_id, thread_session)),
+            Err(e) => Err(PtcError::new(PtcFailure::WorkerExit, format!("Error: failed to start script thread runtime: {e}"))),
         };
         let _ = tx.send(result);
     });
 
-    match rx.await {
+    let clip = |text: &str| crate::agent::tools::exec::clip_tool_text(text, crate::agent::tools::exec::MAX_UNBOUNDED_TOOL_CHARS);
+    let images: Vec<MessageContent> = Vec::new();
+    let _ = images;
+    let mut result = match rx.await {
         Ok(Ok(text)) => AgentToolResult {
             // Capped like every other tool output: a script that returned a
             // huge blob used to push it into context verbatim.
-            content: vec![MessageContent::Text {
-                text: crate::agent::tools::exec::clip_tool_text(&text, crate::agent::tools::exec::MAX_UNBOUNDED_TOOL_CHARS),
-            }],
-            details: serde_json::Value::Null,
+            content: vec![MessageContent::Text { text: clip(&text) }],
+            details: serde_json::json!({ "clipped": text.chars().count() > crate::agent::tools::exec::MAX_UNBOUNDED_TOOL_CHARS }),
             terminate: None,
         },
-        Ok(Err(text)) => err_result(&crate::agent::tools::exec::clip_tool_text(&text, crate::agent::tools::exec::MAX_UNBOUNDED_TOOL_CHARS)),
-        Err(_) => err_result("Error: the script execution thread ended unexpectedly."),
-    }
+        Ok(Err(e)) => {
+            let mut r = err_result(&clip(&e.message));
+            r.details = serde_json::json!({ "failure": e.kind });
+            r
+        }
+        Err(_) => {
+            let mut r = err_result("Error: the script execution thread ended unexpectedly.");
+            r.details = serde_json::json!({ "failure": PtcFailure::WorkerExit });
+            r
+        }
+    };
+    // Images the program's tools returned can't be used inside it, so they go to the model with the program's result.
+    let attached = std::mem::take(&mut *session.images.lock().unwrap_or_else(|e| e.into_inner()));
+    result.content.extend(attached);
+    result
 }
 
 /// Runs entirely on the dedicated thread `execute_ptc_tool` spawns — see the
@@ -184,19 +267,22 @@ async fn run_script(
     emit: EventSender,
     app: tauri::AppHandle,
     outer_id: String,
-) -> Result<String, String> {
-    let rt = AsyncRuntime::new().map_err(|e| format!("Error: failed to start script runtime: {e}"))?;
+    session: Arc<Session>,
+) -> Result<String, PtcError> {
+    let rt = AsyncRuntime::new().map_err(|e| PtcError::new(PtcFailure::WorkerExit, format!("Error: failed to start script runtime: {e}")))?;
     rt.set_memory_limit(MEMORY_LIMIT_BYTES).await;
     // Aborts a *synchronous* runaway (`while(true){}`), which the
     // `tokio::time::timeout` below can't preempt because it never yields.
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
-    rt.set_interrupt_handler(Some(Box::new(move || Instant::now() > deadline))).await;
+    let stop = session.cancel.clone();
+    rt.set_interrupt_handler(Some(Box::new(move || Instant::now() > deadline || stop.load(Ordering::SeqCst)))).await;
 
-    let ctx = AsyncContext::full(&rt).await.map_err(|e| format!("Error: failed to start script context: {e}"))?;
+    let ctx = AsyncContext::full(&rt).await.map_err(|e| PtcError::new(PtcFailure::WorkerExit, format!("Error: failed to start script context: {e}")))?;
     let seq = Arc::new(AtomicU32::new(0));
     let tool_names = crate::agent::tools::exec::tool_names_for_scripts(&state).await;
     let allowed = Arc::new(tool_names.clone());
 
+    let session_for_script = session.clone();
     let script_fut = async_with!(ctx => |ctx| {
         let bound = {
             // NOTE: no `ctx.clone()` here, deliberately. Capturing a `Ctx`
@@ -206,15 +292,15 @@ async fn run_script(
             // against rquickjs 0.8.1: the capture alone is enough to crash,
             // even for a script that calls no tools. The context was only
             // ever needed in order to throw, so throwing moved to the shim.
-            let (state, emit, app, seq, outer_id) =
-                (state.clone(), emit.clone(), app.clone(), seq.clone(), outer_id.clone());
+            let (state, emit, app, seq, outer_id, session) =
+                (state.clone(), emit.clone(), app.clone(), seq.clone(), outer_id.clone(), session_for_script.clone());
             ctx.globals().set("__vivTool", Func::from(Async(move |name: String, args_json: String| {
-                let (state, emit, app, seq, outer_id) =
-                    (state.clone(), emit.clone(), app.clone(), seq.clone(), outer_id.clone());
+                let (state, emit, app, seq, outer_id, session) =
+                    (state.clone(), emit.clone(), app.clone(), seq.clone(), outer_id.clone(), session.clone());
                 async move {
                     let arguments = serde_json::from_str(&args_json).unwrap_or(serde_json::Value::Null);
                     let tagged =
-                        call_bridged_tool(&name, arguments, &seq, &outer_id, delegate_depth, &state, &emit, &app).await;
+                        call_bridged_tool_in(&session, &name, arguments, &seq, &outer_id, delegate_depth, &state, &emit, &app).await;
                     Ok::<String, rquickjs::Error>(tagged)
                 }
             })))
@@ -235,7 +321,7 @@ async fn run_script(
             .and_then(|()| ctx.eval::<(), _>(format!("globalThis.__vivToolNames = {names};")))
             .and_then(|()| ctx.eval::<(), _>(SHIM));
         if let Err(e) = setup {
-            return Err(format!("Error: failed to set up the script environment: {e}"));
+            return Err(PtcError::new(PtcFailure::WorkerExit, format!("Error: failed to set up the script environment: {e}")));
         }
 
         // One handler covers all three failure shapes: a syntax error from
@@ -261,12 +347,43 @@ async fn run_script(
             Ok::<_, rquickjs::Error>(with_logs(&ctx, describe_result(&ctx, settled)))
         }
         .await;
-        outcome.map_err(|e| format!("Error: script failed: {}", CaughtError::from_error(&ctx, e)))
+        match outcome {
+            Ok(text) if text.contains(UNDISPLAYABLE) => Err(PtcError::new(
+                PtcFailure::InvalidOutput,
+                "Error: the script finished, but what it returned can't be shown (a function, a cycle or a BigInt). Return a string or plain JSON.",
+            )),
+            Ok(text) => Ok(text),
+            Err(e) => {
+                let late = Instant::now() > deadline;
+                let kind = if late { PtcFailure::Timeout } else { PtcFailure::Exception };
+                Err(PtcError::new(kind, format!("Error: script failed: {}", CaughtError::from_error(&ctx, e))))
+            }
+        }
     });
 
-    match tokio::time::timeout(Duration::from_secs(timeout_secs), script_fut).await {
-        Ok(r) => r,
-        Err(_) => Err(format!("Error: script exceeded the {timeout_secs}s time limit.")),
+    // Stopped from outside (the turn was stopped, or the call allowance ran out): noticed within a tenth of a second even while waiting on a tool.
+    let stop_watch = {
+        let stop = session.cancel.clone();
+        async move {
+            while !stop.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    };
+    let result = tokio::select! {
+        r = tokio::time::timeout(Duration::from_secs(timeout_secs), script_fut) => match r {
+            Ok(r) => r,
+            Err(_) => Err(PtcError::new(PtcFailure::Timeout, format!("Error: script exceeded the {timeout_secs}s time limit."))),
+        },
+        _ = stop_watch => Err(PtcError::new(PtcFailure::Abort, "Error: the script was stopped.")),
+    };
+    match result {
+        // Running out of calls is the cause, whatever the script then reported (it usually saw a thrown error).
+        Err(_) if session.exceeded.load(Ordering::SeqCst) => Err(PtcError::new(
+            PtcFailure::CallLimit,
+            format!("Error: the script was stopped after {} tool calls, the most one program may make. That looks like a runaway loop: batch the work, or split it across scripts.", session.budget),
+        )),
+        other => other,
     }
 }
 
@@ -305,8 +422,11 @@ fn describe_result<'js>(ctx: &Ctx<'js>, val: Value<'js>) -> String {
         .ok()
         .flatten()
         .and_then(|s| s.to_string().ok())
-        .unwrap_or_else(|| "Script finished (result could not be displayed).".to_string())
+        .unwrap_or_else(|| UNDISPLAYABLE.to_string())
 }
+
+/// What `describe_result` says when a value has no JSON form; `run_script` turns it into an `invalid-output` failure.
+const UNDISPLAYABLE: &str = "Script finished (result could not be displayed).";
 
 /// Prepends anything the script logged via the `console` shim. Output the
 /// model deliberately printed is usually the most informative part of a run,
@@ -341,10 +461,34 @@ pub(crate) async fn call_bridged_tool(
     emit: &EventSender,
     app: &tauri::AppHandle,
 ) -> String {
+    call_bridged_tool_in(&Session::unlimited(), name, arguments, seq, outer_call_id, delegate_depth, state, emit, app).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn call_bridged_tool_in(
+    session: &Session,
+    name: &str,
+    arguments: serde_json::Value,
+    seq: &AtomicU32,
+    outer_call_id: &str,
+    delegate_depth: usize,
+    state: &AgentState,
+    emit: &EventSender,
+    app: &tauri::AppHandle,
+) -> String {
     if name == "run_script" || name == "run_native" {
         return tagged_err("run_script and run_native can't be called from inside a script — you are already in one.");
     }
+    if session.cancel.load(Ordering::SeqCst) {
+        return tagged_err("The script was stopped.");
+    }
     let n = seq.fetch_add(1, Ordering::SeqCst);
+    if n >= session.budget {
+        session.exceeded.store(true, Ordering::SeqCst);
+        // Stop the program itself, not just this call: it may be ignoring errors in a loop.
+        session.cancel.store(true, Ordering::SeqCst);
+        return tagged_err(&format!("This script has used all {} of its tool calls. Stop looping and batch the work.", session.budget));
+    }
     let tc = AgentToolCall { id: format!("{outer_call_id}-ptc{n}"), name: name.to_string(), arguments };
     let inner_ctx = AgentContext { delegate_depth, ..Default::default() };
     let mut results = crate::agent::tools::exec::execute_tool_calls(&inner_ctx, vec![tc], state, emit, app).await;
@@ -352,14 +496,23 @@ pub(crate) async fn call_bridged_tool(
     let Some(AgentMessage::ToolResult { content, is_error, .. }) = results.pop() else {
         return tagged_err("internal error: tool produced no result");
     };
-    let text = content
-        .into_iter()
-        .filter_map(|c| match c {
-            MessageContent::Text { text } => Some(text),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut kept_images = 0;
+    let mut texts = Vec::new();
+    for c in content {
+        match c {
+            MessageContent::Text { text } => texts.push(text),
+            // A script can't use an image, but the model should still see it: it goes with the program's result.
+            image @ MessageContent::Image { .. } => {
+                session.images.lock().unwrap_or_else(|e| e.into_inner()).push(image);
+                kept_images += 1;
+            }
+            _ => {}
+        }
+    }
+    if kept_images > 0 {
+        texts.push(format!("[{kept_images} image{} returned: attached to this script's result]", if kept_images == 1 { "" } else { "s" }));
+    }
+    let text = texts.join("\n");
 
     if is_error == Some(true) {
         tagged_err(&text)
@@ -555,5 +708,58 @@ mod tests {
         let started = Instant::now();
         assert!(run("while(true){}").await.is_err());
         assert!(started.elapsed() < Duration::from_secs(30), "took {:?}", started.elapsed());
+    }
+}
+
+#[cfg(test)]
+mod limits_tests {
+    use super::*;
+
+    #[test]
+    fn a_program_gets_a_call_allowance_in_proportion_to_its_time() {
+        assert_eq!(call_budget(120), 2048);
+        assert_eq!(call_budget(600), 10_240);
+        assert_eq!(call_budget(1), 64, "never fewer than 64");
+    }
+
+    #[test]
+    fn failures_are_named_facts() {
+        let kinds: Vec<String> = [PtcFailure::Timeout, PtcFailure::CallLimit, PtcFailure::InvalidOutput, PtcFailure::WorkerExit]
+            .iter()
+            .map(|k| serde_json::to_value(k).unwrap().as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(kinds, ["timeout", "call-limit", "invalid-output", "worker-exit"]);
+    }
+
+    #[test]
+    fn dropping_the_awaiting_call_stops_the_program() {
+        let flag: Arc<std::sync::atomic::AtomicBool> = Default::default();
+        {
+            let _guard = StopOnDrop(flag.clone());
+            assert!(!flag.load(Ordering::SeqCst));
+        }
+        assert!(flag.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn a_stop_flag_ends_a_runaway_loop_without_waiting_for_the_deadline() {
+        let rt = AsyncRuntime::new().unwrap();
+        let stop: Arc<std::sync::atomic::AtomicBool> = Default::default();
+        let flag = stop.clone();
+        rt.set_interrupt_handler(Some(Box::new(move || flag.load(Ordering::SeqCst)))).await;
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let setter = stop.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            setter.store(true, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        let ended = async_with!(ctx => |ctx| {
+            ctx.eval::<(), _>("while (true) {}").is_err()
+        })
+        .await;
+        drop(rt);
+        assert!(ended, "the loop should have been interrupted");
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }

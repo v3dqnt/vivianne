@@ -1062,8 +1062,9 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "description": { "type": "string", "description": "One line on what this program does, shown above its code." },
                     "code": { "type": "string", "description": "JavaScript source to execute. May use top-level await." },
-                    "timeout_seconds": { "type": "number", "description": "Max seconds before the script is aborted (default 30, max 120)" }
+                    "timeout_seconds": { "type": "number", "description": "Max seconds before the script is aborted (default 120, max 600). A program may make about 1024 tool calls per minute of its limit, then it is stopped." }
                 },
                 "required": ["code"]
             }
