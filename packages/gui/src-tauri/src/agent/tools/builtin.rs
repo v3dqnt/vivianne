@@ -68,6 +68,7 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         Box::new(SleepTool::new()),
         Box::new(TodoWriteTool::new()),
         Box::new(DiagnosticsTool::new(cwd.clone())),
+        Box::new(crate::agent::tools::lsp_nav::LspTool::new(cwd.clone())),
         // ── Grok-parity: subagent orchestration ────────────────────────────
         // No `task` entry here: it is in `exec::AGENT_TOOLS`, which the loop
         // consults before this registry, so a
@@ -315,10 +316,8 @@ impl Tool for WriteTool {
         match tokio::fs::write(&full_path, &content).await {
             Ok(_) => {
                 let full_str = full_path.display().to_string();
-                crate::lsp::manager::touch_file(&full_str, &self.cwd).await;
-                let diagnostics = crate::lsp::manager::diagnostics_for(&full_str, &self.cwd).await;
                 let mut text = format!("File written successfully: {}", path);
-                if let Some(block) = crate::lsp::format_diagnostics(&full_str, &diagnostics) {
+                if let Some(block) = crate::lsp::manager::post_edit_block(&full_str, &self.cwd).await {
                     text.push_str("\n\n");
                     text.push_str(&block);
                 }
@@ -440,10 +439,8 @@ impl Tool for EditTool {
         match tokio::fs::write(&full_path, &out_bytes).await {
             Ok(_) => {
                 let full_str = full_path.display().to_string();
-                crate::lsp::manager::touch_file(&full_str, &self.cwd).await;
-                let diagnostics = crate::lsp::manager::diagnostics_for(&full_str, &self.cwd).await;
                 let mut text = format!("File edited successfully: {}", path);
-                if let Some(block) = crate::lsp::format_diagnostics(&full_str, &diagnostics) {
+                if let Some(block) = crate::lsp::manager::post_edit_block(&full_str, &self.cwd).await {
                     text.push_str("\n\n");
                     text.push_str(&block);
                 }
@@ -501,7 +498,7 @@ impl Tool for BashTool {
         // misinterpret that syntax rather than fail loudly.
         let cwd = match resolve_workdir(&self.cwd, args["workdir"].as_str()) {
             Ok(c) => c,
-            Err(e) => return ToolResult { content: format!("Error: {e}"), is_error: true, details: None },
+            Err(e) => return err(format!("Error: {e}")),
         };
         crate::agent::runtime::streaming::run_streaming("bash", "bash", &["-c", &command], &cwd, timeout_secs).await
     }
@@ -827,15 +824,16 @@ impl Tool for PowerShellTool {
         // PowerShell 7 (`pwsh`) when it's installed — the maintained edition,
         // and quicker to start — else Windows PowerShell 5.1, which every
         // Windows machine has.
+        let cwd = match resolve_workdir(&self.cwd, args["workdir"].as_str()) {
+            Ok(c) => c,
+            Err(e) => return err(format!("Error: {e}")),
+        };
         let exe = if cfg!(windows) && which::which("pwsh").is_err() { "powershell" } else { "pwsh" };
         crate::agent::runtime::streaming::run_streaming(
             "powershell",
             exe,
             &["-NoProfile", "-NonInteractive", "-Command", &command],
-            &match resolve_workdir(&self.cwd, args["workdir"].as_str()) {
-                Ok(c) => c,
-                Err(e) => return err(&format!("Error: {e}")),
-            },
+            &cwd,
             timeout_secs,
         )
         .await
@@ -1010,25 +1008,29 @@ impl Tool for WebSearchTool {
         }
         queries.dedup();
         queries.truncate(MAX_SEARCH_QUERIES);
-        match queries.len() {
-            0 => err("'query' must be at least 2 characters"),
-            1 => search_one(&queries[0], max).await,
+        match queries.as_slice() {
+            [] => err("'query' must be at least 2 characters"),
+            [q] => match search_one(q).await {
+                Ok(found) => ok(found.render(q, max)),
+                Err(e) => err(e),
+            },
             _ => {
-                let results = futures::future::join_all(queries.iter().map(|q| search_one(q, max))).await;
-                let failed = results.iter().all(|r| r.is_error);
-                // A page two queries both found is listed once, under the first query that found it.
-                let mut seen = std::collections::HashSet::new();
-                let mut out = Vec::new();
-                for (q, r) in queries.iter().zip(results) {
-                    let kept: Vec<&str> = r.content.lines().filter(|l| {
-                        let t = l.trim();
-                        !(t.starts_with("http") && !seen.insert(t.to_string()))
-                    }).collect();
-                    out.push(format!("## {q}
-{}", kept.join("
-")));
-                }
-                ToolResult { content: out.join("
+                let results = futures::future::join_all(queries.iter().map(|q| search_one(q))).await;
+                let failed = results.iter().all(|r| r.is_err());
+                // A page several queries found is listed once, under the first query that found it.
+                let mut seen = HashSet::new();
+                let sections: Vec<String> = queries.iter().zip(results).map(|(q, r)| match r {
+                    Ok(mut found) => {
+                        if let Found::Hits { hits, .. } = &mut found {
+                            hits.retain(|h| seen.insert(h.url.clone()));
+                        }
+                        format!("## {q}
+{}", found.render(q, max))
+                    }
+                    Err(e) => format!("## {q}
+Error: {e}"),
+                }).collect();
+                ToolResult { content: sections.join("
 
 "), is_error: failed, details: None }
             }
@@ -1039,43 +1041,52 @@ impl Tool for WebSearchTool {
 /// Up to this many queries run in one call.
 const MAX_SEARCH_QUERIES: usize = 5;
 
-async fn search_one(query: &str, max: usize) -> ToolResult {
-    let query = query.to_string();
-    {
+/// What one query found: hits from an engine (with a note when the preferred one was skipped), or OpenAI's prose answer.
+enum Found {
+    Hits { note: String, hits: Vec<SearchHit>, engine: Option<&'static str> },
+    Text(String),
+}
 
-        // A search API when one is configured: fast, structured, and not
-        // subject to the bot checks and rate limits a scraped engine is.
-        let mut api_note = String::new();
-        // A named engine whose key is gone is said out loud, not quietly replaced.
-        if let Some(label) = chosen_engine_without_key().await {
-            api_note = format!("({label} is selected in Settings but has no key; used DuckDuckGo instead)
+impl Found {
+    fn render(&self, query: &str, max: usize) -> String {
+        match self {
+            Found::Text(t) => t.clone(),
+            Found::Hits { note, hits, .. } if hits.is_empty() => format!("{note}No results found for: {query}"),
+            Found::Hits { note, hits, engine } => format!("{note}{}", format_hits(query, &hits[..hits.len().min(max)], *engine)),
+        }
+    }
+}
+
+async fn search_one(query: &str) -> Result<Found, String> {
+    // A search API when one is configured: fast, structured, and not
+    // subject to the bot checks and rate limits a scraped engine is.
+    let mut note = String::new();
+    // A named engine whose key is gone is said out loud, not quietly replaced.
+    if let Some(label) = chosen_engine_without_key().await {
+        note = format!("({label} is selected in Settings but has no key; used DuckDuckGo instead)
 
 ");
-        }
-        if let Some((provider, key)) = configured_search_api().await {
-            match api_search(provider, &key, &query).await {
-                Ok(hits) if !hits.is_empty() => return ok(format_hits(&query, &hits[..hits.len().min(max)], Some(provider.label()))),
-                Ok(_) => return ok(format!("No results found for: {query}")),
-                Err(e) => api_note = format!("({} search failed: {e}; used DuckDuckGo instead)\n\n", provider.label()),
-            }
-        }
+    }
+    if let Some((provider, key)) = configured_search_api().await {
+        match api_search(provider, &key, query).await {
+            Ok(hits) => return Ok(Found::Hits { note, hits, engine: Some(provider.label()) }),
+            Err(e) => note = format!("({} search failed: {e}; used DuckDuckGo instead)
 
-        match duckduckgo(&query).await {
-            Ok(results) if !results.is_empty() => ok(format!("{api_note}{}", format_hits(&query, &results[..results.len().min(max)], None))),
-            Ok(_) => ok(format!("{api_note}No results found for: {query}")),
-            Err(ddg_err) => {
-                // DuckDuckGo is keyless and so throttles bursts. OpenAI's web
-                // search (with the user's existing OpenAI key) is the fallback.
-                if let Some(key) = crate::ai::auth::stored_api_key("openai").await.or_else(|| std::env::var("OPENAI_API_KEY").ok()) {
-                    match openai_web_search(&key, &query).await {
-                        Ok(text) => return ok(format!("{api_note}{text}")),
-                        Err(e) => return err(format!("web search is unavailable right now: DuckDuckGo {ddg_err}; OpenAI web search failed ({e})")),
-                    }
-                }
-                err(format!(
-                    "DuckDuckGo {ddg_err}. For reliable search add a Brave Search, Tavily or Exa key in Settings → Web search, or use web_fetch on a known URL."
-                ))
+", provider.label()),
+        }
+    }
+    match duckduckgo(query).await {
+        Ok(hits) => Ok(Found::Hits { note, hits, engine: None }),
+        Err(ddg_err) => {
+            // DuckDuckGo is keyless and so throttles bursts. OpenAI's web
+            // search (with the user's existing OpenAI key) is the fallback.
+            if let Some(key) = crate::ai::auth::stored_api_key("openai").await.or_else(|| std::env::var("OPENAI_API_KEY").ok()) {
+                return match openai_web_search(&key, query).await {
+                    Ok(text) => Ok(Found::Text(format!("{note}{text}"))),
+                    Err(e) => Err(format!("web search is unavailable right now: DuckDuckGo {ddg_err}; OpenAI web search failed ({e})")),
+                };
             }
+            Err(format!("DuckDuckGo {ddg_err}. For reliable search add a Brave Search, Tavily or Exa key in Settings → Web search, or use web_fetch on a known URL."))
         }
     }
 }
@@ -1299,15 +1310,17 @@ async fn api_search(api: SearchApi, key: &str, query: &str) -> Result<Vec<Search
 }
 
 /// The hits in a search API's JSON answer, in each API's own shape.
+static TAG: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"<[^>]+>").expect("valid regex"));
+
 fn parse_hits(api: SearchApi, body: &serde_json::Value) -> Vec<SearchHit> {
     let text = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
     let hit = |title: String, url: String, snippet: String, published: String| SearchHit {
         title: html_unescape(&title),
         url,
-        snippet: html_unescape(&regex::Regex::new(r"<[^>]+>").expect("valid regex").replace_all(&snippet, "")),
+        snippet: html_unescape(&TAG.replace_all(&snippet, "")),
         published,
     };
-    let results = |ptr: &str| body.pointer(ptr).and_then(|r| r.as_array()).cloned().unwrap_or_default();
+    let results = |ptr: &str| body.pointer(ptr).and_then(|r| r.as_array()).map(Vec::as_slice).unwrap_or(&[]);
     match api {
         SearchApi::Brave => results("/web/results").iter().map(|r| hit(text(r, "title"), text(r, "url"), text(r, "description"), text(r, "age"))).collect(),
         SearchApi::Tavily => results("/results").iter().map(|r| hit(text(r, "title"), text(r, "url"), text(r, "content"), text(r, "published_date"))).collect(),
@@ -1350,7 +1363,7 @@ fn search_client() -> &'static reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .user_agent(crate::agent::tools::web_fetch::BROWSER_UA)
             // HTTP/1.1 only. DuckDuckGo answers an HTTP/2 request from a
             // non-browser client with a 202 "anomaly" bot challenge and zero
             // results; the same request over HTTP/1.1 gets the real page.
@@ -1401,13 +1414,7 @@ fn parse_ddg_lite(html: &str) -> Vec<SearchHit> {
 }
 
 fn html_unescape(s: &str) -> String {
-    s.replace("&#x27;", "'")
-        .replace("&#39;", "'")
-        .replace("&quot;", "\"")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&nbsp;", " ")
-        .replace("&amp;", "&")
+    crate::agent::tools::web_fetch::decode_entities(s)
 }
 
 /// DuckDuckGo HTML wraps result URLs in a redirect (`/l/?uddg=<encoded>`); unwrap it.

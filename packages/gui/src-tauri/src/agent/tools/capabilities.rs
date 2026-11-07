@@ -115,7 +115,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Read and search code",
         when: "Finding or understanding anything in the workspace, before changing it.",
-        tools: &["read", "grep", "glob", "code_search", "ls", "repo_clone", "repo_overview", "diagnostics"],
+        tools: &["read", "grep", "glob", "code_search", "ls", "repo_clone", "repo_overview", "diagnostics", "lsp"],
         how: Some(
             "grep for an exact string you know; code_search for a loose or conceptual query; \
              glob to find files by name pattern; read for a specific file. \

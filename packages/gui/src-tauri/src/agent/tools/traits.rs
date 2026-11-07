@@ -31,7 +31,7 @@ pub enum Effect {
 pub fn effect(tool: &str) -> Option<Effect> {
     use Effect::*;
     Some(match tool {
-        "read" | "grep" | "glob" | "code_search" | "ls" | "repo_overview" | "diagnostics" | "inspect_document" | "web_search"
+        "read" | "grep" | "glob" | "code_search" | "ls" | "repo_overview" | "diagnostics" | "lsp" | "inspect_document" | "web_search"
         | "web_fetch" | "recall" | "read_skill" | "list_tools" | "search_tools" | "load_tools" | "list_subagent_profiles" | "get_current_time"
         | "get_goal" | "github" | "guide" | "check_diagram" | "math" | "task_output" | "list_agents" | "list_subagent_models" | "team_read" | "list_automations"
         | "list_custom_tools" | "sleep" | "list_threads" | "read_thread" => Read,

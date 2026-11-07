@@ -11,6 +11,9 @@ use std::time::Duration;
 
 use url::Url;
 
+/// A browser's user agent: many sites hand anything else a challenge page.
+pub const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
 pub const MAX_URL_LEN: usize = 2048;
 pub const MAX_REDIRECTS: usize = 5;
 pub const MAX_BODY_BYTES: usize = 5 * 1024 * 1024;
@@ -73,13 +76,11 @@ pub async fn fetch_stoppable(start: Url) -> Result<Fetched, String> {
 }
 
 pub async fn fetch(start: Url) -> Result<Fetched, String> {
-    let client = reqwest::Client::builder()
-        // Browser UA: many sites hand bots a challenge page.
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("http client error: {e}"))?;
+    // One client for every fetch, so connections and TLS setup are reused. Redirects are followed by hand below.
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let client = CLIENT.get_or_init(|| {
+        reqwest::Client::builder().user_agent(BROWSER_UA).redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(10)).build().unwrap_or_else(|_| reqwest::Client::new())
+    });
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut url = start;
     for _ in 0..=MAX_REDIRECTS {
@@ -125,7 +126,7 @@ pub async fn fetch(start: Url) -> Result<Fetched, String> {
     Err(format!("more than {MAX_REDIRECTS} redirects"))
 }
 
-fn decode_entities(s: &str) -> String {
+pub(crate) fn decode_entities(s: &str) -> String {
     if !s.contains('&') {
         return s.to_string();
     }
@@ -186,6 +187,18 @@ fn attr(tag: &str, name: &str) -> Option<String> {
     Some(decode_entities(&body[..end]))
 }
 
+/// End the current text with at least `n` newlines (none at the very start), dropping trailing spaces.
+fn break_to(out: &mut String, n: usize) {
+    out.truncate(out.trim_end_matches(' ').len());
+    if out.is_empty() {
+        return;
+    }
+    let have = out.len() - out.trim_end_matches('\n').len();
+    for _ in have..n {
+        out.push('\n');
+    }
+}
+
 /// One pass over the markup. `base` resolves relative links. Returns `None` when the page nests deeper than `MAX_DEPTH`.
 pub fn html_to_markdown(html: &str, base: Option<&Url>) -> Option<String> {
     let lower = html.to_ascii_lowercase();
@@ -243,22 +256,8 @@ pub fn html_to_markdown(html: &str, base: Option<&Url>) -> Option<String> {
                 }
             }
         }
-        let block = |out: &mut String| {
-            while out.ends_with(' ') {
-                out.pop();
-            }
-            if !out.is_empty() && !out.ends_with("\n\n") {
-                out.push_str(if out.ends_with('\n') { "\n" } else { "\n\n" });
-            }
-        };
-        let line = |out: &mut String| {
-            while out.ends_with(' ') {
-                out.pop();
-            }
-            if !out.is_empty() && !out.ends_with('\n') {
-                out.push('\n');
-            }
-        };
+        let block = |out: &mut String| break_to(out, 2);
+        let line = |out: &mut String| break_to(out, 1);
         match (name.as_str(), closing) {
             ("h1" | "h2" | "h3" | "h4" | "h5" | "h6", false) => {
                 block(&mut out);

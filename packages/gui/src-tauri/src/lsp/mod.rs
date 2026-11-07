@@ -10,6 +10,7 @@
 
 pub mod client;
 pub mod manager;
+pub mod uri;
 
 use std::collections::HashMap;
 

@@ -298,9 +298,7 @@ impl Tool for ApplyPatchTool {
         let mut text = format!("Success. Updated the following files:\n{}", summary_lines.join("\n"));
         for file in &changed_files {
             let full = resolve_path(&self.cwd, file).display().to_string();
-            crate::lsp::manager::touch_file(&full, &self.cwd).await;
-            let diagnostics = crate::lsp::manager::diagnostics_for(&full, &self.cwd).await;
-            if let Some(block) = crate::lsp::format_diagnostics(&full, &diagnostics) {
+            if let Some(block) = crate::lsp::manager::post_edit_block(&full, &self.cwd).await {
                 text.push_str("\n\n");
                 text.push_str(&block);
             }

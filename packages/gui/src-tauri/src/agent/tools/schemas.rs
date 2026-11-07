@@ -396,6 +396,20 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
             }
         }),
         serde_json::json!({
+            "name": "lsp",
+            "description": "Code navigation through the file's language server: goToDefinition, findReferences, goToImplementation, hover (type and docs). Choose it when text search is ambiguous (an overloaded or common name, a method on a specific type). line and column are 1-based, as shown by read; put the column on the symbol. Needs a language server for the file type on PATH; read-only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": { "type": "string", "enum": ["goToDefinition", "findReferences", "goToImplementation", "hover"] },
+                    "path": { "type": "string", "description": "File containing the symbol, absolute or relative to the workspace" },
+                    "line": { "type": "number", "description": "1-based line" },
+                    "column": { "type": "number", "description": "1-based column (characters)" }
+                },
+                "required": ["operation", "path", "line", "column"]
+            }
+        }),
+        serde_json::json!({
             "name": "diagnostics",
             "description": "Get language-server diagnostics (errors/warnings) for a file. Requires a language server for that file type to be installed and on PATH.",
             "parameters": {

@@ -23,17 +23,15 @@ use regex::Regex;
 use std::collections::HashMap;
 
 /// Env var names that are never handed to a spawned shell, even though the agent process itself holds them (for provider API calls).
-/// A name is withheld when it ends in a credential word (`_KEY`, `_TOKEN`, `_SECRET`, `_PASSWORD`, `_CREDENTIAL(S)`) or contains one anywhere
-/// (`SECRET`, `PASSWORD`, `TOKEN`, `API_KEY`, `ACCESS_KEY`, `PRIVATE_KEY`, so `AWS_ACCESS_KEY_ID` and `GITHUB_TOKEN_FILE` don't slip past a
-/// suffix list), or is one of the handles to a credential agent.
-const DENIED_ENV_SUFFIXES: &[&str] = &["_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_CREDENTIAL", "_CREDENTIALS"];
+/// A name is withheld when it ends in `_KEY`, contains a credential word anywhere (`SECRET`, `PASSWORD`, `TOKEN`, `API_KEY`, `ACCESS_KEY`,
+/// `PRIVATE_KEY`, so `AWS_ACCESS_KEY_ID` and `GITHUB_TOKEN_FILE` are caught too), or is one of the handles to a credential agent.
 const DENIED_ENV_WORDS: &[&str] = &["SECRET", "PASSWORD", "PASSWD", "TOKEN", "CREDENTIAL", "API_KEY", "APIKEY", "ACCESS_KEY", "PRIVATE_KEY"];
 const DENIED_ENV_NAMES: &[&str] = &["SSH_AUTH_SOCK", "GPG_AGENT_INFO"];
 
 pub fn is_denied_env_var(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     DENIED_ENV_NAMES.contains(&upper.as_str())
-        || DENIED_ENV_SUFFIXES.iter().any(|suf| upper.ends_with(suf))
+        || upper.ends_with("_KEY")
         || DENIED_ENV_WORDS.iter().any(|w| upper.contains(w))
 }
 
