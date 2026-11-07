@@ -8,6 +8,7 @@ import { Markdown } from './Markdown'
 import { ReportMarkdown } from './ReportMarkdown'
 import { FileLink } from './FileLink'
 import { splitFilePaths } from '../lib/filePaths'
+import { maskSecrets } from '../../../lib/secretMask'
 import { ToolCallCard } from './ToolCallCard'
 import { TeamRunCard } from '../../team/components/TeamRunCard'
 import { ReasoningBlock } from './ReasoningBlock'
@@ -156,7 +157,7 @@ function MessageBubbleImpl({
             <ThinkingIndicator />
           ) : isUser ? (
             <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontSize: CHAT_FONT.text, lineHeight: 1.6 }}>
-              {splitFilePaths(text).map((p, i) =>
+              {splitFilePaths(maskSecrets(text)).map((p, i) =>
                 typeof p === 'string' ? p : <FileLink key={i} path={p.path} label={p.text} prose line={p.anchor?.line} />,
               )}
             </Typography>

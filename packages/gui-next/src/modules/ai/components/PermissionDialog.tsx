@@ -61,10 +61,11 @@ export function PermissionDialog() {
         </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={() => void respond(false)} color="inherit">
+        {/* Deny holds the focus: a stray Enter must not approve a tool call. */}
+        <Button onClick={() => void respond(false)} color="inherit" autoFocus>
           Deny
         </Button>
-        <Button onClick={() => void respond(true)} variant="contained" autoFocus>
+        <Button onClick={() => void respond(true)} variant="contained">
           Allow
         </Button>
       </DialogActions>
