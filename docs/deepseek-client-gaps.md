@@ -65,3 +65,17 @@ Sizes: S is under a day, M a few days, L about a week or more.
 | Plugin market and inventory | Only relevant if mods get an index and versions. `ModsSection` shows local mods | L |
 | Trajectory at scale (`ui-trajectory`) | Virtual rows, a search index and a drag filter on the timeline. Do this when real runs grow past a few hundred steps | M |
 | Plugin loader, HMR, slots, dockkit, connection | A different architecture from ours. Skip unless Vivianne opens to third-party plugins | — |
+
+## Process layer (from the `subprocess` audit)
+
+Done for `bash` and `powershell`: a timeout keeps the output so far, the drain after the loop falls under the same deadline, the whole process tree is killed on timeout or stop, each stream has its own budget, and credential names are withheld. Credentials are now also withheld from MCP, language-server and checker children, with an MCP server's own configured variables applied on top.
+
+| Gap | What it needs | Size |
+|---|---|---|
+| Subagent harness children still get the full environment | Deliberately left: a harness such as Codex or Claude Code may rely on a provider key from the parent. Decide which keys each harness is allowed, then scrub the rest | S |
+| Tree containment outside `bash` and `powershell` | MCP servers, language servers, checkers and the docker path still kill only the direct child. Use the same process-group and `taskkill /T` helpers | M |
+| One spawn seam | A `ProcessRuntime` that the roughly 90 `Command::new` sites go through, so containment, env scrub and deadlines are decided once | L |
+| Shared output collector | Byte-oriented, with one spill file that holds the whole stream, offset readers, and a "head was dropped" flag | M |
+| Terminal reads that don't consume | `terminal.rs` drains the buffer on each read. Add an offset read and report truncation to the model | S |
+| PTY readiness | Foreground process and idle/busy state, so the model stops guessing with fixed sleeps | M |
+| Process lifecycle tests | Spawn and collect, tree kill, drain cannot escape the deadline, terminal resize. `streaming.rs` has the shell cases; nothing covers the other call sites | M |
