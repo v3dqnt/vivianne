@@ -22,10 +22,45 @@ type Files = Vec<(PathBuf, String)>;
 
 /// Load and format every instruction file for the given workspace folders. Returns `None` if there are none.
 pub async fn load(workspace_folders: &[String]) -> Option<String> {
-    load_from(workspace_folders, Some(crate::agent::system::paths::viv_home_path(&[]))).await
+    load_from(workspace_folders, Some(crate::agent::system::paths::viv_home_path(&[])), None).await
 }
 
-async fn load_from(workspace_folders: &[String], user_dir: Option<PathBuf>) -> Option<String> {
+/// Like `load`, and when `key` (a conversation) has been told about these files before, also says what changed since then: a file edited,
+/// added or removed. The model re-reads the current text every turn; this is how it learns that something is different.
+pub async fn load_for(key: Option<&str>, workspace_folders: &[String]) -> Option<String> {
+    load_from(workspace_folders, Some(crate::agent::system::paths::viv_home_path(&[])), key).await
+}
+
+/// What each conversation was last shown: each file's path and a fingerprint of its text.
+fn seen() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::collections::BTreeMap<String, u64>>> {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::collections::BTreeMap<String, u64>>>> = std::sync::OnceLock::new();
+    SEEN.get_or_init(Default::default)
+}
+
+fn fingerprint(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    h.finish()
+}
+
+/// Sentences naming each difference between what was shown before and what is there now.
+pub fn describe_changes(before: &std::collections::BTreeMap<String, u64>, after: &std::collections::BTreeMap<String, u64>) -> Vec<String> {
+    let mut out = Vec::new();
+    for (path, now) in after {
+        match before.get(path) {
+            None => out.push(format!("{path} was added")),
+            Some(was) if was != now => out.push(format!("{path} was edited")),
+            _ => {}
+        }
+    }
+    for path in before.keys().filter(|p| !after.contains_key(*p)) {
+        out.push(format!("{path} was removed"));
+    }
+    out
+}
+
+async fn load_from(workspace_folders: &[String], user_dir: Option<PathBuf>, key: Option<&str>) -> Option<String> {
     let roots: Vec<PathBuf> = if workspace_folders.is_empty() {
         std::env::current_dir().ok().into_iter().collect()
     } else {
@@ -53,11 +88,22 @@ async fn load_from(workspace_folders: &[String], user_dir: Option<PathBuf>) -> O
         }
     }
 
-    let blocks: Vec<String> = [("user_instructions", &user), ("project_instructions", &project)]
+    let mut blocks: Vec<String> = [("user_instructions", &user), ("project_instructions", &project)]
         .into_iter()
         .filter(|(_, files)| !files.is_empty())
         .map(|(tag, files)| render_tier(tag, files, TIER_BYTES))
         .collect();
+    if let Some(key) = key {
+        let now: std::collections::BTreeMap<String, u64> = user.iter().chain(project.iter()).map(|(p, c)| (p.display().to_string(), fingerprint(c))).collect();
+        let before = seen().lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string(), now.clone());
+        // The first time a conversation sees these files there is nothing to compare with, so nothing is said.
+        if let Some(before) = before {
+            let changes = describe_changes(&before, &now);
+            if !changes.is_empty() {
+                blocks.push(format!("<instructions_changed>Since your last turn: {}. The instructions above are the current ones.</instructions_changed>", changes.join("; ")));
+            }
+        }
+    }
     (!blocks.is_empty()).then(|| blocks.join("\n\n"))
 }
 
@@ -170,7 +216,7 @@ mod tests {
     async fn loads_single_agents_md() {
         let dir = temp("one").await;
         tokio::fs::write(dir.join("AGENTS.md"), "Use pnpm here.").await.unwrap();
-        let text = load_from(&s(&dir), None).await.unwrap();
+        let text = load_from(&s(&dir), None, None).await.unwrap();
         assert!(text.contains("<project_instructions>") && text.contains("Use pnpm here."));
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
@@ -180,7 +226,7 @@ mod tests {
         let dir = temp("both").await;
         tokio::fs::write(dir.join("AGENTS.md"), "AGENTS content").await.unwrap();
         tokio::fs::write(dir.join("CLAUDE.md"), "CLAUDE content").await.unwrap();
-        let text = load_from(&s(&dir), None).await.unwrap();
+        let text = load_from(&s(&dir), None, None).await.unwrap();
         assert!(text.contains("AGENTS content") && text.contains("CLAUDE content"));
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
@@ -190,7 +236,7 @@ mod tests {
         let dir = temp("import").await;
         tokio::fs::write(dir.join("AGENTS.md"), "The real instructions.").await.unwrap();
         tokio::fs::write(dir.join("CLAUDE.md"), "@AGENTS.md").await.unwrap();
-        let text = load_from(&s(&dir), None).await.unwrap();
+        let text = load_from(&s(&dir), None, None).await.unwrap();
         assert_eq!(text.matches("The real instructions.").count(), 1);
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
@@ -200,7 +246,7 @@ mod tests {
         let dir = temp("local").await;
         tokio::fs::write(dir.join("AGENTS.md"), "shared rules").await.unwrap();
         tokio::fs::write(dir.join("AGENTS.local.md"), "my own rules").await.unwrap();
-        let text = load_from(&s(&dir), None).await.unwrap();
+        let text = load_from(&s(&dir), None, None).await.unwrap();
         assert!(text.find("shared rules").unwrap() < text.find("my own rules").unwrap());
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
@@ -211,7 +257,7 @@ mod tests {
         let home = temp("home").await;
         tokio::fs::write(dir.join("AGENTS.md"), "project rule").await.unwrap();
         tokio::fs::write(home.join("AGENTS.md"), "always answer briefly").await.unwrap();
-        let text = load_from(&s(&dir), Some(home.clone())).await.unwrap();
+        let text = load_from(&s(&dir), Some(home.clone()), None).await.unwrap();
         assert!(text.contains("<user_instructions>") && text.contains("always answer briefly"));
         assert!(text.contains("<project_instructions>") && text.contains("project rule"));
         let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -227,7 +273,7 @@ mod tests {
         tokio::fs::create_dir_all(repo.join(".git")).await.unwrap();
         tokio::fs::write(repo.join("AGENTS.md"), "repo root rules").await.unwrap();
         tokio::fs::write(container.join("AGENTS.md"), "should not be found").await.unwrap();
-        let text = load_from(&s(&sub), None).await.unwrap();
+        let text = load_from(&s(&sub), None, None).await.unwrap();
         assert!(text.contains("repo root rules") && !text.contains("should not be found"));
         let _ = tokio::fs::remove_dir_all(&container).await;
     }
@@ -235,9 +281,28 @@ mod tests {
     #[tokio::test]
     async fn returns_none_when_nothing_found() {
         let dir = temp("empty").await;
-        if let Some(text) = load_from(&s(&dir), None).await {
+        if let Some(text) = load_from(&s(&dir), None, None).await {
             assert!(!text.contains("vivianne_pi_empty"));
         }
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn an_edited_added_or_removed_file_is_reported_on_the_next_turn_but_not_the_first() {
+        let dir = temp("changes").await;
+        let key = format!("conv-{}", uuid::Uuid::new_v4());
+        tokio::fs::write(dir.join("AGENTS.md"), "version one").await.unwrap();
+        let first = load_from(&s(&dir), None, Some(&key)).await.unwrap();
+        assert!(!first.contains("instructions_changed"), "nothing to compare with yet");
+        let same = load_from(&s(&dir), None, Some(&key)).await.unwrap();
+        assert!(!same.contains("instructions_changed"), "nothing changed");
+        tokio::fs::write(dir.join("AGENTS.md"), "version two").await.unwrap();
+        tokio::fs::write(dir.join("CLAUDE.local.md"), "mine").await.unwrap();
+        let edited = load_from(&s(&dir), None, Some(&key)).await.unwrap();
+        assert!(edited.contains("AGENTS.md was edited") && edited.contains("CLAUDE.local.md was added"), "{edited}");
+        tokio::fs::remove_file(dir.join("CLAUDE.local.md")).await.unwrap();
+        let removed = load_from(&s(&dir), None, Some(&key)).await.unwrap();
+        assert!(removed.contains("CLAUDE.local.md was removed"), "{removed}");
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 

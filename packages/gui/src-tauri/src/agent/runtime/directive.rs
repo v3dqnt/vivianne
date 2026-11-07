@@ -237,7 +237,7 @@ pub(crate) async fn assemble_capability_blocks(
     }
 
     if include_project_instructions {
-        if let Some(instructions_block) = crate::agent::sessions::project_instructions::load(&workspace_folders).await {
+        if let Some(instructions_block) = crate::agent::sessions::project_instructions::load_for(state.session_tag().await.as_deref(), &workspace_folders).await {
             prompt = format!("{prompt}\n\n{instructions_block}");
         }
     }
@@ -296,7 +296,7 @@ pub(crate) async fn assemble_capability_blocks(
         }
     }
     prompt.push_str(&browser_block);
-    prompt.push_str(&time_block(chrono::Local::now()));
+    prompt.push_str(&time_block(chrono::Local::now(), conversation_age_minutes(state.session_tag().await.as_deref())));
     if let Some(goal) = goal_block {
         prompt.push_str(&goal);
     }
@@ -311,14 +311,27 @@ pub(crate) async fn assemble_capability_blocks(
 
 /// The date, time and UTC offset the model works in, so it never has to call a tool to learn what day "tomorrow" is. The minute is floored
 /// to ten, because a prompt that changes every minute would never hit the provider's prompt cache for what follows it.
-pub fn time_block<Tz: chrono::TimeZone>(now: chrono::DateTime<Tz>) -> String
+/// Minutes since this conversation was first given the time (its first step), floored to ten, or None in its first ten minutes.
+fn conversation_age_minutes(key: Option<&str>) -> Option<i64> {
+    static STARTED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, i64>>> = std::sync::OnceLock::new();
+    let key = key?;
+    let now = chrono::Utc::now().timestamp();
+    let first = *STARTED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner()).entry(key.to_string()).or_insert(now);
+    let minutes = (now - first) / 60 / 10 * 10;
+    (minutes >= 10).then_some(minutes)
+}
+
+pub fn time_block<Tz: chrono::TimeZone>(now: chrono::DateTime<Tz>, age_minutes: Option<i64>) -> String
 where
     Tz::Offset: std::fmt::Display,
 {
     use chrono::Timelike;
     let floored = now.with_minute(now.minute() / 10 * 10).unwrap_or(now);
+    let age = age_minutes
+        .map(|m| if m >= 60 { format!(" This conversation began about {}h {:02}m ago.", m / 60, m % 60) } else { format!(" This conversation began about {m} minutes ago.") })
+        .unwrap_or_default();
     format!(
-        "\n\n<vivianne_time>It is {} (UTC{}), {}. Use this for dates and relative times; call get_current_time only if you need the exact second.</vivianne_time>",
+        "\n\n<vivianne_time>It is {} (UTC{}), {}.{age} Use this for dates and relative times; call get_current_time only if you need the exact second.</vivianne_time>",
         floored.format("%Y-%m-%d %H:%M"),
         floored.format("%:z"),
         floored.format("%A"),
@@ -334,9 +347,11 @@ mod time_tests {
     fn the_time_block_names_the_day_and_offset_and_floors_the_minute() {
         let ist = chrono::FixedOffset::east_opt(5 * 3600 + 1800).unwrap();
         let t = ist.with_ymd_and_hms(2026, 11, 7, 19, 38, 42).unwrap();
-        let b = time_block(t);
+        let b = time_block(t, None);
         assert!(b.contains("2026-11-07 19:30") && b.contains("UTC+05:30") && b.contains("Saturday"), "{b}");
-        assert_eq!(time_block(t), time_block(ist.with_ymd_and_hms(2026, 11, 7, 19, 31, 0).unwrap()), "same ten minutes, same text");
+        assert_eq!(time_block(t, None), time_block(ist.with_ymd_and_hms(2026, 11, 7, 19, 31, 0).unwrap(), None), "same ten minutes, same text");
+        assert!(time_block(t, Some(130)).contains("began about 2h 10m ago"));
+        assert!(time_block(t, Some(20)).contains("began about 20 minutes ago"));
     }
 }
 
