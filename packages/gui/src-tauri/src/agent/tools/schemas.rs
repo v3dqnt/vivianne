@@ -171,7 +171,9 @@ pub(crate) fn static_tool_definitions() -> Vec<serde_json::Value> {
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "Shell command to execute" },
-                    "timeout": { "type": "number", "description": "Timeout in seconds (default 120, max 600)" }
+                    "workdir": { "type": "string", "description": "A folder inside the workspace to run it in (instead of cd X && …). Relative to the workspace." },
+                    "description": { "type": "string", "description": "A few words on what the command is for, shown to the user above it." },
+                    "timeout": { "type": "number", "description": "Timeout in seconds (default 120, max 600). If it passes, the command is killed and you get what it printed so far." }
                 },
                 "required": ["command"]
             }
@@ -371,6 +373,8 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "PowerShell command to execute" },
+                    "workdir": { "type": "string", "description": "A folder inside the workspace to run it in. Relative to the workspace." },
+                    "description": { "type": "string", "description": "A few words on what the command is for, shown to the user above it." },
                     "timeout": { "type": "number", "description": "Timeout in seconds (default 120, max 600)" }
                 },
                 "required": ["command"]

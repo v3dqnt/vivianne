@@ -499,7 +499,11 @@ impl Tool for BashTool {
         // elsewhere) since the tool contract and model-generated commands are
         // POSIX syntax; falling back to cmd/powershell would silently
         // misinterpret that syntax rather than fail loudly.
-        crate::agent::runtime::streaming::run_streaming("bash", "bash", &["-c", &command], &self.cwd, timeout_secs).await
+        let cwd = match resolve_workdir(&self.cwd, args["workdir"].as_str()) {
+            Ok(c) => c,
+            Err(e) => return ToolResult { content: format!("Error: {e}"), is_error: true, details: None },
+        };
+        crate::agent::runtime::streaming::run_streaming("bash", "bash", &["-c", &command], &cwd, timeout_secs).await
     }
 }
 
@@ -786,6 +790,23 @@ impl Tool for GlobTool {
 
 // ── powershell ──────────────────────────────────────────────────────────────
 
+/// Where a command runs: the workspace, or a folder inside it named by `workdir`. That replaces `cd X && …`, which the command guard can't reason
+/// about. A folder that doesn't exist, isn't a folder, or lies outside the workspace is refused.
+pub fn resolve_workdir(cwd: &str, workdir: Option<&str>) -> Result<String, String> {
+    let Some(wd) = workdir.map(str::trim).filter(|w| !w.is_empty()) else { return Ok(cwd.to_string()) };
+    let root = std::fs::canonicalize(cwd).map_err(|e| format!("The workspace folder isn't readable: {e}"))?;
+    let wanted = std::path::Path::new(wd);
+    let joined = if wanted.is_absolute() { wanted.to_path_buf() } else { root.join(wanted) };
+    let dir = std::fs::canonicalize(&joined).map_err(|_| format!("workdir '{wd}' doesn't exist."))?;
+    if !dir.is_dir() {
+        return Err(format!("workdir '{wd}' isn't a folder."));
+    }
+    if !dir.starts_with(&root) {
+        return Err(format!("workdir '{wd}' is outside the workspace."));
+    }
+    Ok(dir.to_string_lossy().trim_start_matches(r"\\?\").to_string())
+}
+
 pub struct PowerShellTool { cwd: String }
 impl PowerShellTool { pub fn new(cwd: String) -> Self { Self { cwd } } }
 
@@ -811,7 +832,10 @@ impl Tool for PowerShellTool {
             "powershell",
             exe,
             &["-NoProfile", "-NonInteractive", "-Command", &command],
-            &self.cwd,
+            &match resolve_workdir(&self.cwd, args["workdir"].as_str()) {
+                Ok(c) => c,
+                Err(e) => return err(&format!("Error: {e}")),
+            },
             timeout_secs,
         )
         .await
@@ -2263,5 +2287,24 @@ mod read_ls_tests {
     fn parse_pages() {
         assert_eq!(parse_page_range("1-3", 10), vec![1, 2, 3]);
         assert_eq!(parse_page_range("2,4,6-7", 10), vec![2, 4, 6, 7]);
+    }
+}
+
+#[cfg(test)]
+mod workdir_tests {
+    use super::resolve_workdir;
+
+    #[test]
+    fn workdir_stays_inside_the_workspace() {
+        let root = std::env::temp_dir().join(format!("viv-wd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("f.txt"), b"x").unwrap();
+        let cwd = root.to_string_lossy().to_string();
+        assert_eq!(resolve_workdir(&cwd, None).unwrap(), cwd);
+        assert!(resolve_workdir(&cwd, Some("sub")).unwrap().ends_with("sub"));
+        assert!(resolve_workdir(&cwd, Some("nope")).unwrap_err().contains("doesn't exist"));
+        assert!(resolve_workdir(&cwd, Some("f.txt")).unwrap_err().contains("isn't a folder"));
+        assert!(resolve_workdir(&cwd, Some("..")).unwrap_err().contains("outside"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
