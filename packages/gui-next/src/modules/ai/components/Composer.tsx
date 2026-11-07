@@ -243,6 +243,28 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wantsFiles, workspaceFolders])
 
+  // The files a mention matches, ranked by the backend's index (exact name, name prefix, name contains, path contains, letters in order),
+  // so typing never waits on a walk of the disk and a big repo answers as fast as a small one.
+  const [ranked, setRanked] = useState<MentionableFile[]>([])
+  useEffect(() => {
+    if (mentionQuery === null || workspaceFolders.length === 0) {
+      setRanked([])
+      return
+    }
+    let cancelled = false
+    const t = window.setTimeout(() => {
+      void call<{ relPath: string; name: string; isDir: boolean; insertPath: string }[]>('cmd_file_search', { roots: workspaceFolders, query: mentionQuery, limit: 20 })
+        .then((found) => {
+          if (!cancelled && found) setRanked(found.map((f) => ({ relPath: f.relPath, name: f.name, isDir: f.isDir, insertPath: f.insertPath })))
+        })
+        .catch(() => {})
+    }, 60)
+    return () => {
+      cancelled = true
+      window.clearTimeout(t)
+    }
+  }, [mentionQuery, workspaceFolders])
+
   // What the prompt can name: files, by name and by path.
   const knownFiles = useMemo(
     () => fileMatches.filter((f) => !f.isDir).map((f) => ({ name: f.name, path: f.insertPath })),
@@ -256,12 +278,12 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
       .filter((s) => s.name.toLowerCase().includes(q))
       .slice(0, 5)
       .map((skill) => ({ kind: 'skill', skill }))
-    const fileItems: MentionItem[] = fileMatches
-      .filter((f) => f.relPath.toLowerCase().includes(q) || f.name.toLowerCase().includes(q))
+    // The backend ranks them; before its answer arrives (or when it can't give one) the cached tree is filtered as before.
+    const fileItems: MentionItem[] = (ranked.length > 0 ? ranked : fileMatches.filter((f) => f.relPath.toLowerCase().includes(q) || f.name.toLowerCase().includes(q)))
       .slice(0, 50)
       .map((file) => ({ kind: 'file', file }))
     return [...skillItems, ...fileItems]
-  }, [mentionQuery, skills, fileMatches])
+  }, [mentionQuery, skills, fileMatches, ranked])
 
   const mentionOpen = mentionItems.length > 0
 

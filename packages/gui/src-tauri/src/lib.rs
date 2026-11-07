@@ -311,6 +311,7 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::orchestration::cmd_thread_usage,
       crate::agent::runtime::trace::cmd_traces_list,
       crate::agent::runtime::trace::cmd_trace_read,
+      crate::agent::sessions::file_index::cmd_file_search,
       crate::agent::goal::cmd_goal_get,
       crate::agent::goal::cmd_goal_do,
       crate::agent::tools::background::cmd_tool_background,
