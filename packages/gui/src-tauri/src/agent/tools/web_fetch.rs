@@ -59,6 +59,19 @@ fn decode(bytes: &[u8], content_type: &str) -> String {
     }
 }
 
+/// `fetch`, abandoned within a quarter second of the turn being stopped (the socket closes when the future is dropped).
+pub async fn fetch_stoppable(start: Url) -> Result<Fetched, String> {
+    let watch = async {
+        while !crate::agent::orchestration::turn_aborted() {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    };
+    tokio::select! {
+        r = fetch(start) => r,
+        _ = watch => Err("stopped".to_string()),
+    }
+}
+
 pub async fn fetch(start: Url) -> Result<Fetched, String> {
     let client = reqwest::Client::builder()
         // Browser UA: many sites hand bots a challenge page.
@@ -318,6 +331,27 @@ mod tests {
         assert!(validate_url("ftp://example.com").is_err());
         assert!(validate_url("example.com").is_err());
         assert!(validate_url(&format!("https://example.com/{}", "a".repeat(MAX_URL_LEN))).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_stopped_turn_abandons_the_fetch_quickly() {
+        // A listener that accepts and never answers: the fetch would wait out its deadline.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _held = listener.accept().await;
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let f2 = flag.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            f2.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let started = std::time::Instant::now();
+        let r = crate::agent::orchestration::TURN_ABORT.scope(flag, fetch_stoppable(Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap())).await;
+        assert_eq!(r.err().as_deref(), Some("stopped"));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

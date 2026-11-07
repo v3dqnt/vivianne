@@ -547,6 +547,16 @@ tokio::task_local! {
     pub static TURN_THREAD: String;
 }
 
+tokio::task_local! {
+    /// The running turn's stop flag, so a slow tool (a network fetch) can notice Stop mid-call instead of waiting for the next step.
+    pub static TURN_ABORT: std::sync::Arc<std::sync::atomic::AtomicBool>;
+}
+
+/// True once the turn this code runs under has been told to stop. False outside a turn.
+pub fn turn_aborted() -> bool {
+    TURN_ABORT.try_with(|f| f.load(std::sync::atomic::Ordering::SeqCst)).unwrap_or(false)
+}
+
 /// The thread of the turn this code runs under, if it runs under one.
 pub fn turn_thread() -> Option<String> {
     TURN_THREAD.try_with(|t| t.clone()).ok().filter(|t| !t.is_empty())

@@ -243,7 +243,8 @@ pub async fn run_turn(
     images: Vec<ImageInput>,
     turn: Turn,
 ) -> Result<Vec<AgentMessage>, String> {
-    crate::agent::orchestration::TURN_THREAD.scope(thread_id.to_string(), run_turn_inner(app, state, thread_id, text, images, turn)).await
+    let abort = state.abort_flag.clone();
+    crate::agent::orchestration::TURN_ABORT.scope(abort, crate::agent::orchestration::TURN_THREAD.scope(thread_id.to_string(), run_turn_inner(app, state, thread_id, text, images, turn))).await
 }
 
 async fn run_turn_inner(

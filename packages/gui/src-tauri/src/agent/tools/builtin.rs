@@ -950,7 +950,7 @@ impl Tool for WebFetchTool {
             Ok(u) => u,
             Err(e) => return err(e),
         };
-        let f = match wf::fetch(url.clone()).await {
+        let f = match wf::fetch_stoppable(url.clone()).await {
             Ok(f) => f,
             Err(e) => return err(format!("{e} ({url})")),
         };
@@ -1043,11 +1043,6 @@ async fn search_one(query: &str, max: usize) -> ToolResult {
     let query = query.to_string();
     {
 
-        // Prefer a real browser search (camoufox-browser) when it's running —
-        // far more resistant to being blocked than a plain HTML scrape. Falls
-        // through to the DuckDuckGo scraper below on any failure (not
-        // running, network error, empty result), so search still works with
-        // zero extra setup for anyone who hasn't installed camoufox-browser.
         // A search API when one is configured: fast, structured, and not
         // subject to the bot checks and rate limits a scraped engine is.
         let mut api_note = String::new();
@@ -1198,7 +1193,9 @@ fn format_hits(query: &str, hits: &[SearchHit], source: Option<&str>) -> String 
         None => format!("Search results for: {query}\n\n"),
     };
     for (i, r) in hits.iter().take(10).enumerate() {
-        out.push_str(&format!("{}. {}\n   {}\n", i + 1, r.title, r.url));
+        let engine = source.unwrap_or("DuckDuckGo");
+        let tag = if r.published.is_empty() { engine.to_string() } else { format!("{engine}, {}", r.published) };
+        out.push_str(&format!("{}. {} [{tag}]\n   {}\n", i + 1, r.title, r.url));
         if !r.snippet.is_empty() {
             out.push_str(&format!("   {}\n", r.snippet));
         }
@@ -1304,15 +1301,16 @@ async fn api_search(api: SearchApi, key: &str, query: &str) -> Result<Vec<Search
 /// The hits in a search API's JSON answer, in each API's own shape.
 fn parse_hits(api: SearchApi, body: &serde_json::Value) -> Vec<SearchHit> {
     let text = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-    let hit = |title: String, url: String, snippet: String| SearchHit {
+    let hit = |title: String, url: String, snippet: String, published: String| SearchHit {
         title: html_unescape(&title),
         url,
         snippet: html_unescape(&regex::Regex::new(r"<[^>]+>").expect("valid regex").replace_all(&snippet, "")),
+        published,
     };
     let results = |ptr: &str| body.pointer(ptr).and_then(|r| r.as_array()).cloned().unwrap_or_default();
     match api {
-        SearchApi::Brave => results("/web/results").iter().map(|r| hit(text(r, "title"), text(r, "url"), text(r, "description"))).collect(),
-        SearchApi::Tavily => results("/results").iter().map(|r| hit(text(r, "title"), text(r, "url"), text(r, "content"))).collect(),
+        SearchApi::Brave => results("/web/results").iter().map(|r| hit(text(r, "title"), text(r, "url"), text(r, "description"), text(r, "age"))).collect(),
+        SearchApi::Tavily => results("/results").iter().map(|r| hit(text(r, "title"), text(r, "url"), text(r, "content"), text(r, "published_date"))).collect(),
         SearchApi::Exa => results("/results")
             .iter()
             .map(|r| {
@@ -1321,7 +1319,7 @@ fn parse_hits(api: SearchApi, body: &serde_json::Value) -> Vec<SearchHit> {
                     .and_then(|h| h.as_array())
                     .map(|h| h.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(" … "))
                     .unwrap_or_default();
-                hit(text(r, "title"), text(r, "url"), snippet)
+                hit(text(r, "title"), text(r, "url"), snippet, text(r, "publishedDate"))
             })
             .collect(),
     }
@@ -1365,25 +1363,13 @@ fn search_client() -> &'static reqwest::Client {
     })
 }
 
-/// Whether the local camoufox browser is up, with a "no" remembered for a
-/// minute — most people never run it, and asking every search costs time.
-async fn camoufox_available() -> bool {
-    static LAST_NO: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
-    if let Some(t) = *LAST_NO.lock().unwrap_or_else(|e| e.into_inner()) {
-        if t.elapsed() < Duration::from_secs(60) {
-            return false;
-        }
-    }
-    let up = crate::camoufox::health().await;
-    *LAST_NO.lock().unwrap_or_else(|e| e.into_inner()) = if up { None } else { Some(std::time::Instant::now()) };
-    up
-}
-
 #[derive(Debug, PartialEq)]
 struct SearchHit {
     title: String,
     url: String,
     snippet: String,
+    /// When the page was published, as the engine states it ("2 days ago", "2026-03-01"); empty when it doesn't say.
+    published: String,
 }
 
 /// Results from a DuckDuckGo Lite page: each `result-link` anchor, and the
@@ -1409,7 +1395,7 @@ fn parse_ddg_lite(html: &str) -> Vec<SearchHit> {
         let from = cap.get(0).map(|m| m.end()).unwrap_or(0);
         let to = anchors.get(i + 1).and_then(|c| c.get(0)).map(|m| m.start()).unwrap_or(html.len());
         let snippet = snippet.captures(&html[from..to]).map(|c| clean(&c[1])).unwrap_or_default();
-        hits.push(SearchHit { title, url, snippet });
+        hits.push(SearchHit { title, url, snippet, published: String::new() });
     }
     hits
 }
@@ -2279,9 +2265,11 @@ mod search_api_parse_tests {
 
     #[test]
     fn the_result_text_names_the_engine() {
-        let hits = vec![SearchHit { title: "T".into(), url: "https://t".into(), snippet: "s".into() }];
+        let hits = vec![SearchHit { title: "T".into(), url: "https://t".into(), snippet: "s".into(), published: "2 days ago".into() }];
         let text = format_hits("q", &hits, Some(SearchApi::Tavily.label()));
         assert!(text.starts_with("Search results for: q (via Tavily)"), "{text}");
+        assert!(text.contains("1. T [Tavily, 2 days ago]"), "each hit names its engine and date: {text}");
+        assert!(format_hits("q", &hits, None).contains("1. T [DuckDuckGo, 2 days ago]"));
     }
 }
 
