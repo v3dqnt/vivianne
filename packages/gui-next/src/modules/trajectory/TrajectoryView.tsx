@@ -81,7 +81,8 @@ export function TrajectoryView() {
       {runs && runs.length === 0 && <Empty>No runs recorded yet. Run a task and it shows up here.</Empty>}
       {error && <Empty>{error}</Empty>}
 
-      {traj.turns.length > 0 && <Timeline turns={traj.turns} start={traj.start} end={traj.end} onPick={(step) => setOpen(traj.rows.find((r) => r.step === step && r.kind === 'assistant')?.id ?? null)} />}
+      {traj.turns.length > 0 && !traj.turns.some((t) => t.modelMs > 0) && <Typography sx={{ px: '16px', py: '8px', fontSize: '0.75rem', color: 'text.disabled', borderBottom: 1, borderColor: 'divider' }}>This run was recorded before timings were kept, so there is no timeline. New runs have one.</Typography>}
+      {traj.turns.some((t) => t.modelMs > 0) && <Timeline turns={traj.turns} start={traj.start} end={traj.end} onPick={(step) => setOpen(traj.rows.find((r) => r.step === step && r.kind === 'assistant')?.id ?? null)} />}
 
       <Stack direction="row" sx={{ flex: 1, minHeight: 0 }}>
         <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
