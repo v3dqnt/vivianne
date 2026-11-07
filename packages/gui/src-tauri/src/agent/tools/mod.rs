@@ -18,6 +18,7 @@
 pub mod arg_check;
 pub mod background;
 pub mod present;
+pub mod web_fetch;
 pub mod child_routes;
 pub mod presentation;
 pub mod timeouts;

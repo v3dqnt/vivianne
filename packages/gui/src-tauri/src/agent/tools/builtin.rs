@@ -945,84 +945,47 @@ impl WebFetchTool { pub fn new() -> Self { Self } }
 impl Tool for WebFetchTool {
     fn name(&self) -> &str { "web_fetch" }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        let url = args["url"].as_str().unwrap_or("").to_string();
-        if url.is_empty() { return err("'url' is required"); }
-        if !(url.starts_with("http://") || url.starts_with("https://")) {
-            return err("url must start with http:// or https://");
+        use crate::agent::tools::web_fetch as wf;
+        let url = match wf::validate_url(args["url"].as_str().unwrap_or("")) {
+            Ok(u) => u,
+            Err(e) => return err(e),
+        };
+        let f = match wf::fetch(url.clone()).await {
+            Ok(f) => f,
+            Err(e) => return err(format!("{e} ({url})")),
+        };
+        if let Some(next) = &f.blocked_redirect {
+            return ToolResult {
+                content: format!("{}
+
+{} redirected to a different site, {next}. It was not followed; call web_fetch on that URL if you want it.", wf::EXTERNAL_CONTENT_NOTICE, f.final_url),
+                is_error: false,
+                details: Some(json!({ "url": url.as_str(), "status": f.status, "redirect": next.as_str() })),
+            };
         }
-        let client = match reqwest::Client::builder()
-            // Browser UA — many sites return 403/challenge pages to bot agents.
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .timeout(Duration::from_secs(30))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => return err(format!("http client error: {e}")),
-        };
-        let resp = match client.get(&url).send().await {
-            Ok(r) => r,
-            Err(e) => return err(format!("request failed: {e}")),
-        };
-        let status = resp.status();
-        let content_type = resp
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-        let body = match resp.text().await {
-            Ok(t) => t,
-            Err(e) => return err(format!("failed to read body: {e}")),
-        };
-        let text = if content_type.contains("html") || body.trim_start().starts_with('<') {
-            html_to_text(&body)
+        let is_html = f.content_type.contains("html") || f.body.trim_start().starts_with('<');
+        let text = if is_html {
+            wf::html_to_markdown(&f.body, Some(&f.final_url)).unwrap_or_else(|| "[HTML content omitted: unable to convert safely.]".to_string())
         } else {
-            body
+            f.body.clone()
         };
-        // A fetched page exists nowhere else once this call returns, so the
-        // overflow is spilled to disk and the notice names the file — the model
-        // can `read` or `grep` the rest instead of re-fetching and hoping the
-        // part it needs lands inside the cap this time.
-        let out = crate::agent::runtime::context_shaping::spill_and_trim_middle_bytes(
-            &text,
-            MAX_WEB_BYTES / 2,
-            MAX_WEB_BYTES / 2,
-        )
-        .await;
+        // A fetched page exists nowhere else once this call returns, so the overflow is spilled to disk and the notice names the file.
+        let shaped = crate::agent::runtime::context_shaping::spill_and_trim_middle_bytes(&text, MAX_WEB_BYTES / 2, MAX_WEB_BYTES / 2).await;
+        let cut = if f.body_cut { "
+
+[The page was larger than 5 MB; the rest was not read.]" } else { "" };
+        // A non-2xx answer is still a result: the body often says why.
+        let out = format!("{}
+URL: {}
+Status: {}
+
+{shaped}{cut}", wf::EXTERNAL_CONTENT_NOTICE, f.final_url, f.status);
         ToolResult {
             content: out,
-            is_error: !status.is_success(),
-            details: Some(json!({ "url": url, "status": status.as_u16(), "content_type": content_type })),
+            is_error: false,
+            details: Some(json!({ "url": url.as_str(), "final_url": f.final_url.as_str(), "status": f.status, "content_type": f.content_type })),
         }
     }
-}
-
-/// Very small HTML → text: drop script/style, strip tags, decode a few entities,
-/// collapse whitespace. Good enough for feeding page text to the model.
-fn html_to_text(html: &str) -> String {
-    let mut s = html.to_string();
-    for (open, close) in [("<script", "</script>"), ("<style", "</style>"), ("<!--", "-->")] {
-        loop {
-            let lower = s.to_lowercase();
-            if let Some(start) = lower.find(open) {
-                if let Some(end_rel) = lower[start..].find(close) {
-                    let end = start + end_rel + close.len();
-                    s.replace_range(start..end, " ");
-                    continue;
-                }
-            }
-            break;
-        }
-    }
-    let tag = regex::Regex::new(r"(?s)<[^>]+>").unwrap();
-    let mut text = tag.replace_all(&s, " ").to_string();
-    for (from, to) in [("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'")] {
-        text = text.replace(from, to);
-    }
-    let ws = regex::Regex::new(r"[ \t]+").unwrap();
-    let text = ws.replace_all(&text, " ").to_string();
-    let nl = regex::Regex::new(r"\n\s*\n\s*\n+").unwrap();
-    nl.replace_all(&text, "\n\n").trim().to_string()
 }
 
 // ── web_search (DuckDuckGo HTML, best-effort) ────────────────────────────────
