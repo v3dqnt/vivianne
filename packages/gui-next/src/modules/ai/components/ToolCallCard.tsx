@@ -18,6 +18,7 @@ import {
   MagicpenLinear,
 } from '../../../icons'
 import type { AgentMessage } from '../lib/types'
+import { shellOutcome } from '../lib/shellOutcome'
 import { contentToText, contentImages } from '../lib/types'
 import { ImageBlock } from './ImageBlock'
 import { DiffView } from './DiffView'
@@ -221,6 +222,7 @@ export function ToolCallCard({
   // finishes, then true/false. Nothing else needs checking for "pending."
   const pending = message.isError === null
   const isError = message.isError === true
+  const outcome = pending ? null : shellOutcome(message.details)
   const Icon = iconFor(message.toolName)
   // A program is described by what it says it does; the code itself is in the body.
   const program = message.toolName === 'run_script' && typeof message.arguments?.code === 'string' ? (message.arguments.code as string) : null
@@ -326,6 +328,11 @@ export function ToolCallCard({
         )}
         {isError && typeof (message.details as { failure?: unknown } | null | undefined)?.failure === 'string' && (
           <Box component="span" sx={{ flexShrink: 0, fontSize: '0.75rem', color: 'error.main' }}>{String((message.details as { failure: string }).failure).replace(/-/g, ' ')}</Box>
+        )}
+        {outcome && (
+          <Box component="span" sx={{ flexShrink: 0, px: '6px', height: 18, display: 'inline-flex', alignItems: 'center', borderRadius: '6px', fontSize: '0.6875rem', fontFamily: '"Geist Mono", ui-monospace, monospace', color: outcome.tone === 'bad' ? 'error.main' : 'warning.main', bgcolor: 'action.hover' }}>
+            {outcome.label}
+          </Box>
         )}
         {hasBody && (
           <Box sx={{ display: 'flex', flexShrink: 0, ml: 'auto', opacity: 0.7, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>
