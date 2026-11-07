@@ -25,6 +25,7 @@ import { useModsStore, chatRenderer } from '../../mods/store/modsStore'
 import { ModChatBlock } from '../../mods/components/ModChatBlock'
 import { remarkFiles } from '../lib/remarkFiles'
 import { FileLink } from './FileLink'
+import { isFilePath, splitAnchor } from '../lib/filePaths'
 import { CHAT_FONT } from '../lib/chatStyle'
 import { onWebLinkClick } from '../lib/openLink'
 
@@ -112,7 +113,10 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
           // File names and paths (see `remarkFiles`) open in the Preview.
           span: ({ children, ...rest }) => {
             const file = (rest as Record<string, unknown>)['data-file']
-            if (typeof file === 'string') return <FileLink path={file} label={String(children)} prose />
+            if (typeof file === 'string') {
+              const line = Number((rest as Record<string, unknown>)['data-line'])
+              return <FileLink path={file} label={String(children)} prose line={Number.isFinite(line) && line > 0 ? line : undefined} />
+            }
             return <span>{children}</span>
           },
           a: ({ href, children }) => {
@@ -122,6 +126,11 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
             // of a bare "click here" link.
             if (href && VIDEO_EXT.test(href)) return <Box component="video" src={href} controls sx={{ maxWidth: '100%', borderRadius: 1.6, my: 1 }} />
             if (href && AUDIO_EXT.test(href)) return <Box component="audio" src={href} controls sx={{ width: '100%', my: 1 }} />
+            // `[label](src/app.ts)`: a link to a file on disk, which is what models write by default, opens the file; it is not a web address.
+            if (href && !/^[a-z][a-z0-9+.-]*:/i.test(href.replace(/^[A-Za-z]:[\\/]/, '')) && isFilePath(decodeURIComponent(href))) {
+              const { path, anchor } = splitAnchor(decodeURIComponent(href))
+              return <FileLink path={path} label={typeof children === 'string' ? children : undefined} prose line={anchor?.line} />
+            }
             return (
               <Link href={href} target="_blank" rel="noopener noreferrer" title={href ? `${href}
 Click: open in Preview · Ctrl-click: open in your browser` : undefined} onClick={(e: React.MouseEvent) => onWebLinkClick(e, href)}>

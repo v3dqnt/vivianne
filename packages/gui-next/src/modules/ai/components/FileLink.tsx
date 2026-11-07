@@ -33,7 +33,7 @@ export function filePathArg(args: Record<string, unknown> | undefined): string |
  * highlighted, and opening the file in its own app on click. The full path is
  * on hover.
  */
-export function FileLink({ path, label, prose = false }: { path: string; label?: string; prose?: boolean }) {
+export function FileLink({ path, label, prose = false, line }: { path: string; label?: string; prose?: boolean; line?: number }) {
   const root = useWorkspaceStore((s) => s.folders[0] ?? null)
   const full = resolvePath(path, root)
   const open = () => usePanelStore.getState().openDocument(full)
@@ -43,7 +43,7 @@ export function FileLink({ path, label, prose = false }: { path: string; label?:
       component="span"
       role="link"
       tabIndex={0}
-      title={`${full}\nClick to open it. Ctrl+click or right-click to show in the folder.`}
+      title={`${full}${line ? `, line ${line}` : ''}\nClick to open it. Ctrl+click or right-click to show in the folder.`}
       onClick={(e) => {
         // Inside a card header that toggles on click: open, don't toggle.
         e.stopPropagation()

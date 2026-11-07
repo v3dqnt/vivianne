@@ -157,7 +157,7 @@ function MessageBubbleImpl({
           ) : isUser ? (
             <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontSize: CHAT_FONT.text, lineHeight: 1.6 }}>
               {splitFilePaths(text).map((p, i) =>
-                typeof p === 'string' ? p : <FileLink key={i} path={p.path} label={p.path} prose />,
+                typeof p === 'string' ? p : <FileLink key={i} path={p.path} label={p.text} prose line={p.anchor?.line} />,
               )}
             </Typography>
           ) : (

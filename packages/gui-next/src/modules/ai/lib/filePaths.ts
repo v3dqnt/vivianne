@@ -23,9 +23,31 @@ const EXT = EXTENSIONS.join('|')
  * word character, slash, colon or dot (so URLs and `a.b.c` don't match), and
  * not followed by one. */
 const PATH_RE = new RegExp(
-  String.raw`(?<![\w/\\.:@#=-])((?:[A-Za-z]:[\\/]|~[\\/]|\.{1,2}[\\/])?(?:[\w.@~+-]+[\\/])*[\w@~+-][\w.@~+-]*\.(?:${EXT}))(?![\w-])(?![\\/]\w)`,
+  String.raw`(?<![\w/\\.:@#=-])((?:[A-Za-z]:[\\/]|~[\\/]|\.{1,2}[\\/])?(?:[\w.@~+-]+[\\/])*[\w@~+-][\w.@~+-]*\.(?:${EXT}))(:\d+(?::\d+)?(?:-\d+)?|#L\d+(?:-L?\d+)?)?(?![\w-])(?![\\/]\w)`,
   'gi',
 )
+
+/** A line, or a range of lines, a reference points at: `:24`, `:24:5`, `:24-31`, `#L24`, `#L24-L30`. */
+export interface LineAnchor {
+  line: number
+  endLine?: number
+}
+
+/** The line anchor written after a path (`:24-31`), if it is one. */
+export function parseAnchor(suffix: string | undefined): LineAnchor | null {
+  if (!suffix) return null
+  const m = /^(?::(\d+)(?::\d+)?(?:-(\d+))?|#L(\d+)(?:-L?(\d+))?)$/.exec(suffix)
+  if (!m) return null
+  const line = Number(m[1] ?? m[3])
+  const end = m[2] ?? m[4]
+  return end ? { line, endLine: Number(end) } : { line }
+}
+
+/** A written reference split into its path and its line anchor: `src/app.ts:24` is `src/app.ts` and line 24. */
+export function splitAnchor(text: string): { path: string; anchor: LineAnchor | null } {
+  const m = /^(.*?\.[A-Za-z0-9]{1,8})(:\d+(?::\d+)?(?:-\d+)?|#L\d+(?:-L?\d+)?)$/.exec(text.trim())
+  return m ? { path: m[1], anchor: parseAnchor(m[2]) } : { path: text.trim(), anchor: null }
+}
 
 /** A first segment like `example.com` means a URL typed without its scheme. */
 function looksLikeHost(path: string): boolean {
@@ -35,7 +57,7 @@ function looksLikeHost(path: string): boolean {
 }
 
 export function isFilePath(text: string): boolean {
-  const t = text.trim()
+  const t = splitAnchor(text).path
   if (!t || t.length > 260 || /[<>|*?"\n]/.test(t) || /:\/\//.test(t)) return false
   // Spaces only inside an absolute path (`C:\My Docs\a.txt`).
   if (/\s/.test(t) && !/^(?:[A-Za-z]:[\\/]|~[\\/]|[\\/])/.test(t)) return false
@@ -44,7 +66,7 @@ export function isFilePath(text: string): boolean {
   return !!m && EXTENSIONS.includes(m[1].toLowerCase())
 }
 
-export type Piece = string | { path: string }
+export type Piece = string | { path: string; anchor: LineAnchor | null; text: string }
 
 /** `text` cut into plain runs and file paths, in order. */
 export function splitFilePaths(text: string): Piece[] {
@@ -55,8 +77,9 @@ export function splitFilePaths(text: string): Piece[] {
     if (looksLikeHost(path)) continue
     const at = m.index ?? 0
     if (at > last) out.push(text.slice(last, at))
-    out.push({ path })
-    last = at + path.length
+    const written = m[2] ? path + m[2] : path
+    out.push({ path, anchor: parseAnchor(m[2]), text: written })
+    last = at + written.length
   }
   if (last < text.length) out.push(text.slice(last))
   return out
