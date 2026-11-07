@@ -19,6 +19,12 @@ import { ComputerUseBanner as ComputerUseBannerImpl } from './ComputerUseBanner'
 import { QueuePanel as QueuePanelImpl } from './QueuePanel'
 import { UnifiedMentionMenu, type MentionItem, type MentionableFile, type MentionableSkill } from './MentionMenu'
 import { getSkillMentionQuery, applySkillMention, applyFileMention } from '../../../lib/mentions'
+import { matchCommands, parseSlash, slashAt, type SlashCommand, type SlashContext } from '../../../lib/slashCommands'
+import { rankByName } from '../../../lib/rankByName'
+import { SlashMenu, type SlashItem } from './SlashMenu'
+import { usePermissionModeStore } from '../store/permissionModeStore'
+import { activeThreadId } from '../store/activeThread'
+import { toast } from '../../mods/store/toastStore'
 
 // Every one of these is a zero-prop sibling that subscribes to its own store
 // slices — but Composer itself re-renders on every keystroke (text state) and
@@ -287,6 +293,48 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
 
   const mentionOpen = mentionItems.length > 0
 
+  // ── / commands (and skills) ──
+  const slash = slashAt(text, at)
+  const slashItems: SlashItem[] = useMemo(() => {
+    if (!slash) return []
+    const commands = matchCommands(slash.query).map((command): SlashItem => ({ kind: 'command', command }))
+    const found = rankByName(skills, slash.query, (s) => s.name).slice(0, 5).map((skill): SlashItem => ({ kind: 'skill', skill }))
+    return [...commands, ...found]
+  }, [slash?.query, skills]) // eslint-disable-line react-hooks/exhaustive-deps
+  const slashOpen = !mentionOpen && slashItems.length > 0
+  const [slashIndex, setSlashIndex] = useState(0)
+  useEffect(() => setSlashIndex(0), [slash?.query])
+
+  const slashContext = (): SlashContext => ({
+    mode: () => (usePlanStore.getState().planMode ? 'plan' : usePermissionModeStore.getState().bypassMode ? 'auto' : 'ask'),
+    setPlanMode: (on) => usePlanStore.getState().setPlanMode(on),
+    setAutoApprove: async (on) => {
+      if (usePermissionModeStore.getState().bypassMode !== on) await usePermissionModeStore.getState().toggle()
+    },
+    goal: async (action, goalText) => {
+      await call('cmd_goal_do', { threadId: activeThreadId(), action, text: goalText })
+    },
+    stop: () => abort(),
+    openModelPicker: () => window.dispatchEvent(new Event('viv:open-model-picker')),
+    notice: (t) => toast(t),
+  })
+  const runCommand = (command: SlashCommand, arg: string) => {
+    setText('')
+    void Promise.resolve(command.run(slashContext(), arg)).catch((e) => toast(String(e instanceof Error ? e.message : e)))
+  }
+
+  const chooseSlash = (item: SlashItem) => {
+    if (item.kind === 'skill') {
+      setText(`@${item.skill.name} `)
+    } else if (item.command.args?.startsWith('<')) {
+      // Needs an argument: leave the command in the box for the user to finish.
+      setText(`/${item.command.name} `)
+    } else {
+      runCommand(item.command, '')
+    }
+    box.current?.focus()
+  }
+
   useEffect(() => {
     setMentionIndex(0)
   }, [mentionQuery])
@@ -299,6 +347,8 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
   // `sendMessage` queues when busy: one path for idle-send and send-while-
   // busy. `ensureToday` first, so a chat left open past midnight rolls over.
   const submit = (typed: string, a: ComposerAttachments) => {
+    const slashCall = a.files.length === 0 && a.images.length === 0 ? parseSlash(typed) : null
+    if (slashCall) return runCommand(slashCall.command, slashCall.arg)
     const toSend = typed + formatFilesForPrompt(a.files)
     void useDaysStore
       .getState()
@@ -307,6 +357,24 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
   }
 
   const onMentionKey = (e: KeyboardEvent) => {
+    if (slashOpen) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const n = slashItems.length
+        setSlashIndex((i) => (e.key === 'ArrowDown' ? (i + 1) % n : (i - 1 + n) % n))
+        return true
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        chooseSlash(slashItems[slashIndex])
+        return true
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setText((v) => v.replace(/^\/\S*/, ''))
+        return true
+      }
+    }
     if (!mentionOpen) return false
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
@@ -372,7 +440,13 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
           onKeyDownFirst={onMentionKey}
           knownFiles={knownFiles}
           placeholder={isBusy ? 'Agent is working — send to queue, or steer to redirect now...' : planMode ? 'Describe what you want built — the agent will research it and propose a plan' : 'Do anything'}
-          overlay={mentionOpen && <UnifiedMentionMenu items={mentionItems} activeIndex={mentionIndex} onSelect={applyMention} onHover={setMentionIndex} />}
+          overlay={
+            mentionOpen ? (
+              <UnifiedMentionMenu items={mentionItems} activeIndex={mentionIndex} onSelect={applyMention} onHover={setMentionIndex} />
+            ) : slashOpen ? (
+              <SlashMenu items={slashItems} activeIndex={slashIndex} onSelect={chooseSlash} onHover={setSlashIndex} />
+            ) : null
+          }
           top={<RunStatusBar />}
           left={
             <>

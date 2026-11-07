@@ -258,6 +258,13 @@ export function ModelPicker(
   const selectModel = useModelStore((s) => s.selectModel)
   const openSettings = useSettingsUi((s) => s.openSettings)
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+  // `/model` in the composer opens the chat's picker.
+  useEffect(() => {
+    if (props.mode !== 'chat') return
+    const open = () => setAnchor(document.querySelector<HTMLElement>('[data-model-picker="chat"]'))
+    window.addEventListener('viv:open-model-picker', open)
+    return () => window.removeEventListener('viv:open-model-picker', open)
+  }, [props.mode])
   const [query, setQuery] = useState('')
   const [active, setActive] = useState<FilterId[]>([])
   const [cursor, setCursor] = useState(0)
@@ -374,6 +381,7 @@ export function ModelPicker(
       <Tooltip title={`Model: ${currentName}`}>
         <ButtonBase
           className="cq-collapsible"
+          data-model-picker={props.mode}
           onClick={(e) => setAnchor(e.currentTarget)}
           aria-label={`Model: ${currentName}`}
           aria-haspopup="dialog"
