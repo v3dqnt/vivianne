@@ -1964,10 +1964,10 @@ pub(crate) async fn execute_task_tool(
     };
 
     let active = SubagentRegistry::global().active_count();
-    if active >= crate::agent::runtime::subagents::MAX_ACTIVE_SUBAGENTS {
+    let limit = crate::agent::tools::limits::max_subagents().await;
+    if active >= limit {
         return text_result(format!(
-            "Error: {active} subagents are already working (the limit is {}). Wait for some to finish (task_output) or kill one (kill_task) before starting another.",
-            crate::agent::runtime::subagents::MAX_ACTIVE_SUBAGENTS
+            "Error: {active} subagents are already working (the limit is {limit}). Wait for some to finish (task_output) or kill one (kill_task) before starting another."
         ));
     }
     // Named by the parent, or `agent-N`: the name is how the child is asked about, interrupted or stopped afterwards.

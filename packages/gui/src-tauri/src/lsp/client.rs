@@ -52,7 +52,9 @@ async fn write_frame(writer: &Writer, message: &Value) -> Result<(), String> {
 impl LspClient {
     /// Spawn `command args...` and perform the LSP `initialize`/`initialized` handshake.
     pub async fn spawn(command: &str, args: &[&str], root_dir: &str) -> Result<Arc<Self>, String> {
-        let mut child = tokio::process::Command::new(command)
+        let mut cmd = tokio::process::Command::new(command);
+        crate::agent::tools::code::sandbox::scrub_env(&mut cmd);
+        let mut child = cmd
             .args(args)
             .current_dir(root_dir)
             .stdin(std::process::Stdio::piped())

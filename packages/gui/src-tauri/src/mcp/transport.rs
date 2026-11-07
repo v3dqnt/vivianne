@@ -48,6 +48,8 @@ impl McpConnection {
         let inner = match &config.transport {
             McpTransportConfig::Stdio { command, args, env } => {
                 let mut cmd = tokio::process::Command::new(command);
+                // The server gets the user's environment minus credentials, plus the variables its own config names.
+                crate::agent::tools::code::sandbox::scrub_env(&mut cmd);
                 cmd.args(args)
                     .envs(env)
                     .stdin(std::process::Stdio::piped())

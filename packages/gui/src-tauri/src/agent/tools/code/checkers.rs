@@ -26,6 +26,7 @@ fn command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+    crate::agent::tools::code::sandbox::scrub_env(&mut cmd);
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     cmd
 }

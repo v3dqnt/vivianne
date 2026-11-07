@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Box, Stack, Typography, IconButton, Collapse, CircularProgress, Dialog, DialogTitle, DialogContent } from '../../../ui'
+import { Box, Stack, Typography, IconButton, Collapse, CircularProgress, Dialog, DialogTitle, DialogContent, InputBase } from '../../../ui'
 import { UserOctagonLinear, StopCircleLinear, ArrowDownLinear } from '../../../icons'
 import { useSubagentStore, type SubagentSummary } from '../store/subagentStore'
 import type { AgentMessage } from '../lib/types'
 import { MessageBubble } from './MessageBubble'
+import { stopReasonLabel, subagentTree } from '../lib/subagentTree'
 
 function formatElapsed(ms: number): string {
   const s = Math.round(ms / 1000)
@@ -16,6 +17,9 @@ function formatElapsed(ms: number): string {
  * transcript-so-far fills in live. */
 function SubagentTranscript({ agent, onClose }: { agent: SubagentSummary; onClose: () => void }) {
   const getMessages = useSubagentStore((s) => s.getMessages)
+  const tell = useSubagentStore((s) => s.message)
+  const [draft, setDraft] = useState('')
+  const [sendError, setSendError] = useState<string | null>(null)
   const [messages, setMessages] = useState<AgentMessage[]>([])
   const [loaded, setLoaded] = useState(false)
   const running = agent.status === 'running'
@@ -53,7 +57,7 @@ function SubagentTranscript({ agent, onClose }: { agent: SubagentSummary; onClos
       </DialogTitle>
       <DialogContent dividers sx={{ px: 2, py: 1.5 }}>
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-          Read-only — this is the subagent's own conversation, not yours.
+          {running ? "This is the subagent's own conversation. Write below to redirect it; it reads your message at its next step." : "This is the subagent's own conversation, not yours."}
         </Typography>
         {!loaded ? (
           <Typography variant="caption" color="text.secondary">Loading…</Typography>
@@ -74,29 +78,56 @@ function SubagentTranscript({ agent, onClose }: { agent: SubagentSummary; onClos
           </Typography>
         )}
       </DialogContent>
+      {running && (
+        <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 2, py: 1, borderTop: 1, borderColor: 'divider' }}>
+          <InputBase
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' || e.shiftKey || !draft.trim()) return
+              e.preventDefault()
+              const text = draft
+              setDraft('')
+              setSendError(null)
+              void tell(agent.id, text).catch((err) => setSendError(String(err instanceof Error ? err.message : err)))
+            }}
+            placeholder={`Tell ${agent.name}…`}
+            sx={{ flex: 1, fontSize: '0.8125rem' }}
+          />
+          {sendError && <Typography variant="caption" color="error.main">{sendError}</Typography>}
+        </Stack>
+      )}
     </Dialog>
   )
 }
 
-function SubagentRow({ agent }: { agent: SubagentSummary }) {
+function SubagentRow({ agent, depth }: { agent: SubagentSummary; depth: number }) {
   const kill = useSubagentStore((s) => s.kill)
   const running = agent.status === 'running'
   const [showTranscript, setShowTranscript] = useState(false)
+  // Stopping takes two presses: the first asks, and lapses after a few seconds.
+  const [confirmStop, setConfirmStop] = useState(false)
+  useEffect(() => {
+    if (!confirmStop) return
+    const t = setTimeout(() => setConfirmStop(false), 3000)
+    return () => clearTimeout(t)
+  }, [confirmStop])
+  const ended = stopReasonLabel(agent.stopReason)
 
   return (
     <>
       <Stack
         direction="row"
         onClick={() => setShowTranscript(true)}
-        sx={{ alignItems: 'center', gap: 1, py: 0.75, px: 0.5, borderRadius: 0.8, cursor: 'pointer', '&:hover': { bgcolor: 'action.hover' } }}
+        sx={{ alignItems: 'center', gap: 1, py: 0.75, px: 0.5, pl: 0.5 + depth * 2, borderRadius: 0.8, cursor: 'pointer', '&:hover': { bgcolor: 'action.hover' } }}
       >
         {running ? <CircularProgress size={12} thickness={5} /> : null}
         <Stack sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="caption" sx={{ fontWeight: 500 }} noWrap>
-            {agent.subagentType}: {agent.description}
+            {agent.name}: {agent.description}
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            {agent.status} · {formatElapsed(agent.elapsedMs)}
+            {running ? agent.status : (ended ?? agent.status)} · {formatElapsed(agent.elapsedMs)}
             {agent.turns > 0 && ` · ${agent.turns} turns`}
             {agent.toolCalls > 0 && ` · ${agent.toolCalls} tools`}
           </Typography>
@@ -106,11 +137,14 @@ function SubagentRow({ agent }: { agent: SubagentSummary }) {
             size="small"
             onClick={(e) => {
               e.stopPropagation()
+              if (!confirmStop) return setConfirmStop(true)
+              setConfirmStop(false)
               void kill(agent.id)
             }}
-            title="Cancel"
+            title={confirmStop ? 'Press again to stop it' : 'Stop'}
+            sx={confirmStop ? { color: 'error.main', width: 'auto', px: 0.75, borderRadius: '6px' } : undefined}
           >
-            <StopCircleLinear size={14} color="currentColor" />
+            {confirmStop ? <Typography variant="caption">Stop?</Typography> : <StopCircleLinear size={14} color="currentColor" />}
           </IconButton>
         )}
       </Stack>
@@ -146,8 +180,8 @@ export function SubagentPanel() {
       </Stack>
       <Collapse in={open}>
         <Stack sx={{ px: 1.5, pb: 0.5, borderTop: 1, borderColor: 'divider' }}>
-          {subagents.map((a) => (
-            <SubagentRow key={a.id} agent={a} />
+          {subagentTree(subagents).map(({ agent: a, depth }) => (
+            <SubagentRow key={a.id} agent={a} depth={depth} />
           ))}
         </Stack>
       </Collapse>

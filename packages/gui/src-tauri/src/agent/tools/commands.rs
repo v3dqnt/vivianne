@@ -30,6 +30,11 @@ pub struct SubagentSummary {
     pub tool_calls: u32,
     pub output: Option<String>,
     pub error: Option<String>,
+    /// What the parent calls it, and which subagent (if any) started it, so the list can show a tree.
+    pub name: String,
+    pub parent: Option<String>,
+    /// How it ended: `completed`, `aborted`, `error`, `max-tokens` or `refusal`.
+    pub stop_reason: Option<String>,
 }
 
 #[tauri::command]
@@ -59,6 +64,9 @@ pub async fn cmd_coding_list_subagents() -> Result<Vec<SubagentSummary>, String>
             tool_calls,
             output,
             error,
+            name: g.name.clone(),
+            parent: g.parent.clone(),
+            stop_reason: g.stop_reason.and_then(|r| serde_json::to_value(r).ok()).and_then(|v| v.as_str().map(String::from)),
         });
     }
     // Newest first — matches how a user scanning for "what just started" expects the list ordered.
@@ -82,6 +90,12 @@ pub async fn cmd_coding_get_subagent_messages(id: String) -> Result<Vec<crate::a
         m
     };
     Ok(messages)
+}
+
+/// The user writing to a running subagent from its transcript.
+#[tauri::command]
+pub async fn cmd_coding_message_subagent(id: String, text: String) -> Result<(), String> {
+    crate::agent::runtime::subagents::message_from_user(&id, &text).await
 }
 
 #[tauri::command]

@@ -3,6 +3,7 @@ import { Box, Divider, IconButton, MenuItem, Stack, Switch, TextField, Tooltip, 
 import { ArrowDownLinear, ArrowUpLinear, TrashLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { useModelStore } from '../../ai/store/modelStore'
+import { LimitsCard } from './LimitsCard'
 
 /** `agent::types::ModelRef` exactly as the backend deserializes it — no
  * serde rename, so snake_case, and every field present. */
@@ -196,6 +197,8 @@ export function ReliabilitySection() {
           }}
         />
       </Stack>
+      <Divider />
+      <LimitsCard />
     </Stack>
   )
 }

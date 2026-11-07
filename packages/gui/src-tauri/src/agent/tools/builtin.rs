@@ -106,7 +106,6 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
 const MAX_GREP_MATCHES: usize = 100;
 const MAX_GREP_BYTES: usize = 256_000;
 const MAX_GREP_LINE_CHARS: usize = 1000;
-const DEFAULT_BASH_TIMEOUT_SECS: u64 = 120;
 const MAX_BASH_TIMEOUT_SECS: u64 = 600;
 
 /// Directories that are always skipped during recursive walks — shared by
@@ -482,11 +481,7 @@ impl Tool for BashTool {
         if let Some(reason) = crate::agent::tools::code::sandbox::check_command(&command) {
             return ToolResult { content: reason.to_string(), is_error: true, details: None };
         }
-        let timeout_secs = args["timeout"]
-            .as_u64()
-            .unwrap_or(DEFAULT_BASH_TIMEOUT_SECS)
-            .min(MAX_BASH_TIMEOUT_SECS)
-            .max(1);
+        let timeout_secs = args["timeout"].as_u64().unwrap_or(crate::agent::tools::limits::shell_timeout().await).min(MAX_BASH_TIMEOUT_SECS).max(1);
 
         // Always streams live output to the GUI (if a channel is registered)
         // and returns the same labeled, head+tail-truncated, exit-code-bearing
@@ -719,7 +714,6 @@ impl Tool for CodeSearchTool {
 
 const MAX_GLOB_RESULTS: usize = 100;
 const MAX_WEB_BYTES: usize = 100_000;
-const DEFAULT_PS_TIMEOUT_SECS: u64 = 120;
 const MAX_PS_TIMEOUT_SECS: u64 = 600;
 const MAX_SLEEP_SECS: u64 = 60;
 
@@ -816,7 +810,7 @@ impl Tool for PowerShellTool {
         if let Some(reason) = crate::agent::tools::code::sandbox::check_command(&command) {
             return err(reason);
         }
-        let timeout_secs = args["timeout"].as_u64().unwrap_or(DEFAULT_PS_TIMEOUT_SECS).min(MAX_PS_TIMEOUT_SECS).max(1);
+        let timeout_secs = args["timeout"].as_u64().unwrap_or(crate::agent::tools::limits::shell_timeout().await).min(MAX_PS_TIMEOUT_SECS).max(1);
 
         // `powershell.exe` on Windows, `pwsh` (PowerShell Core) elsewhere.
         // Always streams live output to the GUI, same as `bash` — see

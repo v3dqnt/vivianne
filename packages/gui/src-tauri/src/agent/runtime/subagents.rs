@@ -295,6 +295,20 @@ async fn steer(handle: &Arc<Mutex<SubagentHandle>>, text: String) -> bool {
     true
 }
 
+/// The user writing to a running child directly (from its transcript in the GUI): it reads the message at its next step, like an interrupt
+/// from its parent but in the user's own words.
+pub async fn message_from_user(id: &str, text: &str) -> Result<(), String> {
+    let handle = SubagentRegistry::global().get(id).ok_or_else(|| format!("There is no subagent '{id}'."))?;
+    if handle.lock().unwrap_or_else(|e| e.into_inner()).status.is_terminal() {
+        return Err("It has already finished.".into());
+    }
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("Write a message first.".into());
+    }
+    if steer(&handle, format!("The user says: {text}")).await { Ok(()) } else { Err("It hasn't started its loop yet; try again in a moment.".into()) }
+}
+
 /// Redirect a running child without ending it: it reads the message at its next step and carries on from there. Unlike killing it, its
 /// conversation and what it has learned are kept. Only the agent that started a child may interrupt it, and never itself.
 pub async fn interrupt(name: &str, message: Option<&str>, caller_thread: Option<&str>) -> Result<String, String> {
@@ -357,8 +371,6 @@ pub fn fork_seed(messages: &[AgentMessage]) -> Vec<AgentMessage> {
     messages[..cut.unwrap_or(messages.len())].to_vec()
 }
 
-/// The most subagents that may work at once. A runaway fan-out fails loudly at this line instead of starving the machine.
-pub const MAX_ACTIVE_SUBAGENTS: usize = 8;
 
 /// A failure's diagnostic is kept to this many bytes, cut on a character boundary.
 const DIAGNOSTIC_BYTES: usize = 4096;
@@ -458,6 +470,23 @@ mod tree_tests {
             diagnostic: None,
             structured: None,
         }))
+    }
+
+    #[tokio::test]
+    async fn the_user_can_write_to_a_running_child_but_not_a_finished_or_unknown_one() {
+        let queue = Arc::new(tokio::sync::RwLock::new(Vec::new()));
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let h = handle("direct-1", "direct-1", None, "t", SubagentStatus::Running { turns: 0, tool_calls: 0 });
+        h.lock().unwrap().steering = Some((queue.clone(), flag.clone()));
+        SubagentRegistry::global().register_for_test(h);
+        assert!(message_from_user("direct-1", "  use the staging DB  ").await.is_ok());
+        assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(queue.read().await.len(), 1);
+        assert!(message_from_user("direct-1", "   ").await.is_err());
+        assert!(message_from_user("no-such-agent", "hi").await.is_err());
+        let done = handle("direct-2", "direct-2", None, "t", SubagentStatus::Failed { error: "x".into() });
+        SubagentRegistry::global().register_for_test(done);
+        assert!(message_from_user("direct-2", "hi").await.unwrap_err().contains("finished"));
     }
 
     #[test]

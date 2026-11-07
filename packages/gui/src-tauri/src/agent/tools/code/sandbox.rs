@@ -41,6 +41,12 @@ pub fn filtered_env() -> HashMap<String, String> {
     std::env::vars().filter(|(k, _)| !is_denied_env_var(k)).collect()
 }
 
+/// Give a child process the filtered environment instead of everything the agent holds. Set what the child is meant to receive (an MCP
+/// server's configured variables, say) after this call, so it overrides rather than being cleared.
+pub fn scrub_env(cmd: &mut tokio::process::Command) -> &mut tokio::process::Command {
+    cmd.env_clear().envs(filtered_env())
+}
+
 /// Patterns for commands that are never legitimate as agent-issued shell
 /// commands — only catastrophic, whole-system-destructive ones. Deliberately
 /// short: this is a last-resort backstop, not a policy engine, so it must

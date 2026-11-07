@@ -15,6 +15,7 @@ import { StreamStatusLine as StreamStatusLineImpl } from './StreamStatusLine'
 import { RunStatusBar as RunStatusBarImpl } from './RunStatusBar'
 import { usePlanStore } from '../../plan/store/planStore'
 import { SubagentPanel as SubagentPanelImpl } from './SubagentPanel'
+import { JobsPanel as JobsPanelImpl } from './JobsPanel'
 import { ComputerUseBanner as ComputerUseBannerImpl } from './ComputerUseBanner'
 import { QueuePanel as QueuePanelImpl } from './QueuePanel'
 import { UnifiedMentionMenu, type MentionItem, type MentionableFile, type MentionableSkill } from './MentionMenu'
@@ -40,6 +41,7 @@ const ContextUsageBar = memo(ContextUsageBarImpl)
 const StreamStatusLine = memo(StreamStatusLineImpl)
 const RunStatusBar = memo(RunStatusBarImpl)
 const SubagentPanel = memo(SubagentPanelImpl)
+const JobsPanel = memo(JobsPanelImpl)
 const ComputerUseBanner = memo(ComputerUseBannerImpl)
 const QueuePanel = memo(QueuePanelImpl)
 
@@ -425,6 +427,7 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
       <Stack sx={{ gap: 0.5 }}>
         <ComputerUseBanner />
         <SubagentPanel />
+        <JobsPanel />
         <StreamStatusLine />
         <QueuePanel />
         <ChatComposer
