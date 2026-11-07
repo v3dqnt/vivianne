@@ -75,6 +75,7 @@ pub const DEFERRED_TOOLS: &[&str] = &[
     "dip",
     "create_automation", "list_automations", "delete_automation", "set_automation_enabled",
     "nebius_job", "create_tool", "list_custom_tools", "delete_tool", "connect_mcp_server", "run_native",
+    "list_agents", "interrupt_agent", "message_parent", "list_subagent_models",
 ];
 
 /// How much of the tool list a request starts with.

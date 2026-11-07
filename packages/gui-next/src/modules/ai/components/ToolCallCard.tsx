@@ -502,6 +502,20 @@ function specialBody(message: ToolResultMessage): React.ReactNode | null {
       const title = typeof args.title === 'string' ? args.title : 'The plan'
       return <PlanApproval planId={planId} version={version} title={title} />
     }
+    case 'present': {
+      const files = Array.isArray(details.presented) ? (details.presented as { path: string; name: string; bytes: number }[]) : []
+      if (files.length === 0) return null
+      return (
+        <Stack sx={{ gap: '4px', py: '4px' }}>
+          {files.map((f) => (
+            <Stack key={f.path} direction="row" sx={{ alignItems: 'center', gap: '8px' }}>
+              <FileLink path={f.path} label={f.name} />
+              <Typography variant="caption" color="text.disabled">{f.bytes >= 1048576 ? `${(f.bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(f.bytes / 1024))} KB`}</Typography>
+            </Stack>
+          ))}
+        </Stack>
+      )
+    }
     case 'message_agent': {
       const to = typeof args.to === 'string' ? args.to : ''
       const text = typeof args.text === 'string' ? args.text : ''

@@ -522,6 +522,18 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
             }
         }),
         serde_json::json!({
+            "name": "present",
+            "description": "Declare files that already exist on disk as the deliverable of your work: a generated report, document, spreadsheet, image or archive the user asked for. The user is shown each as a card they can open or reveal. Pass paths only, never contents; the files must already be written. Folders and symlinks are refused, and at most 8 files per call.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "paths": { "type": "array", "items": { "type": "string" }, "description": "Paths of the files, absolute or relative to the workspace" },
+                    "note": { "type": "string", "description": "One line on what the user is getting" }
+                },
+                "required": ["paths"]
+            }
+        }),
+        serde_json::json!({
             "name": "present_snippet",
             "description": "Show the user a short, syntax-highlighted code snippet inline in the chat, without writing it to a file. Use for a quick example, a one-off calculation, or illustrating an idea — not for real changes to the user's project (use write/edit for those).",
             "parameters": {

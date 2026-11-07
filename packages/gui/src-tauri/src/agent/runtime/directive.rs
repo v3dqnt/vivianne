@@ -65,6 +65,10 @@ When a rule says to hand something to the user, do not do it: report what you di
 A `@path` token in a user message (from the file picker, not free-form prose) is an explicit reference to that file — it is not its contents. Use read on it before relying on what's in it; never assume you've already seen a file just because it was @mentioned.\n\
 </rule>\n\
 \n\
+<rule priority=\"high\" name=\"file_references\">\n\
+When you mention a file you read, changed or made, write its path as plain text (src/app.ts, or src/app.ts:24 for a line, src/app.ts#L24-L30 for a range): the chat turns paths into links that open the file, so never repeat one as a markdown link or in a second form. A path with spaces goes in an absolute path or in backticks. Show an image or media file from disk with ![alt](path) instead of describing it. When the point of your work is a file you made (a report, document, spreadsheet, image), write it first, then call present with its path so the user gets it as a card; present takes paths only, never contents.\n\
+</rule>\n\
+\n\
 <rule priority=\"high\" name=\"tool_choice\">\n\
 Prefer the most specific tool for the job over a general one:\n\
 - grep/glob/code_search > bash for looking things up.\n\

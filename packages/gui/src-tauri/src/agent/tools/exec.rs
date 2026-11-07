@@ -507,6 +507,7 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
     tool!("submit_plan" => |cx| crate::agent::team::plans::execute_submit_plan(cx.args, cx.state.primary_workspace_folder().await, cx.app).await),
     tool!("assign_plan_steps" => |cx| crate::agent::team::plans::execute_assign_plan_steps(cx.args, cx.depth, cx.state, cx.app).await),
     tool!("present_snippet" => |cx| execute_present_snippet_tool(cx.args)),
+    tool!("present" => |cx| crate::agent::tools::present::execute_present_tool(cx.args, cx.state).await),
     // The old Camoufox browser tools, kept as names only: every call goes to
     // the user's own browser through the extension.
     tool!("web_preview" => |cx| via_user_browser("open", cx.args, cx.vision).await),

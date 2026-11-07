@@ -217,7 +217,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Show things in the app's UI",
         when: "Surfacing something visually instead of describing it in prose.",
-        tools: &["present_snippet", "generate_image"],
+        tools: &["present", "present_snippet", "generate_image"],
         how: None,
         triggers: &["show me", "display", "preview", "snippet", "example of"],
     },
