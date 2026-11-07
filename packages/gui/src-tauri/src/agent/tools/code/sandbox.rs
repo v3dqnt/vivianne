@@ -22,16 +22,19 @@
 use regex::Regex;
 use std::collections::HashMap;
 
-/// Env var names that are never handed to a spawned shell, even though the
-/// agent process itself holds them (for provider API calls). Matches by
-/// suffix so it catches every provider's convention (ANTHROPIC_API_KEY,
-/// AWS_SECRET_ACCESS_KEY, GITHUB_TOKEN, ...) without enumerating each one.
-const DENIED_ENV_SUFFIXES: &[&str] =
-    &["_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_CREDENTIAL", "_CREDENTIALS"];
+/// Env var names that are never handed to a spawned shell, even though the agent process itself holds them (for provider API calls).
+/// A name is withheld when it ends in a credential word (`_KEY`, `_TOKEN`, `_SECRET`, `_PASSWORD`, `_CREDENTIAL(S)`) or contains one anywhere
+/// (`SECRET`, `PASSWORD`, `TOKEN`, `API_KEY`, `ACCESS_KEY`, `PRIVATE_KEY`, so `AWS_ACCESS_KEY_ID` and `GITHUB_TOKEN_FILE` don't slip past a
+/// suffix list), or is one of the handles to a credential agent.
+const DENIED_ENV_SUFFIXES: &[&str] = &["_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_CREDENTIAL", "_CREDENTIALS"];
+const DENIED_ENV_WORDS: &[&str] = &["SECRET", "PASSWORD", "PASSWD", "TOKEN", "CREDENTIAL", "API_KEY", "APIKEY", "ACCESS_KEY", "PRIVATE_KEY"];
+const DENIED_ENV_NAMES: &[&str] = &["SSH_AUTH_SOCK", "GPG_AGENT_INFO"];
 
-fn is_denied_env_var(name: &str) -> bool {
+pub fn is_denied_env_var(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
-    DENIED_ENV_SUFFIXES.iter().any(|suf| upper.ends_with(suf))
+    DENIED_ENV_NAMES.contains(&upper.as_str())
+        || DENIED_ENV_SUFFIXES.iter().any(|suf| upper.ends_with(suf))
+        || DENIED_ENV_WORDS.iter().any(|w| upper.contains(w))
 }
 
 /// Build the environment a spawned shell command should see: everything the
@@ -106,5 +109,20 @@ mod tests {
         assert!(!is_denied_env_var("PATH"));
         assert!(!is_denied_env_var("HOME"));
         assert!(!is_denied_env_var("NODE_ENV"));
+    }
+}
+
+#[cfg(test)]
+mod env_tests {
+    use super::is_denied_env_var;
+
+    #[test]
+    fn credential_names_are_withheld_wherever_the_word_sits_and_ordinary_ones_are_kept() {
+        for secret in ["ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SESSION_TOKEN", "GITHUB_TOKEN", "DB_PASSWORD", "NPM_TOKEN_FILE", "client_secret", "SSH_AUTH_SOCK", "OPENAI_APIKEY"] {
+            assert!(is_denied_env_var(secret), "{secret} should be withheld");
+        }
+        for fine in ["PATH", "HOME", "USERPROFILE", "AWS_REGION", "AWS_PROFILE", "LANG", "TEMP", "KEYBOARD_LAYOUT_NAME"] {
+            assert!(!is_denied_env_var(fine), "{fine} should be kept");
+        }
     }
 }
