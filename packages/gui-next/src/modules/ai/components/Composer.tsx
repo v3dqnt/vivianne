@@ -200,7 +200,9 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
     })
   }, [])
 
-  const mentionQuery = getSkillMentionQuery(text)
+  const [caret, setCaret] = useState(0)
+  const at = Math.min(caret, text.length)
+  const mentionQuery = getSkillMentionQuery(text, at)
   const mentionActive = mentionQuery !== null
   // File names are needed whenever the prompt might name one (to mark and to
   // complete them), not only inside an @ mention: loaded once the box has
@@ -268,7 +270,7 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
   }, [mentionQuery])
 
   const applyMention = (item: MentionItem) => {
-    setText((v) => (item.kind === 'skill' ? applySkillMention(v, item.skill.name) : applyFileMention(v, item.file.insertPath)))
+    setText((v) => (item.kind === 'skill' ? applySkillMention(v, item.skill.name, at) : applyFileMention(v, item.file.insertPath, at)))
     box.current?.focus()
   }
 
@@ -339,6 +341,7 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
           ref={box}
           value={text}
           onChange={setText}
+          onCaret={setCaret}
           onSubmit={submit}
           onSteer={(typed, a) => void steer(typed + formatFilesForPrompt(a.files), a.images)}
           busy={isBusy}

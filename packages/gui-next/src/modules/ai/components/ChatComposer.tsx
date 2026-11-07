@@ -55,11 +55,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, {
   right?: ReactNode
   /** The files a prompt can name: their names are highlighted, and a
    * half-typed or mistyped one is completed or corrected with Tab. */
+  /** Told where the cursor is, so a mention can be completed in the middle of the text. */
+  onCaret?: (caret: number) => void
   knownFiles?: KnownFile[]
   error?: string | null
   dense?: boolean
 }>(function ChatComposer(
-  { value, onChange, onSubmit, placeholder = 'Message', attachments = true, busy = false, stopping = false, onStop, onSteer, onKeyDownFirst, overlay, top, left, right, knownFiles, error: outerError, dense },
+  { value, onChange, onSubmit, placeholder = 'Message', attachments = true, busy = false, stopping = false, onStop, onSteer, onKeyDownFirst, overlay, top, left, right, onCaret, knownFiles, error: outerError, dense },
   ref,
 ) {
   const theme = useTheme()
@@ -71,6 +73,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, {
   const [interim, setInterim] = useState('')
   // File names: where the caret is, and the suggestion the user waved off.
   const [caret, setCaret] = useState(0)
+  useEffect(() => onCaret?.(caret), [caret, onCaret])
   const [waved, setWaved] = useState<string | null>(null)
   const known = useMemo(() => knownFiles ?? [], [knownFiles])
   const marks = useMemo(() => (value && known.length ? highlights(value, known) : value.includes('@') ? highlights(value, []) : []), [value, known])
