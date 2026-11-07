@@ -197,7 +197,7 @@ pub(crate) async fn spill_and_trim_middle_bytes(text: &str, head_bytes: usize, t
 /// Write `text` in full to a new file under the spill directory, returning
 /// its path. `None` on any failure (directory unavailable, disk full, ...) —
 /// spilling is a nice-to-have, never worth failing the tool call over.
-async fn spill(text: &str) -> Option<String> {
+pub(crate) async fn spill(text: &str) -> Option<String> {
     let dir = crate::agent::system::paths::viv_spill_dir().ok()?;
     let path = dir.join(format!("{}.txt", uuid::Uuid::new_v4()));
     tokio::fs::write(&path, text).await.ok()?;

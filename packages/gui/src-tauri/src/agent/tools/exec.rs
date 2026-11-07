@@ -497,7 +497,7 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
     }),
     tool!("team_run" => |cx| crate::agent::team::run::execute_team_run(cx.args, cx.depth, cx.state, cx.app).await),
     tool!("list_threads" => |cx| crate::agent::thread_msgs::execute_list_threads(cx.state, cx.app).await),
-    tool!("read_thread" => |cx| crate::agent::thread_msgs::execute_read_thread(cx.args).await),
+    tool!("read_thread" => |cx| crate::agent::thread_msgs::execute_read_thread(cx.args, cx.state).await),
     tool!("message_thread" => |cx| crate::agent::thread_msgs::execute_message_thread(cx.args, cx.state, cx.app).await),
     tool!("ask_thread" => |cx| crate::agent::thread_msgs::execute_ask_thread(cx.args, cx.state, cx.app).await),
     tool!("spawn_thread" => |cx| crate::agent::thread_msgs::execute_spawn_thread(cx.args, cx.state, cx.app).await),
