@@ -309,6 +309,8 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::sessions::thread_worktree::cmd_thread_worktree_finish,
       crate::agent::orchestration::cmd_thread_consumed_work,
       crate::agent::orchestration::cmd_thread_usage,
+      crate::agent::runtime::trace::cmd_traces_list,
+      crate::agent::runtime::trace::cmd_trace_read,
       crate::agent::goal::cmd_goal_get,
       crate::agent::goal::cmd_goal_do,
       crate::agent::tools::background::cmd_tool_background,

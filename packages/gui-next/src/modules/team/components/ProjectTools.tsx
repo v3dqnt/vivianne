@@ -191,6 +191,7 @@ export function ProjectTools() {
         <Box className="col" sx={{ minWidth: 0 }}>
           <Section id="context" title="Context" right={<ContextPercent />}>
             <ContextBreakdown />
+            <ButtonBase onClick={() => useAppView.setState({ view: 'trajectory' })} sx={ROW}>Open trajectory</ButtonBase>
           </Section>
         </Box>
       </Box>

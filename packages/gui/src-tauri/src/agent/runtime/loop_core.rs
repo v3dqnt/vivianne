@@ -622,6 +622,7 @@ pub async fn run_agent_loop_continue(
         // hard-stop past it so a tool-call loop can't run forever.
         step += 1;
         trace.set_step(step);
+        let t_step = now_ms();
         // A long task has no step ceiling: its spend and time caps are what
         // bound it, checked after every step below.
         let ceiling = if ledger.is_some() { usize::MAX } else { MAX_STEPS };
@@ -804,6 +805,7 @@ pub async fn run_agent_loop_continue(
             }
             crate::agent::orchestration::record_new(tag, "step.started", serde_json::json!({ "model": format!("{}/{}", model.provider, model.id), "messages": context.messages.len() }));
         }
+        trace.request(&context.system_prompt, &tool_defs, &context.messages);
         let mut llm_context = crate::ai::types::Context {
             messages: llm_messages,
             system_prompt: Some(context.system_prompt.clone()),
@@ -844,6 +846,7 @@ pub async fn run_agent_loop_continue(
         // Call the provider — the run's model, then its fallback chain.
         // What the stream needs to start reads early (`speculation`).
         let scope = Arc::new(crate::agent::tools::speculation::Scope::of(state).await);
+        let t_model = now_ms();
         let (outcome, used) = crate::agent::tools::speculation::SCOPE.scope(scope, call_provider_with_fallback(
             app,
             &models,
@@ -869,6 +872,8 @@ pub async fn run_agent_loop_continue(
                 }));
             }
             trace.event("turn", serde_json::json!({
+                "input_ms": t_model.saturating_sub(t_step),
+                "model_ms": now_ms().saturating_sub(t_model),
                 "model": format!("{}/{}", model.provider, model.id),
                 "answered_by": format!("{}/{}", used_model.provider, used_model.id),
                 "fallback": used_model.provider != model.provider || used_model.id != model.id,
@@ -1121,11 +1126,15 @@ pub async fn run_agent_loop_continue(
             tool_calls_since_todo += tool_calls.len();
         }
 
+        let t_tools = now_ms();
         let tool_results = if !tool_calls.is_empty() {
             execute_tool_calls(context, tool_calls, state, emit, app).await
         } else {
             Vec::new()
         };
+        if !tool_results.is_empty() {
+            trace.event("tools_done", serde_json::json!({ "ms": now_ms().saturating_sub(t_tools), "count": tool_results.len() }));
+        }
 
         let mut just_called: Vec<(String, serde_json::Value)> = Vec::new();
         for result in &tool_results {
@@ -1139,6 +1148,8 @@ pub async fn run_agent_loop_continue(
                 let args = arguments.clone().unwrap_or(serde_json::Value::Null);
                 attempts.record(step, tool_name, &args, failed, &text);
                 trace.event("tool", serde_json::json!({
+                    "args": crate::agent::runtime::trace::preview(&args.to_string(), 1500),
+                    "result": crate::agent::runtime::trace::preview(&text, 2500),
                     "tool": tool_name,
                     "call": crate::agent::runtime::attempts::key_of(tool_name, &args).1,
                     "failed": failed,

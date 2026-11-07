@@ -11,6 +11,7 @@ import { UpdateSurfaces } from './modules/updates/components/UpdateSurfaces'
 import { LayoutErrorBoundary } from './components/LayoutErrorBoundary'
 import { Workspace } from './modules/workspace/Workspace'
 import { GitView, useAppView } from './modules/git/components/GitView'
+import { TrajectoryView } from './modules/trajectory/TrajectoryView'
 import { startGitStatus } from './modules/git/store/gitStatusStore'
 import { startThreadGit } from './modules/git/store/threadGitStore'
 import { installShortcuts, registerShortcuts } from './lib/shortcuts'
@@ -57,6 +58,7 @@ function App() {
             <Workspace />
           </Box>
           {view === 'git' && <GitView />}
+          {view === 'trajectory' && <TrajectoryView />}
           {view === 'home' && <HomeView />}
           {view === 'agents' && <AgentsView />}
         </LayoutErrorBoundary>
