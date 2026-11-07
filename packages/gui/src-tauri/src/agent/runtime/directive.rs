@@ -296,6 +296,7 @@ pub(crate) async fn assemble_capability_blocks(
         }
     }
     prompt.push_str(&browser_block);
+    prompt.push_str(&time_block(chrono::Local::now()));
     if let Some(goal) = goal_block {
         prompt.push_str(&goal);
     }
@@ -306,6 +307,37 @@ pub(crate) async fn assemble_capability_blocks(
         prompt.push_str(&skills);
     }
     prompt
+}
+
+/// The date, time and UTC offset the model works in, so it never has to call a tool to learn what day "tomorrow" is. The minute is floored
+/// to ten, because a prompt that changes every minute would never hit the provider's prompt cache for what follows it.
+pub fn time_block<Tz: chrono::TimeZone>(now: chrono::DateTime<Tz>) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    use chrono::Timelike;
+    let floored = now.with_minute(now.minute() / 10 * 10).unwrap_or(now);
+    format!(
+        "\n\n<vivianne_time>It is {} (UTC{}), {}. Use this for dates and relative times; call get_current_time only if you need the exact second.</vivianne_time>",
+        floored.format("%Y-%m-%d %H:%M"),
+        floored.format("%:z"),
+        floored.format("%A"),
+    )
+}
+
+#[cfg(test)]
+mod time_tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn the_time_block_names_the_day_and_offset_and_floors_the_minute() {
+        let ist = chrono::FixedOffset::east_opt(5 * 3600 + 1800).unwrap();
+        let t = ist.with_ymd_and_hms(2026, 11, 7, 19, 38, 42).unwrap();
+        let b = time_block(t);
+        assert!(b.contains("2026-11-07 19:30") && b.contains("UTC+05:30") && b.contains("Saturday"), "{b}");
+        assert_eq!(time_block(t), time_block(ist.with_ymd_and_hms(2026, 11, 7, 19, 31, 0).unwrap()), "same ten minutes, same text");
+    }
 }
 
 #[cfg(test)]
