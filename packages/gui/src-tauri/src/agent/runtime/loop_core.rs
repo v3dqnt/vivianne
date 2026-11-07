@@ -1138,12 +1138,14 @@ pub async fn run_agent_loop_continue(
 
         let mut just_called: Vec<(String, serde_json::Value)> = Vec::new();
         for result in &tool_results {
-            if let AgentMessage::ToolResult { tool_name, arguments, is_error, content, .. } = result {
+            if let AgentMessage::ToolResult { tool_name, arguments, is_error, content, details, .. } = result {
                 let text: String = content
                     .iter()
                     .filter_map(|c| if let MessageContent::Text { text } = c { Some(text.as_str()) } else { None })
                     .collect();
-                let failed = *is_error == Some(true);
+                // A command that exited non-zero is not the tool failing, but it did not succeed: repeated attempts and unverified changes still count it.
+                let exited_badly = details.as_ref().and_then(|d| d.get("exit_code")).and_then(|c| c.as_i64()).is_some_and(|c| c != 0) || details.as_ref().and_then(|d| d.get("timed_out")).and_then(|t| t.as_bool()) == Some(true);
+                let failed = *is_error == Some(true) || exited_badly;
                 verification.observe(tool_name, arguments.as_ref(), failed, &text);
                 let args = arguments.clone().unwrap_or(serde_json::Value::Null);
                 attempts.record(step, tool_name, &args, failed, &text);
