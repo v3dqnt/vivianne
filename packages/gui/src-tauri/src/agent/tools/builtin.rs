@@ -1003,8 +1003,45 @@ impl WebSearchTool { pub fn new() -> Self { Self } }
 impl Tool for WebSearchTool {
     fn name(&self) -> &str { "web_search" }
     async fn execute(&self, args: &serde_json::Value, _cwd: &str) -> ToolResult {
-        let query = args["query"].as_str().unwrap_or("").trim().to_string();
-        if query.len() < 2 { return err("'query' must be at least 2 characters"); }
+        let max = args["maxResults"].as_u64().map(|n| n.clamp(1, 20) as usize).unwrap_or(10);
+        let mut queries: Vec<String> = args["queries"].as_array().map(|a| a.iter().filter_map(|q| q.as_str()).map(|q| q.trim().to_string()).filter(|q| q.len() >= 2).collect()).unwrap_or_default();
+        if let Some(q) = args["query"].as_str().map(str::trim).filter(|q| q.len() >= 2) {
+            if !queries.iter().any(|x| x == q) { queries.insert(0, q.to_string()); }
+        }
+        queries.dedup();
+        queries.truncate(MAX_SEARCH_QUERIES);
+        match queries.len() {
+            0 => err("'query' must be at least 2 characters"),
+            1 => search_one(&queries[0], max).await,
+            _ => {
+                let results = futures::future::join_all(queries.iter().map(|q| search_one(q, max))).await;
+                let failed = results.iter().all(|r| r.is_error);
+                // A page two queries both found is listed once, under the first query that found it.
+                let mut seen = std::collections::HashSet::new();
+                let mut out = Vec::new();
+                for (q, r) in queries.iter().zip(results) {
+                    let kept: Vec<&str> = r.content.lines().filter(|l| {
+                        let t = l.trim();
+                        !(t.starts_with("http") && !seen.insert(t.to_string()))
+                    }).collect();
+                    out.push(format!("## {q}
+{}", kept.join("
+")));
+                }
+                ToolResult { content: out.join("
+
+"), is_error: failed, details: None }
+            }
+        }
+    }
+}
+
+/// Up to this many queries run in one call.
+const MAX_SEARCH_QUERIES: usize = 5;
+
+async fn search_one(query: &str, max: usize) -> ToolResult {
+    let query = query.to_string();
+    {
 
         // Prefer a real browser search (camoufox-browser) when it's running —
         // far more resistant to being blocked than a plain HTML scrape. Falls
@@ -1014,16 +1051,22 @@ impl Tool for WebSearchTool {
         // A search API when one is configured: fast, structured, and not
         // subject to the bot checks and rate limits a scraped engine is.
         let mut api_note = String::new();
+        // A named engine whose key is gone is said out loud, not quietly replaced.
+        if let Some(label) = chosen_engine_without_key().await {
+            api_note = format!("({label} is selected in Settings but has no key; used DuckDuckGo instead)
+
+");
+        }
         if let Some((provider, key)) = configured_search_api().await {
             match api_search(provider, &key, &query).await {
-                Ok(hits) if !hits.is_empty() => return ok(format_hits(&query, &hits, Some(provider.label()))),
+                Ok(hits) if !hits.is_empty() => return ok(format_hits(&query, &hits[..hits.len().min(max)], Some(provider.label()))),
                 Ok(_) => return ok(format!("No results found for: {query}")),
                 Err(e) => api_note = format!("({} search failed: {e}; used DuckDuckGo instead)\n\n", provider.label()),
             }
         }
 
         match duckduckgo(&query).await {
-            Ok(results) if !results.is_empty() => ok(format!("{api_note}{}", format_hits(&query, &results, None))),
+            Ok(results) if !results.is_empty() => ok(format!("{api_note}{}", format_hits(&query, &results[..results.len().min(max)], None))),
             Ok(_) => ok(format!("{api_note}No results found for: {query}")),
             Err(ddg_err) => {
                 // DuckDuckGo is keyless and so throttles bursts. OpenAI's web
@@ -1191,6 +1234,18 @@ impl SearchApi {
 
 /// The search API to use: the one chosen in Settings (`webSearchProvider`),
 /// or with "auto" the first that has a key. `None` means use DuckDuckGo.
+/// The label of the engine Settings names when it has no key to use; None for "auto", DuckDuckGo, or a keyed engine.
+async fn chosen_engine_without_key() -> Option<&'static str> {
+    let chosen = crate::agent::tools::exec::read_settings_json().await.get("webSearchProvider").and_then(|v| v.as_str()).map(str::to_string)?;
+    let api = match chosen.as_str() {
+        "brave" => SearchApi::Brave,
+        "tavily" => SearchApi::Tavily,
+        "exa" => SearchApi::Exa,
+        _ => return None,
+    };
+    configured_search_api().await.is_none().then(|| api.label())
+}
+
 async fn configured_search_api() -> Option<(SearchApi, String)> {
     let chosen = crate::agent::tools::exec::read_settings_json()
         .await
