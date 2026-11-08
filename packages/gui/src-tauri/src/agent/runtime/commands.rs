@@ -1,0 +1,3381 @@
+use crate::agent::runtime::types::*;
+use crate::ai::local_registry::{self, LocalEndpointEntry, LocalEndpointRegistry};
+use std::sync::Arc;
+use std::path::PathBuf;
+use tauri::State;
+
+use serde::{Deserialize, Serialize};
+
+/// Global app state shared across commands.
+pub struct AppState {
+    pub(in crate::agent::runtime) agent: tokio::sync::Mutex<crate::agent::Agent>,
+    /// The same `AgentState` the `Agent` above holds, cloned out at
+    /// construction (it wraps an `Arc<RwLock<_>>`, so this is a shared
+    /// handle, not a copy).
+    ///
+    /// Exists for the same reason `steering_queue` does: the `agent` mutex is
+    /// held for the whole duration of a run, so any command that took it just
+    /// to read or set a field froze until the turn finished — model,
+    /// thinking level, persona, workspace, compaction settings and the
+    /// message list were all unreachable mid-turn, and a turn parked on an
+    /// unanswered permission prompt held it for up to 900s.
+    pub agent_state: crate::agent::runtime::state::AgentState,
+    pub(in crate::agent::runtime) session_id: tokio::sync::Mutex<Option<String>>,
+    /// Cloned out of `Agent` at construction time so steering/follow-up
+    /// commands can push messages without waiting on `agent`'s mutex, which
+    /// is held for the full duration of an in-flight prompt/continue run.
+    pub steering_queue: std::sync::Arc<tokio::sync::RwLock<Vec<AgentMessage>>>,
+    pub follow_up_queue: std::sync::Arc<tokio::sync::RwLock<Vec<AgentMessage>>>,
+    /// Set by `cmd_agent_abort` to interrupt the in-flight run at the next
+    /// checkpoint (between turns, and between tool calls). Reset at the start
+    /// of every `cmd_agent_prompt`/`cmd_agent_continue`.
+    pub abort_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Set by `cmd_agent_steer` to interrupt the in-flight run at the same
+    /// checkpoint `abort_flag` uses, but instead of ending the run it drains
+    /// the just-queued steering message immediately and continues with it,
+    /// skipping any further tool-call turns the model had queued up under
+    /// the message being steered away from. Reset at the start of every
+    /// `cmd_agent_prompt`/`cmd_agent_continue`.
+    pub steer_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Why the current run was stopped (see `runtime::cancel`).
+    pub(in crate::agent::runtime) cancel_cause: std::sync::Mutex<Option<crate::agent::runtime::cancel::CancelCause>>,
+    /// Where this thread's transcript is saved, when not in the sessions list:
+    /// a bot's conversation is its `thread.json`.
+    pub transcript_file: std::sync::Mutex<Option<std::path::PathBuf>>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        let agent = crate::agent::Agent::new();
+        let steering_queue = agent.steering_queue.clone();
+        let follow_up_queue = agent.follow_up_queue.clone();
+        let agent_state = agent.state.clone();
+        Self {
+            agent: tokio::sync::Mutex::new(agent),
+            agent_state,
+            session_id: tokio::sync::Mutex::new(None),
+            steering_queue,
+            follow_up_queue,
+            abort_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            steer_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            cancel_cause: std::sync::Mutex::new(None),
+            transcript_file: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+/// Resolves a chat-thread pane's own independent `AppState` by frontend
+/// thread id, so multiple panes (opened via drag-to-dock) can each run a
+/// genuinely concurrent turn instead of sharing one global agent.
+///
+/// The empty-string thread id always resolves to `primary` — the exact same
+/// `Arc<AppState>` that's separately `app.manage()`d for every other command
+/// in this file (model/thinking-level/workspace/queue/etc., none of which are
+/// thread-aware yet). That keeps the default single-thread experience
+/// byte-for-byte unchanged: every existing frontend call site that doesn't
+/// pass a `sessionId` (i.e. all of them, today) keeps hitting `primary`.
+/// Only a real, non-empty thread id — used exclusively by newly-opened
+/// secondary panes — gets routed to its own entry in `extra`.
+pub struct AgentRegistry {
+    primary: Arc<AppState>,
+    extra: tokio::sync::Mutex<std::collections::HashMap<String, Arc<AppState>>>,
+}
+
+impl AgentRegistry {
+    pub fn new(primary: Arc<AppState>) -> Self {
+        Self {
+            primary,
+            extra: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// The thread if it is already open, without making one.
+    pub async fn peek(&self, thread_id: &str) -> Option<Arc<AppState>> {
+        self.extra.lock().await.get(thread_id).cloned()
+    }
+
+    /// Stop every thread's run, for a reason (the app is closing).
+    pub async fn cancel_all(&self, kind: crate::agent::runtime::cancel::CancelKind, reason: &str) {
+        let mut all = vec![self.primary.clone()];
+        all.extend(self.extra.lock().await.values().cloned());
+        for state in all {
+            if !state.is_idle() {
+                state.cancel(kind, Some(reason.to_string())).await;
+            }
+        }
+    }
+
+    pub async fn resolve(&self, thread_id: Option<&str>) -> Arc<AppState> {
+        match thread_id {
+            None | Some("") => self.primary.clone(),
+            Some(id) => {
+                if let Some(state) = self.extra.lock().await.get(id) {
+                    return state.clone();
+                }
+                // A new thread starts where the primary is. Callers with their
+                // own settings (a bot, Viv Instant, `viv run`) set them after.
+                let fresh = Arc::new(AppState::default());
+                fresh.agent_state.inherit_from(&self.primary.agent_state).await;
+                self.extra.lock().await.entry(id.to_string()).or_insert(fresh).clone()
+            }
+        }
+    }
+
+    /// The thread `thread_id`, taking settings from `parent` if this call creates it.
+    async fn resolve_from(&self, thread_id: Option<&str>, parent: Option<&str>) -> Arc<AppState> {
+        let existed = match thread_id {
+            None | Some("") => true,
+            Some(id) => self.extra.lock().await.contains_key(id),
+        };
+        let state = self.resolve(thread_id).await;
+        if !existed && parent.is_some_and(|p| Some(p) != thread_id) {
+            let parent = self.resolve(parent).await;
+            state.agent_state.inherit_from(&parent.agent_state).await;
+        }
+        state
+    }
+
+    /// Free an idle thread's memory; its session stays on disk and reopens later.
+    /// A running thread, or the primary, stays. Returns whether it was freed.
+    pub async fn release(&self, thread_id: &str) -> bool {
+        let mut extra = self.extra.lock().await;
+        match extra.get(thread_id) {
+            Some(state) if state.is_idle() => extra.remove(thread_id).is_some(),
+            _ => false,
+        }
+    }
+}
+
+/// Free a thread that is no longer open. See `AgentRegistry::release`.
+#[tauri::command]
+pub async fn cmd_thread_release(#[allow(non_snake_case)] threadId: String, registry: State<'_, AgentRegistry>) -> Result<bool, String> {
+    Ok(registry.release(&threadId).await)
+}
+
+/// A single image attached to a user prompt (frontend sends base64 + MIME type).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ImageInput {
+    pub base64: String,
+    pub media_type: String,
+}
+
+/// Return the agent's current working directory (the "project directory").
+#[tauri::command]
+pub async fn cmd_get_project_dir() -> Result<String, String> {
+    std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .map_err(|e| e.to_string())
+}
+
+/// Change the agent's working directory. All relative file/exec tools resolve
+/// against this from the next tool call onward.
+///
+/// Path validation:
+/// - Canonicalizes the path to resolve `..` / symlinks
+/// - Verifies the path exists and is a directory
+/// - Rejects paths that canonicalise to nothing (nonexistent target after resolution)
+#[tauri::command]
+pub async fn cmd_set_project_dir(path: String) -> Result<String, String> {
+    let p = std::path::Path::new(&path);
+    let canonical = p
+        .canonicalize()
+        .map_err(|_| format!("Path does not exist or cannot be resolved: {path}"))?;
+    if !canonical.is_dir() {
+        return Err(format!("Not a directory: {}", canonical.display()));
+    }
+    std::env::set_current_dir(&canonical).map_err(|e| e.to_string())?;
+    Ok(canonical.to_string_lossy().to_string())
+}
+
+/// Usage-attribution tag for the top-level agent (as opposed to a `task`
+/// subagent — see `tool_exec.rs`'s equivalent tag), keyed by the
+/// active session id so `usage_by_source.json` can at least identify which
+/// session a request's cost came from without a full parent/child tree.
+async fn main_source_tag(state: &AppState) -> String {
+    let session_id = state.session_id().await.unwrap_or_default();
+    format!("main:{session_id}")
+}
+
+/// Send a prompt to the agent.
+#[tauri::command]
+pub async fn cmd_agent_prompt(
+    text: String,
+    images: Option<Vec<ImageInput>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    // Automations (`workflowRunner` steps) pass `automation: true`: the turn
+    // is unattended, so it must run model routing even when the UI has a
+    // specific model selected — it never chose that model itself.
+    automation: Option<bool>,
+    app: tauri::AppHandle,
+    registry: State<'_, AgentRegistry>,
+) -> Result<Vec<AgentMessage>, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let turn = Turn { main: true, source_tag: None, on_event: None, forced_routing: automation.unwrap_or(false) };
+    // A person speaking ends any chain of thread-to-thread messages this thread was in.
+    crate::agent::thread_msgs::user_turn(threadId.as_deref().unwrap_or_default());
+    run_turn(&app, state, threadId.as_deref().unwrap_or_default(), text, images.unwrap_or_default(), turn).await?;
+    Ok(Vec::new())
+}
+
+/// How a turn differs by who runs it: the chat, or a bot (`agent::team::bots`).
+pub struct Turn {
+    /// The conversation the user is talking to: it gets the project's master
+    /// framing, and a team project's coordinator directive.
+    pub main: bool,
+    /// What usage is filed under; the session's own when `None`.
+    pub source_tag: Option<String>,
+    /// Sees every event of the turn too (a bot's face and steps).
+    pub on_event: Option<Arc<dyn Fn(&crate::agent::runtime::events::AgentEvent) + Send + Sync>>,
+    /// The caller insists this turn goes through model routing regardless of
+    /// the currently selected model — automations, which run unattended and
+    /// must not silently pay for whatever the user happened to leave selected.
+    pub forced_routing: bool,
+}
+
+/// One turn of a thread, the way the chat runs one: the system prompt rebuilt,
+/// Auto resolved to a model, every event sent to the frontend tagged with the
+/// thread, the transcript saved after. Returns the turn's new messages.
+pub async fn run_turn(
+    app: &tauri::AppHandle,
+    state: Arc<AppState>,
+    thread_id: &str,
+    text: String,
+    images: Vec<ImageInput>,
+    turn: Turn,
+) -> Result<Vec<AgentMessage>, String> {
+    let abort = state.abort_flag.clone();
+    crate::agent::orchestration::TURN_ABORT.scope(abort, crate::agent::orchestration::TURN_THREAD.scope(thread_id.to_string(), run_turn_inner(app, state, thread_id, text, images, turn))).await
+}
+
+async fn run_turn_inner(
+    app: &tauri::AppHandle,
+    state: Arc<AppState>,
+    thread_id: &str,
+    text: String,
+    images: Vec<ImageInput>,
+    turn: Turn,
+) -> Result<Vec<AgentMessage>, String> {
+    use tauri::Emitter;
+    if turn.main {
+        // Alongside the reply, never in front of it: a first message also gets a title.
+        crate::agent::sessions::title::on_turn_start(app, &state, &text).await;
+    }
+    let mut agent = state.lock_agent().await;
+    let (tx, mut rx) = crate::agent::runtime::events::event_bus();
+
+    // Every event this turn gets tagged with the thread it belongs to, so a
+    // frontend with multiple open panes routes each event to the right
+    // one instead of assuming a single global stream. The default/primary
+    // pane sends no `threadId`, so its events carry `thread_id: ""` — the
+    // same sentinel `AgentRegistry::resolve` treats as "primary".
+    let emit_thread_id = thread_id.to_string();
+    let app_clone = app.clone();
+    // Snapshotted once per turn, not re-read live inside the loop — the
+    // workspace can't change mid-turn (nothing else runs while `agent`'s
+    // mutex is held), and re-reading it live inside the spawned task would
+    // just add an await per event for no different an answer.
+    // Multiplayer sync is the main chat's: a bot's turns aren't the partner's.
+    let mp_workspace_folders = if turn.main { agent.state.workspace_folders().await } else { Vec::new() };
+    let mp_workspace_folders_for_loop = mp_workspace_folders.clone();
+    crate::notch::turn_started(app, &emit_thread_id, &mp_workspace_folders, &text);
+    let on_event = turn.on_event.clone();
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = rx.rx.recv().await {
+            if let Some(f) = &on_event {
+                f(&event);
+            }
+            crate::notch::event(&app_clone, &emit_thread_id, &event);
+            crate::agent::system::notifications::on_agent_event(&app_clone, &emit_thread_id, &event);
+            if let crate::agent::runtime::events::AgentEvent::AgentEnd { messages, .. } = &event {
+                let (state, message) = crate::activity::outcome(messages);
+                crate::activity::end_run(&app_clone, state, message);
+            }
+            crate::multiplayer::broadcast_agent_event(&app_clone, &mp_workspace_folders_for_loop, &event).await;
+            let _ = app_clone.emit(
+                "agent_event",
+                serde_json::json!({ "threadId": emit_thread_id, "event": event }),
+            );
+        }
+    });
+
+    // Rebuild the system prompt for this turn: the always-on capability directive,
+    // mode framing, skills catalog + any @mentioned skill's full content, project
+    // instructions (AGENTS.md/CLAUDE.md), then the project-memory block (when
+    // memory is enabled). Rebuilt from a stripped base each turn so the injected
+    // blocks never stack up. Block assembly itself lives in `directive.rs`,
+    // shared with spawned subagents (`tool_exec::execute_task_tool`) so they
+    // get the same capability framing.
+    {
+        let stored = agent.state.system_prompt().await;
+        let base = stored.as_str();
+        let base = base.split("<vivianne_directive>").next().unwrap_or(base);
+        let base = base.split("\n\n<vivianne_mode>").next().unwrap_or(base);
+        let base = base.split("\n\n<vivianne_skills>").next().unwrap_or(base);
+        let base = base.split("\n\n<vivianne_mentioned_skills>").next().unwrap_or(base);
+        let base = base.split("\n\n<vivianne_relevant_skills>").next().unwrap_or(base);
+        let base = base.split("\n\n<vivianne_workspace>").next().unwrap_or(base);
+        let base = base.split("\n\n<project_instructions>").next().unwrap_or(base);
+        let base = base.split("\n\n<project_memory>").next().unwrap_or(base);
+        let base = base.trim();
+
+        let mode_section = agent.state.persona_mode().await.prompt_section();
+        let auth = crate::ai::auth::wait_for_state(app).await;
+        let capability_blocks = crate::agent::runtime::directive::assemble_capability_blocks(
+            &agent.state,
+            mode_section,
+            &text,
+            Some(&auth),
+            true,
+            turn.main,
+        ).await;
+
+        let mut prompt = if base.is_empty() {
+            capability_blocks
+        } else {
+            format!("{base}\n\n{capability_blocks}")
+        };
+        // The chat of a tree with a master and a team is its lead: it
+        // delegates, checks and decides (`traits::lead_allowed`).
+        if turn.main {
+            let lead = match agent.state.primary_workspace_folder().await {
+                Some(root) => {
+                    crate::agent::sessions::projects::is_tree(&root)
+                        && crate::agent::sessions::projects::has_master(&root)
+                        && crate::agent::team::list(std::path::Path::new(&root)).iter().any(|a| a.status == crate::agent::team::STATUS_ACTIVE)
+                }
+                None => false,
+            };
+            agent.state.set_lead(lead).await;
+        }
+        if agent.state.lead().await {
+            prompt.push_str("
+
+");
+            prompt.push_str(crate::agent::team::LEAD_DIRECTIVE);
+        }
+        // After the directive, so the per-turn strip above removes it again
+        // and a turn out of plan mode carries none of it.
+        if agent.state.plan_mode().await {
+            prompt.push_str("
+
+");
+            prompt.push_str(crate::agent::team::plans::PLAN_MODE_DIRECTIVE);
+        }
+        // A team project: the conversation coordinates the user's agents.
+        if let Some(root) = agent.state.primary_workspace_folder().await.filter(|_| turn.main) {
+            if crate::agent::sessions::projects::is_tree(&root) && !crate::agent::sessions::projects::has_master(&root) {
+                if let Some(d) = crate::agent::team::run::coordinator_directive(&root) {
+                    prompt.push_str("
+
+");
+                    prompt.push_str(&d);
+                }
+            }
+        }
+        // Sections from settings and the thread's own scope, with their variables filled in.
+        let model = agent.state.model().await;
+        let vars = std::collections::HashMap::from([
+            ("cwd", agent.state.primary_workspace_folder().await.unwrap_or_default()),
+            ("model", model.id.clone()),
+            ("provider", model.provider.clone()),
+            ("project", agent.state.primary_workspace_folder().await.and_then(|p| std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().to_string())).unwrap_or_default()),
+            ("date", chrono::Local::now().format("%Y-%m-%d").to_string()),
+        ]);
+        let (extra, problems) = crate::agent::runtime::prompt_sections::assemble(&crate::agent::tools::exec::read_settings_json().await, state.agent_state.session_tag().await.as_deref(), &vars);
+        for p in problems {
+            log::warn!("[prompt] {p}");
+        }
+        if !extra.is_empty() {
+            prompt.push_str("
+
+");
+            prompt.push_str(&extra);
+        }
+        agent.state.set_system_prompt(prompt).await;
+    }
+
+    state.abort_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    state.steer_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    state.clear_cancel();
+    // Multiplayer project: take in the partner's commits and show the agent
+    // what they did (a no-op anywhere else).
+    crate::multiplayer::collab::before_run(app, &mp_workspace_folders, &agent.state).await;
+    let request_text = text.clone();
+    let attached = images;
+    // Prime the model explicitly: some models default to a boilerplate "I can't
+    // see images" refusal unless the surrounding text confirms one is actually
+    // present this turn, even though the image content block is right there.
+    let text = if attached.is_empty() {
+        text
+    } else {
+        format!(
+            "{text}\n\n({} image{} attached to this message — look at it/them before answering.)",
+            attached.len(),
+            if attached.len() == 1 { "" } else { "s" }
+        )
+    };
+    let mut content = vec![MessageContent::Text { text }];
+    for img in attached {
+        content.push(MessageContent::Image {
+            url: None,
+            base64: Some(img.base64),
+            media_type: Some(img.media_type),
+        });
+    }
+    let message = AgentMessage::User {
+        content,
+        timestamp: now_ms(),
+    };
+    crate::multiplayer::broadcast_user_message(app, &mp_workspace_folders, &message).await;
+    let source_tag = match turn.source_tag {
+        Some(tag) => tag,
+        None => main_source_tag(&state).await,
+    };
+    // The "Auto" model: this turn runs on whichever model the request's
+    // difficulty calls for, and the selection goes back to Auto afterwards.
+    // Forced routing (`turn.forced_routing`, set by automations) routes even
+    // without Auto: the automation step is unattended and never chose the
+    // selected model, so paying for it isn't fair to the user either. When
+    // routing fails, only a forced-only turn meanwhile falls back to the
+    // selected model (an automation shouldn't wedge because its resolver
+    // hiccuped); an interactive Auto selection gets and shows the error.
+    let selected = agent.state.model().await;
+    let forced_only = turn.forced_routing && !crate::agent::models::routing::is_router(&selected);
+    let routed_from = if crate::agent::models::routing::is_router(&selected) || turn.forced_routing {
+        match crate::agent::models::routing::resolve_router(&request_text).await {
+            Ok((model, verdict)) => {
+                let _ = app.emit(
+                    "router_decision",
+                    serde_json::json!({
+                        "threadId": thread_id,
+                        "model": if model.name.is_empty() { model.id.clone() } else { model.name.clone() },
+                        "level": verdict.map(|v| v.level),
+                        "by": verdict.map(|v| v.by),
+                    }),
+                );
+                agent.state.set_model(model).await;
+                Some(selected)
+            }
+            Err(e) => {
+                if forced_only {
+                    None
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    } else {
+        None
+    };
+    crate::agent::background::run_ledger::begin_run(&state, thread_id, &request_text).await;
+    // A thread in a git project works on a branch of its own, made on its first turn.
+    crate::agent::sessions::thread_worktree::provision_for_turn(app, &state, &request_text).await;
+    // A baseline to diff this turn against, and a snapshot of what it leaves.
+    let checkpoint_scope = state.session_id().await;
+    let checkpoint_dir = agent.state.primary_workspace_folder().await;
+    if let (Some(dir), Some(scope)) = (&checkpoint_dir, &checkpoint_scope) {
+        crate::agent::changes::git_checkpoints::before_turn(dir, scope).await;
+    }
+    // Another coding agent (Claude Code, Codex, Gemini CLI…) as the model:
+    // the turn runs in it, over ACP, instead of in Vivianne's own loop.
+    let current = agent.state.model().await;
+    let new_messages = if current.provider == crate::agent::harness::PROVIDER {
+        let bypass = crate::agent::tools::exec::read_bypass_mode().await || agent.state.auto_approve().await;
+        crate::agent::harness::run_turn(&agent.state, &tx, thread_id, &current.id, message, &state.abort_flag, bypass).await
+    } else if crate::ai::imagegen::is_image_model(&current.provider, &current.id) {
+        // An image model picked: the message is the prompt and the picture is the reply.
+        crate::ai::imagegen::run_turn(&agent.state, &tx, app, &current.provider, &current.id, message, &state.abort_flag).await
+    } else {
+        agent.prompt(message, app, &tx, &state.abort_flag, &state.steer_flag, &source_tag).await
+    };
+    if let Some(auto) = routed_from {
+        agent.state.set_model(auto).await;
+    }
+    drop(agent);
+
+    let saved = save_current_session_impl(None, &state).await;
+    if let Some(dir) = checkpoint_dir {
+        // The session may have been saved for the first time just now.
+        let scope = checkpoint_scope.or_else(|| saved.as_ref().ok().cloned());
+        if let Some(scope) = scope {
+            tauri::async_runtime::spawn(async move { crate::agent::changes::git_checkpoints::after_turn(&dir, &scope).await });
+        }
+    }
+    // Multiplayer project: summarise the run for the partner, commit, sync.
+    // Off the reply path — git and the network never delay the turn ending.
+    tauri::async_runtime::spawn(crate::multiplayer::collab::after_run(app.clone(), mp_workspace_folders, request_text, new_messages.clone()));
+    Ok(new_messages)
+}
+
+
+/// Continue the agent from the current transcript.
+#[tauri::command]
+pub async fn cmd_agent_continue(
+    app: tauri::AppHandle,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<Vec<AgentMessage>, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    use tauri::Emitter;
+    let mut agent = state.lock_agent().await;
+    let (tx, mut rx) = crate::agent::runtime::events::event_bus();
+
+    let app_clone = app.clone();
+    let emit_thread_id = threadId.clone().unwrap_or_default();
+    let mp_workspace_folders = agent.state.workspace_folders().await;
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = rx.rx.recv().await {
+            if let crate::agent::runtime::events::AgentEvent::AgentEnd { messages, .. } = &event {
+                let (state, message) = crate::activity::outcome(messages);
+                crate::activity::end_run(&app_clone, state, message);
+            }
+            crate::multiplayer::broadcast_agent_event(&app_clone, &mp_workspace_folders, &event).await;
+            let _ = app_clone.emit("agent_event", serde_json::json!({ "threadId": emit_thread_id, "event": event }));
+        }
+    });
+
+    state.abort_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    state.steer_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    let source_tag = main_source_tag(&state).await;
+    let selected = agent.state.model().await;
+    let routed_from = if crate::agent::models::routing::is_router(&selected) {
+        let (model, _) = crate::agent::models::routing::resolve_router("").await?;
+        agent.state.set_model(model).await;
+        Some(selected)
+    } else {
+        None
+    };
+    let _new_messages = agent.continue_run(&app, &tx, &state.abort_flag, &state.steer_flag, &source_tag).await;
+    if let Some(auto) = routed_from {
+        agent.state.set_model(auto).await;
+    }
+    Ok(Vec::new())
+}
+
+/// Interrupt the in-flight run at the next checkpoint (between turns / tool
+/// calls). Non-blocking — returns immediately; the actual stop happens on the
+/// next loop iteration, which then emits a normal `agent_end`.
+#[tauri::command]
+pub async fn cmd_agent_abort(#[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    state.cancel(crate::agent::runtime::cancel::CancelKind::User, None).await;
+    // A plan being carried out runs inside one long tool call, which the
+    // loop's abort check can't reach until it returns — stop it directly.
+    // ponytail: stops every thread's plans and team runs, not only this
+    // thread's; track them per thread if two threads run plans at once.
+    crate::agent::team::plans::cancel_all();
+    crate::agent::team::run::cancel_all();
+    Ok(())
+}
+
+/// Stop from the activity notch: the run, and any typing mid-flight, now.
+#[tauri::command]
+pub async fn cmd_activity_stop(app: tauri::AppHandle, #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>) -> Result<(), String> {
+    crate::agent::tools::desktop::win_cancel();
+    crate::activity::end_run(&app, "stopped", "Stopping…".into());
+    cmd_agent_abort(threadId, registry).await
+}
+
+/// Queue a steering message AND interrupt the in-flight run at the next
+/// checkpoint so it's picked up immediately instead of waiting for the
+/// current tool-call chain to run its course. Non-blocking — like
+/// `cmd_agent_abort`, the actual pivot happens on the next loop iteration,
+/// not mid-token; unlike abort, the run continues (with the new message)
+/// rather than ending.
+#[tauri::command]
+pub async fn cmd_agent_steer(
+    text: String,
+    images: Option<Vec<ImageInput>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let attached = images.unwrap_or_default();
+    let mut content = vec![MessageContent::Text { text }];
+    for img in attached {
+        content.push(MessageContent::Image {
+            url: None,
+            base64: Some(img.base64),
+            media_type: Some(img.media_type),
+        });
+    }
+    let message = AgentMessage::User {
+        content,
+        timestamp: now_ms(),
+    };
+    state.steering_queue.write().await.push(message);
+    persist_queues(&state).await;
+    note_inbox(&state, "inbox.queued", 1).await;
+    crate::agent::runtime::compaction_v2::record(state.agent_state.session_tag().await.as_deref(), "run.steered", serde_json::json!({}));
+    state.steer_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
+/// Reset the agent state.
+#[tauri::command]
+pub async fn cmd_agent_reset(
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    state.reset_thread().await;
+    Ok(())
+}
+
+/// Queue a steering message.
+#[tauri::command]
+pub async fn cmd_agent_steering_queue(
+    text: String,
+    images: Option<Vec<ImageInput>>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    // Deliberately does NOT touch `state.agent`'s mutex — that mutex is held
+    // for the full duration of an in-flight prompt/continue run, so routing
+    // this through it would block until the run finishes, making mid-run
+    // steering impossible.
+    let mut content = vec![MessageContent::Text { text }];
+    for img in images.unwrap_or_default() {
+        content.push(MessageContent::Image { url: None, base64: Some(img.base64), media_type: Some(img.media_type) });
+    }
+    let message = AgentMessage::User { content, timestamp: now_ms() };
+    state.steering_queue.write().await.push(message);
+    Ok(())
+}
+
+/// Queue a follow-up message.
+#[tauri::command]
+pub async fn cmd_agent_follow_up_queue(
+    text: String,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let message = AgentMessage::User {
+        content: vec![MessageContent::Text { text }],
+        timestamp: now_ms(),
+    };
+    state.follow_up_queue.write().await.push(message);
+    persist_queues(&state).await;
+    note_inbox(&state, "inbox.queued", 1).await;
+    Ok(())
+}
+
+/// Clear all queues.
+#[tauri::command]
+pub async fn cmd_agent_clear_queues(#[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let dropped = state.steering_queue.read().await.len() + state.follow_up_queue.read().await.len();
+    state.steering_queue.write().await.clear();
+    state.follow_up_queue.write().await.clear();
+    persist_queues(&state).await;
+    if dropped > 0 {
+        note_inbox(&state, "inbox.cancelled", dropped).await;
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueSnapshot {
+    pub steering: Vec<AgentMessage>,
+    pub follow_up: Vec<AgentMessage>,
+}
+
+/// Read what's currently queued — the UI's "Queue" panel polls this so
+/// pending steering/follow-up messages are actually visible instead of
+/// being a write-only side channel.
+#[tauri::command]
+pub async fn cmd_agent_get_queues(#[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>) -> Result<QueueSnapshot, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let snapshot = QueueSnapshot {
+        steering: state.steering_queue.read().await.clone(),
+        follow_up: state.follow_up_queue.read().await.clone(),
+    };
+    Ok(snapshot)
+}
+
+/// Remove one queued message by its position in the given queue (steering
+/// or follow-up) without disturbing the others — lets the user retract a
+/// single queued message instead of only clear-all.
+#[tauri::command]
+pub async fn cmd_agent_remove_queued(
+    queue: String,
+    index: usize,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let target = match queue.as_str() {
+        "steering" => &state.steering_queue,
+        "followUp" | "follow_up" => &state.follow_up_queue,
+        other => return Err(format!("Unknown queue '{other}' — expected 'steering' or 'followUp'.")),
+    };
+    let mut guard = target.write().await;
+    if index >= guard.len() {
+        return Err(format!("Index {index} out of range ({} queued)", guard.len()));
+    }
+    guard.remove(index);
+    drop(guard);
+    persist_queues(&state).await;
+    note_inbox(&state, "inbox.cancelled", 1).await;
+    Ok(())
+}
+
+/// Get agent messages.
+#[tauri::command]
+pub async fn cmd_agent_messages(
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<Vec<AgentMessage>, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    Ok(state.agent_state.messages().await)
+}
+
+pub(crate) fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Return a diagnostic snapshot of the agent's runtime state for debugging.
+#[tauri::command]
+pub async fn cmd_debug_agent_status(
+    app: tauri::AppHandle,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<serde_json::Value, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    use crate::ai::auth::Credential;
+
+    // Reads only `agent_state` (the lock-free `Arc<RwLock<_>>` clone `Agent`
+    // itself also holds), not the `agent` mutex — that mutex is held for a
+    // whole in-flight turn (up to 900s parked on a permission prompt), and
+    // this is a debug/status read that has no reason to queue behind it.
+    let model = state.agent_state.model().await;
+    let thinking_level = state.agent_state.thinking_level().await;
+    let messages = state.agent_state.messages().await;
+
+    // Try to read API key for current provider
+    let auth_state = crate::ai::auth::wait_for_state(&app).await;
+    let credential = auth_state.store.read(&model.provider).await.ok().flatten();
+    let api_key_status = match credential {
+        None => "not_found",
+        Some(Credential::ApiKey(ref k)) => if k.key.is_some() { "present" } else { "empty" },
+        Some(Credential::OAuth(_)) => "oauth_present",
+    };
+
+    // Check all known providers (canonical ids — must match env_api_keys.rs /
+    // ApiKeyManager.tsx, e.g. "azure-openai-responses" not "azure-openai").
+    let providers = [
+        "anthropic", "openai", "google", "mistral", "nvidia", "nvidia-nim", "bedrock",
+        "groq", "xai", "deepseek", "together", "fireworks", "openrouter",
+        "azure-openai-responses", "cerebras", "huggingface", "cloudflare-workers-ai", "nebius",
+    ];
+    let mut auth_map = serde_json::Map::new();
+    for p in providers {
+        let cred = auth_state.store.read(p).await.ok().flatten();
+        auth_map.insert(p.to_string(), serde_json::Value::Bool(cred.is_some()));
+    }
+
+    #[cfg(debug_assertions)]
+    eprintln!("[DEBUG][status] model={:?} provider={:?} api_key={} messages={}",
+        model.id, model.provider, api_key_status, messages.len());
+
+    Ok(serde_json::json!({
+        "model": {
+            "id": model.id,
+            "name": model.name,
+            "provider": model.provider,
+            "api": model.api,
+            "max_tokens": model.max_tokens,
+            "base_url": model.base_url,
+        },
+        "thinking_level": format!("{:?}", thinking_level),
+        "api_key_status": api_key_status,
+        "message_count": messages.len(),
+        "message_roles": messages.iter().map(|m| m.role()).collect::<Vec<_>>(),
+        "messages": messages,
+        "auth_map": auth_map,
+    }))
+}
+
+/// Set the active model for the agent.
+#[tauri::command]
+pub async fn cmd_agent_set_model(
+    id: String,
+    name: String,
+    api: String,
+    provider: String,
+    base_url: Option<String>,
+    reasoning: Option<bool>,
+    max_tokens: Option<u32>,
+    context_window: Option<u32>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    crate::agent::runtime::compaction_v2::record(
+        state.agent_state.session_tag().await.as_deref(),
+        "model.selected",
+        serde_json::json!({ "id": id, "name": name, "api": api, "provider": provider, "baseUrl": base_url, "reasoning": reasoning, "maxTokens": max_tokens, "contextWindow": context_window }),
+    );
+    use tauri::Manager;
+
+    // For local providers, resolve the base URL from the endpoint registry
+    // if one wasn't passed directly. The composite model id is `kind:endpoint_id`.
+    let resolved_base_url = if provider == "local" && base_url.is_none() {
+        if let Some(registry) = app.try_state::<LocalEndpointRegistry>() {
+            local_registry::resolve_local_base_url(&registry, &id).await
+        } else {
+            None
+        }
+    } else {
+        base_url
+    };
+
+    let model_ref = ModelRef {
+        id,
+        name,
+        api,
+        provider,
+        base_url: resolved_base_url,
+        reasoning: reasoning.unwrap_or(false),
+        max_tokens: max_tokens.unwrap_or(8192),
+        context_window: context_window.unwrap_or(128_000),
+    };
+    // Persisted before the in-memory set so a crash/kill between the two
+    // still leaves the on-disk value correct — the write is what makes model
+    // choice survive an app restart (`ModelRef::load_persisted`, read back
+    // by `Agent::new_with_cwd_and_model`).
+    model_ref.persist();
+    // Lock-free — see `cmd_debug_agent_status`'s comment. Switching models
+    // used to queue behind an in-flight turn's mutex for no reason: nothing
+    // here touches anything on `Agent` except `.state`.
+    state.agent_state.set_model(model_ref).await;
+    Ok(())
+}
+
+/// Set the thinking level.
+#[tauri::command]
+pub async fn cmd_agent_set_thinking_level(
+    level: String,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let level_enum = match level.to_lowercase().as_str() {
+        "off" => ThinkingLevel::Off,
+        "minimal" => ThinkingLevel::Minimal,
+        "low" => ThinkingLevel::Low,
+        "medium" => ThinkingLevel::Medium,
+        "high" => ThinkingLevel::High,
+        "max" | "xhigh" => ThinkingLevel::XHigh,
+        _ => ThinkingLevel::Off,
+    };
+    state.agent_state.set_thinking_level(level_enum).await;
+    Ok(())
+}
+
+/// Set the persona mode (agent/ask/debug/explore) — swaps the active
+/// system-prompt section and tool restrictions (see `PersonaMode`).
+#[tauri::command]
+pub async fn cmd_agent_set_persona_mode(
+    mode: String,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let mode_enum = match mode.to_lowercase().as_str() {
+        "ask" => PersonaMode::Ask,
+        "debug" => PersonaMode::Debug,
+        "explore" => PersonaMode::Explore,
+        _ => PersonaMode::Agent,
+    };
+    state.agent_state.set_persona_mode(mode_enum).await;
+    Ok(())
+}
+
+/// Read the active workspace folders + access mode for the current agent
+/// session — the frontend has no other way to learn what a session load
+/// just restored server-side (`cmd_load_session` sets `AgentState` directly).
+#[tauri::command]
+pub async fn cmd_agent_get_workspace(#[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>) -> Result<serde_json::Value, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let folders = state.agent_state.workspace_folders().await;
+    let access_mode = match state.agent_state.access_mode().await {
+        crate::agent::runtime::state::WorkspaceAccessMode::ReadOnly => "readOnly",
+        crate::agent::runtime::state::WorkspaceAccessMode::Full => "full",
+    };
+    Ok(serde_json::json!({ "folders": folders, "accessMode": access_mode }))
+}
+
+/// Set the active workspace folder and access mode for the current agent
+/// session — the one line in `tool_exec.rs` that reads `state.cwd()` is what
+/// makes this actually change where tools execute (previously the process
+/// cwd, `cmd_set_project_dir`, was the only knob and applied globally, not
+/// per session).
+#[tauri::command]
+pub async fn cmd_agent_set_workspace(
+    folders: Vec<String>,
+    access_mode: String,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let mode = if access_mode == "readOnly" {
+        crate::agent::runtime::state::WorkspaceAccessMode::ReadOnly
+    } else {
+        crate::agent::runtime::state::WorkspaceAccessMode::Full
+    };
+
+    let previous = state.agent_state.workspace_folders().await;
+    state.agent_state.set_workspace(folders.clone(), mode).await;
+
+    // If this is a real change mid-conversation (not the initial setup of an
+    // empty session), push a visible message into the transcript so the
+    // model actually sees the change happen — not just a silent update to
+    // context it might not attend to. A `User` message, not `Custom` (the
+    // same bug class already fixed once this session in the compaction
+    // work: `Custom` converts to empty content blocks and would silently
+    // vanish from the next LLM request).
+    let has_existing_messages = !state.agent_state.messages().await.is_empty();
+    if has_existing_messages && previous != folders {
+        let text = if folders.is_empty() {
+            "[Workspace changed: no folders configured anymore.]".to_string()
+        } else {
+            format!("[Workspace changed: now includes {}]", folders.join(", "))
+        };
+        state.agent_state.add_message(AgentMessage::User {
+            content: vec![MessageContent::Text { text }],
+            timestamp: now_ms(),
+        }).await;
+    }
+
+    Ok(())
+}
+
+/// The whole computer, as workspace folders: the user's home first (the
+/// primary folder, so relative paths and new files land somewhere sensible),
+/// then every drive root. This is General's workspace — it isn't a project,
+/// so nothing narrower is right for it.
+#[tauri::command]
+pub fn cmd_system_roots() -> Vec<String> {
+    let mut roots = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.to_string_lossy().to_string());
+    }
+    #[cfg(windows)]
+    for letter in b'A'..=b'Z' {
+        let drive = format!("{}:\\", letter as char);
+        // `metadata` rather than `exists`: an empty card reader or optical
+        // drive fails fast here instead of being listed as a folder that
+        // then errors on every read.
+        if std::fs::metadata(&drive).map(|m| m.is_dir()).unwrap_or(false) {
+            roots.push(drive);
+        }
+    }
+    #[cfg(not(windows))]
+    roots.push("/".to_string());
+    roots
+}
+
+/// Create a brand-new empty folder on disk (not just browse to an existing
+/// one) — for the "New folder…" workspace action.
+///
+/// Validates that `parent` exists and is a directory before creating.
+#[tauri::command]
+pub async fn cmd_create_workspace_folder(parent: String, name: String) -> Result<String, String> {
+    let parent_path = std::path::Path::new(&parent);
+    let canonical_parent = parent_path
+        .canonicalize()
+        .map_err(|_| format!("Parent path does not exist or cannot be resolved: {parent}"))?;
+    if !canonical_parent.is_dir() {
+        return Err(format!("Parent is not a directory: {parent}"));
+    }
+    let stem: String = name
+        .trim()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '-' })
+        .collect();
+    let stem = stem.trim();
+    if stem.is_empty() {
+        return Err("Folder name must not be empty".to_string());
+    }
+    let full_path = canonical_parent.join(stem);
+    std::fs::create_dir_all(&full_path).map_err(|e| format!("Failed to create folder: {e}"))?;
+    Ok(full_path.to_string_lossy().to_string())
+}
+
+/// Configure automatic context compaction: whether it's on, how many tokens
+/// to reserve for the model's own prompt+response headroom, how many recent
+/// tokens of conversation are kept verbatim (never summarized), whether
+/// compaction tries an LLM-authored structured summary before falling back
+/// to the deterministic Mermaid diagram, and how many of the most recent
+/// images stay intact in live context before older ones are evicted. The
+/// last two are `Option` (omit/`null` to keep their defaults — on, and 4 —
+/// so existing callers that don't pass these fields are unaffected).
+#[tauri::command]
+pub async fn cmd_agent_set_compaction_config(
+    enabled: bool,
+    reserve_tokens: u32,
+    keep_recent_tokens: u32,
+    llm_summary_enabled: Option<bool>,
+    image_keep_last_n: Option<u32>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    state.agent_state.set_compaction_config(
+        enabled,
+        reserve_tokens,
+        keep_recent_tokens,
+        llm_summary_enabled.unwrap_or(true),
+        image_keep_last_n.unwrap_or(4),
+    ).await;
+    Ok(())
+}
+
+/// Read the current compaction settings — the Context/Memory settings tab
+/// needs this to show the user's saved values, not just write new ones.
+#[tauri::command]
+pub async fn cmd_agent_get_compaction_config(
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<serde_json::Value, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    Ok(serde_json::json!({
+        "enabled": state.agent_state.compaction_enabled().await,
+        "reserveTokens": state.agent_state.reserve_tokens().await,
+        "keepRecentTokens": state.agent_state.keep_recent_tokens().await,
+        "llmSummaryEnabled": state.agent_state.llm_summary_enabled().await,
+        "imageKeepLastN": state.agent_state.image_keep_last_n().await,
+    }))
+}
+
+/// Manually compact the live session right now, on demand (the TaskHeader's
+/// "Compact" button) — reuses `loop_core::maybe_compact_context` with
+/// `force: true` so it runs regardless of the automatic token threshold.
+/// Returns how many messages were folded into the summary (0 = nothing to
+/// compact, e.g. too few messages).
+#[tauri::command]
+pub async fn cmd_compact_now(
+    app: tauri::AppHandle,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<usize, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    // Only between turns: waiting here for a running turn to end froze the button.
+    if !state.is_idle() {
+        return Err("busy: a turn is running. Stop it or wait for it to finish, then compact.".to_string());
+    }
+    let lock_key = state.agent_state.session_tag().await.unwrap_or_else(|| "primary".to_string());
+    if crate::agent::runtime::compaction_v2::is_locked(&lock_key) {
+        return Err("busy: this conversation is already being compacted.".to_string());
+    }
+    let agent = state.lock_agent().await;
+    let model = agent.state.model().await;
+    let mut context = crate::agent::runtime::types::AgentContext {
+        system_prompt: agent.state.system_prompt().await,
+        messages: agent.state.messages().await,
+        delegate_depth: 0,
+        ..Default::default()
+    };
+    let before = context.messages.len();
+    crate::agent::runtime::loop_core::maybe_compact_context(&mut context, &agent.state, &app, &model, true).await;
+    let after = context.messages.len();
+    // maybe_compact_context already calls state.set_messages(...) internally
+    // when it actually compacts (drains `cut_point` messages, inserts one
+    // summary message in their place) — a no-op run (too few messages)
+    // leaves `before == after` exactly, nothing to sync back.
+    let folded = if after < before { before - after + 1 } else { 0 };
+    Ok(folded)
+}
+
+/// Set the steering mode.
+#[tauri::command]
+pub async fn cmd_agent_set_steering_mode(
+    mode: String,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let mode_enum = match mode.to_lowercase().as_str() {
+        "all" => QueueMode::All,
+        "one-at-a-time" => QueueMode::OneAtATime,
+        _ => QueueMode::OneAtATime,
+    };
+    state.set_steering_mode(mode_enum).await;
+    Ok(())
+}
+
+/// Set the follow-up mode.
+#[tauri::command]
+pub async fn cmd_agent_set_follow_up_mode(
+    mode: String,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let mode_enum = match mode.to_lowercase().as_str() {
+        "all" => QueueMode::All,
+        "one-at-a-time" => QueueMode::OneAtATime,
+        _ => QueueMode::OneAtATime,
+    };
+    state.set_follow_up_mode(mode_enum).await;
+    Ok(())
+}
+
+/// Where the session's context window is actually going.
+///
+/// The composer used to show one opaque percentage bar, which tells you that
+/// you're at 78% but not what to do about it. These are the categories a user
+/// can actually act on: prune history, disable tools, or compact.
+///
+/// Every field is an estimate from the same char/4 heuristic
+/// `calculate_context_tokens` uses, so the parts add up to the whole rather
+/// than being measured two different ways and disagreeing.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextBreakdown {
+    /// System prompt: persona/directive text plus the generated capability map.
+    pub system_prompt: u32,
+    /// JSON schemas for every enabled tool — this is why disabling unused
+    /// tools reclaims context, and it's invisible without a breakdown.
+    pub tool_schemas: u32,
+    pub user: u32,
+    pub assistant: u32,
+    pub tool_results: u32,
+}
+
+/// Session usage stats for the GUI footer / header.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStats {
+    pub context_tokens: u32,
+    pub context_window: u32,
+    pub context_percent: f64,
+    pub message_count: usize,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cache_read: u32,
+    pub cache_write: u32,
+    pub total_tokens: u32,
+    pub model_id: String,
+    pub model_name: String,
+    pub provider: String,
+    pub max_tokens: u32,
+    pub breakdown: ContextBreakdown,
+}
+
+/// Return estimated context usage and token totals for the active session.
+#[tauri::command]
+pub async fn cmd_agent_session_stats(
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<SessionStats, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    use crate::agent::runtime::compaction::{calculate_context_tokens, message_char_len};
+
+    // Lock-free — see `cmd_debug_agent_status`'s comment.
+    let model = state.agent_state.model().await;
+    let messages = state.agent_state.messages().await;
+
+    let context_tokens = calculate_context_tokens(&messages);
+    let context_window = model.context_window.max(1);
+    let context_percent =
+        ((context_tokens as f64 / context_window as f64) * 100.0).min(100.0);
+
+    // Rough split: user/tool messages count as input, assistant as output.
+    // Uses the same real-text-length estimate as `calculate_context_tokens`
+    // (not a debug-formatted struct dump) so this split and the context
+    // gauge above agree with each other.
+    let mut input_tokens = 0u32;
+    let mut output_tokens = 0u32;
+    let mut breakdown = ContextBreakdown::default();
+    for msg in &messages {
+        let tokens = (message_char_len(msg) as f32 / 4.0).ceil() as u32;
+        match msg {
+            AgentMessage::Assistant { .. } => {
+                output_tokens += tokens;
+                breakdown.assistant += tokens;
+            }
+            AgentMessage::ToolResult { .. } => {
+                input_tokens += tokens;
+                breakdown.tool_results += tokens;
+            }
+            _ => {
+                input_tokens += tokens;
+                breakdown.user += tokens;
+            }
+        }
+    }
+
+    // Tool schemas ride along in every single request, so they occupy context
+    // permanently — measured from the real definition list (which already
+    // reflects the user's disabled-tools setting, mod tools and MCP servers),
+    // not a fixed guess.
+    let tool_defs = crate::agent::tools::exec::get_agent_tool_definitions().await;
+    breakdown.tool_schemas = (tool_defs
+        .iter()
+        .map(crate::agent::runtime::loop_core::estimate_json_value_raw_str_len)
+        .sum::<usize>() as f32
+        / 4.0)
+        .ceil() as u32;
+
+    // The system prompt is rebuilt here rather than cached, for the same
+    // reason the tool list is: it varies with persona mode, the enabled tool
+    // set, memory and project instructions, so a stored number would drift.
+    // `mention_scan_text` is empty because the per-turn intent hint isn't part
+    // of the standing prompt cost.
+    let system_prompt =
+        crate::agent::runtime::directive::assemble_capability_blocks(&state.agent_state, None, "", None, true, true).await;
+    breakdown.system_prompt = (system_prompt.len() as f32 / 4.0).ceil() as u32;
+
+    Ok(SessionStats {
+        context_tokens,
+        context_window,
+        context_percent,
+        message_count: messages.len(),
+        input_tokens,
+        output_tokens,
+        cache_read: 0,
+        cache_write: 0,
+        total_tokens: input_tokens + output_tokens,
+        model_id: model.id,
+        model_name: model.name,
+        provider: model.provider,
+        max_tokens: model.max_tokens,
+        breakdown,
+    })
+}
+
+/// Read models.json from ~/.viv/agent/models.json
+#[tauri::command]
+pub async fn cmd_get_models_config() -> Result<serde_json::Value, String> {
+    let mut path = crate::agent::system::paths::viv_agent_dir()?;
+    path.push("models.json");
+    if !path.exists() {
+        return Ok(serde_json::json!({ "providers": {} }));
+    }
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read models.json: {}", e))?;
+    let val: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse models.json: {}", e))?;
+    Ok(val)
+}
+
+/// Save models.json to ~/.viv/agent/models.json
+#[tauri::command]
+pub async fn cmd_save_models_config(config: serde_json::Value) -> Result<(), String> {
+    let mut path = crate::agent::system::paths::viv_agent_dir()?;
+    path.push("models.json");
+    let content = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize models.json: {}", e))?;
+    std::fs::write(&path, content)
+        .map_err(|e| format!("Failed to write models.json: {}", e))?;
+    Ok(())
+}
+
+/// Register a local endpoint so the streaming path can route to it.
+#[tauri::command]
+pub async fn cmd_register_local_endpoint(
+    id: String,
+    name: String,
+    base_url: String,
+    model_id: String,
+    kind: String,
+    api_key: Option<String>,
+    _state: State<'_, Arc<AppState>>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let registry = app.state::<LocalEndpointRegistry>().inner().clone();
+    let entry = LocalEndpointEntry {
+        id,
+        name,
+        base_url,
+        model_id,
+        kind,
+        api_key,
+    };
+    local_registry::register(&registry, entry).await;
+    Ok(())
+}
+
+/// Unregister a previously registered local endpoint.
+#[tauri::command]
+pub async fn cmd_unregister_local_endpoint(
+    id: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let registry = app.state::<LocalEndpointRegistry>().inner().clone();
+    local_registry::unregister(&registry, &id).await;
+    Ok(())
+}
+
+/// List all registered local endpoints.
+#[tauri::command]
+pub async fn cmd_list_local_endpoints(
+    app: tauri::AppHandle,
+) -> Result<Vec<LocalEndpointEntry>, String> {
+    use tauri::Manager;
+    use std::ops::Deref;
+    let registry = app.state::<LocalEndpointRegistry>().inner().clone();
+    let map = registry.read().await;
+    let entries: Vec<LocalEndpointEntry> = map.deref().values().cloned().collect();
+    Ok(entries)
+}
+
+/// Read settings.json directly from ~/.viv/agent/settings.json
+#[tauri::command]
+pub async fn cmd_get_settings() -> Result<serde_json::Value, String> {
+    // Served from the same cache the agent loop already uses, rather than a
+    // fresh blocking read + parse per call.
+    //
+    // Six different frontend stores each call this on mount, so startup was
+    // doing six synchronous disk reads and six JSON parses of one small file
+    // that had not changed between them. `cmd_save_settings` already
+    // invalidates this cache, so a cached read cannot go stale — the write
+    // path was there, only the read path was bypassing it.
+    //
+    // `read_settings_json` resolves a missing or malformed file to `{}`, which
+    // matches this command's previous behaviour for the missing-file case. A
+    // malformed file now yields `{}` instead of an error; that is the better
+    // outcome here, since the Settings panel can still render and rewrite a
+    // corrupted file rather than being locked out by it.
+    Ok(crate::agent::tools::exec::read_settings_json().await)
+}
+
+/// Save settings.json directly to ~/.viv/agent/settings.json
+#[tauri::command]
+pub async fn cmd_save_settings(settings: serde_json::Value) -> Result<(), String> {
+    let path = crate::agent::system::paths::viv_agent_dir()?.join("settings.json");
+
+    let content = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+    std::fs::write(&path, content)
+        .map_err(|e| format!("Failed to write settings: {}", e))?;
+    crate::agent::tools::exec::invalidate_settings_cache();
+    Ok(())
+}
+
+/// List every built-in tool the agent actually has, by name/description —
+/// reads the same schema list sent to the model (`static_tool_definitions`),
+/// so the Settings UI can never drift from what the agent can really call.
+#[tauri::command]
+pub fn cmd_list_tool_names() -> Vec<serde_json::Value> {
+    crate::agent::tools::schemas::static_tool_definitions()
+        .into_iter()
+        // run_script is always on: it is the way every other tool gets
+        // chained, so it isn't offered as a per-tool switch.
+        .filter(|t| t["name"] != "run_script")
+        .map(|t| {
+            // Group each tool with the SAME capability map the model's system
+            // prompt is built from (`agent::tools::capabilities::GROUPS`), rather than
+            // a second hand-maintained list in the Settings UI. That map already
+            // has a drift-guard test asserting every tool sits in exactly one
+            // group, so Settings inherits that guarantee for free and can never
+            // disagree with what the model is told it can do.
+            let name = t["name"].as_str().unwrap_or_default();
+            let group = crate::agent::tools::capabilities::GROUPS
+                .iter()
+                .find(|g| g.tools.contains(&name))
+                .map(|g| g.name)
+                .unwrap_or("Other");
+            serde_json::json!({ "name": t["name"], "description": t["description"], "group": group })
+        })
+        .collect()
+}
+
+/// List skills discovered across the given directories (plus the default
+/// `~/.viv/skills` directory). Reads real SKILL.md/*.md frontmatter via
+/// `agent::tools::skills::load_skills_from_dir` — this is the same loader the
+/// agent itself would use, so what the Settings UI shows here matches reality.
+///
+/// Each skill's `status` is resolved here (not at parse time in `skills.rs`)
+/// because it needs `AuthState` — a skill declaring `requires_provider` gets
+/// `"missing_dependency"` when no key is configured for that provider, using
+/// the same stored-credential-then-env-var check `ai/embedding.rs` and
+/// `ai/completion.rs` already use.
+#[tauri::command]
+pub async fn cmd_list_skills(app: tauri::AppHandle, paths: Vec<String>) -> Result<serde_json::Value, String> {
+    let mut all_skills = Vec::new();
+    let mut all_errors = Vec::new();
+
+    let mut dirs_to_scan = paths;
+    if let Ok(dir) = crate::agent::system::paths::viv_skills_dir() {
+        dirs_to_scan.push(dir.to_string_lossy().to_string());
+    }
+
+    for dir in dirs_to_scan {
+        let result = crate::agent::tools::skills::load_skills_from_dir(&dir);
+        all_skills.extend(result.skills);
+        all_errors.extend(result.errors);
+    }
+
+    let auth_state = crate::ai::auth::wait_for_state(&app).await;
+    for skill in &mut all_skills {
+        if let Some(provider) = &skill.requires_provider {
+            let stored = auth_state.store.read(provider).await.ok().flatten().is_some();
+            let has_env = crate::ai::env_api_keys::get_env_api_key(provider, None).is_some();
+            if !stored && !has_env {
+                skill.status = "missing_dependency".to_string();
+            }
+        }
+    }
+
+    Ok(serde_json::json!({ "skills": all_skills, "errors": all_errors }))
+}
+
+/// Save an uploaded markdown file as a skill in `~/.viv/skills`. The next skill
+/// rescan (same loader as the agent) picks it up. If the file has no YAML
+/// frontmatter, a minimal `name`/`description` block is prepended so the loader
+/// shows a real name instead of "unnamed".
+#[tauri::command]
+pub async fn cmd_save_skill_file(name: String, content: String) -> Result<String, String> {
+    let dir = crate::agent::system::paths::viv_skills_dir()?;
+
+    // Sanitize the upload's name into a safe file stem.
+    let stem: String = name
+        .trim()
+        .trim_end_matches(".markdown")
+        .trim_end_matches(".md")
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    let stem = if stem.trim_matches('-').is_empty() { "skill".to_string() } else { stem };
+    let file_path = dir.join(format!("{}.md", stem));
+
+    let final_content = if content.trim_start().starts_with("---") {
+        content
+    } else {
+        format!("---\nname: {}\ndescription: Imported skill\n---\n\n{}", stem, content)
+    };
+
+    std::fs::write(&file_path, final_content).map_err(|e| format!("Failed to write skill: {}", e))?;
+    Ok(file_path.to_string_lossy().to_string())
+}
+
+/// Full daily-aggregated real token/cost usage history, for the Settings →
+/// Usage dashboard. See `agent::models::usage_store` — data comes from real
+/// provider-reported `Usage` on every completed turn, not an estimate.
+#[tauri::command]
+pub async fn cmd_get_usage_history() -> Result<serde_json::Value, String> {
+    let days = crate::agent::models::usage_store::read_history().await;
+    serde_json::to_value(days).map_err(|e| format!("Failed to serialize usage history: {e}"))
+}
+
+/// Tokens and cost per model over the last `days` days (or everything kept),
+/// for Settings → Usage → By model: "which model did the work, and what did
+/// it cost". Keys are `"<provider>/<model id>"`.
+#[tauri::command]
+pub async fn cmd_get_usage_by_model(days: Option<u32>) -> Result<serde_json::Value, String> {
+    let since = days.map(|d| (chrono::Local::now() - chrono::Duration::days(i64::from(d))).format("%Y-%m-%d").to_string());
+    let by_model = crate::agent::models::usage_store::read_usage_by_model(since.as_deref()).await;
+    serde_json::to_value(by_model).map_err(|e| format!("Failed to serialize usage by model: {e}"))
+}
+
+/// Total cost/tokens/requests attributed to one session (`main:<id>`, plus
+/// any `task:<id>` subagents spawned from it), summed across every day in
+/// `usage_by_source.json` — TaskHeader's cost display. `None` active session
+/// id (never saved yet) returns all-zero, not an error.
+#[tauri::command]
+pub async fn cmd_session_cost(session_id: Option<String>) -> Result<serde_json::Value, String> {
+    let Some(session_id) = session_id.filter(|s| !s.is_empty()) else {
+        return Ok(serde_json::json!({ "cost": 0.0, "inputTokens": 0, "outputTokens": 0, "requests": 0 }));
+    };
+    let by_source = crate::agent::models::usage_store::read_history_by_source().await;
+    let mut cost = 0.0f64;
+    let mut input = 0u64;
+    let mut output = 0u64;
+    let mut requests = 0u32;
+    for day in by_source.values() {
+        for (tag, usage) in day.iter() {
+            // Matches "main:<id>", "task:<id>" — any source tag ending in
+            // this exact session id, so subagent cost this session spawned
+            // rolls up into its total.
+            if tag.rsplit(':').next() == Some(session_id.as_str()) {
+                cost += usage.cost;
+                input += usage.input;
+                output += usage.output;
+                requests += usage.requests;
+            }
+        }
+    }
+    Ok(serde_json::json!({ "cost": cost, "inputTokens": input, "outputTokens": output, "requests": requests }))
+}
+
+/// One node of a directory tree, shaped to match the frontend's `FileNode`
+/// type exactly (`ai-elements/file-tree.tsx`) — powers both the Workspace
+/// panel (previously just showed empty-children folder stubs) and the `@`
+/// file-mention picker in the prompt input.
+#[derive(Serialize)]
+pub struct FileTreeNode {
+    name: String,
+    path: String,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    children: Option<Vec<FileTreeNode>>,
+}
+
+/// List a directory as a nested tree, gitignore-aware (reuses
+/// `agent::tools::builtin::IgnoreSet`, the same gitignore engine the
+/// agent's own `list_dir` tool uses), depth- and entry-capped so a huge repo
+/// can't hang the UI or blow up the IPC payload.
+#[tauri::command]
+pub async fn cmd_list_dir_tree(
+    root: String,
+    max_depth: Option<u32>,
+    max_entries: Option<u32>,
+) -> Result<Vec<FileTreeNode>, String> {
+    let max_depth = max_depth.unwrap_or(4).clamp(1, 8) as usize;
+    let max_entries = max_entries.unwrap_or(2000).clamp(1, 5000) as usize;
+    let root_path = PathBuf::from(&root);
+    if !root_path.is_dir() {
+        return Err(format!("Not a directory: {root}"));
+    }
+
+    tokio::task::spawn_blocking(move || {
+        let ignore = crate::agent::tools::builtin::IgnoreSet::from_root(&root_path);
+        let mut counted = 0usize;
+        Ok(build_file_tree(&root_path, &root_path, &ignore, 0, max_depth, &mut counted, max_entries))
+    })
+    .await
+    .map_err(|e| format!("internal error listing directory: {e}"))?
+}
+
+fn build_file_tree(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    ignore: &crate::agent::tools::builtin::IgnoreSet,
+    level: usize,
+    max_depth: usize,
+    counted: &mut usize,
+    max_entries: usize,
+) -> Vec<FileTreeNode> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut items: Vec<(PathBuf, bool, String)> = Vec::new();
+    for e in entries.flatten() {
+        if *counted >= max_entries {
+            break;
+        }
+        let p = e.path();
+        let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let name = e.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+        if ignore.is_ignored(&rel, is_dir) {
+            continue;
+        }
+        *counted += 1;
+        items.push((p, is_dir, name));
+    }
+    items.sort_by(|a, b| match (a.1, b.1) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.2.to_ascii_lowercase().cmp(&b.2.to_ascii_lowercase()),
+    });
+
+    items
+        .into_iter()
+        .map(|(p, is_dir, name)| {
+            let path = p.display().to_string();
+            if is_dir {
+                let children = if level + 1 < max_depth && *counted < max_entries {
+                    Some(build_file_tree(root, &p, ignore, level + 1, max_depth, counted, max_entries))
+                } else {
+                    Some(Vec::new())
+                };
+                FileTreeNode { name, path, kind: "directory", children }
+            } else {
+                FileTreeNode { name, path, kind: "file", children: None }
+            }
+        })
+        .collect()
+}
+
+/// Reads the entire content of a file as a UTF-8 string.
+#[tauri::command]
+pub async fn cmd_read_file_content(path: String) -> Result<String, String> {
+    let p = std::path::PathBuf::from(&path);
+    if !p.is_file() {
+        return Err(format!("Not a file: {path}"));
+    }
+    tokio::fs::read_to_string(&p)
+        .await
+        .map_err(|e| format!("Failed to read file: {e}"))
+}
+
+pub(crate) fn get_session_dir() -> Result<PathBuf, String> {
+    let mut path = crate::agent::system::paths::viv_agent_dir()?;
+    path.push("sessions");
+    std::fs::create_dir_all(&path).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
+    Ok(path)
+}
+
+/// Write via a temp file + rename instead of a direct write, so a crash or
+/// power loss mid-write can never leave a half-written, unparseable session
+/// file behind — `rename` onto an existing path is atomic on both Windows
+/// and POSIX, a plain `write` is not.
+pub(crate) fn write_session_file_atomic(path: &std::path::Path, json: &str) -> Result<(), String> {
+    crate::agent::system::paths::write_atomic(path, json.as_bytes()).map_err(|e| format!("Failed to save session: {e}"))?;
+    // The stored copy follows every save, so search and paging are never stale.
+    crate::agent::transcripts::sync_in_background(path.to_path_buf(), json.to_string());
+    // Every session write funnels through here, which makes this the one
+    // place the cached listing can go stale.
+    invalidate_session_list_cache();
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SessionInfo {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    /// Who made the name: `user` (typed, never replaced) or `auto` (a summary
+    /// or a cleaned sentence). Written before `messages` so it can be read
+    /// from the start of a large file. Absent on sessions from before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) title_source: Option<String>,
+    pub(crate) messages: Vec<AgentMessage>,
+    pub(crate) created_at: String,
+    /// Per-session workspace folders (first = primary) + access mode,
+    /// restored on load. Empty/`None` means "whatever the process cwd
+    /// already is" — old sessions saved before this field existed, or saved
+    /// under the earlier single-`cwd` shape, still load fine (just start
+    /// with an empty workspace rather than crashing).
+    #[serde(default)]
+    pub(crate) workspace_folders: Vec<String>,
+    #[serde(default)]
+    pub(crate) access_mode: Option<String>,
+}
+
+/// A saved session without its transcript — what the sidebar actually needs.
+///
+/// `cmd_get_sessions` used to return full `SessionInfo`s: with a real
+/// history (169 sessions, 111MB on disk here) that parsed every message of
+/// every conversation into memory and serialized the lot across the Tauri
+/// IPC boundary, on a command the sidebar re-runs after *every turn*. Serde
+/// ignores unknown fields by default, so omitting `messages` here means the
+/// transcript array is skipped during parsing and never leaves Rust.
+///
+/// Mirrors `packages/gui-next/src/modules/sessions/lib/types.ts`, which
+/// already declared exactly these fields.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SessionMeta {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) created_at: String,
+    #[serde(default)]
+    pub(crate) workspace_folders: Vec<String>,
+    #[serde(default)]
+    pub(crate) access_mode: Option<String>,
+}
+
+/// Cached session listing.
+///
+/// Even returning metadata only, building the list means opening every
+/// session file — 111MB across 132 sessions here, with single conversations
+/// reaching 18MB — and the sidebar re-runs `cmd_get_sessions` after every
+/// turn. The listing can only change when a session file is written or
+/// removed, and every write goes through `write_session_file_atomic`, so
+/// invalidating there (plus the two delete sites) reduces this to one scan
+/// per actual change instead of one per turn.
+static SESSION_LIST_CACHE: std::sync::RwLock<Option<Vec<SessionMeta>>> = std::sync::RwLock::new(None);
+
+fn invalidate_session_list_cache() {
+    if let Ok(mut cache) = SESSION_LIST_CACHE.write() {
+        *cache = None;
+    }
+}
+
+/// Delete saved sessions that contain no messages, returning how many went.
+///
+/// A thread is persisted the moment it's created (so it appears in the
+/// sidebar and can be assigned to a project straight away), which means an
+/// abandoned "New chat" leaves a file behind holding nothing. Called once at
+/// startup, where it's unambiguously safe: no session is active yet, so a
+/// thread the user is part-way through creating cannot be caught by it.
+/// A session file bigger than this can't hold zero messages — a single real
+/// message (even a short one) plus JSON structure overhead clears it easily
+/// — so it's skipped by a cheap `metadata()` size check instead of being
+/// fully read and parsed just to confirm it isn't empty.
+const EMPTY_SESSION_SIZE_CAP_BYTES: u64 = 4096;
+
+pub fn prune_empty_sessions() -> usize {
+    let Ok(dir) = get_session_dir() else { return 0 };
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        // Skip anything too big to possibly be empty without opening it —
+        // this is what actually saves the work: a startup prune that read
+        // and parsed every session file (up to 18MB each, 111MB total here)
+        // before first paint just to check a `messages` length.
+        match std::fs::metadata(&path) {
+            Ok(meta) if meta.len() > EMPTY_SESSION_SIZE_CAP_BYTES => continue,
+            Ok(_) => {}
+            Err(_) => continue,
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        // Parsed as the full shape on purpose: `messages` must be read to
+        // know it's empty, and only a file that genuinely holds zero
+        // messages is ever removed.
+        let Ok(session) = serde_json::from_str::<SessionInfo>(&content) else { continue };
+        // A past day holding nothing but its handoff note was opened and never
+        // used. Today's is kept even then — it is where the next message goes.
+        let unused_day = crate::agent::sessions::days::parse_day_id(&session.id)
+            .is_some_and(|(d, _)| d != crate::agent::sessions::days::today())
+            && session.messages.iter().all(crate::agent::sessions::days::is_handoff);
+        if (session.messages.is_empty() || unused_day) && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        invalidate_session_list_cache();
+    }
+    removed
+}
+
+/// Get a list of all saved sessions (metadata only — no transcripts).
+#[tauri::command]
+pub async fn cmd_get_sessions() -> Result<Vec<SessionMeta>, String> {
+    if let Ok(cache) = SESSION_LIST_CACHE.read() {
+        if let Some(cached) = cache.as_ref() {
+            return Ok(cached.clone());
+        }
+    }
+
+    let dir = get_session_dir()?;
+    let mut list = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(session) = serde_json::from_str::<SessionMeta>(&content) {
+                        list.push(session);
+                    }
+                }
+            }
+        }
+    }
+    list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    if let Ok(mut cache) = SESSION_LIST_CACHE.write() {
+        *cache = Some(list.clone());
+    }
+    Ok(list)
+}
+
+/// The currently active session id, if any (set once a session has been
+/// saved/loaded — a brand-new unsaved session is `None`). Needed by the
+/// frontend to scope per-session queries like `cmd_session_cost`.
+#[tauri::command]
+pub async fn cmd_get_active_session_id(#[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>) -> Result<Option<String>, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    Ok(state.session_id().await)
+}
+
+/// Permanently delete a saved session file. If it's the currently active
+/// session, clears the active session id and the live agent's transcript too
+/// (so a delete of the open session doesn't leave a ghost of it on screen).
+#[tauri::command]
+pub async fn cmd_delete_session(
+    id: String,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<(), String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let dir = get_session_dir()?;
+    let path = dir.join(format!("{}.json", id));
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| format!("Failed to delete session: {}", e))?;
+        invalidate_session_list_cache();
+    }
+
+    state.close_if_open(&id).await;
+    registry.release(&id).await;
+    crate::agent::transcripts::forget_session(&id);
+    crate::agent::runtime::prompt_sections::forget(&id);
+    crate::agent::orchestration::record_new(&id, "thread.deleted", serde_json::json!({}));
+    crate::agent::sessions::title::forget(&id);
+    Ok(())
+}
+
+/// Write arbitrary text content to an absolute path chosen by the user
+/// (e.g. via a save dialog). Used by session export and similar
+/// "save this generated text to disk" flows, and by the IDE view's save.
+#[tauri::command]
+pub async fn cmd_write_text_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| format!("Failed to write file: {}", e))
+}
+
+/// The FULL, untruncated text content of a file — for the IDE view's editor,
+/// which must never operate on a partial buffer.
+///
+/// Deliberately separate from `cmd_read_file_preview`: that command caps text
+/// at 400,000 chars for display, and editing a capped buffer then saving it
+/// would silently truncate the real file on disk, destroying whatever came
+/// after the cap. An editor's read path and a preview's read path have
+/// different correctness requirements and must not share one command.
+///
+/// Errors (rather than falling back to a lossy read) when the file isn't
+/// valid UTF-8, since a lossy round-trip would corrupt it the same way a
+/// truncated one would — silently, on save.
+#[tauri::command]
+pub async fn cmd_read_file_raw(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::InvalidData {
+            format!("'{path}' isn't valid UTF-8 text — the IDE view can only edit text files.")
+        } else {
+            format!("Failed to read {path}: {e}")
+        }
+    })
+}
+
+/// Load a specific session's messages into the active agent.
+#[tauri::command]
+pub async fn cmd_load_session(
+    id: String,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    #[allow(non_snake_case)] inheritFrom: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<(), String> {
+    let state = registry.resolve_from(threadId.as_deref(), inheritFrom.as_deref()).await;
+    // Already open here, maybe mid-turn (the window reloaded): reading the file
+    // again would replace the live transcript with an older one.
+    if state.is_session(&id).await {
+        return Ok(());
+    }
+    let dir = get_session_dir()?;
+    let path = dir.join(format!("{}.json", id));
+    if !path.exists() {
+        return Err("Session not found".to_string());
+    }
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read session: {}", e))?;
+    let session: SessionInfo = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse session: {}", e))?;
+    
+    let access_mode = if session.access_mode.as_deref() == Some("readOnly") {
+        crate::agent::runtime::state::WorkspaceAccessMode::ReadOnly
+    } else {
+        crate::agent::runtime::state::WorkspaceAccessMode::Full
+    };
+    state.agent_state.set_workspace(session.workspace_folders, access_mode).await;
+    // An ordinary thread keeps no compaction archive. Without this, a thread
+    // opened after a project's conversation would inherit that conversation's
+    // archive path and append its own compacted messages to the project's
+    // history.
+    state.resume(&session.id, session.messages, None).await;
+    if let Some(m) = crate::agent::orchestration::thread_model(&session.id).as_ref().and_then(|v| {
+        let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+        Some(crate::agent::runtime::types::ModelRef {
+            id: s("id")?,
+            name: s("name").unwrap_or_default(),
+            api: s("api")?,
+            provider: s("provider")?,
+            base_url: s("baseUrl"),
+            reasoning: v.get("reasoning").and_then(|x| x.as_bool()).unwrap_or(false),
+            max_tokens: v.get("maxTokens").and_then(|x| x.as_u64()).unwrap_or(8192) as u32,
+            context_window: v.get("contextWindow").and_then(|x| x.as_u64()).unwrap_or(128_000) as u32,
+        })
+    }) {
+        if crate::agent::models::routing::provider_has_key(&m.provider).await {
+            state.agent_state.set_model(m).await;
+        }
+    }
+    let back = crate::agent::runtime::inbox::restore(&session.id, &state.steering_queue, &state.follow_up_queue).await;
+    if back > 0 {
+        log::info!("[inbox] put back {back} queued message(s) for {}", session.id);
+    }
+    Ok(())
+}
+
+/// Mirror a thread's two queues to disk after they change.
+async fn note_inbox(state: &AppState, kind: &str, count: usize) {
+    crate::agent::runtime::compaction_v2::record(state.agent_state.session_tag().await.as_deref(), kind, serde_json::json!({ "count": count }));
+}
+
+async fn persist_queues(state: &AppState) {
+    crate::agent::runtime::inbox::persist(state.agent_state.session_tag().await.as_deref(), &state.steering_queue, &state.follow_up_queue).await;
+}
+
+/// Save the current agent transcript as a session.
+#[tauri::command]
+pub async fn cmd_save_current_session(
+    name: Option<String>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<String, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    save_current_session_impl(name, &state).await
+}
+
+/// Shared body for `cmd_save_current_session` — takes a plain `&Arc<AppState>`
+/// (rather than the `State<'_, ...>` Tauri-command extractor) so callers that
+/// already resolved a specific thread's `AppState` via `AgentRegistry` (like
+/// `cmd_agent_prompt`'s post-turn autosave) save *that* thread's transcript,
+/// not whichever state happens to be the singleton default.
+/// Save a thread that keeps its transcript in a file of its own there.
+/// `false` when it has none (it is a session).
+fn save_transcript_file(state: &AppState, messages: &[AgentMessage]) -> bool {
+    let Some(path) = state.transcript_file.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return false };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match serde_json::to_string(messages) {
+        Ok(json) => {
+            let _ = write_session_file_atomic(&path, &json);
+        }
+        Err(e) => log::warn!("[threads] couldn't save {}: {e}", path.display()),
+    }
+    true
+}
+
+async fn save_current_session_impl(name: Option<String>, state: &Arc<AppState>) -> Result<String, String> {
+    // Lock-free — see `cmd_debug_agent_status`'s comment. This used to lock
+    // `state.agent` and hold it through the whole save (message clone, JSON
+    // serialize, disk write) — for an 18MB transcript, that's real time spent
+    // blocking every other command mid-turn for no reason: nothing here
+    // touches anything on `Agent` except `.state`, which is available
+    // lock-free as `agent_state`. (`cmd_agent_prompt`'s own `drop(agent)`
+    // before calling this was pointless as long as this function re-locked
+    // the same mutex immediately anyway.)
+    let messages = state.agent_state.messages().await;
+    if messages.is_empty() {
+        return Ok("".to_string());
+    }
+    if save_transcript_file(state, &messages) {
+        return Ok(state.session_id().await.unwrap_or_default());
+    }
+    
+    let s_id = state
+        .session_id_or_else(|| format!("session_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()))
+        .await;
+
+    let dir = get_session_dir()?;
+    let path = dir.join(format!("{}.json", s_id));
+    
+    // A day's date is its identity, so its `created_at` is fixed to that date
+    // rather than rewritten to "now" on every save like an ordinary session's.
+    let day = crate::agent::sessions::days::parse_day_id(&s_id).map(|(d, _)| d.to_string());
+    let created_at = match &day {
+        Some(d) => crate::agent::sessions::days::day_start_rfc3339(d),
+        None => chrono::Utc::now().to_rfc3339(),
+    };
+    // Named from the first thing the USER actually asked. A day opens with a
+    // handoff note carried in a `User` message, and naming the day after that
+    // would label every day "<previous_day date=...".
+    let first_ask = crate::agent::sessions::title::first_ask(&messages);
+    // The name: one the caller gives, else the one this thread already has
+    // (a rename sticks; a summary stays), else the first message cleaned up.
+    // An unused day keeps an empty name, which is how the history knows to
+    // leave it out.
+    let (name_str, title_source) = match name {
+        Some(n) => (n, crate::agent::sessions::title::USER),
+        None if first_ask.is_none() && day.is_some() => (String::new(), crate::agent::sessions::title::AUTO),
+        None => {
+            let (existing_name, existing_source) = match crate::agent::sessions::title::remembered(&s_id) {
+                Some((n, src)) => (Some(n), Some(src.to_string())),
+                None => session_head_fields(&path),
+            };
+            let (n, src) = crate::agent::sessions::title::decide(existing_name.as_deref(), existing_source.as_deref(), first_ask.as_deref());
+            crate::agent::sessions::title::remember(&s_id, &n, src);
+            (n, src)
+        }
+    };
+
+    let workspace_folders = state.agent_state.workspace_folders().await;
+    let access_mode = match state.agent_state.access_mode().await {
+        crate::agent::runtime::state::WorkspaceAccessMode::ReadOnly => Some("readOnly".to_string()),
+        crate::agent::runtime::state::WorkspaceAccessMode::Full => Some("full".to_string()),
+    };
+
+    let session = SessionInfo {
+        id: s_id.clone(),
+        name: name_str,
+        title_source: Some(title_source.to_string()),
+        messages,
+        created_at,
+        workspace_folders,
+        access_mode,
+    };
+
+    let json = serde_json::to_string_pretty(&session)
+        .map_err(|e| format!("Failed to serialize session: {}", e))?;
+    let _writing = crate::agent::sessions::title::SESSION_WRITE.lock().await;
+    write_session_file_atomic(&path, &json)?;
+    Ok(s_id)
+}
+
+/// Start a new thread and persist it immediately, returning its id.
+///
+/// `save_current_session_impl` bails on an empty transcript, so a thread
+/// created by `cmd_agent_reset` alone doesn't exist anywhere until its first
+/// turn finishes — which left "New session" looking like it did nothing (no
+/// row in the sidebar, and no id to assign to a project). This writes the
+/// empty session up front instead.
+///
+/// The `"New chat"` name is a placeholder: the next autosave re-derives the
+/// name from the first user message, so it renames itself as soon as the
+/// thread is actually used.
+#[tauri::command]
+pub async fn cmd_new_session(
+    #[allow(non_snake_case)] threadId: Option<String>,
+    #[allow(non_snake_case)] inheritFrom: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<String, String> {
+    let state = registry.resolve_from(threadId.as_deref(), inheritFrom.as_deref()).await;
+
+    // Already sitting on an untouched new thread? Reuse it. Without this,
+    // every click writes another empty session file — clicking the button a
+    // few times (as anyone does when it looks like nothing happened) leaves
+    // a pile of identical dead "New chat" threads behind.
+    if let Some(existing) = state.untouched_session().await {
+        return Ok(existing);
+    }
+
+    // A thread named after its session keeps that id, so the two are one identity.
+    let s_id = match threadId.as_deref() {
+        Some(id) if id.starts_with("session_") => id.to_string(),
+        _ => format!("session_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()),
+    };
+    // See `cmd_load_session`: a thread must not write into a project
+    // conversation's archive, so it starts with none.
+    state.start_fresh(&s_id, Vec::new(), None).await;
+
+    let workspace_folders = state.agent_state.workspace_folders().await;
+    let access_mode = match state.agent_state.access_mode().await {
+        crate::agent::runtime::state::WorkspaceAccessMode::ReadOnly => Some("readOnly".to_string()),
+        crate::agent::runtime::state::WorkspaceAccessMode::Full => Some("full".to_string()),
+    };
+
+    let session = SessionInfo {
+        id: s_id.clone(),
+        name: "New chat".to_string(),
+        title_source: None,
+        messages: Vec::new(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        workspace_folders,
+        access_mode,
+    };
+    let path = get_session_dir()?.join(format!("{}.json", s_id));
+    let json = serde_json::to_string_pretty(&session).map_err(|e| format!("Failed to serialize session: {}", e))?;
+    write_session_file_atomic(&path, &json)?;
+    crate::agent::orchestration::record(&format!("new:{s_id}"), &s_id, "thread.created", serde_json::json!({ "title": "New chat" }));
+    Ok(s_id)
+}
+
+/// Rename an existing saved session in place (same id, same messages, just
+/// the display name changes).
+#[tauri::command]
+pub async fn cmd_rename_session(id: String, name: String) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Session name must not be empty".to_string());
+    }
+    let dir = get_session_dir()?;
+    let path = dir.join(format!("{}.json", id));
+    if !path.exists() {
+        return Err("Session not found".to_string());
+    }
+    crate::agent::sessions::title::remember(&id, name, crate::agent::sessions::title::USER);
+    rename_session_file(&id, name, crate::agent::sessions::title::USER).await?;
+    crate::agent::orchestration::record_new(&id, "thread.renamed", serde_json::json!({ "title": name }));
+    Ok(())
+}
+
+/// The name (and who made it) of a session file, rewritten in place. Shared by
+/// a rename and by the title the model writes for a new thread.
+pub(crate) async fn rename_session_file(id: &str, name: &str, source: &str) -> Result<(), String> {
+    let _writing = crate::agent::sessions::title::SESSION_WRITE.lock().await;
+    let path = get_session_dir()?.join(format!("{}.json", id));
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read session: {}", e))?;
+    let mut session: SessionInfo = serde_json::from_str(&content).map_err(|e| format!("Failed to parse session: {}", e))?;
+    session.name = name.to_string();
+    session.title_source = Some(source.to_string());
+    let json = serde_json::to_string_pretty(&session).map_err(|e| format!("Failed to serialize session: {}", e))?;
+    write_session_file_atomic(&path, &json)
+}
+
+/// `name` and `title_source` from the start of a session file: the first
+/// kilobyte is enough, so a very large transcript is never read for this.
+fn session_head_fields(path: &std::path::Path) -> (Option<String>, Option<String>) {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else { return (None, None) };
+    let mut buf = vec![0u8; 1024];
+    let n = f.read(&mut buf).unwrap_or(0);
+    crate::agent::sessions::title::head_fields(&String::from_utf8_lossy(&buf[..n]))
+}
+
+/// Checkpoints: revert the active conversation to right before `index` —
+/// discards that message and everything after it, both in memory and (if
+/// this conversation is currently saved as a session) on disk. A way to
+/// back out of a path the conversation took and continue from an earlier
+/// point instead of losing the whole session. Returns how many messages
+/// were removed.
+#[tauri::command]
+pub async fn cmd_agent_revert_to_index(
+    index: usize,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<usize, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let mut messages = state.agent_state.messages().await;
+    if index > messages.len() {
+        return Err(format!("Index {index} out of range ({} messages)", messages.len()));
+    }
+    let removed = messages.len() - index;
+    if removed == 0 {
+        return Ok(0);
+    }
+    messages.truncate(index);
+    state.agent_state.set_messages(messages.clone()).await;
+
+    // Persist to the active session file, if one exists — a revert that
+    // only lived in memory would silently un-revert on the next reload.
+    if save_transcript_file(&state, &messages) {
+        return Ok(removed);
+    }
+    if let Some(session_id) = state.session_id().await {
+        if let Ok(dir) = get_session_dir() {
+            let path = dir.join(format!("{session_id}.json"));
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(mut session) = serde_json::from_str::<SessionInfo>(&content) {
+                    session.messages = messages;
+                    if let Ok(json) = serde_json::to_string_pretty(&session) {
+                        let _ = write_session_file_atomic(&path, &json);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(removed)
+}
+
+/// Fork an existing session under a new ID.
+#[tauri::command]
+pub async fn cmd_fork_session(
+    id: String,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<String, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let dir = get_session_dir()?;
+    let path = dir.join(format!("{}.json", id));
+    if !path.exists() {
+        return Err("Source session not found".to_string());
+    }
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read session: {}", e))?;
+    let mut session: SessionInfo = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse session: {}", e))?;
+
+    let new_id = format!("session_{}_fork_{}", id, std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs());
+    session.id = new_id.clone();
+    session.name = format!("{} (Fork)", session.name);
+    session.created_at = chrono::Utc::now().to_rfc3339();
+
+    let new_path = dir.join(format!("{}.json", new_id));
+    let json = serde_json::to_string_pretty(&session)
+        .map_err(|e| format!("Failed to serialize session: {}", e))?;
+    write_session_file_atomic(&new_path, &json)?;
+
+    state.adopt(&new_id, session.messages).await;
+
+    Ok(new_id)
+}
+
+/// A copy of `source` keeping only its first `index` messages, under `new_id`.
+/// The source is left as it is.
+fn fork_at(source: &SessionInfo, messages: &[AgentMessage], index: usize, new_id: &str) -> Result<SessionInfo, String> {
+    if index == 0 || index > messages.len() {
+        return Err(format!("Can't fork at {index}: the conversation has {} messages.", messages.len()));
+    }
+    let mut forked = source.clone();
+    forked.id = new_id.to_string();
+    forked.name = format!("{} (from here)", source.name);
+    forked.created_at = chrono::Utc::now().to_rfc3339();
+    forked.messages = messages[..index].to_vec();
+    Ok(forked)
+}
+
+/// Start a new thread from the first `index` messages of the conversation
+/// that is open, leaving that conversation untouched. Returns the new id; it
+/// shows up in the thread list and can be opened like any other.
+#[tauri::command]
+pub async fn cmd_fork_session_at(index: usize, #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>) -> Result<String, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let messages = state.agent_state.messages().await;
+    let id = state.session_id().await.ok_or_else(|| "Nothing is open to fork.".to_string())?;
+    let dir = get_session_dir()?;
+    let source: SessionInfo = std::fs::read_to_string(dir.join(format!("{id}.json")))
+        .ok()
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_else(|| SessionInfo {
+            id: id.clone(),
+            name: "Conversation".to_string(),
+            title_source: None,
+            messages: Vec::new(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            workspace_folders: Vec::new(),
+            access_mode: None,
+        });
+    let new_id = format!(
+        "session_{}_fork_{}",
+        id,
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()
+    );
+    let forked = fork_at(&source, &messages, index, &new_id)?;
+    let json = serde_json::to_string_pretty(&forked).map_err(|e| format!("Failed to serialize session: {e}"))?;
+    write_session_file_atomic(&dir.join(format!("{new_id}.json")), &json)?;
+    Ok(new_id)
+}
+
+/// Clone an existing session under a new ID.
+#[tauri::command]
+pub async fn cmd_clone_session(
+    id: String,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<String, String> {
+    cmd_fork_session(id, threadId, registry).await
+}
+
+/// Respond to a pending tool-call permission request (bypass mode off).
+#[tauri::command]
+pub async fn cmd_agent_respond_permission(request_id: String, approved: bool) -> Result<bool, String> {
+    Ok(crate::agent::tools::exec::respond_to_permission(&request_id, approved))
+}
+
+/// Answer a pending `question` tool call. `answers[i]` holds the selected
+/// option label(s) for `questions[i]` (empty means unanswered/dismissed).
+#[tauri::command]
+pub async fn cmd_agent_answer_question(request_id: String, answers: Vec<Vec<String>>) -> Result<bool, String> {
+    Ok(crate::agent::tools::exec::respond_to_question(&request_id, answers))
+}
+
+/// Answer a pending `confirm_action` tool call.
+#[tauri::command]
+pub async fn cmd_agent_respond_confirmation(request_id: String, approved: bool) -> Result<bool, String> {
+    Ok(crate::agent::tools::exec::respond_to_confirmation(&request_id, approved))
+}
+
+// ============================================================================
+// Memory commands — project-scoped persistent memory (see agent::memory)
+// ============================================================================
+
+/// The folder whose memory is in use: the agent's primary workspace folder —
+/// the project, or the home folder in General — so each project remembers
+/// its own things.
+///
+/// This used to be the app process's current directory, which put every
+/// memory from every project into one pile wherever the app was launched
+/// from (in development, inside the app's own source tree). That pile is
+/// moved, once, to the home folder's memory — General's — since it can't be
+/// split back into projects.
+pub(crate) async fn memory_root_for(agent_state: &crate::agent::runtime::state::AgentState) -> String {
+    migrate_legacy_memory_once();
+    agent_state
+        .primary_workspace_folder()
+        .await
+        .filter(|p| !p.trim().is_empty())
+        .or_else(|| dirs::home_dir().map(|h| h.display().to_string()))
+        .unwrap_or_else(|| ".".to_string())
+}
+
+fn migrate_legacy_memory_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(cwd) = std::env::current_dir() else { return };
+        let Some(home) = dirs::home_dir() else { return };
+        if cwd == home {
+            return;
+        }
+        let old = cwd.join(".vivianne").join("memory");
+        if !old.is_dir() {
+            return;
+        }
+        let new = crate::agent::system::paths::project_viv_path(&home, &["memory"]);
+        if new.exists() {
+            log::warn!("[memory] left the old memory at {} in place: {} already exists", old.display(), new.display());
+            return;
+        }
+        if let Some(parent) = new.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::rename(&old, &new) {
+            Ok(()) => log::info!("[memory] moved memory from {} to {}", old.display(), new.display()),
+            Err(e) => log::warn!("[memory] couldn't move {} to {}: {e}", old.display(), new.display()),
+        }
+    });
+}
+
+#[tauri::command]
+pub async fn cmd_memory_status(state: State<'_, Arc<AppState>>) -> Result<crate::agent::memory::MemoryStatus, String> {
+    Ok(crate::agent::memory::status(&memory_root_for(&state.agent_state).await).await)
+}
+
+#[tauri::command]
+pub async fn cmd_memory_enable(state: State<'_, Arc<AppState>>) -> Result<crate::agent::memory::MemoryState, String> {
+    crate::agent::memory::enable(&memory_root_for(&state.agent_state).await).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_disable(state: State<'_, Arc<AppState>>) -> Result<crate::agent::memory::MemoryState, String> {
+    crate::agent::memory::disable(&memory_root_for(&state.agent_state).await).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_configure(
+    state: State<'_, Arc<AppState>>,
+    auto_consolidate: Option<bool>) -> Result<crate::agent::memory::MemoryState, String> {
+    crate::agent::memory::configure(&memory_root_for(&state.agent_state).await, auto_consolidate).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_purge(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
+    crate::agent::memory::purge(&memory_root_for(&state.agent_state).await).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_configure_extraction(
+    state: State<'_, Arc<AppState>>,
+    enabled: bool) -> Result<crate::agent::memory::MemoryState, String> {
+    crate::agent::memory::configure_extraction(&memory_root_for(&state.agent_state).await, enabled).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_remember(
+    state: State<'_, Arc<AppState>>,
+    
+    app: tauri::AppHandle,
+    text: String,
+    key: Option<String>,
+) -> Result<crate::agent::memory::MemoryEntry, String> {
+    let auth = crate::ai::auth::wait_for_state(&app).await;
+    crate::agent::memory::remember(&memory_root_for(&state.agent_state).await, &text, key, Some(auth)).await
+}
+
+/// Everything currently remembered: this project's facts and what's known
+/// about the user across projects, newest first. The Memory panel's list.
+#[tauri::command]
+pub async fn cmd_memory_list(state: State<'_, Arc<AppState>>) -> Result<Vec<crate::agent::memory::MemoryEntry>, String> {
+    use crate::agent::memory::store::{list_live, USER_ROOT};
+    let root = memory_root_for(&state.agent_state).await;
+    let mut out = list_live(&root, 1000).await?;
+    if crate::agent::memory::user_store_exists() {
+        for mut e in list_live(USER_ROOT, 500).await.unwrap_or_default() {
+            e.user_wide = true;
+            out.push(e);
+        }
+    }
+    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(out)
+}
+
+/// Forget one memory by id (not by matching text: a search could take more
+/// than the one the user clicked).
+#[tauri::command]
+pub async fn cmd_memory_delete(state: State<'_, Arc<AppState>>, id: String, user_wide: bool) -> Result<(), String> {
+    let root = if user_wide { crate::agent::memory::store::USER_ROOT.to_string() } else { memory_root_for(&state.agent_state).await };
+    crate::agent::memory::store::delete_entry(&root, &id).await
+}
+
+/// Correct one memory's text. It's re-embedded later and counts as freshly
+/// confirmed.
+#[tauri::command]
+pub async fn cmd_memory_edit(state: State<'_, Arc<AppState>>, id: String, text: String, user_wide: bool) -> Result<(), String> {
+    let text = crate::agent::memory::redact_secrets(text.trim());
+    if text.is_empty() {
+        return Err("A memory can't be empty. Forget it instead.".to_string());
+    }
+    let root = if user_wide { crate::agent::memory::store::USER_ROOT.to_string() } else { memory_root_for(&state.agent_state).await };
+    crate::agent::memory::store::update_entry_text(&root, &id, &text).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_forget(
+    state: State<'_, Arc<AppState>>,
+    query: String) -> Result<usize, String> {
+    crate::agent::memory::forget(&memory_root_for(&state.agent_state).await, &query).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_recall(
+    state: State<'_, Arc<AppState>>,
+    app: tauri::AppHandle, query: String) -> Result<Vec<crate::agent::memory::MemoryEntry>, String> {
+    let auth = crate::ai::auth::wait_for_state(&app).await;
+    Ok(crate::agent::memory::recall(&memory_root_for(&state.agent_state).await, &query, Some(&auth), None).await)
+}
+
+// ============================================================================
+// MCP commands
+// ============================================================================
+
+#[tauri::command]
+pub async fn cmd_mcp_add_server(config: crate::mcp::McpServerConfig) -> Result<Vec<crate::mcp::McpToolDef>, String> {
+    crate::mcp::add_server(config).await
+}
+
+#[tauri::command]
+pub async fn cmd_mcp_remove_server(name: String) -> Result<bool, String> {
+    let removed = crate::mcp::remove_server(&name).await;
+    if removed {
+        // MCP tools changed — invalidate the tool defs cache so the
+        // next LLM call no longer advertises tools from the removed server.
+        crate::agent::tools::exec::invalidate_tool_defs_cache();
+    }
+    Ok(removed)
+}
+
+#[tauri::command]
+pub async fn cmd_mcp_list_servers() -> Result<Vec<crate::mcp::McpServerConfig>, String> {
+    Ok(crate::mcp::list_servers().await)
+}
+
+#[tauri::command]
+pub async fn cmd_mcp_list_tools() -> Result<Vec<(String, crate::mcp::McpToolDef)>, String> {
+    Ok(crate::mcp::list_all_tools().await)
+}
+
+#[tauri::command]
+pub async fn cmd_mcp_authorize(
+    server_name: String,
+    resource_url: String,
+    client_id: String,
+    app: tauri::AppHandle,
+) -> Result<bool, String> {
+    crate::mcp::oauth::authorize(&server_name, &resource_url, &client_id, &app).await?;
+    Ok(true)
+}
+
+// ============================================================================
+// Web preview commands — manual navigation for the WebPreviewPanel's own
+// address bar / back / forward / reload controls, separate from the
+// `web_preview` agent tool (which drives the same shared camoufox tab).
+// ============================================================================
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebPreviewResult {
+    pub screenshot_base64: Option<String>,
+}
+
+#[tauri::command]
+pub async fn cmd_web_preview_navigate(url: String) -> Result<WebPreviewResult, String> {
+    let result = crate::camoufox::navigate(&url).await?;
+    Ok(WebPreviewResult { screenshot_base64: result.screenshot_base64 })
+}
+
+#[tauri::command]
+pub async fn cmd_web_preview_back() -> Result<WebPreviewResult, String> {
+    let result = crate::camoufox::back().await?;
+    Ok(WebPreviewResult { screenshot_base64: result.screenshot_base64 })
+}
+
+#[tauri::command]
+pub async fn cmd_web_preview_forward() -> Result<WebPreviewResult, String> {
+    let result = crate::camoufox::forward().await?;
+    Ok(WebPreviewResult { screenshot_base64: result.screenshot_base64 })
+}
+
+#[tauri::command]
+pub async fn cmd_web_preview_refresh() -> Result<WebPreviewResult, String> {
+    let result = crate::camoufox::refresh().await?;
+    Ok(WebPreviewResult { screenshot_base64: result.screenshot_base64 })
+}
+
+// ============================================================================
+// Docker installer commands
+// ============================================================================
+
+#[tauri::command]
+pub async fn cmd_check_docker_status() -> Result<crate::docker_installer::DockerStatus, String> {
+    Ok(crate::docker_installer::status().await)
+}
+
+/// Downloads Docker Desktop's official installer and runs it with admin
+/// elevation. The frontend MUST get the user's explicit confirmation before
+/// calling this — it's a real, system-modifying install, not a background
+/// convenience action.
+#[tauri::command]
+pub async fn cmd_install_docker(app: tauri::AppHandle) -> Result<String, String> {
+    crate::docker_installer::install(&app).await
+}
+
+// ============================================================================
+// Terminal commands (real PTY-backed shells)
+// ============================================================================
+
+#[tauri::command]
+pub async fn cmd_terminal_list_sessions(
+    registry: State<'_, std::sync::Arc<crate::terminal::TerminalRegistry>>,
+) -> Result<Vec<crate::terminal::TerminalSessionInfo>, String> {
+    Ok(registry.list())
+}
+
+#[tauri::command]
+pub async fn cmd_terminal_list_shells() -> Result<Vec<crate::terminal::ShellOption>, String> {
+    Ok(crate::terminal::available_shells())
+}
+
+#[tauri::command]
+pub async fn cmd_terminal_spawn(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, Arc<crate::terminal::TerminalRegistry>>,
+    tab_id: String,
+    shell_id: String,
+    cwd: String,
+) -> Result<(), String> {
+    // User-opened tab: real environment, no retained buffer (xterm renders
+    // from the live event stream).
+    crate::terminal::spawn(app, &registry, tab_id, shell_id, cwd, false)
+}
+
+#[tauri::command]
+pub async fn cmd_terminal_write(
+    registry: tauri::State<'_, Arc<crate::terminal::TerminalRegistry>>,
+    tab_id: String,
+    data: String,
+) -> Result<(), String> {
+    crate::terminal::write(&registry, &tab_id, &data)
+}
+
+#[tauri::command]
+pub async fn cmd_terminal_resize(
+    registry: tauri::State<'_, Arc<crate::terminal::TerminalRegistry>>,
+    tab_id: String,
+    rows: u16,
+    cols: u16,
+) -> Result<(), String> {
+    crate::terminal::resize(&registry, &tab_id, rows, cols)
+}
+
+#[tauri::command]
+pub async fn cmd_terminal_close(
+    registry: tauri::State<'_, Arc<crate::terminal::TerminalRegistry>>,
+    tab_id: String,
+) -> Result<(), String> {
+    crate::terminal::close(&registry, &tab_id);
+    Ok(())
+}
+
+// ============================================================================
+// LSP commands
+// ============================================================================
+
+#[tauri::command]
+pub async fn cmd_lsp_diagnostics(
+    state: State<'_, Arc<AppState>>,
+    path: String) -> Result<Vec<crate::lsp::Diagnostic>, String> {
+    let root = memory_root_for(&state.agent_state).await;
+    Ok(crate::lsp::manager::diagnostics_for(&path, &root).await)
+}
+
+/// Current git branch for a workspace folder, or `None` if it isn't a git
+/// repo (or `git` isn't on PATH) — informational only, shown next to the
+/// workspace selector in the composer. Never errors the caller for the
+/// common "not a repo" case, only for a genuinely missing `git` binary.
+#[tauri::command]
+pub async fn cmd_git_current_branch(path: String) -> Result<Option<String>, String> {
+    let output = tokio::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(if branch.is_empty() { None } else { Some(branch) })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRemote {
+    /// Raw `origin` URL as configured (ssh or https form).
+    pub url: String,
+    /// `owner/repo`, parsed out when this is a GitHub remote.
+    pub github_repo: Option<String>,
+    /// Browser-openable `https://github.com/owner/repo`, when applicable.
+    pub github_url: Option<String>,
+}
+
+/// Detect the `origin` remote for a workspace folder and, when it points at
+/// GitHub, parse out `owner/repo`. Handles both SSH (`git@github.com:o/r.git`)
+/// and HTTPS (`https://github.com/o/r.git`) forms. `None` when the folder
+/// isn't a repo or has no origin — not an error, same as the other git
+/// commands here.
+#[tauri::command]
+pub async fn cmd_git_remote(path: String) -> Result<Option<GitRemote>, String> {
+    let output = tokio::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if url.is_empty() {
+        return Ok(None);
+    }
+    let github_repo = parse_github_repo(&url);
+    let github_url = github_repo.as_ref().map(|r| format!("https://github.com/{r}"));
+    Ok(Some(GitRemote { url, github_repo, github_url }))
+}
+
+fn parse_github_repo(url: &str) -> Option<String> {
+    let rest = if let Some(r) = url.strip_prefix("git@github.com:") {
+        r
+    } else if let Some(r) = url.strip_prefix("https://github.com/") {
+        r
+    } else { url.strip_prefix("ssh://git@github.com/")? };
+    let rest = rest.strip_suffix(".git").unwrap_or(rest).trim_end_matches('/');
+    let mut parts = rest.split('/');
+    let owner = parts.next()?.trim();
+    let repo = parts.next()?.trim();
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommit {
+    pub hash: String,
+    pub author: String,
+    pub date: String,
+    pub message: String,
+}
+
+/// Recent commit log for a workspace folder — read-only, same "not a repo"
+/// tolerance as `cmd_git_current_branch` (empty list, not an error).
+#[tauri::command]
+pub async fn cmd_git_log(path: String, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
+    let limit = limit.unwrap_or(50).clamp(1, 500);
+    let output = tokio::process::Command::new("git")
+        .args(["log", &format!("-n{limit}"), "--date=iso-strict", "--pretty=format:%H%x1f%an%x1f%ad%x1f%s"])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let commits = text
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(4, '\u{1f}');
+            Some(GitCommit {
+                hash: parts.next()?.to_string(),
+                author: parts.next()?.to_string(),
+                date: parts.next()?.to_string(),
+                message: parts.next().unwrap_or("").to_string(),
+            })
+        })
+        .collect();
+    Ok(commits)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranch {
+    pub name: String,
+    pub is_current: bool,
+    pub is_remote: bool,
+}
+
+/// Local + remote-tracking branches for a workspace folder.
+#[tauri::command]
+pub async fn cmd_git_branches(path: String) -> Result<Vec<GitBranch>, String> {
+    let output = tokio::process::Command::new("git")
+        .args(["branch", "-a", "--format=%(HEAD)%09%(refname:short)"])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let branches = text
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(2, '\t');
+            let head_marker = parts.next()?;
+            let name = parts.next()?.to_string();
+            if name.contains("HEAD ->") {
+                return None; // the "remotes/origin/HEAD -> origin/main" pointer, not a real branch
+            }
+            Some(GitBranch {
+                is_current: head_marker == "*",
+                is_remote: name.starts_with("remotes/"),
+                name,
+            })
+        })
+        .collect();
+    Ok(branches)
+}
+
+/// Switch to an existing local (or remote-tracking) branch. Unlike the
+/// read-only commands above, a failure here (uncommitted changes that would
+/// be overwritten, unknown branch) is real and surfaced verbatim — the
+/// caller needs git's actual message, not a silently empty result.
+/// Whether a folder holds this app's own source, in a dev build: switching
+/// its branch rebuilds the running app from that branch.
+#[tauri::command]
+pub fn cmd_is_own_source(path: String) -> bool {
+    if !cfg!(debug_assertions) {
+        return false;
+    }
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("..");
+    match (std::fs::canonicalize(&repo), std::fs::canonicalize(&path)) {
+        (Ok(repo), Ok(path)) => path.starts_with(&repo) || repo.starts_with(&path),
+        _ => false,
+    }
+}
+
+#[tauri::command]
+pub async fn cmd_git_checkout_branch(path: String, branch: String) -> Result<(), String> {
+    let output = tokio::process::Command::new("git")
+        .args(["checkout", &branch])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(())
+}
+
+/// Run git in `dir`; its stdout, or its stderr as the error.
+async fn git_in(dir: &str, args: &[&str]) -> Result<String, String> {
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.args(args).current_dir(dir);
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd.output().await.map_err(|e| format!("failed to run git: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        Err(if err.is_empty() { format!("git {} failed", args.join(" ")) } else { err })
+    }
+}
+
+/// The worktree that has `branch` checked out, if any (`git worktree list`).
+async fn worktree_of(dir: &str, branch: &str) -> Option<String> {
+    let list = git_in(dir, &["worktree", "list", "--porcelain"]).await.ok()?;
+    let want = format!("branch refs/heads/{branch}");
+    let mut current: Option<&str> = None;
+    for line in list.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current = Some(path);
+        } else if line == want {
+            return current.map(|p| p.replace('/', std::path::MAIN_SEPARATOR_STR));
+        }
+    }
+    None
+}
+
+/// Check out a branch, or a pull request's head (`pr`), and say which folder
+/// it is checked out in.
+///
+/// - A branch already checked out in some worktree is left there: that
+///   folder is the answer, nothing switches.
+/// - A branch only on `origin` is fetched and tracked; a pull request is
+///   fetched from `pull/<n>/head`, so one from a fork works too.
+/// - `worktree`: check out into a new folder beside the repository
+///   (`<repo>-<branch>`) instead of switching this one. The app's own
+///   source in a dev build always goes this way: switching it would rebuild
+///   the running app from the other branch.
+#[tauri::command]
+pub async fn cmd_git_checkout(path: String, branch: String, pr: Option<u64>, worktree: Option<bool>) -> Result<String, String> {
+    let branch = branch.trim().to_string();
+    if branch.is_empty() || branch.starts_with('-') {
+        return Err("No branch to check out.".into());
+    }
+    let top = git_in(&path, &["rev-parse", "--show-toplevel"]).await?;
+    if let Some(dir) = worktree_of(&path, &branch).await {
+        return Ok(dir);
+    }
+    let local = git_in(&path, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).await.is_ok();
+    if let Some(n) = pr {
+        // The PR's head, under the branch's own name (updated if it exists).
+        git_in(&path, &["fetch", "origin", &format!("+pull/{n}/head:refs/heads/{branch}")]).await?;
+    } else if !local {
+        git_in(&path, &["fetch", "origin", &branch]).await.map_err(|_| format!("There's no branch '{branch}' here or on origin."))?;
+        git_in(&path, &["branch", "--track", &branch, &format!("origin/{branch}")]).await?;
+    }
+    let own = cmd_is_own_source(path.clone());
+    if worktree.unwrap_or(false) || own {
+        let top_path = std::path::Path::new(&top);
+        let name = top_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "repo".into());
+        let safe: String = branch.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '-' }).collect();
+        let dir = top_path.parent().unwrap_or(top_path).join(format!("{name}-{safe}"));
+        let dir_s = dir.to_string_lossy().to_string();
+        git_in(&path, &["worktree", "add", &dir_s, &branch]).await?;
+        return Ok(dir_s.replace('/', std::path::MAIN_SEPARATOR_STR));
+    }
+    git_in(&path, &["checkout", &branch]).await?;
+    Ok(path)
+}
+
+/// Create a new branch off the current HEAD and switch to it (`git checkout -b`).
+#[tauri::command]
+pub async fn cmd_git_create_branch(path: String, name: String) -> Result<(), String> {
+    let output = tokio::process::Command::new("git")
+        .args(["checkout", "-b", &name])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatusEntry {
+    pub path: String,
+    /// Raw two-char porcelain status code (e.g. " M", "??", "A ").
+    pub status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitFileChange {
+    pub path: String,
+    pub added: u32,
+    pub removed: u32,
+    /// Porcelain status code for this file, or `"??"` for untracked.
+    pub status: String,
+    pub staged: bool,
+}
+
+/// Resolve the actual git repository root for `path`. `git diff --numstat`,
+/// `git status --porcelain`, and `git ls-files` all report paths relative to
+/// this — regardless of what directory the command is invoked from — so any
+/// caller that re-joins those paths onto a base directory (another git
+/// pathspec, or a direct filesystem read) has to join onto *this*, not onto
+/// `path` itself. Without it, a workspace root scoped to a subdirectory of
+/// the repo (any monorepo package folder, not just the true top level)
+/// produced file paths that resolved to nowhere — a second `git diff --
+/// <path>` found no match and silently returned no output, which the caller
+/// then couldn't distinguish from "no changes". Falls back to `path`
+/// unchanged when it isn't inside a git repo at all (the git commands
+/// downstream just return empty results in that case, same as before).
+async fn git_toplevel(path: &str) -> String {
+    let output = tokio::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(path)
+        .output()
+        .await;
+    match output {
+        Ok(o) if o.status.success() => {
+            let top = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if top.is_empty() { path.to_string() } else { top }
+        }
+        _ => path.to_string(),
+    }
+}
+
+/// Per-file added/removed line counts for the Review panel.
+///
+/// `--numstat` covers tracked changes only, so untracked files are counted
+/// separately by reading them — otherwise a brand-new file shows up in the
+/// status list with a meaningless `+0 -0` next to it.
+#[tauri::command]
+pub async fn cmd_git_diff_stat(path: String, staged: bool) -> Result<Vec<GitFileChange>, String> {
+    let path = git_toplevel(&path).await;
+    let mut args = vec!["diff", "--numstat"];
+    if staged {
+        args.push("--cached");
+    }
+    let output = tokio::process::Command::new("git")
+        .args(&args)
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut changes: Vec<GitFileChange> = text
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split('\t');
+            let added = parts.next()?;
+            let removed = parts.next()?;
+            let file = parts.next()?;
+            Some(GitFileChange {
+                path: file.to_string(),
+                // "-" means binary — report as 0 rather than failing the row.
+                added: added.parse().unwrap_or(0),
+                removed: removed.parse().unwrap_or(0),
+                status: "M".to_string(),
+                staged,
+            })
+        })
+        .collect();
+
+    if !staged {
+        let untracked = tokio::process::Command::new("git")
+            .args(["ls-files", "--others", "--exclude-standard"])
+            .current_dir(&path)
+            .output()
+            .await
+            .map_err(|e| format!("failed to run git: {e}"))?;
+        if untracked.status.success() {
+            let root = std::path::Path::new(&path);
+            for file in String::from_utf8_lossy(&untracked.stdout).lines().filter(|l| !l.trim().is_empty()) {
+                let added = std::fs::read_to_string(root.join(file)).map(|c| c.lines().count() as u32).unwrap_or(0);
+                changes.push(GitFileChange { path: file.to_string(), added, removed: 0, status: "??".to_string(), staged: false });
+            }
+        }
+    }
+
+    changes.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(changes)
+}
+
+/// How much of a file a diff shows around each change.
+fn diff_flags(context: Option<u32>, ignore_whitespace: Option<bool>) -> Vec<String> {
+    let mut flags = Vec::new();
+    if let Some(c) = context {
+        flags.push(format!("-U{c}"));
+    }
+    if ignore_whitespace == Some(true) {
+        flags.push("-w".to_string());
+    }
+    flags
+}
+
+/// Unified diff for one file. Untracked files have no diff to show, so their
+/// full contents are synthesized as an all-additions patch instead of
+/// returning nothing. `context` is the lines around each change (the whole
+/// file for a large number); `ignore_whitespace` leaves out whitespace-only
+/// changes.
+#[tauri::command]
+pub async fn cmd_git_diff_file(path: String, file: String, staged: bool, context: Option<u32>, ignore_whitespace: Option<bool>) -> Result<String, String> {
+    let path = git_toplevel(&path).await;
+    let mut args: Vec<String> = vec!["diff".to_string()];
+    args.extend(diff_flags(context, ignore_whitespace));
+    if staged {
+        args.push("--cached".to_string());
+    }
+    args.push("--".to_string());
+    args.push(file.clone());
+    let output = tokio::process::Command::new("git")
+        .args(&args)
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    let diff = String::from_utf8_lossy(&output.stdout).to_string();
+    if !diff.trim().is_empty() {
+        return Ok(diff);
+    }
+
+    let full = std::path::Path::new(&path).join(&file);
+    match std::fs::read_to_string(&full) {
+        Ok(content) => {
+            let count = content.lines().count();
+            let body: String = content.lines().map(|l| format!("+{l}\n")).collect();
+            Ok(format!("--- /dev/null\n+++ b/{file}\n@@ -0,0 +1,{count} @@\n{body}"))
+        }
+        Err(_) => Ok(String::new()),
+    }
+}
+
+/// Working-tree status (dirty files) for a workspace folder.
+#[tauri::command]
+pub async fn cmd_git_status(path: String) -> Result<Vec<GitStatusEntry>, String> {
+    let path = git_toplevel(&path).await;
+    let output = tokio::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let entries = text
+        .lines()
+        .filter(|l| l.len() > 3)
+        .map(|line| GitStatusEntry {
+            status: line[..2].to_string(),
+            path: line[3..].trim().to_string(),
+        })
+        .collect();
+    Ok(entries)
+}
+
+
+// ============================================================================
+// Telemetry, crash records, and bug reports
+// ============================================================================
+//
+// All three read from `agent::system::telemetry`'s local store. Nothing is uploaded
+// unless the user has both enabled telemetry and configured an endpoint —
+// see that module's header for why the default is off.
+
+/// Record one usage event. Called from the frontend for UI-level actions the
+/// backend can't see (a panel opened, a settings tab visited).
+#[tauri::command]
+pub fn cmd_telemetry_track(kind: String, props: Option<serde_json::Value>) {
+    crate::agent::system::telemetry::track(&kind, props.unwrap_or(serde_json::Value::Null));
+}
+
+/// Summary for the Usage page: counts by event kind, plus recent crashes.
+#[tauri::command]
+pub fn cmd_get_telemetry_summary() -> serde_json::Value {
+    use std::collections::HashMap;
+    let events = crate::agent::system::telemetry::read_events();
+    let crashes = crate::agent::system::telemetry::read_crashes();
+
+    let mut by_kind: HashMap<String, u64> = HashMap::new();
+    for event in &events {
+        *by_kind.entry(event.kind.clone()).or_insert(0) += 1;
+    }
+    let mut kinds: Vec<serde_json::Value> =
+        by_kind.into_iter().map(|(kind, count)| serde_json::json!({ "kind": kind, "count": count })).collect();
+    // Descending by count so the Usage page's list needs no client-side sort.
+    kinds.sort_by(|a, b| b["count"].as_u64().cmp(&a["count"].as_u64()));
+
+    serde_json::json!({
+        "eventCount": events.len(),
+        "firstEventTs": events.first().map(|e| e.ts),
+        "lastEventTs": events.last().map(|e| e.ts),
+        "kinds": kinds,
+        "crashes": crashes,
+    })
+}
+
+/// Wipe the local telemetry store. The user owns this data, so deleting it
+/// has to be one click and has to actually delete rather than tombstone.
+#[tauri::command]
+pub fn cmd_clear_telemetry() -> Result<(), String> {
+    if let Ok(path) = crate::agent::system::telemetry::events_path() {
+        let _ = std::fs::remove_file(path);
+    }
+    if let Ok(dir) = crate::agent::system::telemetry::crashes_dir() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Bundle a user-written bug report with the context needed to act on it:
+/// recent events, the latest crash, and build/OS identifiers.
+///
+/// Always written to disk and the path returned, so the report survives even
+/// when upload is off or fails — the user can then attach the file to an
+/// issue by hand rather than losing what they typed.
+#[tauri::command]
+pub async fn cmd_submit_bug_report(
+    app: tauri::AppHandle,
+    description: String,
+    include_diagnostics: bool,
+) -> Result<serde_json::Value, String> {
+    if description.trim().is_empty() {
+        return Err("Please describe what went wrong.".to_string());
+    }
+
+    let events = if include_diagnostics { crate::agent::system::telemetry::read_events() } else { Vec::new() };
+    let tail: Vec<_> =
+        events.iter().rev().take(crate::agent::system::telemetry::REPORT_EVENT_TAIL).rev().cloned().collect();
+    let crashes = if include_diagnostics { crate::agent::system::telemetry::read_crashes() } else { Vec::new() };
+
+    let report = serde_json::json!({
+        "ts": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+        "description": description.trim(),
+        "appVersion": app.package_info().version.to_string(),
+        "os": format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+        "events": tail,
+        "latestCrash": crashes.first(),
+    });
+
+    let dir = crate::agent::system::paths::viv_agent_dir()?.join("reports");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("reports dir: {e}"))?;
+    let path = dir.join(format!("report-{}.json", report["ts"].as_u64().unwrap_or(0)));
+    std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap_or_default())
+        .map_err(|e| format!("write report: {e}"))?;
+
+    let uploaded = match crate::agent::system::telemetry::upload(report).await {
+        Ok(sent) => sent,
+        Err(e) => {
+            // A failed upload must not lose the report — it's already on disk.
+            log::warn!("[telemetry] bug report saved locally but upload failed: {e}");
+            false
+        }
+    };
+
+    Ok(serde_json::json!({ "path": path.to_string_lossy(), "uploaded": uploaded }))
+}
+
+// ─── Checkpoints ─────────────────────────────────────────────────────────────
+
+/// Every checkpoint for a session, newest first.
+#[tauri::command]
+pub async fn cmd_list_checkpoints(
+    session_id: Option<String>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<Vec<crate::agent::changes::checkpoints::Checkpoint>, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let id = match session_id {
+        Some(s) if !s.is_empty() => s,
+        _ => state.session_id().await.unwrap_or_default(),
+    };
+    if id.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(crate::agent::changes::checkpoints::list(&id))
+}
+
+/// Restore one checkpoint, putting the files it captured back as they were.
+///
+/// Returns exactly which files were written, removed, or failed — a checkpoint
+/// only ever covered a known set of paths, so reporting a bare "restored" would
+/// overstate what happened.
+#[tauri::command]
+pub async fn cmd_restore_checkpoint(
+    checkpoint_id: String,
+    session_id: Option<String>,
+    #[allow(non_snake_case)] threadId: Option<String>,
+    registry: State<'_, AgentRegistry>,
+) -> Result<crate::agent::changes::checkpoints::RestoreReport, String> {
+    let state = registry.resolve(threadId.as_deref()).await;
+    let id = match session_id {
+        Some(s) if !s.is_empty() => s,
+        _ => state.session_id().await.unwrap_or_default(),
+    };
+    if id.is_empty() {
+        return Err("No active session to restore a checkpoint from.".to_string());
+    }
+    crate::agent::changes::checkpoints::restore(&id, &checkpoint_id)
+}
+
+// ─── Document inspection (Documents panel) ───────────────────────────────────
+
+/// Addressable parts of a document, for the Documents panel's part list.
+///
+/// The panel needs the same view of a file the `inspect_document` tool gives the
+/// model — same ids, same editability flags — so that clicking a part in the UI
+/// and asking the model to change it refer to the same thing. Sharing the
+/// implementation is what keeps them from drifting apart.
+#[tauri::command]
+pub async fn cmd_inspect_document(
+    path: String,
+) -> Result<Vec<crate::agent::tools::files::documents::DocPart>, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::agent::tools::files::documents::inspect(std::path::Path::new(&path))
+    })
+    .await
+    .map_err(|e| format!("inspect task panicked: {e}"))?
+}
+
+/// A fresh screenshot of the open browser tab, for the preview panel's poll.
+///
+/// Returns `None` when no tab is open or the browser is not running, so the
+/// panel can keep showing the last good frame rather than flashing an error
+/// every poll interval.
+#[tauri::command]
+pub async fn cmd_web_preview_screenshot() -> Result<Option<String>, String> {
+    crate::camoufox::live_screenshot().await
+}
+
+// ── User-driven browser input ────────────────────────────────────────────────
+//
+// These let the person watching the preview panel act on the page themselves,
+// in the same tab the agent is using. Coordinates are fractions of the viewport
+// (0.0–1.0) so the panel never has to know the page's real size or the device
+// scale factor — see `camoufox`'s note on why pixels would be wrong twice over.
+
+#[tauri::command]
+pub async fn cmd_web_preview_click_at(fx: f64, fy: f64) -> Result<Option<String>, String> {
+    crate::camoufox::click_at_fraction(fx, fy).await.map(|r| r.screenshot_base64)
+}
+
+#[tauri::command]
+pub async fn cmd_web_preview_type(text: String) -> Result<Option<String>, String> {
+    crate::camoufox::type_at_focus(&text).await.map(|r| r.screenshot_base64)
+}
+
+#[tauri::command]
+pub async fn cmd_web_preview_press(key: String) -> Result<Option<String>, String> {
+    crate::camoufox::press_key(&key).await.map(|r| r.screenshot_base64)
+}
+
+#[tauri::command]
+pub async fn cmd_web_preview_scroll(direction: String, amount: i64) -> Result<Option<String>, String> {
+    crate::camoufox::scroll(&direction, amount).await.map(|r| r.screenshot_base64)
+}
+
+#[cfg(test)]
+mod fork_at_tests {
+    use super::*;
+
+    fn user(text: &str, ts: u64) -> AgentMessage {
+        serde_json::from_value(serde_json::json!({ "type": "user", "content": [{ "type": "text", "text": text }], "timestamp": ts })).unwrap()
+    }
+
+    fn session() -> SessionInfo {
+        SessionInfo {
+            title_source: None,
+            id: "s1".into(),
+            name: "Plan".into(),
+            messages: vec![user("a", 1), user("b", 2), user("c", 3)],
+            created_at: "2026-01-01T00:00:00Z".into(),
+            workspace_folders: vec!["C:/p".into()],
+            access_mode: None,
+        }
+    }
+
+    #[test]
+    fn forking_keeps_the_first_n_and_leaves_the_source_alone() {
+        let src = session();
+        let forked = fork_at(&src, &src.messages, 2, "s2").unwrap();
+        assert_eq!(forked.messages.len(), 2);
+        assert_eq!(forked.id, "s2");
+        assert_eq!(forked.workspace_folders, src.workspace_folders);
+        assert_eq!(src.messages.len(), 3, "the source keeps every message");
+        assert_eq!(src.id, "s1");
+    }
+
+    #[test]
+    fn forking_outside_the_conversation_is_refused() {
+        let src = session();
+        assert!(fork_at(&src, &src.messages, 0, "x").is_err());
+        assert!(fork_at(&src, &src.messages, 4, "x").is_err());
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn each_thread_has_its_own_state_and_none_is_the_primary() {
+        let primary = Arc::new(AppState::default());
+        let registry = AgentRegistry::new(primary.clone());
+        assert!(Arc::ptr_eq(&registry.resolve(None).await, &primary));
+        assert!(Arc::ptr_eq(&registry.resolve(Some("")).await, &primary));
+        let a = registry.resolve(Some("a")).await;
+        let b = registry.resolve(Some("b")).await;
+        assert!(!Arc::ptr_eq(&a, &b) && !Arc::ptr_eq(&a, &primary));
+        assert!(Arc::ptr_eq(&a, &registry.resolve(Some("a")).await), "the same id is the same thread");
+        assert_eq!(a.agent_state.model().await.id, primary.agent_state.model().await.id, "a new thread starts on the primary's model");
+        // Stopping one thread leaves the others running.
+        a.abort_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(!b.abort_flag.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!primary.abort_flag.load(std::sync::atomic::Ordering::SeqCst));
+    }
+}
+
+#[cfg(test)]
+mod git_checkout_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn checkout_switches_here_opens_worktrees_and_reuses_them() {
+        let base = std::env::temp_dir().join(format!("viv-co-{}", now_ms()));
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let r = repo.to_string_lossy().to_string();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "one"],
+            vec!["branch", "feature"],
+            vec!["branch", "other"],
+        ] {
+            git_in(&r, &args).await.unwrap();
+        }
+        // In place: this folder now has the branch.
+        assert_eq!(cmd_git_checkout(r.clone(), "feature".into(), None, None).await.unwrap(), r);
+        assert_eq!(git_in(&r, &["branch", "--show-current"]).await.unwrap(), "feature");
+        // Into a worktree beside it: this folder doesn't move.
+        let wt = cmd_git_checkout(r.clone(), "other".into(), None, Some(true)).await.unwrap();
+        assert!(wt.ends_with("repo-other"), "{wt}");
+        assert_eq!(git_in(&wt, &["branch", "--show-current"]).await.unwrap(), "other");
+        assert_eq!(git_in(&r, &["branch", "--show-current"]).await.unwrap(), "feature");
+        // Already checked out somewhere: that folder, nothing switches.
+        let again = cmd_git_checkout(r.clone(), "other".into(), None, None).await.unwrap();
+        assert_eq!(std::fs::canonicalize(&again).unwrap(), std::fs::canonicalize(&wt).unwrap());
+        assert_eq!(git_in(&r, &["branch", "--show-current"]).await.unwrap(), "feature");
+        // Nothing by that name anywhere.
+        assert!(cmd_git_checkout(r.clone(), "nope".into(), None, None).await.is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod thread_release_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_thread_id_is_one_state_and_an_idle_one_can_be_freed() {
+        let registry = AgentRegistry::new(Arc::new(AppState::default()));
+        let a = registry.resolve(Some("session_a")).await;
+        let b = registry.resolve(Some("session_b")).await;
+        assert!(!Arc::ptr_eq(&a, &b));
+        assert!(Arc::ptr_eq(&a, &registry.resolve(Some("session_a")).await));
+        assert!(Arc::ptr_eq(&registry.resolve(None).await, &registry.resolve(Some("")).await));
+        assert!(registry.release("session_a").await);
+        assert!(!Arc::ptr_eq(&a, &registry.resolve(Some("session_a")).await), "reopened fresh");
+        assert!(!registry.release("").await, "the primary stays");
+        assert!(!registry.release("never-opened").await);
+    }
+
+    #[tokio::test]
+    async fn a_running_thread_is_not_freed() {
+        let registry = AgentRegistry::new(Arc::new(AppState::default()));
+        let a = registry.resolve(Some("session_a")).await;
+        let running = a.agent.lock().await;
+        assert!(!registry.release("session_a").await);
+        drop(running);
+        assert!(registry.release("session_a").await);
+    }
+}

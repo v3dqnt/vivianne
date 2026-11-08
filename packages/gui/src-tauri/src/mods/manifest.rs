@@ -67,6 +67,9 @@ pub struct Contributes {
     pub tools: Vec<ToolContribution>,
     #[serde(default)]
     pub themes: Vec<ThemeContribution>,
+    /// Tiles in the Quick access panel.
+    #[serde(default)]
+    pub quick_access: Vec<QuickAccessContribution>,
 }
 
 /// A dock panel: a page from the mod (`entry`) or a page you run locally
@@ -117,6 +120,40 @@ pub struct ToolContribution {
     #[serde(default, alias = "timeout_secs")]
     pub timeout_secs: Option<u64>,
 }
+
+/// What a Quick access tile does when pressed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum QuickAction {
+    /// Open one of the mod's own panels (`panel` is its id).
+    Panel { panel: String },
+    /// Open one of the app's panels by name (needs `open`).
+    Open { target: String },
+    /// Put `text` in the message box without sending it (needs `chat.compose`).
+    Compose { text: String },
+    /// Send `text` to Vivianne as the user (needs `chat.send`).
+    Send { text: String },
+}
+
+/// A tile in the Quick access panel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickAccessContribution {
+    pub id: String,
+    pub title: String,
+    /// A short emoji or symbol shown on the tile.
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// One line under the title.
+    #[serde(default)]
+    pub description: Option<String>,
+    pub action: QuickAction,
+}
+
+/// The app panels a `quickAccess` tile may open by name.
+pub const OPENABLE_PANELS: &[&str] = &[
+    "files", "agents", "plan", "timeline", "memory", "preview", "terminal", "review", "tasks", "multiplayer", "quick",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -179,7 +216,7 @@ pub fn describe_permission(p: &str) -> String {
 impl Manifest {
     pub fn contribution_count(&self) -> usize {
         let c = &self.contributes;
-        c.panels.len() + c.sidebar.len() + c.chat.len() + c.tools.len() + c.themes.len()
+        c.panels.len() + c.sidebar.len() + c.chat.len() + c.tools.len() + c.themes.len() + c.quick_access.len()
     }
 
     pub fn has(&self, permission: &str) -> bool {
@@ -199,7 +236,7 @@ impl Manifest {
             return Err("name must be 1-60 characters".into());
         }
         if self.contribution_count() == 0 {
-            return Err("contributes nothing (add a panel, sidebar section, chat component, tool or theme)".into());
+            return Err("contributes nothing (add a panel, sidebar section, chat component, tool, theme or quick access tile)".into());
         }
         if self.contribution_count() > MAX_CONTRIBUTIONS {
             return Err(format!("contributes more than {MAX_CONTRIBUTIONS} things"));
@@ -237,6 +274,41 @@ impl Manifest {
                 return Err(format!("sidebar id \"{}\" must be unique and a-z, 0-9, -", s.id));
             }
             file("sidebar entry", &s.entry)?;
+        }
+        for q in &self.contributes.quick_access {
+            if !is_slug(&q.id, 1, 40) || !ids.insert(format!("quick:{}", q.id)) {
+                return Err(format!("quick access id \"{}\" must be unique and a-z, 0-9, -", q.id));
+            }
+            if q.title.trim().is_empty() || q.title.len() > 40 {
+                return Err(format!("quick access \"{}\" needs a title of 1-40 characters", q.id));
+            }
+            if q.icon.as_deref().is_some_and(|i| i.chars().count() > 4) {
+                return Err(format!("quick access \"{}\": icon must be a short emoji or symbol", q.id));
+            }
+            match &q.action {
+                QuickAction::Panel { panel } => {
+                    if !self.contributes.panels.iter().any(|p| &p.id == panel) {
+                        return Err(format!("quick access \"{}\" opens panel \"{panel}\", which this mod doesn't have", q.id));
+                    }
+                }
+                QuickAction::Open { target } => {
+                    if !OPENABLE_PANELS.contains(&target.as_str()) {
+                        return Err(format!("quick access \"{}\" can't open \"{target}\" (use one of: {})", q.id, OPENABLE_PANELS.join(", ")));
+                    }
+                    if !self.has("open") {
+                        return Err(format!("quick access \"{}\" opens a panel, so the mod must ask for the \"open\" permission", q.id));
+                    }
+                }
+                QuickAction::Compose { text } | QuickAction::Send { text } => {
+                    let permission = if matches!(q.action, QuickAction::Send { .. }) { "chat.send" } else { "chat.compose" };
+                    if text.trim().is_empty() || text.len() > 2000 {
+                        return Err(format!("quick access \"{}\" needs text of 1-2000 characters", q.id));
+                    }
+                    if !self.has(permission) {
+                        return Err(format!("quick access \"{}\" uses the message box, so the mod must ask for the \"{permission}\" permission", q.id));
+                    }
+                }
+            }
         }
         for c in &self.contributes.chat {
             if !is_slug(&c.fence, 2, 30) || !c.fence.starts_with(|ch: char| ch.is_ascii_lowercase()) {
@@ -305,6 +377,33 @@ mod tests {
     #[test]
     fn a_good_manifest_passes() {
         assert_eq!(base().validate(None, &none()), Ok(()));
+    }
+
+    fn with_tile(permissions: serde_json::Value, action: serde_json::Value) -> Manifest {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": 1, "id": "tiles", "name": "Tiles",
+            "permissions": permissions,
+            "contributes": {
+                "panels": [{ "id": "board", "title": "Board", "url": "http://localhost:3000" }],
+                "quickAccess": [{ "id": "go", "title": "Go", "icon": "🚀", "action": action }]
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn quick_access_tiles_need_the_permission_their_action_uses() {
+        // Opening the mod's own panel needs nothing.
+        assert_eq!(with_tile(serde_json::json!([]), serde_json::json!({ "type": "panel", "panel": "board" })).validate(None, &none()), Ok(()));
+        // A panel it doesn't have.
+        assert!(with_tile(serde_json::json!([]), serde_json::json!({ "type": "panel", "panel": "nope" })).validate(None, &none()).is_err());
+        // Opening an app panel, composing and sending each name their permission.
+        assert!(with_tile(serde_json::json!([]), serde_json::json!({ "type": "open", "target": "files" })).validate(None, &none()).unwrap_err().contains("open"));
+        assert_eq!(with_tile(serde_json::json!(["open"]), serde_json::json!({ "type": "open", "target": "files" })).validate(None, &none()), Ok(()));
+        assert!(with_tile(serde_json::json!(["open"]), serde_json::json!({ "type": "open", "target": "settings" })).validate(None, &none()).is_err());
+        assert!(with_tile(serde_json::json!(["chat.compose"]), serde_json::json!({ "type": "send", "text": "hi" })).validate(None, &none()).unwrap_err().contains("chat.send"));
+        assert_eq!(with_tile(serde_json::json!(["chat.send"]), serde_json::json!({ "type": "send", "text": "hi" })).validate(None, &none()), Ok(()));
+        assert_eq!(with_tile(serde_json::json!(["chat.compose"]), serde_json::json!({ "type": "compose", "text": "hi" })).validate(None, &none()), Ok(()));
     }
 
     #[test]

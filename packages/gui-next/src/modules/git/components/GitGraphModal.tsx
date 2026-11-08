@@ -20,7 +20,7 @@ export function GitGraphModal({ open, onClose, root }: { open: boolean; onClose:
       <Stack sx={{ height: '100%', minHeight: 0 }}>
         <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
           <Hierarchy2Linear size={16} color="currentColor" />
-          <Typography variant="subtitle2" sx={{ fontWeight: 700, flex: 1 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 500, flex: 1 }}>
             Git Graph
           </Typography>
           <Tooltip title="Refresh">
@@ -36,7 +36,7 @@ export function GitGraphModal({ open, onClose, root }: { open: boolean; onClose:
         <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <Box sx={{ display: 'grid', gridTemplateColumns: '48px 1fr 140px 140px 96px', alignItems: 'center', px: 2, py: 1, borderBottom: 1, borderColor: 'divider', position: 'sticky', top: 0, bgcolor: 'background.paper' }}>
             {['Graph', 'Description', 'Date', 'Author', 'Commit'].map((h) => (
-              <Typography key={h} variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+              <Typography key={h} variant="caption" color="text.secondary" sx={{ fontWeight: 500 }}>
                 {h}
               </Typography>
             ))}

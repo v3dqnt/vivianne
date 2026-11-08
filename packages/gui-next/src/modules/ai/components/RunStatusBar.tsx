@@ -122,7 +122,7 @@ export function RunStatusBar() {
         py: 0.25,
         borderRadius: '6px',
         fontSize: '0.6875rem',
-        fontWeight: 600,
+        fontWeight: 500,
         color: strong ? 'text.primary' : 'text.secondary',
         flexShrink: 0,
         '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
@@ -157,7 +157,7 @@ export function RunStatusBar() {
         ) : (
           <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color, flexShrink: 0, mx: '7px' }} />
         )}
-        <Typography variant="caption" sx={{ fontWeight: 600, color, flexShrink: 0, fontSize: '0.6875rem' }}>
+        <Typography variant="caption" sx={{ fontWeight: 500, color, flexShrink: 0, fontSize: '0.6875rem' }}>
           {label}
           {status === 'waiting' && waitUntil ? ` · ${formatDuration(waitUntil - now)}` : ''}
         </Typography>

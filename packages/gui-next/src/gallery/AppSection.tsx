@@ -1,0 +1,99 @@
+import { Suspense, createElement, useEffect, useRef, useState, type ComponentType } from 'react'
+import { Box, Button, Stack, Typography } from '../ui'
+import { FIXTURES, NOT_COMPONENTS } from './fixtures'
+import { Boundary } from './Boundary'
+
+type Loader = () => Promise<Record<string, unknown>>
+type Entry = { path: string; name: string; load: Loader }
+
+const files = import.meta.glob(['../modules/**/*.tsx', '../components/**/*.tsx', '!../**/*.test.tsx']) as Record<string, Loader>
+
+// A component is a function, or a memo / forwardRef object (which carries `$$typeof`); anything else exported in capitals is a constant.
+// `Composer` is skipped: it is `ChatComposer` wired to the app's stores, so it would show the same composer twice.
+const SKIP = new Set(['Composer'])
+// Components that open over the whole page (dialogs, panels, the theme builder, overlay windows). Rendering them in a card would
+// cover the page as you scroll, so they wait behind an Open button and close again.
+const OVERLAY = /(Dialog|Modal|Overlay|Popover|Menu|Builder|Toast|Widget|Widgets)$|^(ReviewPanel|ThemeBuilder|SettingsPanel|AgentSettingsPanel|RestingNotch|Notch)$/
+const isComponent = (name: string, v: unknown) =>
+  /^[A-Z]/.test(name) && !SKIP.has(name) && !NOT_COMPONENTS.test(name) && (typeof v === 'function' || (typeof v === 'object' && v !== null && '$$typeof' in v))
+
+/** Every card renders itself, but only while it is near the screen. Cards have one fixed size, so scrolling never re-lays-out the page, and
+ * only a handful of components run animations, timers and listeners at any moment. */
+function Card({ path, name, load }: Entry) {
+  const [Comp] = useState(() => await_(load, name))
+  const [near, setNear] = useState(false)
+  const [opened, setOpened] = useState(false)
+  const overlay = OVERLAY.test(name)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const io = new IntersectionObserver(([e]) => setNear(e.isIntersecting), { rootMargin: '200px' })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [])
+  return (
+    <Box ref={ref} sx={{ border: 1, borderColor: 'divider', borderRadius: '8px', p: '12px', display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0, height: 300, contain: 'strict' }}>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography noWrap sx={{ fontSize: '0.8125rem', fontWeight: 500 }}>{name}</Typography>
+        <Typography noWrap sx={{ fontSize: '0.6875rem', color: 'text.disabled' }}>{path.replace('../', '')}</Typography>
+      </Box>
+      <Box sx={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'auto', p: '8px', borderRadius: '8px', bgcolor: 'action.hover' }}>
+        {overlay && (
+          <Button size="small" variant="outlined" onClick={() => setOpened(true)}>Open</Button>
+        )}
+        {(overlay ? opened : near) && (
+          <Boundary>
+            <Suspense fallback={<Typography variant="caption">Loading…</Typography>}>
+              <Comp onClose={() => setOpened(false)} />
+            </Suspense>
+          </Boundary>
+        )}
+      </Box>
+    </Box>
+  )
+}
+
+/** A component that loads its module on first render, so the card needs no separate loading state. */
+function await_(load: Loader, name: string): ComponentType<{ onClose?: () => void }> {
+  let mod: Record<string, unknown> | null = null
+  let pending: Promise<void> | null = null
+  return function Lazy(props: Record<string, unknown>) {
+    if (!mod) {
+      pending ??= load().then((m) => void (mod = m))
+      throw pending
+    }
+    const C = mod[name] as ComponentType<Record<string, unknown>>
+    return createElement(C, { ...FIXTURES[name], ...(props.onClose && 'onClose' in (FIXTURES[name] ?? {}) ? { onClose: props.onClose } : {}) })
+  }
+}
+
+/** Every component under `modules/` and `components/`, found from the source files, each rendered on demand with no props. */
+export function AppSection() {
+  const [entries, setEntries] = useState<Entry[] | null>(null)
+  const [query, setQuery] = useState('')
+  useEffect(() => {
+    void (async () => {
+      const out: Entry[] = []
+      for (const [path, load] of Object.entries(files)) {
+        const mod = await load().catch(() => ({}) as Record<string, unknown>)
+        for (const [name, v] of Object.entries(mod)) if (isComponent(name, v)) out.push({ path, name, load })
+      }
+      setEntries(out.sort((a, b) => a.path.localeCompare(b.path)))
+    })()
+  }, [])
+  const shown = (entries ?? []).filter((e) => `${e.name} ${e.path}`.toLowerCase().includes(query.toLowerCase()))
+  return (
+    <Stack sx={{ gap: '12px' }}>
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder={entries ? `Filter ${entries.length} components` : 'Finding components…'}
+        style={{ height: 36, padding: '0 12px', borderRadius: 8, border: '1px solid rgba(128,128,128,0.4)', background: 'transparent', color: 'inherit' }}
+      />
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '10px' }}>
+        {shown.map((e) => <Card key={`${e.path}:${e.name}`} {...e} />)}
+      </Box>
+    </Stack>
+  )
+}

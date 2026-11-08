@@ -1,13 +1,13 @@
-import { useState } from 'react'
-import { Box, Button, Collapse, CircularProgress, Typography, Stack, alpha, useTheme } from '../../../ui'
+import { useEffect, useState } from 'react'
+import { call, on } from '../../../ipc'
+import { Box, Button, Collapse, CircularProgress, Typography, Stack } from '../../../ui'
 import {
   CommandLinear,
   EditLinear,
   SearchNormalLinear,
   DocumentTextLinear,
   CodeLinear,
-  ArrowDownLinear,
-  CheckLinear,
+  ChevronRightLinear,
   DangerLinear,
   ArchiveBookLinear,
   ClipboardTextLinear,
@@ -17,22 +17,24 @@ import {
   MonitorLinear,
   MagicpenLinear,
 } from '../../../icons'
-import { usePlanStore } from '../../plan/store/planStore'
-import { usePanelStore } from '../../dock/store/panelStore'
 import type { AgentMessage } from '../lib/types'
+import { shellOutcome } from '../lib/shellOutcome'
+import { phaseName, withProgress, type ProgressEvent } from '../lib/scriptProgress'
 import { contentToText, contentImages } from '../lib/types'
 import { ImageBlock } from './ImageBlock'
 import { DiffView } from './DiffView'
 import { CodeBlock } from './CodeBlock'
 import { FileLink, filePathArg } from './FileLink'
-import { CHAT_HEADER_SX, CHAT_MAX_WIDTH, CHAT_RADIUS, CHAT_RADIUS_INNER, CHAT_SURFACE_SX, CHAT_TITLE_SX } from '../lib/chatStyle'
+import { TOOL_BODY_SX, TOOL_ROW_SX, TOOL_WELL_SX } from '../lib/chatStyle'
+import { usePlanStore } from '../../plan/store/planStore'
 
 type ToolResultMessage = Extract<AgentMessage, { type: 'toolResult' }>
 
 /** One width for everything a tool leaves in the chat — groups, cards,
  * checkpoints, team runs — so they line up as a column instead of each
- * being as wide as its own text. */
-export const TOOL_BLOCK_SX = { width: '100%', maxWidth: CHAT_MAX_WIDTH } as const
+ * being as wide as its own text. That column is the transcript's own: tool
+ * activity runs exactly as wide as the prose above and below it. */
+export const TOOL_BLOCK_SX = { width: '100%', minWidth: 0 } as const
 
 const MEMORY_TOOLS: Record<string, string> = {
   memory_get: 'Recalling memory…',
@@ -83,6 +85,9 @@ const DECLARATIONS: Record<string, [string, string]> = {
 }
 
 /** `[label, target]` for the card header. */
+/** Tools that can be sent to the background while they run: the ones that wait on a process or the network. */
+const CAN_BACKGROUND = new Set(['bash', 'powershell', 'code_search', 'grep', 'glob', 'web_fetch', 'web_search'])
+
 export function declarationFor(name: string, pending: boolean, summary: string | null): [string, string | null] {
   if (pending && name in MEMORY_TOOLS) return [MEMORY_TOOLS[name], null]
   const phrasing = DECLARATIONS[name]
@@ -118,6 +123,27 @@ export function iconFor(name: string) {
   if (n.includes('search') || n.includes('grep') || n.includes('glob') || n.includes('find')) return SearchNormalLinear
   if (n.includes('read') || n.includes('file')) return DocumentTextLinear
   return CodeLinear
+}
+
+/** File extensions shiki knows, by the grammar to use. */
+const EXT_LANG: Record<string, string> = {
+  ts: 'ts', tsx: 'tsx', js: 'js', jsx: 'jsx', mjs: 'js', cjs: 'js', json: 'json', rs: 'rust', py: 'python', go: 'go', java: 'java', kt: 'kotlin',
+  c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp', cs: 'csharp', rb: 'ruby', php: 'php', swift: 'swift', css: 'css', scss: 'scss', html: 'html',
+  md: 'markdown', yml: 'yaml', yaml: 'yaml', toml: 'toml', sh: 'bash', ps1: 'powershell', sql: 'sql', xml: 'xml', vue: 'vue', svelte: 'svelte',
+}
+
+/**
+ * The grammar for a tool's output: a diff is coloured as one, a file that was read in its own language, JSON as JSON.
+ * Anything else (shell output, search hits) stays plain, since colouring arbitrary text only adds noise.
+ */
+export function outputLangFor(tool: string, output: string, file: string | null): string {
+  if (/^diff --git |^@@ -\d/m.test(output) || /^(---|\+\+\+) [ab]\//m.test(output)) return 'diff'
+  if (tool === 'read' && file) {
+    const ext = file.split('.').pop()?.toLowerCase() ?? ''
+    if (EXT_LANG[ext]) return EXT_LANG[ext]
+  }
+  if (['read', 'code_search', 'grep', 'glob'].includes(tool)) return 'text'
+  return looksLikeJson(output) ? 'json' : 'text'
 }
 
 export function argSummary(args: Record<string, unknown> | undefined): string | null {
@@ -192,12 +218,24 @@ export function ToolCallCard({
   compact?: boolean
 }) {
   const [open, setOpen] = useState(false)
+  const [sentToBackground, setSentToBackground] = useState(false)
   // `isError` is the wire type's in-flight sentinel: null until the tool
   // finishes, then true/false. Nothing else needs checking for "pending."
   const pending = message.isError === null
   const isError = message.isError === true
+  const outcome = pending ? null : shellOutcome(message.details)
   const Icon = iconFor(message.toolName)
-  const summary = argSummary(message.arguments)
+  // A program is described by what it says it does; the code itself is in the body.
+  const program = message.toolName === 'run_script' && typeof message.arguments?.code === 'string' ? (message.arguments.code as string) : null
+  // What a running script reports with log() and phase().
+  const [progress, setProgress] = useState<string[]>([])
+  useEffect(() => {
+    if (!program || message.isError !== null) return
+    const off = on<ProgressEvent>('script_progress', (e) => setProgress((lines) => withProgress(lines, e, message.toolCallId)))
+    return () => void off.then((f) => f())
+  }, [program, message.isError, message.toolCallId])
+  const programNote = program && typeof message.arguments?.description === 'string' ? (message.arguments.description as string) : null
+  const summary = programNote ?? argSummary(message.arguments)
   const [label, target] = declarationFor(message.toolName, pending, summary)
   const file = target !== null ? filePathArg(message.arguments) : null
   const output = contentToText(message.content).trim()
@@ -211,7 +249,7 @@ export function ToolCallCard({
   // Shell output is not any language shiki knows; tagging it `text` avoids
   // spurious highlighting of arbitrary stdout. Structured tools that really
   // do emit JSON get the JSON grammar.
-  const outputLang = ['read', 'code_search', 'grep', 'glob'].includes(message.toolName) ? 'text' : looksLikeJson(output) ? 'json' : 'text'
+  const outputLang = outputLangFor(message.toolName, output, file)
   // Only a completed, successful call has real before/after content — a
   // failed `edit` (e.g. old_string not found) changed nothing, so there's
   // nothing to diff. `extractDiffs` itself is cheap (just reshapes
@@ -223,34 +261,43 @@ export function ToolCallCard({
   // Some tools say something to the model, not to the user: their result is
   // replaced by a view of what they did, always shown, never the raw text.
   const special = !pending && !isError ? specialBody(message) : null
-  const hasBody = !special && (!!output || diffs.length > 0)
+  const hasBody = !special && (!!output || diffs.length > 0 || !!program)
 
   return (
     // Open, a card takes the full width it's given: its output shouldn't be
     // squeezed to the width of its header.
     <Stack spacing={0.5} sx={compact ? { width: '100%' } : TOOL_BLOCK_SX}>
-    <Box
-      sx={{
-        ...CHAT_SURFACE_SX,
-        borderColor: isError ? 'error.main' : 'divider',
-        borderRadius: compact ? CHAT_RADIUS_INNER : CHAT_RADIUS,
-      }}
-    >
+    <Box sx={{ minWidth: 0 }}>
       <Box
+        role={hasBody ? 'button' : undefined}
+        tabIndex={hasBody ? 0 : undefined}
+        aria-expanded={hasBody ? open : undefined}
         onClick={() => hasBody && setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (hasBody && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault()
+            setOpen((v) => !v)
+          }
+        }}
         sx={{
-          ...CHAT_HEADER_SX,
-          ...(compact && { minHeight: 34, py: 0.5 }),
+          ...TOOL_ROW_SX,
+          color: isError ? 'error.main' : 'text.secondary',
           cursor: hasBody ? 'pointer' : 'default',
-          '&:hover': hasBody ? { bgcolor: 'action.hover' } : undefined,
+          // Inside a group the row is one step in a bordered list; the list's
+          // hairline is an inset shadow, so the row needs no compensation and
+          // its text lands on the group heading's left edge exactly.
+          ...(compact && { display: 'flex', width: '100%' }),
+          '&:hover': hasBody ? { color: isError ? 'error.main' : 'text.primary' } : undefined,
         }}
       >
-        <Box sx={{ display: 'flex', color: 'text.secondary', flexShrink: 0 }}>
-          <Icon size={16} color="currentColor" />
-        </Box>
-        <Typography variant="caption" sx={CHAT_TITLE_SX} title={message.toolName}>
+        {!compact && (
+          <Box sx={{ display: 'flex', flexShrink: 0, opacity: 0.85 }}>
+            <Icon size={14} color="currentColor" />
+          </Box>
+        )}
+        <Box component="span" sx={{ flexShrink: 0, whiteSpace: 'nowrap' }} title={message.toolName}>
           {label}
-        </Typography>
+        </Box>
         {file ? (
           <FileLink path={file} />
         ) : (
@@ -259,34 +306,45 @@ export function ToolCallCard({
               variant="caption"
               color="text.secondary"
               noWrap
-              sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', minWidth: 0 }}
+              sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', flex: '0 1 auto', minWidth: 0 }}
             >
               {target}
             </Typography>
           )
         )}
-        <Box sx={{ flex: 1 }} />
-        {pending ? (
-          <CircularProgress size={12} thickness={5} />
-        ) : isError ? (
-          <Box sx={{ display: 'flex', color: 'error.main' }}>
-            <DangerLinear size={15} color="currentColor" />
+        {pending && <CircularProgress size={11} thickness={5} />}
+        {pending && CAN_BACKGROUND.has(message.toolName) && !sentToBackground && (
+          <Box
+            component="span"
+            role="button"
+            tabIndex={0}
+            title="Let it keep running; the agent carries on and you're told when it finishes"
+            onClick={(e) => {
+              e.stopPropagation()
+              setSentToBackground(true)
+              void call('cmd_tool_background', { callId: message.toolCallId })
+            }}
+            sx={{ ml: 'auto', flexShrink: 0, px: '8px', height: 20, display: 'inline-flex', alignItems: 'center', borderRadius: '6px', fontSize: '0.75rem', color: 'text.secondary', bgcolor: 'action.hover', '&:hover': { color: 'text.primary', bgcolor: 'action.selected' } }}
+          >
+            Background
           </Box>
-        ) : (
-          <Box sx={{ display: 'flex', color: 'success.main' }}>
-            <CheckLinear size={15} color="currentColor" />
+        )}
+        {isError && (
+          <Box sx={{ display: 'flex', flexShrink: 0 }}>
+            <DangerLinear size={13} color="currentColor" />
+          </Box>
+        )}
+        {isError && typeof (message.details as { failure?: unknown } | null | undefined)?.failure === 'string' && (
+          <Box component="span" sx={{ flexShrink: 0, fontSize: '0.75rem', color: 'error.main' }}>{String((message.details as { failure: string }).failure).replace(/-/g, ' ')}</Box>
+        )}
+        {outcome && (
+          <Box component="span" sx={{ flexShrink: 0, px: '6px', height: 18, display: 'inline-flex', alignItems: 'center', borderRadius: '6px', fontSize: '0.6875rem', fontFamily: '"Geist Mono", ui-monospace, monospace', color: outcome.tone === 'bad' ? 'error.main' : 'warning.main', bgcolor: 'action.hover' }}>
+            {outcome.label}
           </Box>
         )}
         {hasBody && (
-          <Box
-            sx={{
-              display: 'flex',
-              color: 'text.secondary',
-              transform: open ? 'rotate(180deg)' : 'none',
-              transition: 'transform 0.15s',
-            }}
-          >
-            <ArrowDownLinear size={16} color="currentColor" />
+          <Box sx={{ display: 'flex', flexShrink: 0, ml: 'auto', opacity: 0.7, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>
+            <ChevronRightLinear size={12} color="currentColor" />
           </Box>
         )}
       </Box>
@@ -300,8 +358,7 @@ export function ToolCallCard({
             WebkitLineClamp: 2,
             WebkitBoxOrient: 'vertical',
             overflow: 'hidden',
-            px: 1.5,
-            pb: 0.75,
+            ...TOOL_BODY_SX,
             fontFamily: '"Geist Mono", ui-monospace, monospace',
             fontSize: '0.6875rem',
             lineHeight: 1.5,
@@ -319,17 +376,27 @@ export function ToolCallCard({
         // card is actually expanded.
         <Collapse in={open}>
           {open && (
-            <>
+            <Stack sx={{ ...TOOL_BODY_SX, gap: '8px' }}>
               {diffs.map((d, i) => (
                 <Box key={i}>
-                  <Box sx={{ display: 'flex', px: 1.5, pt: 1, borderTop: i === 0 ? 1 : 0, borderColor: 'divider' }}>
+                  <Box sx={{ display: 'flex', pb: 0.5 }}>
                     <FileLink path={d.path} />
                   </Box>
                   <DiffView before={d.before} after={d.after} />
                 </Box>
               ))}
+              {program && <CodeBlock code={program} lang="javascript" wrap bare dense collapsible />}
+              {progress.length > 0 && (
+                <Stack sx={{ gap: '2px', fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem', color: 'text.secondary' }}>
+                  {progress.map((line, i) => (
+                    <Box key={i} sx={phaseName(line) ? { color: 'text.primary', fontWeight: 500, pt: '4px' } : undefined}>
+                      {phaseName(line) ?? line}
+                    </Box>
+                  ))}
+                </Stack>
+              )}
               {output && <ToolOutput code={output} lang={outputLang} />}
-            </>
+            </Stack>
           )}
         </Collapse>
       )}
@@ -351,10 +418,57 @@ export function ToolCallCard({
  * hover, and the long-output collapse. No header — the card's header already
  * says what this is.
  */
-function ToolOutput({ code, lang }: { code: string; lang: string }) {
-  const theme = useTheme()
+/** A todo list as the tool reports it (`[x] done`, `[~] doing`, `[ ] to do`). */
+const TODO_LINE = /^\s*\[( |x|~|-)\]\s+(.*)$/i
+
+function TodoOutput({ text }: { text: string }) {
+  const lines = text.split(/\r?\n/)
+  const items = lines.map((l) => TODO_LINE.exec(l)).filter((m): m is RegExpExecArray => !!m)
+  const footer = lines.filter((l) => l.trim() && !TODO_LINE.test(l) && !/^todo list updated:?$/i.test(l.trim())).join(' ')
   return (
-    <Box sx={{ borderTop: 1, borderColor: 'divider', bgcolor: alpha(theme.palette.text.primary, 0.02), px: 1.5, py: 1, color: 'text.secondary' }}>
+    <Stack sx={{ ...TOOL_WELL_SX, gap: '2px' }}>
+      {items.map((m, i) => {
+        const state = m[1].toLowerCase()
+        const done = state === 'x'
+        const doing = state === '~' || state === '-'
+        return (
+          <Stack key={i} direction="row" sx={{ gap: '8px', alignItems: 'flex-start', fontSize: '0.8125rem', lineHeight: '20px' }}>
+            <Box
+              component="span"
+              sx={{
+                mt: '4px',
+                width: 12,
+                height: 12,
+                flexShrink: 0,
+                borderRadius: '3px',
+                border: 1.5,
+                borderColor: done ? 'success.main' : doing ? 'primary.main' : 'text.disabled',
+                bgcolor: done ? 'success.main' : 'transparent',
+                display: 'grid',
+                placeItems: 'center',
+                color: 'background.paper',
+                fontSize: '0.6875rem',
+                fontWeight: 500,
+                lineHeight: 1,
+              }}
+            >
+              {done ? '✓' : doing ? <Box component="span" sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: 'primary.main' }} /> : null}
+            </Box>
+            <Box component="span" sx={{ color: done ? 'text.disabled' : 'text.primary', textDecoration: done ? 'line-through' : 'none', fontWeight: doing ? 600 : 400 }}>
+              {m[2]}
+            </Box>
+          </Stack>
+        )
+      })}
+      {footer && <Box sx={{ mt: '4px', fontSize: '0.6875rem', lineHeight: '16px', color: 'text.secondary' }}>{footer}</Box>}
+    </Stack>
+  )
+}
+
+function ToolOutput({ code, lang }: { code: string; lang: string }) {
+  if (code.split(/\r?\n/).filter((l) => TODO_LINE.test(l)).length >= 2) return <TodoOutput text={code} />
+  return (
+    <Box sx={{ ...TOOL_WELL_SX, color: 'text.secondary' }}>
       <CodeBlock code={code} lang={lang} wrap bare dense collapsible />
     </Box>
   )
@@ -364,9 +478,39 @@ function ToolOutput({ code, lang }: { code: string; lang: string }) {
  * something rather than text to read. */
 function BodyLine({ children }: { children: React.ReactNode }) {
   return (
-    <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, pb: 1, pt: 0.25, minWidth: 0 }}>
+    <Stack direction="row" sx={{ ...TOOL_BODY_SX, ...TOOL_WELL_SX, alignItems: 'center', gap: '8px' }}>
       {children}
     </Stack>
+  )
+}
+
+/** A plan waiting on you, approved where it was proposed: Approve sends it
+ * back to be carried out; to change it, reply in the chat. */
+function PlanApproval({ planId, version, title }: { planId: string; version: number | null; title: string }) {
+  const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
+  const approve = async () => {
+    setState('busy')
+    try {
+      const plans = usePlanStore.getState()
+      await plans.open(planId, version ?? undefined)
+      await plans.approve()
+      setState(usePlanStore.getState().error ? 'error' : 'done')
+    } catch {
+      setState('error')
+    }
+  }
+  return (
+    <BodyLine>
+      <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0 }}>
+        {title}
+        {version ? ` · v${version}` : ''} — {state === 'done' ? 'approved' : state === 'error' ? "couldn't approve it" : 'ready for your review. To change it, reply below.'}
+      </Typography>
+      {state !== 'done' && (
+        <Button size="small" variant="contained" disableElevation disabled={state === 'busy'} onClick={() => void approve()} sx={{ flexShrink: 0 }}>
+          {state === 'busy' ? 'Approving…' : 'Approve'}
+        </Button>
+      )}
+    </BodyLine>
   )
 }
 
@@ -380,23 +524,20 @@ function specialBody(message: ToolResultMessage): React.ReactNode | null {
       const version = typeof details.version === 'number' ? details.version : null
       if (!planId) return null
       const title = typeof args.title === 'string' ? args.title : 'The plan'
+      return <PlanApproval planId={planId} version={version} title={title} />
+    }
+    case 'present': {
+      const files = Array.isArray(details.presented) ? (details.presented as { path: string; name: string; bytes: number }[]) : []
+      if (files.length === 0) return null
       return (
-        <BodyLine>
-          <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0 }}>
-            {title}
-            {version ? ` · v${version}` : ''} — ready for your review
-          </Typography>
-          <Button
-            size="small"
-            onClick={() => {
-              void usePlanStore.getState().open(planId, version ?? undefined)
-              usePanelStore.getState().openRight('plan')
-            }}
-            sx={{ flexShrink: 0 }}
-          >
-            Open plan
-          </Button>
-        </BodyLine>
+        <Stack sx={{ gap: '4px', py: '4px' }}>
+          {files.map((f) => (
+            <Stack key={f.path} direction="row" sx={{ alignItems: 'center', gap: '8px' }}>
+              <FileLink path={f.path} label={f.name} />
+              <Typography variant="caption" color="text.disabled">{f.bytes >= 1048576 ? `${(f.bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(f.bytes / 1024))} KB`}</Typography>
+            </Stack>
+          ))}
+        </Stack>
       )
     }
     case 'message_agent': {

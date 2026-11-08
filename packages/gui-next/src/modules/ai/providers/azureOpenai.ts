@@ -165,21 +165,10 @@ export async function streamAzureOpenAi(req: ProviderStreamRequest): Promise<voi
     return
   }
 
-  let raw: string
-  try {
-    raw = await resp.text()
-  } catch (e) {
-    output.stopReason = 'error'
-    output.errorMessage = `Failed to read response: ${e instanceof Error ? e.message : String(e)}`
-    emitDone(output)
-    return
-  }
-
-  const events = parseSseEvents(raw)
   let fullText = ''
   const currentToolCalls = new Map<string, { name: string; args: string }>()
 
-  for (const event of events) {
+  const handle = (event: Record<string, unknown>) => {
     const eventType = event.type as string | undefined
 
     if (eventType === 'response.output_text.delta') {
@@ -239,6 +228,34 @@ export async function streamAzureOpenAi(req: ProviderStreamRequest): Promise<voi
       const incompleteReason = (resp2?.incomplete_details as Record<string, unknown> | undefined)?.reason
       if (typeof incompleteReason === 'string') output.stopReason = mapStopReason(incompleteReason)
     }
+  }
+
+  // Read the body as it arrives: the first token is shown when it is sent,
+  // not after the whole answer has been generated.
+  try {
+    const reader = resp.body?.getReader()
+    if (!reader) {
+      for (const event of parseSseEvents(await resp.text())) handle(event)
+    } else {
+      const decoder = new TextDecoder()
+      let buffered = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (value) buffered += decoder.decode(value, { stream: !done })
+        const cut = buffered.lastIndexOf('\n')
+        if (cut !== -1) {
+          for (const event of parseSseEvents(buffered.slice(0, cut + 1))) handle(event)
+          buffered = buffered.slice(cut + 1)
+        }
+        if (done) break
+      }
+      for (const event of parseSseEvents(buffered)) handle(event)
+    }
+  } catch (e) {
+    output.stopReason = 'error'
+    output.errorMessage = `Failed to read response: ${e instanceof Error ? e.message : String(e)}`
+    emitDone(output)
+    return
   }
 
   if (fullText) output.content.unshift({ type: 'text', text: fullText })

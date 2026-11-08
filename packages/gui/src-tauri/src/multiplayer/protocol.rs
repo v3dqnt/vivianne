@@ -4,7 +4,7 @@
 //! this is phase 1, transport + a first cut at shared sessions); each side
 //! just appends its own new turn messages and forwards them as they happen.
 
-use crate::agent::types::AgentMessage;
+use crate::agent::runtime::types::AgentMessage;
 use serde::{Deserialize, Serialize};
 
 /// Bumped if the frame shape ever changes incompatibly — sent in `Hello` so
@@ -29,7 +29,7 @@ pub enum WireMessage {
     /// What one of this side's runs did, summarised (see `collab`).
     Activity { entry: Box<super::collab::ActivityEntry> },
     /// This side's daily usage totals on the shared project.
-    Usage { days: std::collections::BTreeMap<String, crate::agent::usage_store::DayUsage> },
+    Usage { days: std::collections::BTreeMap<String, crate::agent::models::usage_store::DayUsage> },
     /// Commits the partner lacks, as a base64 git bundle (no shared remote).
     GitBundle { base: Option<String>, head: String, data: String },
     /// This side's current HEAD, so the partner bundles only what's new.

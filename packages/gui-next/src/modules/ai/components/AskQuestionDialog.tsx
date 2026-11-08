@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, Stack, Typography, Chip } from '../../../ui'
 import { MessageQuestionLinear } from '../../../icons'
 import { useAgentStore } from '../store/agentStore'
+import { clearQuestionDraft, loadQuestionDraft, saveQuestionDraft } from '../../../lib/questionDraft'
 
 /** Backend-driven structured clarification — mirrors the same "ask user
  * with options" pattern used elsewhere: the model pauses mid-turn instead of
@@ -13,9 +14,14 @@ export function AskQuestionDialog() {
   // One selected-labels array per question, indexed the same as `pending.questions`.
   const [selections, setSelections] = useState<string[][]>([])
 
+  // A reload or a thread switch brings back what was already picked.
   useEffect(() => {
-    setSelections(pending ? pending.questions.map(() => []) : [])
+    if (!pending) return setSelections([])
+    setSelections(loadQuestionDraft(pending.requestId, pending.questions.length) ?? pending.questions.map(() => []))
   }, [pending])
+  useEffect(() => {
+    if (pending && selections.length === pending.questions.length) saveQuestionDraft(pending.requestId, selections)
+  }, [pending, selections])
 
   if (!pending) return null
 
@@ -71,7 +77,7 @@ export function AskQuestionDialog() {
                         gap: 1,
                         px: 1.5,
                         py: 1,
-                        borderRadius: 2,
+                        borderRadius: 1.6,
                         border: 1,
                         borderColor: selected ? 'primary.main' : 'divider',
                         bgcolor: selected ? 'action.selected' : 'transparent',
@@ -99,7 +105,10 @@ export function AskQuestionDialog() {
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button disabled={!canSubmit} onClick={() => void answerQuestion(selections)} variant="contained">
+        <Button disabled={!canSubmit} onClick={() => {
+            clearQuestionDraft(pending.requestId)
+            void answerQuestion(selections)
+          }} variant="contained">
           Submit
         </Button>
       </DialogActions>

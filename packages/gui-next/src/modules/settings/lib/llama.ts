@@ -61,6 +61,48 @@ export interface LlamaTuning {
   sleepIdleSeconds?: number | null
   /** Raw extra flags, whitespace-separated. */
   extraArgs?: string | null
+
+  // Placement
+  /** `--n-cpu-moe`: experts of the first N layers stay on the CPU. */
+  nCpuMoe?: number | null
+  /** `-ts`, e.g. "3,1". */
+  tensorSplit?: string | null
+  /** `-mg`. */
+  mainGpu?: number | null
+  /** `false` = `--no-mmap`. */
+  mmap?: boolean | null
+  // Throughput
+  batchSize?: number | null
+  ubatchSize?: number | null
+  parallel?: number | null
+  threadsBatch?: number | null
+  /** "on" | "off" | "auto". */
+  flashAttn?: string | null
+  // Sampling defaults
+  temperature?: number | null
+  topP?: number | null
+  topK?: number | null
+  minP?: number | null
+  repeatPenalty?: number | null
+  // The model
+  alias?: string | null
+  chatTemplate?: string | null
+  mmproj?: string | null
+  lora?: string | null
+  ropeScale?: number | null
+}
+
+/** What a GGUF file says about itself (`local_models::GgufInfo`). */
+export interface GgufInfo {
+  name: string | null
+  architecture: string | null
+  sizeLabel: string | null
+  contextLength: number | null
+  expertCount: number | null
+  fileType: number | null
+  format: string | null
+  formatNote: string | null
+  fileBytes: number
 }
 
 export interface LlamaEndpoint {

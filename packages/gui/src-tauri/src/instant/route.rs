@@ -200,7 +200,7 @@ fn describe(p: &ProjectRef) -> String {
 }
 
 pub async fn projects() -> Vec<ProjectRef> {
-    crate::agent::projects::cmd_list_projects()
+    crate::agent::sessions::projects::cmd_list_projects()
         .await
         .unwrap_or_default()
         .into_iter()

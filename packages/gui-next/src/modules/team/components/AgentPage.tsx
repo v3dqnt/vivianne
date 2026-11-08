@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Box, Stack, Typography, Button, ButtonBase, IconButton, InputBase, Collapse, Tooltip, CircularProgress, Orb, alpha, useTheme } from '../../../ui'
-import { ArrowLeftLinear, EditLinear, TrashLinear, SendLinear } from '../../../icons'
+import { Box, Stack, Typography, ButtonBase, IconButton, Collapse, Tooltip, CircularProgress, Orb, alpha, useTheme } from '../../../ui'
+import { ArrowLeftLinear, EditLinear, TrashLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import type { AgentMessage } from '../../ai/lib/types'
+import { ChatComposer } from '../../ai/components/ChatComposer'
 import { MessageList } from '../../ai/components/MessageList'
 import { Markdown } from '../../ai/components/Markdown'
 import { useTeamStore, type AgentRun, type TeamAgent } from '../store/teamStore'
-import { Avatar, Tag, SectionLabel, colorOf } from './bits'
+import { Avatar, Tag, SectionLabel, faceOf } from './bits'
 
 const EMPTY_RUNS: AgentRun[] = []
 
@@ -46,7 +47,7 @@ function StatusPill({ status }: { status: AgentRun['status'] }) {
       ) : (
         <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: c }} />
       )}
-      <Typography component="span" sx={{ fontSize: '0.6875rem', fontWeight: 600, lineHeight: '18px' }}>
+      <Typography component="span" sx={{ fontSize: '0.6875rem', fontWeight: 500, lineHeight: '18px' }}>
         {label}
       </Typography>
     </Stack>
@@ -86,9 +87,9 @@ export function AgentPage({ root, agent, onBack, onEdit }: { root: string; agent
         </ButtonBase>
 
         <Stack direction="row" sx={{ alignItems: 'flex-start', gap: 1.25 }}>
-          <Avatar name={agent.name} color={colorOf(agent)} size={34} />
+          <Avatar {...faceOf(agent)} size={34} />
           <Stack sx={{ flex: 1, minWidth: 0, gap: 0.5 }}>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
               {agent.name}
             </Typography>
             {agent.role && (
@@ -168,14 +169,14 @@ export function AgentPage({ root, agent, onBack, onEdit }: { root: string; agent
 function RunCard({ run, open, onToggle }: { run: AgentRun; open: boolean; onToggle: () => void }) {
   const live = run.status === 'running'
   return (
-    <Box sx={{ borderRadius: '10px', border: 1, borderColor: live ? 'primary.main' : 'divider', overflow: 'hidden' }}>
+    <Box sx={{ borderRadius: '8px', border: 1, borderColor: live ? 'primary.main' : 'divider', overflow: 'hidden' }}>
       <ButtonBase
         onClick={onToggle}
         aria-expanded={open}
         sx={{ display: 'flex', width: '100%', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', gap: 1, px: 1.25, py: 1, '&:hover': { bgcolor: 'action.hover' } }}
       >
         <Stack sx={{ flex: 1, minWidth: 0, gap: 0.25 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem' }} noWrap>
+          <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }} noWrap>
             {run.description || 'Task'}
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>
@@ -198,8 +199,6 @@ function RunBody({ run }: { run: AgentRun }) {
   const [messages, setMessages] = useState<AgentMessage[] | null>(null)
   const [showTask, setShowTask] = useState(false)
   const [draft, setDraft] = useState('')
-  const [sending, setSending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const live = run.status === 'running'
 
   // The transcript streams in while the run works; afterwards it is final.
@@ -217,21 +216,6 @@ function RunBody({ run }: { run: AgentRun }) {
       window.clearInterval(t)
     }
   }, [run.id, live])
-
-  const send = async () => {
-    const text = draft.trim()
-    if (!text) return
-    setSending(true)
-    setError(null)
-    try {
-      await comment(run, text)
-      setDraft('')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setSending(false)
-    }
-  }
 
   // The first message is the task itself, shown separately above.
   const transcript = messages ? (messages[0]?.type === 'user' ? messages.slice(1) : messages) : null
@@ -278,37 +262,14 @@ function RunBody({ run }: { run: AgentRun }) {
         </Stack>
       )}
 
-      <Stack direction="row" sx={{ gap: 0.75, alignItems: 'flex-end' }}>
-        <InputBase
-          multiline
-          maxRows={6}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              void send()
-            }
-          }}
-          placeholder={live ? 'Steer it — it reads this on its next step…' : 'Comment on this work — it will remember next time…'}
-          sx={{ flex: 1, fontSize: '0.8125rem', px: 1.25, py: 0.75, border: 1, borderColor: 'divider', borderRadius: '8px', '&.ui-focused': { borderColor: 'primary.main' } }}
-        />
-        <Button
-          variant="contained"
-          disableElevation
-          disabled={sending || !draft.trim()}
-          onClick={() => void send()}
-          sx={{ minWidth: 0, px: 1.25, height: 34, borderRadius: '8px' }}
-          aria-label={live ? 'Send steering comment' : 'Send comment'}
-        >
-          {sending ? <CircularProgress size={14} /> : <SendLinear size={14} color="currentColor" />}
-        </Button>
-      </Stack>
-      {error && (
-        <Typography variant="caption" color="error.main">
-          {error}
-        </Typography>
-      )}
+      <ChatComposer
+        value={draft}
+        onChange={setDraft}
+        onSubmit={(t) => comment(run, t.trim())}
+        attachments={false}
+        dense
+        placeholder={live ? 'Steer it — it reads this on its next step…' : 'Comment on this work — it will remember next time…'}
+      />
       {run.output && !live && (
         <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
           Its final report went back to the master.

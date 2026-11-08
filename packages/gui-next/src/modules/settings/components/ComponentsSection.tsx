@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Stack, Typography, Button, ButtonBase, LinearProgress, Divider } from '../../../ui'
+import { Stack, Typography, Button, ButtonBase, LinearProgress, Divider, Alert } from '../../../ui'
 import { TickCircleLinear, ImportLinear } from '../../../icons'
 import { call, on } from '../../../ipc'
 import { useOptionalComponentsStore } from '../store/optionalComponentsStore'
@@ -25,7 +25,7 @@ function Row({
     <Stack sx={{ gap: 1, py: 2 }}>
       <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
         <Stack>
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>
             {title}
           </Typography>
           <Typography variant="caption" color="text.secondary">
@@ -60,9 +60,9 @@ function Row({
         </Stack>
       )}
       {progress.error && (
-        <Typography variant="caption" color="error.main">
+        <Alert severity="error">
           {progress.error}
-        </Typography>
+        </Alert>
       )}
     </Stack>
   )

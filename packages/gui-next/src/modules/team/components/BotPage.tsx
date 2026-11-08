@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react'
-import { Box, Button, ButtonBase, IconButton, InputBase, Stack, Switch, TextField, Tooltip, Typography, alpha, useTheme } from '../../../ui'
+import { useEffect, useMemo, useState } from 'react'
+import { Box, Button, ButtonBase, IconButton, InputBase, Orb, Stack, Switch, TextField, Tooltip, Typography, alpha, useTheme } from '../../../ui'
 import { ArrowLeftLinear, EditLinear, TrashLinear } from '../../../icons'
 import { call } from '../../../ipc'
 import { useTeamStore, type TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey, type BotSettings, type Level, type Routine } from '../store/botsStore'
-import { Avatar, SectionLabel, colorOf } from './bits'
-import { ModelPicker } from './ModelPicker'
+import { LiveAvatar, SectionLabel, colorOf } from './bits'
+import { IDLE_LINES, STATE_LABEL, useBotFace } from './AgentFace'
+import { ModelPicker } from '../../ai/components/ModelPicker'
 import { ContactTab } from './ContactTab'
 
 type Tab = 'routines' | 'contact' | 'rules' | 'memory'
@@ -51,7 +52,7 @@ function Segmented({ value, onChange }: { value: Level; onChange: (v: Level) => 
             py: 0.375,
             borderRadius: '6px',
             fontSize: '0.6875rem',
-            fontWeight: 600,
+            fontWeight: 500,
             color: value === l.value ? 'text.primary' : 'text.secondary',
             bgcolor: value === l.value ? 'background.paper' : 'transparent',
             boxShadow: value === l.value ? 1 : 0,
@@ -69,7 +70,7 @@ function RoutineEditor({ initial, onSave, onCancel }: { initial: Partial<Routine
   const [err, setErr] = useState<string | null>(null)
   const preset = PRESETS.find((p) => p.cron === r.cron)
   return (
-    <Stack sx={{ gap: 1, p: 1.25, borderRadius: '10px', border: 1, borderColor: 'divider' }}>
+    <Stack sx={{ gap: 1, p: 1.5, borderRadius: '12px', border: 1, borderColor: 'divider' }}>
       <TextField size="small" label="Title" value={r.title} onChange={(e) => setR({ ...r, title: e.target.value })} placeholder="Morning standup" />
       <TextField
         size="small"
@@ -156,56 +157,80 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
 
   const state = st?.state ?? (settings?.paused ? 'paused' : 'idle')
   const color = colorOf(agent)
+  const face = useBotFace(root, agent.id)
+  const idleLine = useMemo(() => IDLE_LINES[Math.floor(Math.random() * IDLE_LINES.length)], [])
+  const caption =
+    state === 'working' && face !== 'listening' ? (st?.activity ?? STATE_LABEL[face]) : face === 'idle' ? idleLine : STATE_LABEL[face]
 
   return (
     <Stack sx={{ height: '100%', minHeight: 0 }}>
-      <Stack sx={{ p: 1.5, pb: 1, gap: 1.25, flexShrink: 0 }}>
-        <ButtonBase onClick={onBack} sx={{ alignSelf: 'flex-start', gap: 0.5, color: 'text.secondary', fontSize: '0.75rem', borderRadius: '6px', px: 0.5 }}>
+      <Stack sx={{ p: 2, pb: 1, gap: 2, flexShrink: 0 }}>
+        <ButtonBase onClick={onBack} sx={{ alignSelf: 'flex-start', gap: 0.5, color: 'text.secondary', fontSize: '0.75rem', borderRadius: '6px', px: 0.5, ml: -0.5 }}>
           <ArrowLeftLinear size={13} color="currentColor" />
           Team
         </ButtonBase>
-        <Stack direction="row" sx={{ alignItems: 'flex-start', gap: 1.25 }}>
-          <Avatar name={agent.name} color={color} size={38} />
-          <Stack sx={{ flex: 1, minWidth: 0, gap: 0.25 }}>
-            <Stack direction="row" sx={{ alignItems: 'baseline', gap: 0.75 }}>
-              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+        <Stack
+          direction="row"
+          sx={{
+            alignItems: 'flex-start',
+            gap: 2,
+            p: 2,
+            borderRadius: '12px',
+            border: 1,
+            borderColor: alpha(color, 0.24),
+            background: `linear-gradient(135deg, ${alpha(color, 0.12)} 0%, ${alpha(color, 0.03)} 100%)`,
+          }}
+        >
+          {/* A portrait, not a poster: the face says who this is at a glance
+              and leaves the name and job the room to be read. */}
+          <Box sx={{ flexShrink: 0 }}>
+            <LiveAvatar root={root} agent={agent} size={48} />
+          </Box>
+          <Stack sx={{ flex: 1, minWidth: 0, gap: 0.5 }}>
+            <Stack direction="row" sx={{ alignItems: 'baseline', gap: 1, minWidth: 0 }}>
+              <Typography noWrap sx={{ fontWeight: 600, fontSize: '1rem', lineHeight: 1.35 }}>
                 {agent.name}
               </Typography>
-              <Typography variant="caption" color="text.secondary">
+              <Typography variant="caption" color="text.secondary" noWrap>
                 @{agent.id}
               </Typography>
             </Stack>
-            <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.45 }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              title={agent.role || undefined}
+              sx={{ lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+            >
               {agent.role || 'No job described yet'}
             </Typography>
-            <Stack direction="row" sx={{ gap: 0.5, alignItems: 'center', mt: 0.25 }}>
-              <Box
-                sx={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: '50%',
-                  bgcolor: state === 'working' ? 'success.main' : state === 'paused' ? 'text.disabled' : 'text.secondary',
-                }}
-              />
-              <Typography variant="caption" color="text.secondary" noWrap>
-                {state === 'working' ? (st?.activity ?? 'Working') : state === 'paused' ? 'Paused' : 'Idle'}
+            <Stack
+              direction="row"
+              sx={{ gap: 1, alignItems: 'center', mt: 0.5, alignSelf: 'flex-start', minWidth: 0, maxWidth: '100%', px: 1.5, height: 24, borderRadius: '999px', bgcolor: alpha(color, 0.16) }}
+            >
+              {state === 'working' ? (
+                <Orb state="working" px={12} label="Working" />
+              ) : (
+                <Box sx={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, bgcolor: state === 'paused' ? 'text.disabled' : 'success.main' }} />
+              )}
+              <Typography variant="caption" sx={{ fontWeight: 500, minWidth: 0 }} noWrap>
+                {caption}
               </Typography>
             </Stack>
           </Stack>
           <Tooltip title="Edit name, job, standing rules, model and tools">
-            <IconButton size="small" onClick={onEdit}>
+            <IconButton size="small" onClick={onEdit} sx={{ mt: -0.5, mr: -0.5 }}>
               <EditLinear size={15} color="currentColor" />
             </IconButton>
           </Tooltip>
         </Stack>
-        <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+        <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0, minWidth: 40 }}>
             Model
           </Typography>
           {/* Takes effect from its next turn; one in progress keeps its model. */}
-          <ModelPicker value={agent.model} onChange={(model) => void saveAgent(root, { ...agent, model }, agent.id)} />
+          <ModelPicker mode="agent" variant="field" value={agent.model} onChange={(model) => void saveAgent(root, { ...agent, model }, agent.id)} />
         </Stack>
-        <Stack direction="row" sx={{ gap: 0.75, flexWrap: 'wrap' }}>
+        <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
           <Button size="small" variant="contained" onClick={() => setChannel(root, agent.id)} sx={{ borderRadius: '8px' }}>
             Message
           </Button>
@@ -219,6 +244,8 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
               {settings.paused ? 'Resume' : 'Pause'}
             </Button>
           )}
+          {/* Destructive, so it sits apart from the everyday actions. */}
+          <Box sx={{ flex: 1 }} />
           <Tooltip title="Forget its conversation, messages and memory. Its definition stays.">
             <Button
               size="small"
@@ -237,16 +264,16 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
             </Button>
           </Tooltip>
         </Stack>
-        <Stack direction="row" sx={{ gap: 0.25, borderBottom: 1, borderColor: 'divider' }}>
+        <Stack direction="row" sx={{ gap: 0.5, borderBottom: 1, borderColor: 'divider' }}>
           {(['routines', 'contact', 'rules', 'memory'] as Tab[]).map((t) => (
             <ButtonBase
               key={t}
               onClick={() => setTab(t)}
               sx={{
-                px: 1.25,
-                py: 0.75,
+                px: 1.5,
+                py: 1,
                 fontSize: '0.75rem',
-                fontWeight: 600,
+                fontWeight: 500,
                 textTransform: 'capitalize',
                 color: tab === t ? 'text.primary' : 'text.secondary',
                 borderBottom: 2,
@@ -261,17 +288,17 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
       </Stack>
 
       {(
-        <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: 1.5, pb: 2 }}>
+        <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: 2, pb: 2 }}>
           {tab === 'routines' && (
-            <Stack sx={{ gap: 1.25, pt: 0.5 }}>
+            <Stack sx={{ gap: 1.5, pt: 1 }}>
               <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.5 }}>
                 Work {agent.name} does on a schedule, while you're elsewhere (the app keeps running in the tray). Results are
                 posted in the room. Up to 50.
               </Typography>
               {routines.map((r) => (
-                <Stack key={r.id} sx={{ gap: 0.5, p: 1.25, borderRadius: '10px', border: 1, borderColor: 'divider' }}>
+                <Stack key={r.id} sx={{ gap: 1, p: 1.5, borderRadius: '12px', border: 1, borderColor: 'divider' }}>
                   <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
-                    <Typography variant="body2" sx={{ fontWeight: 600, flex: 1, minWidth: 0 }} noWrap>
+                    <Typography variant="body2" sx={{ fontWeight: 500, flex: 1, minWidth: 0 }} noWrap>
                       {r.title}
                     </Typography>
                     <Switch
@@ -324,7 +351,7 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
           {tab === 'contact' && <ContactTab root={root} agent={agent} />}
 
           {tab === 'rules' && settings && (
-            <Stack sx={{ gap: 1.5, pt: 0.5 }}>
+            <Stack sx={{ gap: 1.5, pt: 1 }}>
               <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.5 }}>
                 What {agent.name} may do on its own. “If I asked” means only when your message asked for it; “Hand to me” means it
                 tells you what to do instead. Reading files and talking are always allowed.
@@ -332,7 +359,7 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
               {RULES.map((r) => (
                 <Stack key={r.key} direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
                   <Stack sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem' }}>
+                    <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }}>
                       {r.label}
                     </Typography>
                     <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>
@@ -342,10 +369,10 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
                   <Segmented value={settings.rules[r.key]} onChange={(v) => void saveSettings({ ...settings, rules: { ...settings.rules, [r.key]: v } })} />
                 </Stack>
               ))}
-              <Box sx={{ mt: 1, p: 1.25, borderRadius: '10px', bgcolor: alpha(theme.palette.text.primary, 0.04) }}>
+              <Box sx={{ mt: 1, p: 1.5, borderRadius: '12px', bgcolor: alpha(theme.palette.text.primary, 0.04) }}>
                 <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
                   <Stack sx={{ flex: 1 }}>
-                    <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8125rem' }}>
+                    <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }}>
                       Always on
                     </Typography>
                     <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.45 }}>
@@ -376,7 +403,7 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
           )}
 
           {tab === 'memory' && memory !== null && (
-            <Stack sx={{ gap: 1, pt: 0.5 }}>
+            <Stack sx={{ gap: 1, pt: 1 }}>
               <SectionLabel>What {agent.name} remembers</SectionLabel>
               <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.5 }}>
                 Its own notes, which it keeps as it works. Edit or delete anything; it reads this at the start of every turn.

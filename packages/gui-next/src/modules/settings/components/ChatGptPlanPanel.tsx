@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Box, Button, ButtonBase, CircularProgress, Stack, Typography } from '../../../ui'
+import { Box, Button, ButtonBase, CircularProgress, Stack, Typography, Alert } from '../../../ui'
 import { call } from '../../../ipc'
 import { useModelStore } from '../../ai/store/modelStore'
 
@@ -63,7 +63,7 @@ export function ChatGptPlanPanel({ onChange }: { onChange?: (status: ChatGptStat
   return (
     <Stack sx={{ gap: 2, maxWidth: 480 }}>
       <Stack sx={{ gap: 0.5 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
           ChatGPT plan
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.55 }}>
@@ -73,10 +73,10 @@ export function ChatGptPlanPanel({ onChange }: { onChange?: (status: ChatGptStat
       </Stack>
 
       {connected ? (
-        <Stack sx={{ gap: 1.25, p: 1.5, border: 1, borderColor: 'divider', borderRadius: '12px' }}>
+        <Stack sx={{ gap: 1.25, p: 1.5, border: 1, borderColor: 'divider', borderRadius: '8px' }}>
           <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
             <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'success.main' }} />
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
               Using ChatGPT plan
             </Typography>
             {status?.email && (
@@ -112,13 +112,13 @@ export function ChatGptPlanPanel({ onChange }: { onChange?: (status: ChatGptStat
             sx={{
               alignSelf: 'flex-start',
               gap: 1,
-              height: 40,
+              height: 32,
               px: 2,
-              borderRadius: '999px',
+              borderRadius: '6px',
               bgcolor: 'text.primary',
               color: 'background.paper',
-              fontSize: '0.875rem',
-              fontWeight: 600,
+              fontSize: '0.8125rem',
+              fontWeight: 500,
               opacity: busy ? 0.7 : 1,
               '&:hover': { opacity: 0.88 },
             }}
@@ -135,9 +135,9 @@ export function ChatGptPlanPanel({ onChange }: { onChange?: (status: ChatGptStat
       )}
 
       {error && (
-        <Typography variant="caption" color="error.main" sx={{ lineHeight: 1.5 }}>
+        <Alert severity="error">
           {error}
-        </Typography>
+        </Alert>
       )}
     </Stack>
   )

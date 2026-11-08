@@ -1,7 +1,12 @@
+import type { FaceStyle } from './faceStore'
 import { create } from 'zustand'
 import { listen } from '@tauri-apps/api/event'
 import { call, hasTauri } from '../../../ipc'
 import type { SubagentModelOverride } from '../../settings/lib/subagentProfiles'
+
+/** The channel a project's lead conversation shows in, when its lead is the
+ * project's master (a project made as a company). */
+export const LEAD_CHANNEL = '__lead'
 
 /** Mirrors `agent::team::TeamAgent` (`rename_all = "camelCase"`). */
 export interface TeamAgent {
@@ -10,11 +15,15 @@ export interface TeamAgent {
   role: string
   status: 'active' | 'proposed'
   reportsTo: string | null
+  /** Promoted to lead its branch of the tree. */
+  lead?: boolean
   model: SubagentModelOverride | null
   /** `null` = full tool access. */
   allowedTools: string[] | null
   owns: string[]
   color: string | null
+  /** The robot head's outline, trim and LED colour. */
+  face?: FaceStyle | null
   created: string | null
   /** `user` or `master`. */
   proposedBy: string | null

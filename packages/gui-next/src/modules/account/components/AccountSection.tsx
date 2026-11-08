@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Stack, Typography, TextField, Button, CircularProgress, Divider, Box } from '../../../ui'
+import { Stack, Typography, TextField, Button, CircularProgress, Divider, Box, Alert } from '../../../ui'
 import { UserOctagonLinear, Link2Linear } from '../../../icons'
 import { useAccountStore } from '../store/accountStore'
 
@@ -42,7 +42,7 @@ function SignedIn() {
           <UserOctagonLinear size={20} color="currentColor" />
         </Box>
         <Stack sx={{ minWidth: 0 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>
+          <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
             {user?.displayName || user?.email || 'Signed in'}
           </Typography>
           {user?.email && (
@@ -56,7 +56,7 @@ function SignedIn() {
       <Divider />
 
       <Stack sx={{ gap: 1 }}>
-        <Typography variant="caption" sx={{ fontWeight: 600 }}>
+        <Typography variant="caption" sx={{ fontWeight: 500 }}>
           Display name
         </Typography>
         <Stack direction="row" sx={{ gap: 1 }}>
@@ -85,9 +85,9 @@ function SignedIn() {
           </Typography>
         )}
         {error && (
-          <Typography variant="caption" color="error.main">
+          <Alert severity="error">
             {error}
-          </Typography>
+          </Alert>
         )}
       </Stack>
 
@@ -145,9 +145,9 @@ function SignedOut() {
         </Typography>
       )}
       {error && (
-        <Typography variant="caption" color="error.main">
+        <Alert severity="error">
           {error}
-        </Typography>
+        </Alert>
       )}
     </Stack>
   )

@@ -24,7 +24,7 @@ export function ComputerUseBanner() {
       <Box sx={{ display: 'flex', color: 'warning.contrastText' }}>
         <MonitorLinear size={13} color="currentColor" />
       </Box>
-      <Typography variant="caption" sx={{ color: 'warning.contrastText', fontWeight: 600 }}>
+      <Typography variant="caption" sx={{ color: 'warning.contrastText', fontWeight: 500 }}>
         Vivianne is controlling your screen
       </Typography>
     </Stack>

@@ -69,6 +69,31 @@ fn default_schema() -> serde_json::Value {
 lazy_static::lazy_static! {
     static ref CONNECTIONS: RwLock<HashMap<String, Arc<McpConnection>>> = RwLock::new(HashMap::new());
     static ref CONFIGS: RwLock<HashMap<String, McpServerConfig>> = RwLock::new(HashMap::new());
+    /// The connected servers' names, readable without awaiting, so a tool call can be routed from its public name.
+    static ref SERVER_NAMES: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+    /// Each server's last tool list that was read successfully: a failed re-list keeps these instead of the tools vanishing.
+    static ref LAST_TOOLS: RwLock<HashMap<String, Vec<McpToolDef>>> = RwLock::new(HashMap::new());
+}
+
+/// The server and the tool a public name `mcp__<server>__<tool>` stands for, given the servers there are. The longest server name
+/// that fits wins, so a server called `foo__bar` gets `mcp__foo__bar__baz` rather than a server `foo` being asked for `bar__baz`.
+pub fn split_public_name<'a>(name: &str, servers: impl IntoIterator<Item = &'a str>) -> Option<(String, String)> {
+    let rest = name.strip_prefix("mcp__")?;
+    servers
+        .into_iter()
+        .filter(|s| rest.len() > s.len() + 2 && rest.starts_with(*s) && rest[s.len()..].starts_with("__"))
+        .max_by_key(|s| s.len())
+        .map(|s| (s.to_string(), rest[s.len() + 2..].to_string()))
+}
+
+/// Route a tool call by its public name to a connected server.
+pub fn route(name: &str) -> Option<(String, String)> {
+    let names = SERVER_NAMES.read().unwrap_or_else(|e| e.into_inner());
+    split_public_name(name, names.iter().map(String::as_str))
+}
+
+fn remember_names(names: Vec<String>) {
+    *SERVER_NAMES.write().unwrap_or_else(|e| e.into_inner()) = names;
 }
 
 /// `~/.viv/agent/mcp_servers.json` — every connected server's config, so it
@@ -78,7 +103,7 @@ lazy_static::lazy_static! {
 /// known, accepted limitation (matching this app's credentials.json
 /// plaintext-fallback precedent) rather than a half-built secrets store.
 fn configs_path() -> Option<std::path::PathBuf> {
-    crate::agent::paths::viv_agent_dir().ok().map(|d| d.join("mcp_servers.json"))
+    crate::agent::system::paths::viv_agent_dir().ok().map(|d| d.join("mcp_servers.json"))
 }
 
 async fn persist_configs() {
@@ -105,7 +130,9 @@ pub async fn add_server(config: McpServerConfig) -> Result<Vec<McpToolDef>, Stri
     let connection = McpConnection::connect(&config).await?;
     let tools = connection.list_tools().await?;
     CONNECTIONS.write().await.insert(config.name.clone(), Arc::new(connection));
+    LAST_TOOLS.write().await.insert(config.name.clone(), tools.clone());
     CONFIGS.write().await.insert(config.name.clone(), config);
+    remember_names(CONFIGS.read().await.keys().cloned().collect());
     persist_configs().await;
     Ok(tools)
 }
@@ -116,6 +143,8 @@ pub async fn remove_server(name: &str) -> bool {
         conn.close().await;
     }
     let removed = CONFIGS.write().await.remove(name).is_some();
+    LAST_TOOLS.write().await.remove(name);
+    remember_names(CONFIGS.read().await.keys().cloned().collect());
     if removed {
         persist_configs().await;
     }
@@ -132,10 +161,19 @@ pub async fn list_all_tools() -> Vec<(String, McpToolDef)> {
     let mut out = Vec::new();
     let connections = CONNECTIONS.read().await;
     for (server, conn) in connections.iter() {
-        if let Ok(tools) = conn.list_tools().await {
-            for tool in tools {
-                out.push((server.clone(), tool));
+        // A failed re-list keeps the server's last good tools: a network blip shouldn't change the model's tools mid-conversation.
+        let tools = match conn.list_tools().await {
+            Ok(tools) => {
+                LAST_TOOLS.write().await.insert(server.clone(), tools.clone());
+                tools
             }
+            Err(e) => {
+                log::warn!("mcp: couldn't re-list '{server}' ({e}); keeping its last tool list");
+                LAST_TOOLS.read().await.get(server).cloned().unwrap_or_default()
+            }
+        };
+        for tool in tools {
+            out.push((server.clone(), tool));
         }
     }
     out
@@ -148,6 +186,22 @@ pub async fn call_tool(server_name: &str, tool_name: &str, args: serde_json::Val
     };
     let Some(conn) = conn else { return Err(format!("MCP server '{server_name}' is not connected")) };
     conn.call_tool(tool_name, args).await
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::split_public_name;
+
+    #[test]
+    fn a_public_name_routes_to_the_longest_server_that_fits() {
+        let servers = ["foo", "foo__bar", "linear"];
+        assert_eq!(split_public_name("mcp__foo__bar__baz", servers), Some(("foo__bar".into(), "baz".into())));
+        assert_eq!(split_public_name("mcp__foo__qux", servers), Some(("foo".into(), "qux".into())));
+        assert_eq!(split_public_name("mcp__linear__create_issue", servers), Some(("linear".into(), "create_issue".into())));
+        assert_eq!(split_public_name("mcp__unknown__x", servers), None);
+        assert_eq!(split_public_name("mcp__linear__", servers), None);
+        assert_eq!(split_public_name("read", servers), None);
+    }
 }
 
 /// Reconnect every server persisted from a previous run (called at startup).

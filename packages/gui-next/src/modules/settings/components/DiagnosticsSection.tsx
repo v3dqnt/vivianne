@@ -93,7 +93,7 @@ export function DiagnosticsSection() {
   return (
     <Stack sx={{ gap: 2 }}>
       <Stack sx={{ gap: 0.25 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
           Diagnostics
         </Typography>
         <Typography variant="caption" color="text.secondary">
@@ -136,7 +136,7 @@ export function DiagnosticsSection() {
       <Divider />
 
       <Stack sx={{ gap: 0.75 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
           Recorded locally
         </Typography>
         <Stack direction="row" sx={{ gap: 3, flexWrap: 'wrap' }}>
@@ -144,7 +144,7 @@ export function DiagnosticsSection() {
             <Typography variant="caption" color="text.secondary">
               Events
             </Typography>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
               {summary?.eventCount ?? 0}
             </Typography>
           </Stack>
@@ -158,7 +158,7 @@ export function DiagnosticsSection() {
             <Typography variant="caption" color="text.secondary">
               Crashes
             </Typography>
-            <Typography variant="body2" sx={{ fontWeight: 600, color: summary?.crashes.length ? 'error.main' : undefined }}>
+            <Typography variant="body2" sx={{ fontWeight: 500, color: summary?.crashes.length ? 'error.main' : undefined }}>
               {summary?.crashes.length ?? 0}
             </Typography>
           </Stack>
@@ -185,9 +185,9 @@ export function DiagnosticsSection() {
               <Box
                 key={c.ts}
                 onClick={() => setExpandedCrash(expandedCrash === c.ts ? null : c.ts)}
-                sx={{ border: 1, borderColor: 'divider', borderRadius: 2, p: 1, cursor: 'pointer' }}
+                sx={{ border: 1, borderColor: 'divider', borderRadius: 1.6, p: 1, cursor: 'pointer' }}
               >
-                <Typography variant="caption" sx={{ fontWeight: 600, display: 'block' }} noWrap>
+                <Typography variant="caption" sx={{ fontWeight: 500, display: 'block' }} noWrap>
                   {c.message}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
@@ -200,7 +200,7 @@ export function DiagnosticsSection() {
                       mt: 1,
                       p: 1,
                       bgcolor: 'action.hover',
-                      borderRadius: 1,
+                      borderRadius: 0.8,
                       fontSize: '0.6875rem',
                       overflowX: 'auto',
                       maxHeight: 200,
@@ -225,7 +225,7 @@ export function DiagnosticsSection() {
 
       <Stack sx={{ gap: 1 }}>
         <Stack sx={{ gap: 0.25 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
             Report a bug
           </Typography>
           <Typography variant="caption" color="text.secondary">

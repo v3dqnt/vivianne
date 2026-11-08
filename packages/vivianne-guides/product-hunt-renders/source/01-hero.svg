@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1600" height="1000" viewBox="0 0 1600 1000">
+  <defs>
+    <style>
+      @font-face { font-family: 'Satoshi'; src: url('../assets/Satoshi-Regular.woff2') format('woff2'); font-weight: 400; }
+      @font-face { font-family: 'Satoshi'; src: url('../assets/Satoshi-Medium.woff2') format('woff2'); font-weight: 500; }
+      @font-face { font-family: 'Satoshi'; src: url('../assets/Satoshi-Black.woff2') format('woff2'); font-weight: 900; }
+      .brand { font-family: 'Satoshi', sans-serif; font-size: 25px; font-weight: 500; letter-spacing: -0.7px; fill: #111214; }
+      .headline { font-family: 'Satoshi', sans-serif; font-size: 83px; font-weight: 900; letter-spacing: -4.1px; fill: #111214; }
+      .caption { font-family: 'Satoshi', sans-serif; font-size: 26px; font-weight: 400; letter-spacing: -0.7px; fill: #555754; }
+      .micro { font-family: 'Satoshi', sans-serif; font-size: 18px; font-weight: 500; letter-spacing: 1.2px; fill: #555754; }
+    </style>
+    <filter id="shadow" x="-15%" y="-15%" width="140%" height="145%"><feDropShadow dx="0" dy="22" stdDeviation="19" flood-color="#171816" flood-opacity="0.19"/></filter>
+    <clipPath id="appClip"><rect x="730" y="164" width="810" height="728" rx="30"/></clipPath>
+  </defs>
+  <rect width="1600" height="1000" fill="#F3F0E9"/>
+  <circle cx="612" cy="942" r="210" fill="#E7E4DD"/>
+  <rect x="82" y="80" width="52" height="52" rx="12" fill="#0D0E10"/>
+  <image href="../assets/vivianne-logo.svg" x="82" y="80" width="52" height="52"/>
+  <text class="brand" x="152" y="114">Vivianne</text>
+  <text class="micro" x="84" y="224">AN AGENT HARNESS</text>
+  <text class="headline" x="82" y="350">The agent</text>
+  <text class="headline" x="82" y="440">harness for</text>
+  <text class="headline" x="82" y="530">code, math,</text>
+  <text class="headline" x="82" y="620">and science.</text>
+  <text class="caption" x="84" y="718">A focused workspace for ambitious</text>
+  <text class="caption" x="84" y="752">technical work.</text>
+  <g filter="url(#shadow)">
+    <rect x="714" y="148" width="842" height="760" rx="40" fill="#252625"/>
+    <rect x="730" y="164" width="810" height="728" rx="30" fill="#111214"/>
+    <image href="../assets/vivianne-app.png" x="730" y="164" width="810" height="728" preserveAspectRatio="xMidYMid slice" clip-path="url(#appClip)"/>
+    <rect x="730" y="164" width="810" height="728" rx="30" fill="none" stroke="#0A0B0B" stroke-opacity="0.6" stroke-width="2"/>
+  </g>
+  <path d="M82 894H602" stroke="#C9C5BD" stroke-width="2"/>
+  <text class="micro" x="82" y="928">VIVIANNE / 01</text>
+</svg>

@@ -2,7 +2,7 @@ import { createContext, useContext, type ReactNode } from 'react'
 import { Global, ThemeProvider as EmotionThemeProvider } from '@emotion/react'
 import { Tooltip as RadixTooltip } from 'radix-ui'
 import type { Theme } from './theme'
-import { resolve, type SxProps } from './sx'
+import { resolve, WEIGHT_NUDGE, type SxProps } from './sx'
 
 const ThemeContext = createContext<Theme | null>(null)
 
@@ -63,12 +63,12 @@ export function CssBaseline({ extra }: { extra?: Record<string, unknown> }) {
             // one-off sx sizes), so this one value is the app's text scale.
             // 15px sits a step under the browser's 16: denser, while spacing
             // (px-based) keeps its breathing room.
-            fontSize: '15px',
+            fontSize: '1rem',
             colorScheme: p.mode,
           },
           '*, *::before, *::after': { boxSizing: 'inherit' },
           // Emphasis inside content (chat, docs) only; chrome never goes bold.
-          'strong, b': { fontWeight: 600 },
+          'strong, b': { fontWeight: 600 + WEIGHT_NUDGE },
           body: {
             margin: 0,
             color: p.text.primary,

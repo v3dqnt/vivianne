@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Box, Button, Popover, Slider, Stack, Typography, alpha } from '../../../ui'
-import { Setting2Linear } from '../../../icons'
 import { THINKING_LEVELS, type ThinkingLevel } from '../lib/types'
 import { useModelStore } from '../store/modelStore'
+import { TOOLBAR_PILL } from '../lib/toolbarPill'
 
 /**
  * Copy for each stop on the slider.
@@ -47,22 +47,10 @@ export function ThinkingLevelControl() {
         onClick={(e) => setAnchor(e.currentTarget)}
         title={`Thinking: ${current.label}`}
         aria-label={`Thinking level: ${current.label}`}
-        endIcon={<Setting2Linear size={12} color="currentColor" />}
-        sx={{
-          textTransform: 'none',
-          fontSize: '0.8125rem',
-          fontWeight: 500,
-          color: 'text.secondary',
-          minWidth: 0,
-          borderRadius: '8px',
-          px: 1,
-          py: 0.375,
-          '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
-        }}
+        sx={TOOLBAR_PILL}
       >
-        <Box component="span" className="cq-label">
-          {current.label}
-        </Box>
+        {/* Always shown: the level in use must be readable at any width. */}
+        <Box component="span">{current.label}</Box>
       </Button>
       <Popover
         open={!!anchor}
@@ -70,17 +58,17 @@ export function ThinkingLevelControl() {
         onClose={() => setAnchor(null)}
         anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
         transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        slotProps={{ paper: { sx: { width: 268, maxWidth: '92vw', borderRadius: '14px' } } }}
+        slotProps={{ paper: { sx: { width: 268, maxWidth: '92vw', borderRadius: '12px' } } }}
       >
         <Box sx={{ px: 2, pt: 1.75, pb: 1.75 }}>
           {/* The chosen level is stated as text rather than left to a tooltip
               that only appears mid-drag — previously the one thing you needed
               in order to choose was the one thing you could not see. */}
           <Stack direction="row" sx={{ alignItems: 'baseline', justifyContent: 'space-between', mb: 0.25 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, letterSpacing: 0.3 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, letterSpacing: 0.3 }}>
               Thinking level
             </Typography>
-            <Typography variant="body2" sx={{ fontWeight: 700, color: 'primary.main', lineHeight: 1 }}>
+            <Typography variant="body2" sx={{ fontWeight: 500, color: 'primary.main', lineHeight: 1 }}>
               {current.label}
             </Typography>
           </Stack>

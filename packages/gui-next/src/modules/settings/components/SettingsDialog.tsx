@@ -1,13 +1,16 @@
+import { lazy, Suspense } from 'react'
+import { INSTANT_ENABLED } from '../../instant/enabled'
 import { Dialog, Box, Divider, Stack, Typography, IconButton, ButtonBase, Tooltip, useTheme } from '../../../ui'
+import { DIALOG_RADIUS } from '../../../theme'
 import {
   CloseCircleLinear,
   KeyLinear,
+  LockLinear,
   CpuLinear,
   FlashLinear,
   Link2Linear,
   ArchiveBookLinear,
   MagicpenLinear,
-  ClockLinear,
   ColorSwatchLinear,
   LayoutLinear,
   UserOctagonLinear,
@@ -17,25 +20,24 @@ import {
   GlobalLinear,
   ShieldTickLinear,
 } from '../../../icons'
-import { ProvidersSection } from './ProvidersSection'
-import { LocalModelsSection } from './LocalModelsSection'
-import { ModsSection } from './ModsSection'
-import { BrowserSection } from './BrowserSection'
-import { SubagentsSection } from './SubagentsSection'
-import { ConnectionsSection } from './ConnectionsSection'
-import { MemorySection } from './MemorySection'
-import { DiagnosticsSection } from './DiagnosticsSection'
-import { UsageSection } from './UsageSection'
-import { SkillsSection } from './SkillsSection'
-import { AutomationsSection } from './AutomationsSection'
-import { ThemesSection } from './ThemesSection'
-import { LayoutSection } from './LayoutSection'
-import { ComponentsSection } from './ComponentsSection'
-import { UpdatesSection } from './UpdatesSection'
-import { InstantSection } from './InstantSection'
-import { ReliabilitySection } from './ReliabilitySection'
-import { WebSearchSection } from './WebSearchSection'
-import { AccountSection } from '../../account/components/AccountSection'
+const ProvidersSection = lazy(() => import('./ProvidersSection').then((m) => ({ default: m.ProvidersSection })))
+const LocalModelsSection = lazy(() => import('./LocalModelsSection').then((m) => ({ default: m.LocalModelsSection })))
+const ModsSection = lazy(() => import('./ModsSection').then((m) => ({ default: m.ModsSection })))
+const VaultSection = lazy(() => import('./VaultSection').then((m) => ({ default: m.VaultSection })))
+const BrowserSection = lazy(() => import('./BrowserSection').then((m) => ({ default: m.BrowserSection })))
+const ConnectionsSection = lazy(() => import('./ConnectionsSection').then((m) => ({ default: m.ConnectionsSection })))
+const MemorySection = lazy(() => import('./MemorySection').then((m) => ({ default: m.MemorySection })))
+const DiagnosticsSection = lazy(() => import('./DiagnosticsSection').then((m) => ({ default: m.DiagnosticsSection })))
+const UsageSection = lazy(() => import('./UsageSection').then((m) => ({ default: m.UsageSection })))
+const SkillsSection = lazy(() => import('./SkillsSection').then((m) => ({ default: m.SkillsSection })))
+const ThemesSection = lazy(() => import('./ThemesSection').then((m) => ({ default: m.ThemesSection })))
+const LayoutSection = lazy(() => import('./LayoutSection').then((m) => ({ default: m.LayoutSection })))
+const ComponentsSection = lazy(() => import('./ComponentsSection').then((m) => ({ default: m.ComponentsSection })))
+const UpdatesSection = lazy(() => import('./UpdatesSection').then((m) => ({ default: m.UpdatesSection })))
+const InstantSection = lazy(() => import('./InstantSection').then((m) => ({ default: m.InstantSection })))
+const ReliabilitySection = lazy(() => import('./ReliabilitySection').then((m) => ({ default: m.ReliabilitySection })))
+const WebSearchSection = lazy(() => import('./WebSearchSection').then((m) => ({ default: m.WebSearchSection })))
+const AccountSection = lazy(() => import('../../account/components/AccountSection').then((m) => ({ default: m.AccountSection })))
 import { useSettingsUi, type SettingsSection } from '../store/uiStore'
 
 interface SectionDef {
@@ -69,13 +71,12 @@ const GROUPS: { label: string; items: SectionDef[] }[] = [
     label: 'Agent',
     items: [
       { id: 'mods', label: 'Mods', icon: FlashLinear },
-      { id: 'subagents', label: 'Subagents', icon: UserOctagonLinear },
       { id: 'connections', label: 'Connections', icon: Link2Linear },
       { id: 'websearch', label: 'Web & browser', icon: GlobalLinear },
       { id: 'memory', label: 'Memory', icon: ArchiveBookLinear },
+      { id: 'vault', label: 'Vault', icon: LockLinear },
       { id: 'skills', label: 'Skills', icon: MagicpenLinear },
-      { id: 'automations', label: 'Automations', icon: ClockLinear },
-      { id: 'instant', label: 'Viv Instant', icon: MicrophoneLinear },
+      ...(INSTANT_ENABLED ? [{ id: 'instant' as const, label: 'Viv Instant', icon: MicrophoneLinear }] : []),
     ],
   },
   {
@@ -102,20 +103,21 @@ export function SettingsDialog() {
     <Dialog
       open={open}
       onClose={closeSettings}
-      maxWidth="md"
+      maxWidth="lg"
       fullWidth
       slotProps={{
         // Solid, not glass: Settings is read closely, and text over a blurred
         // window behind it is harder to read than text on a plain surface.
         paper: {
           sx: {
-            height: 660,
+            // Big enough for a section to show its whole form without scrolling.
+            height: 'min(820px, 88vh)',
             overflow: 'hidden',
             backgroundImage: 'none',
             bgcolor: 'background.paper',
             border: 0,
             borderColor: 'divider',
-            borderRadius: `${theme.radius['3xl']}px`,
+            borderRadius: `${DIALOG_RADIUS}px`,
             boxShadow: `${theme.elevation.ring}, ${theme.elevation.xl}`,
           },
         },
@@ -124,7 +126,7 @@ export function SettingsDialog() {
       <Stack direction="row" sx={{ height: '100%', minHeight: 0 }}>
         <Stack
           sx={{
-            width: 220,
+            width: 232,
             flexShrink: 0,
             borderRight: 1,
             borderColor: 'divider',
@@ -135,7 +137,7 @@ export function SettingsDialog() {
             overflowY: 'auto',
           }}
         >
-          <Typography variant="subtitle1" sx={{ fontWeight: 700, px: 1 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600, px: 1 }}>
             Settings
           </Typography>
           {GROUPS.map((group) => (
@@ -153,10 +155,10 @@ export function SettingsDialog() {
                   sx={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 1.25,
-                    px: 1.5,
-                    py: 0.875,
-                    borderRadius: 1.5,
+                    gap: 1,
+                    height: 28,
+                    px: 1,
+                    borderRadius: '6px',
                     justifyContent: 'flex-start',
                     fontSize: '0.8125rem',
                     fontWeight: 500,
@@ -167,7 +169,7 @@ export function SettingsDialog() {
                     '&:active': { transform: 'scale(0.98)' },
                   }}
                 >
-                  <s.icon size={15} color="currentColor" />
+                  <s.icon size={14} color="currentColor" />
                   {s.label}
                 </ButtonBase>
               ))}
@@ -178,9 +180,9 @@ export function SettingsDialog() {
         <Stack sx={{ flex: 1, minWidth: 0, height: '100%', minHeight: 0 }}>
           <Stack
             direction="row"
-            sx={{ alignItems: 'center', justifyContent: 'space-between', px: 3.5, py: 1.75, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}
+            sx={{ alignItems: 'center', justifyContent: 'space-between', px: 3, py: 1.5, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}
           >
-            <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'text.secondary' }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 500, color: 'text.secondary' }}>
               {activeLabel}
             </Typography>
             <Tooltip title="Close">
@@ -198,16 +200,18 @@ export function SettingsDialog() {
             </Tooltip>
           </Stack>
 
-          <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 3.5, py: 3 }}>
+          <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 3, py: 2 }}>
             {/* Providers is a master-detail layout (list + form) that wants
                 the full width; every other section is a single settings
                 column, which reads better constrained. */}
-            <Box sx={section === 'providers' ? { height: '100%' } : { maxWidth: 640 }}>
+            <Box sx={section === 'providers' ? { height: '100%' } : { maxWidth: 860 }}>
+              {/* Each section loads the first time it's opened. */}
+              <Suspense fallback={null}>
               {(section === 'account' || section === 'usage') && (
                 <Stack sx={{ gap: 4 }}>
                   <AccountSection />
                   <Box>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.25 }}>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 500, mb: 0.25 }}>
                       Usage
                     </Typography>
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
@@ -221,13 +225,12 @@ export function SettingsDialog() {
               {section === 'reliability' && <ReliabilitySection />}
               {section === 'local' && <LocalModelsSection />}
               {section === 'mods' && <ModsSection />}
-              {section === 'subagents' && <SubagentsSection />}
               {/* Manual MCP servers live under Connections → Advanced; 'mcp' still opens it. */}
               {(section === 'connections' || section === 'mcp') && <ConnectionsSection />}
               {section === 'memory' && <MemorySection />}
+              {section === 'vault' && <VaultSection />}
               {section === 'diagnostics' && <DiagnosticsSection />}
               {section === 'skills' && <SkillsSection />}
-              {section === 'automations' && <AutomationsSection />}
               {section === 'instant' && <InstantSection />}
               {/* One tab for the web: how the agent searches it, and the
                   user's own browser it can work in. 'browser' still opens it. */}
@@ -242,6 +245,7 @@ export function SettingsDialog() {
               {section === 'layout' && <LayoutSection />}
               {section === 'components' && <ComponentsSection />}
               {section === 'updates' && <UpdatesSection />}
+              </Suspense>
             </Box>
           </Box>
         </Stack>

@@ -57,13 +57,13 @@ export function QueuePanel() {
             gap: 1,
             px: 1.25,
             py: 0.625,
-            borderRadius: 2,
+            borderRadius: 1.6,
             bgcolor: 'action.hover',
             border: 1,
             borderColor: 'divider',
           }}
         >
-          <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.6875rem', fontWeight: 600, flexShrink: 0 }}>
+          <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.6875rem', fontWeight: 500, flexShrink: 0 }}>
             Queued
           </Typography>
           <Typography variant="caption" noWrap title={row.text} sx={{ flex: 1, minWidth: 0, color: 'text.primary' }}>
@@ -80,7 +80,7 @@ export function QueuePanel() {
       {isBusy && (
         <Stack
           direction="row"
-          sx={{ alignItems: 'center', gap: 1, px: 1.25, py: 0.375, borderRadius: 2, border: 1, borderColor: 'divider' }}
+          sx={{ alignItems: 'center', gap: 1, px: 1.25, py: 0.375, borderRadius: 1.6, border: 1, borderColor: 'divider' }}
         >
           <InputBase
             fullWidth

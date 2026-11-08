@@ -16,12 +16,19 @@ export interface SubagentSummary {
   toolCalls: number
   output: string | null
   error: string | null
+  /** What the parent calls it, and which subagent started it. */
+  name: string
+  parent: string | null
+  /** `completed`, `aborted`, `error`, `max-tokens` or `refusal`; null while it runs. */
+  stopReason: string | null
 }
 
 interface SubagentStoreState {
   subagents: SubagentSummary[]
   refresh: () => Promise<void>
   kill: (id: string) => Promise<void>
+  /** Write to a running subagent; it reads the message at its next step. */
+  message: (id: string, text: string) => Promise<void>
   /** A subagent's own transcript — in-memory on the backend, so this reads
    * fresh each call rather than being cached in this store (cheap, and the
    * transcript view polls it live while the subagent is still running). */
@@ -49,6 +56,10 @@ export const useSubagentStore = create<SubagentStoreState>((set, get) => ({
   kill: async (id) => {
     await call('cmd_coding_kill_subagent', { id })
     await get().refresh()
+  },
+
+  message: async (id, text) => {
+    await call('cmd_coding_message_subagent', { id, text })
   },
 
   getMessages: async (id) => {

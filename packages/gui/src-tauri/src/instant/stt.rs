@@ -238,7 +238,7 @@ fn engine_of(settings: &serde_json::Value) -> &'static str {
 /// Download and load whichever engine is configured, ahead of first use.
 #[tauri::command]
 pub async fn cmd_instant_stt_preload(app: tauri::AppHandle, model: Option<String>) -> Result<(), String> {
-    let settings = crate::agent::tool_exec::read_settings_json().await;
+    let settings = crate::agent::tools::exec::read_settings_json().await;
     if engine_of(&settings) == "parakeet" {
         match crate::instant::parakeet::preload(&app).await {
             Err(e) if e == crate::instant::parakeet::UNAVAILABLE => {}
@@ -260,7 +260,7 @@ pub async fn cmd_instant_stt_transcribe(
     if pcm.is_empty() {
         return Ok(String::new());
     }
-    let settings = crate::agent::tool_exec::read_settings_json().await;
+    let settings = crate::agent::tools::exec::read_settings_json().await;
     if engine_of(&settings) == "parakeet" {
         match crate::instant::parakeet::transcribe(&app, pcm.clone()).await {
             Err(e) if e == crate::instant::parakeet::UNAVAILABLE => {}
@@ -277,7 +277,7 @@ pub async fn cmd_instant_stt_transcribe(
 /// press the chord and nothing happens for several minutes.
 #[tauri::command]
 pub async fn cmd_instant_stt_installed(app: tauri::AppHandle) -> Result<bool, String> {
-    let settings = crate::agent::tool_exec::read_settings_json().await;
+    let settings = crate::agent::tools::exec::read_settings_json().await;
     if engine_of(&settings) == "parakeet" {
         return Ok(crate::instant::parakeet::is_installed(&app));
     }

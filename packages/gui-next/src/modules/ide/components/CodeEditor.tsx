@@ -23,7 +23,7 @@ function editorTheme(mode: 'light' | 'dark'): Extension {
   const p = paletteFor(mode)
   return EditorView.theme(
     {
-      '&': { color: p.fg, backgroundColor: p.bg, height: '100%', fontSize: '13px' },
+      '&': { color: p.fg, backgroundColor: p.bg, height: '100%', fontSize: '0.8125rem' },
       '.cm-content': { fontFamily: '"Geist Mono", ui-monospace, monospace', caretColor: p.fg },
       '.cm-gutters': { backgroundColor: p.bg, color: p.gutter, border: 'none' },
       '.cm-activeLine': { backgroundColor: p.activeLine },

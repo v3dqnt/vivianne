@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Stack, Typography, Divider, Button, ButtonBase, IconButton, CircularProgress, Dialog, TextField, Select, MenuItem, Chip, Collapse } from '../../../ui'
+import { Stack, Typography, Divider, Button, ButtonBase, IconButton, CircularProgress, Dialog, TextField, Select, MenuItem, Chip, Collapse, Alert } from '../../../ui'
 import { ImportLinear, TrashLinear, Link2Linear, CommandLinear, GlobalLinear, ArrowDownLinear } from '../../../icons'
 import { useMcpStore } from '../store/mcpStore'
 import { DEFAULT_MCP_TIMEOUT_MS, type McpServerConfig, type McpTransportConfig } from '../lib/mcp'
@@ -19,7 +19,7 @@ function ServerRow({ server, toolCount }: { server: McpServerConfig; toolCount: 
   }
 
   return (
-    <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5, py: 1.25, px: 1.5, borderRadius: 2, '&:hover': { bgcolor: 'action.hover' } }}>
+    <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5, py: 1.25, px: 1.5, borderRadius: 1.6, '&:hover': { bgcolor: 'action.hover' } }}>
       {isHttp ? <GlobalLinear size={16} color="currentColor" /> : <CommandLinear size={16} color="currentColor" />}
       <Stack sx={{ flex: 1, minWidth: 0 }}>
         <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
@@ -150,7 +150,7 @@ function AddServerDialog({ open, onClose }: { open: boolean; onClose: () => void
       <Stack sx={{ p: 3, gap: 2.5 }}>
         <Stack direction="row" sx={{ alignItems: 'flex-start', justifyContent: 'space-between' }}>
           <Stack sx={{ gap: 0.5 }}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
               New MCP server
             </Typography>
             <Typography variant="caption" color="text.secondary">
@@ -167,7 +167,7 @@ function AddServerDialog({ open, onClose }: { open: boolean; onClose: () => void
                   py: 0.375,
                   borderRadius: 999,
                   fontSize: '0.75rem',
-                  fontWeight: 600,
+                  fontWeight: 500,
                   bgcolor: mode === m ? 'action.selected' : 'transparent',
                   color: mode === m ? 'text.primary' : 'text.secondary',
                   transition: 'background-color 0.15s, color 0.15s',
@@ -184,7 +184,7 @@ function AddServerDialog({ open, onClose }: { open: boolean; onClose: () => void
             <TextField label="Name" size="small" placeholder="my-mcp-server" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
             <Stack direction="row" sx={{ gap: 2 }}>
               <Stack sx={{ flex: 1, gap: 0.5 }}>
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
                   Type
                 </Typography>
                 <Select size="small" value={kind} onChange={(e) => setKind(e.target.value as 'stdio' | 'http')}>
@@ -193,7 +193,7 @@ function AddServerDialog({ open, onClose }: { open: boolean; onClose: () => void
                 </Select>
               </Stack>
               <Stack sx={{ width: 140, gap: 0.5 }}>
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
                   Timeout MS
                 </Typography>
                 <TextField
@@ -225,7 +225,7 @@ function AddServerDialog({ open, onClose }: { open: boolean; onClose: () => void
               <Stack sx={{ gap: 1 }}>
                 <ButtonBase
                   onClick={() => setEnvOpen((v) => !v)}
-                  sx={{ display: 'flex', alignItems: 'center', gap: 0.5, alignSelf: 'flex-start', color: 'text.secondary', fontSize: '0.8125rem', fontWeight: 600 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: 0.5, alignSelf: 'flex-start', color: 'text.secondary', fontSize: '0.8125rem', fontWeight: 500 }}
                 >
                   <ArrowDownLinear size={12} color="currentColor" style={{ transform: envOpen ? 'rotate(180deg)' : undefined, transition: 'transform 0.15s' }} />
                   Environment variables (optional)
@@ -246,7 +246,7 @@ function AddServerDialog({ open, onClose }: { open: boolean; onClose: () => void
           </Stack>
         ) : (
           <Stack sx={{ gap: 1 }}>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
               Full configuration
             </Typography>
             <TextField
@@ -265,9 +265,9 @@ function AddServerDialog({ open, onClose }: { open: boolean; onClose: () => void
         )}
 
         {error && (
-          <Typography variant="caption" color="error.main">
+          <Alert severity="error">
             {error}
-          </Typography>
+          </Alert>
         )}
 
         <Stack direction="row" sx={{ gap: 1 }}>
@@ -305,7 +305,7 @@ export function McpSection({ hide = [] }: { hide?: string[] }) {
   return (
     <Stack sx={{ gap: 0.5 }}>
       <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
           MCP servers
         </Typography>
         <Button

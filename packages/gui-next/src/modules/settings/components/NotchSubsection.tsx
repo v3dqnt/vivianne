@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Button, CircularProgress, Link, Stack, Switch, Typography } from '../../../ui'
+import { Button, CircularProgress, Link, Stack, Switch, Typography, Alert } from '../../../ui'
 import { call, on } from '../../../ipc'
 
 interface LayaStatus {
@@ -124,9 +124,9 @@ export function NotchSubsection() {
         </Stack>
       )}
       {error && (
-        <Typography variant="caption" color="error.main">
+        <Alert severity="error">
           {error}
-        </Typography>
+        </Alert>
       )}
     </Stack>
   )

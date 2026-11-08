@@ -12,9 +12,12 @@ import { RunSummary } from './RunSummary'
 import { ToolGroup } from './ToolGroup'
 import { groupTranscript } from '../lib/toolGroups'
 import { findCheckpoints } from '../lib/checkpoints'
+import { sourcesByMessage } from '../lib/sources'
+import { Sources } from './Sources'
 import { CheckpointCard } from './CheckpointCard'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { TodoPanel } from './TodoPanel'
+import { CHAT_COLUMN } from '../lib/chatStyle'
 
 /**
  * The conversation transcript.
@@ -25,6 +28,26 @@ import { TodoPanel } from './TodoPanel'
  * exactly like it did live. Read-only drops everything that would act on the
  * live agent: revert, edit, the busy indicator and the todo panel.
  */
+/** Each transcript row: off-screen rows skip layout and paint
+ * (`content-visibility`), keeping their last size so scrolling stays put.
+ * `pb` here is the transcript's whole vertical rhythm — the gap between a
+ * reply, a run of tool calls and the next reply is the same everywhere. */
+const ROW_SX = { pb: 2.5, contentVisibility: 'auto', containIntrinsicSize: 'auto 120px' } as const
+
+/** The messages that close a turn: the last thing the agent said before the
+ * next user message (or `after`, for a page of history whose next message
+ * lives in another array). Only these carry a timestamp, so a turn that took
+ * six steps shows one time instead of six. */
+function closingIndices(list: AgentMessage[], after?: AgentMessage): Set<number> {
+  const ends = new Set<number>()
+  list.forEach((m, i) => {
+    if (m.type === 'user') return
+    const next = i + 1 < list.length ? list[i + 1] : after
+    if (!next || next.type === 'user') ends.add(i)
+  })
+  return ends
+}
+
 export function MessageList({
   messages: savedMessages,
   earlier,
@@ -34,6 +57,8 @@ export function MessageList({
   readOnly = false,
   sessionId,
   emptyText,
+  onRevertTo,
+  revertNote,
 }: {
   messages?: AgentMessage[]
   /** Messages compacted out of the model's context, shown read-only above
@@ -49,6 +74,11 @@ export function MessageList({
   /** The saved conversation's id, when showing one — its change reviews live
    * under that id rather than today's. */
   sessionId?: string
+  /** Revert for a conversation that isn't the main chat (an agent's DM):
+   * enables "revert to here" even when `readOnly`. */
+  onRevertTo?: (index: number) => Promise<void>
+  /** What reverting does there, for the confirmation. */
+  revertNote?: string
 } = {}) {
   const liveMessages = useAgentStore((s) => s.messages)
   const messages = savedMessages ?? liveMessages
@@ -64,7 +94,8 @@ export function MessageList({
   const isBusy = readOnly ? false : liveBusy
   const liveStreamingIndex = useAgentStore((s) => s.streamingIndex)
   const streamingIndex = readOnly ? null : liveStreamingIndex
-  const revertToIndex = useAgentStore((s) => s.revertToIndex)
+  const mainRevert = useAgentStore((s) => s.revertToIndex)
+  const revertToIndex = onRevertTo ?? mainRevert
   const setDraft = useAgentStore((s) => s.setDraft)
   const containerRef = useRef<HTMLDivElement>(null)
   // Whether the user was already at (or near) the bottom before this update —
@@ -82,6 +113,9 @@ export function MessageList({
   }, [messages])
 
   const checkpoints = useMemo(() => findCheckpoints(messages), [messages])
+  const sources = useMemo(() => sourcesByMessage(messages), [messages])
+  const turnEnds = useMemo(() => closingIndices(messages), [messages])
+  const earlierTurnEnds = useMemo(() => closingIndices(earlier ?? [], messages[0]), [earlier, messages])
   const transcript = useMemo(
     () => groupTranscript(messages, streamingIndex, new Set(checkpoints.keys())),
     [messages, streamingIndex, checkpoints],
@@ -171,8 +205,8 @@ export function MessageList({
   // Keyed by position in the whole archive, so loading an older page in
   // front doesn't remount (and re-highlight) everything already on screen.
   const earlierItems = (earlier ?? []).map((m, i) => (
-    <Box key={`e${earlierStart + i}`} sx={{ pb: 1.5 }}>
-      <MessageBubble message={m} index={i} />
+    <Box key={`e${earlierStart + i}`} sx={ROW_SX}>
+      <MessageBubble message={m} index={i} turnEnd={earlierTurnEnds.has(i)} />
     </Box>
   ))
   if (earlierStart > 0 && onLoadOlder) {
@@ -187,14 +221,19 @@ export function MessageList({
   // Omitting the callbacks is what hides a bubble's revert and edit
   // actions — history is not editable.
   const renderMessage = (i: number, compact = false) => (
-    <MessageBubble
-      message={messages[i]}
-      index={i}
-      streaming={isBusy && streamingIndex === i}
-      onRevert={readOnly ? undefined : setRevertTarget}
-      onEdit={readOnly ? undefined : startEdit}
-      compact={compact}
-    />
+    <>
+      <MessageBubble
+        message={messages[i]}
+        index={i}
+        streaming={isBusy && streamingIndex === i}
+        onRevert={readOnly && !onRevertTo ? undefined : setRevertTarget}
+        onEdit={readOnly ? undefined : startEdit}
+        compact={compact}
+        turnEnd={turnEnds.has(i)}
+      />
+      {/* What the turn's web searches drew on, under its closing reply. */}
+      {sources.has(i) && !(isBusy && streamingIndex === i) && <Sources sources={sources.get(i)!} />}
+    </>
   )
   /** The review appears once an assignment is over — never under the one
    * still running, whose change set isn't final yet. */
@@ -214,17 +253,17 @@ export function MessageList({
   // row's key never changes under it.
   const items = transcript.map((item) =>
     item.kind === 'checkpoint' ? (
-      <Box key={`c${item.index}`} sx={{ pb: 1.5 }}>
+      <Box key={`c${item.index}`} sx={ROW_SX}>
         <CheckpointCard checkpoint={checkpoints.get(item.index)!} />
       </Box>
     ) : item.kind === 'message' ? (
-      <Box key={item.index} sx={{ pb: 1.5 }}>
+      <Box key={item.index} sx={ROW_SX}>
         {renderMessage(item.index)}
         {reviewAfter([item.index])}
       </Box>
     ) : (
-      <Box key={`g${item.start}`} sx={{ pb: 1.5 }}>
-        <ToolGroup tools={item.toolIndices.map((i) => messages[i] as ToolResultMessage)}>
+      <Box key={`g${item.start}`} sx={ROW_SX}>
+        <ToolGroup tools={item.toolIndices.map((i) => messages[i] as ToolResultMessage)} thoughts={item.thoughts}>
           {item.indices.map((i) => (
             <Box key={i}>{renderMessage(i, true)}</Box>
           ))}
@@ -237,14 +276,14 @@ export function MessageList({
   // conversation, and only for work that took more than a single reply.
   if (!readOnly && !isBusy && lastRun && ['done', 'stopped', 'paused', 'blocked'].includes(lastRun.status) && lastRun.steps > 1) {
     items.push(
-      <Box key={`summary-${lastRun.key}`} sx={{ pb: 1.5 }}>
+      <Box key={`summary-${lastRun.key}`} sx={ROW_SX}>
         <RunSummary ledger={lastRun} />
       </Box>,
     )
   }
   if (showTrailingIndicator) {
     items.push(
-      <Box key="trailing-indicator" sx={{ pb: 1.5 }}>
+      <Box key="trailing-indicator" sx={ROW_SX}>
         <ThinkingIndicator />
       </Box>,
     )
@@ -258,12 +297,12 @@ export function MessageList({
     // useful. Anchoring it to this non-scrolling wrapper keeps it pinned.
     <Box sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       {!readOnly && <TodoPanel />}
-      <Box ref={containerRef} sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 2, py: 1.5 }}>
+      <Box ref={containerRef} sx={{ flex: 1, minHeight: 0, overflowY: 'auto', scrollbarGutter: 'stable', px: 2, py: 1.5 }}>
         {/* Capped and centred so the reading measure stays stable as the window
             resizes, and lines up with the Composer's matching maxWidth below it. */}
         {/* The conversation is content, so it's selectable; the chrome
             around it isn't (see baselineExtras). */}
-        <Box className="select-text" sx={{ maxWidth: 880, mx: 'auto' }}>
+        <Box className="select-text" sx={{ maxWidth: CHAT_COLUMN, mx: 'auto' }}>
           {/* `shift` while an older page is being put in front, so the view
               stays on what the user was reading instead of jumping. */}
           <Virtualizer scrollRef={containerRef} shift={prepending}>
@@ -277,7 +316,7 @@ export function MessageList({
         <DialogContent>
           <DialogContentText variant="body2">
             {revertTarget !== null && messages.length > 0
-              ? `This removes ${messages.length - revertTarget} message${messages.length - revertTarget === 1 ? '' : 's'} after this one, including any tool calls and their results. This can't be undone.`
+              ? `This removes ${messages.length - revertTarget} message${messages.length - revertTarget === 1 ? '' : 's'} after this one, including any tool calls and their results.${revertNote ? ' ' + revertNote : " This can't be undone."}`
               : ''}
           </DialogContentText>
         </DialogContent>

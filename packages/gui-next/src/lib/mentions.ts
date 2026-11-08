@@ -1,26 +1,68 @@
 /**
- * Detects an in-progress `@skill` mention being typed at the very end of the
- * input (the composer is a plain textarea, not a rich cursor-aware editor,
- * so this only triggers for the token currently being typed at the tail,
- * not an arbitrary mid-text cursor position).
- * Requires the `@` to be preceded by whitespace or the start of the string
- * so it doesn't fire mid-word or on something like an email address.
- * Returns the partial name after `@`, or null when not in trigger state.
+ * `@skill` and `@file` mentions in the composer's text.
+ *
+ * A mention starts at an `@` that is preceded by whitespace or the start of the text (so an email address is not one), and runs to the
+ * cursor: either a plain path (`@src/agent/loop`) or, for a path with spaces, an open quote (`@"My Folder/notes`). Every function takes the
+ * cursor position and defaults to the end of the text, so editing in the middle of a message works the same as at its tail.
  */
-export function getSkillMentionQuery(value: string): string | null {
-  // Broadened to include `/`, `.`, and other path chars so an in-progress
-  // file path (`@src/agent/loop_...`) is a valid mention query too.
-  const match = value.match(/(^|\s)@([A-Za-z0-9_./\\-]*)$/)
-  return match ? match[2] : null
+
+export interface MentionRange {
+  /** Index of the `@`. */
+  start: number
+  /** Where the mention ends: the cursor, or the end of the word the cursor is inside. */
+  end: number
+  /** What has been typed after the `@`, without a quote. */
+  query: string
+  quoted: boolean
 }
 
-/** Replace the trailing in-progress `@partial` with a completed `@name `,
- * preserving whatever preceded it (start-of-string or the whitespace char). */
-export function applySkillMention(value: string, skillName: string): string {
-  return value.replace(/(^|\s)@([A-Za-z0-9_./\\-]*)$/, (_full, lead: string) => `${lead}@${skillName} `)
+const PATH_CHARS = 'A-Za-z0-9_./\\\\-'
+const OPEN = new RegExp(`(^|\\s)@("[^"\\n]*|[${PATH_CHARS}]*)$`)
+const REST_PLAIN = new RegExp(`^[${PATH_CHARS}]*`)
+
+/** The mention being typed at `cursor`, if the cursor is in one. */
+export function mentionAt(value: string, cursor: number = value.length): MentionRange | null {
+  const before = value.slice(0, cursor)
+  const m = before.match(OPEN)
+  if (!m) return null
+  const token = m[2]
+  const quoted = token.startsWith('"')
+  const start = before.length - token.length - 1
+  // Past the cursor, the rest of the word belongs to the mention too, so completing it replaces the whole word.
+  const after = value.slice(cursor)
+  const restLen = quoted ? (after.match(/^[^"\n]*"?/)?.[0].length ?? 0) : (after.match(REST_PLAIN)?.[0].length ?? 0)
+  return { start, end: cursor + restLen, query: quoted ? token.slice(1) : token, quoted }
 }
 
-/** Same as `applySkillMention` but for a workspace-relative file path. */
-export function applyFileMention(value: string, path: string): string {
-  return value.replace(/(^|\s)@([A-Za-z0-9_./\\-]*)$/, (_full, lead: string) => `${lead}@${path} `)
+/** The partial name or path after the `@`, or null when the cursor is not in a mention. */
+export function getSkillMentionQuery(value: string, cursor: number = value.length): string | null {
+  return mentionAt(value, cursor)?.query ?? null
+}
+
+/** A mention as it is written: a path with spaces in quotes, anything else bare. */
+export function formatMention(name: string): string {
+  return /\s/.test(name) ? `@"${name}"` : `@${name}`
+}
+
+function replaceMention(value: string, cursor: number, name: string): { text: string; cursor: number } {
+  const r = mentionAt(value, cursor)
+  if (!r) return { text: value, cursor }
+  const mention = `${formatMention(name)} `
+  const text = value.slice(0, r.start) + mention + value.slice(r.end).replace(/^ /, '')
+  return { text, cursor: r.start + mention.length }
+}
+
+/** Replace the mention at the cursor with a completed `@name `. */
+export function applySkillMention(value: string, skillName: string, cursor: number = value.length): string {
+  return replaceMention(value, cursor, skillName).text
+}
+
+/** Same, for a workspace-relative file path (quoted when it has spaces). */
+export function applyFileMention(value: string, path: string, cursor: number = value.length): string {
+  return replaceMention(value, cursor, path).text
+}
+
+/** Where the cursor should land after completing the mention at `cursor`. */
+export function cursorAfterMention(value: string, name: string, cursor: number = value.length): number {
+  return replaceMention(value, cursor, name).cursor
 }

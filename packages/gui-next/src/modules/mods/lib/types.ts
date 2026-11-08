@@ -13,7 +13,21 @@ export interface ModManifest {
     chat: { fence: string; entry: string }[]
     tools: { name: string; description: string; parameters: Record<string, unknown>; command: string; timeoutSecs?: number | null }[]
     themes: { file: string }[]
+    quickAccess?: QuickAccessTile[]
   }
+}
+
+/** Mirrors `mods::manifest::QuickAccessContribution`: a tile in the Quick access panel. */
+export interface QuickAccessTile {
+  id: string
+  title: string
+  icon?: string | null
+  description?: string | null
+  action:
+    | { type: 'panel'; panel: string }
+    | { type: 'open'; target: string }
+    | { type: 'compose'; text: string }
+    | { type: 'send'; text: string }
 }
 
 /** Mirrors `mods::Status`. */

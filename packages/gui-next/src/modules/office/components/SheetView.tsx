@@ -56,7 +56,7 @@ export function SheetView({ bytes, onEditCell }: { bytes: Uint8Array; onEditCell
                   <Box
                     component="th"
                     key={c}
-                    sx={{ position: 'sticky', top: 0, zIndex: 2, bgcolor: 'background.paper', border, px: 1, py: 0.25, fontWeight: 600, color: 'text.secondary', fontSize: '0.75rem' }}
+                    sx={{ position: 'sticky', top: 0, zIndex: 2, bgcolor: 'background.paper', border, px: 1, py: 0.25, fontWeight: 500, color: 'text.secondary', fontSize: '0.75rem' }}
                   >
                     {XLSX.utils.encode_col(c)}
                   </Box>
@@ -68,7 +68,7 @@ export function SheetView({ bytes, onEditCell }: { bytes: Uint8Array; onEditCell
                 <tr key={r}>
                   <Box
                     component="th"
-                    sx={{ position: 'sticky', left: 0, zIndex: 1, bgcolor: 'background.paper', border, px: 1, fontWeight: 600, color: 'text.secondary', fontSize: '0.75rem', textAlign: 'right' }}
+                    sx={{ position: 'sticky', left: 0, zIndex: 1, bgcolor: 'background.paper', border, px: 1, fontWeight: 500, color: 'text.secondary', fontSize: '0.75rem', textAlign: 'right' }}
                   >
                     {r + 1}
                   </Box>

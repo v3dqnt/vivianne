@@ -1,14 +1,30 @@
-import { useEffect } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { Stack, Typography, Button, alpha, useTheme } from '../../../ui'
 import { useAgentStore } from '../store/agentStore'
 import { useDaysStore, type Viewing } from '../../sessions/store/daysStore'
 import { MessageList } from './MessageList'
+import type { AgentMessage } from '../lib/types'
 import { Composer } from './Composer'
 import { PermissionDialog } from './PermissionDialog'
 import { AskQuestionDialog } from './AskQuestionDialog'
 import { ConfirmationDialog } from './ConfirmationDialog'
 
-export function ChatView() {
+export interface OwnThread {
+  toolbar: ReactNode
+  onRevertTo: (index: number) => Promise<void>
+  /** Its archive, above the thread. */
+  earlier: AgentMessage[]
+  earlierStart: number
+  onLoadOlder: () => void
+  loadingOlder: boolean
+  /** Shown in place of the composer: the thread can be watched, not
+   * written to. */
+  readOnly?: ReactNode
+}
+
+/** The conversation on screen. A bot's DM passes `own`: no project archive
+ * above it, its own model picker, and going back through the bot. */
+export function ChatView({ own }: { own?: OwnThread } = {}) {
   const init = useAgentStore((s) => s.init)
   const viewing = useDaysStore((s) => s.viewing)
   const earlier = useDaysStore((s) => s.earlier)
@@ -22,12 +38,22 @@ export function ChatView() {
 
   return (
     <Stack sx={{ height: '100%', minHeight: 0 }}>
-      {viewing ? (
+      {viewing && !own ? (
         <HistoryView viewing={viewing} />
       ) : (
         <>
-          <MessageList earlier={earlier} earlierStart={earlierStart} onLoadOlder={() => void loadOlder()} loadingOlder={loadingOlder} />
-          <Composer />
+          {own ? (
+            <MessageList
+              onRevertTo={own.onRevertTo}
+              earlier={own.earlier}
+              earlierStart={own.earlierStart}
+              onLoadOlder={own.onLoadOlder}
+              loadingOlder={own.loadingOlder}
+            />
+          ) : (
+            <MessageList earlier={earlier} earlierStart={earlierStart} onLoadOlder={() => void loadOlder()} loadingOlder={loadingOlder} />
+          )}
+          {own?.readOnly ?? <Composer toolbar={own?.toolbar} />}
         </>
       )}
       {/* Mounted either way: a permission prompt from the running turn must
@@ -66,7 +92,7 @@ function HistoryView({ viewing }: { viewing: Viewing }) {
         }}
       >
         <Stack sx={{ minWidth: 0, flex: 1 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>
+          <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
             {viewing.label}
           </Typography>
           <Typography variant="caption" color="text.secondary">

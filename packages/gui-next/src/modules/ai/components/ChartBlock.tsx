@@ -100,7 +100,7 @@ export function ChartBlock({ code }: { code: string }) {
   if ('error' in parsed) {
     return (
       <Box sx={{ my: 1, p: 1.5, border: 1, borderColor: 'divider', borderRadius: '12px' }}>
-        <Typography variant="caption" color="error.main" sx={{ fontWeight: 600, display: 'block' }}>
+        <Typography variant="caption" color="error.main" sx={{ fontWeight: 500, display: 'block' }}>
           Chart spec problem
         </Typography>
         <Typography variant="caption" color="text.secondary">
@@ -192,13 +192,13 @@ export function ChartBlock({ code }: { code: string }) {
     >
       <Stack direction="row" sx={{ alignItems: 'baseline', justifyContent: 'space-between', gap: 1, mb: 0.5 }}>
         {spec.title && (
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>
             {spec.title}
           </Typography>
         )}
         <ButtonBase
           onClick={() => setShowTable((v) => !v)}
-          sx={{ ml: 'auto', fontSize: '0.6875rem', color: 'text.secondary', borderRadius: 1, px: 0.75, py: 0.25, '&:hover': { bgcolor: 'action.hover' } }}
+          sx={{ ml: 'auto', fontSize: '0.6875rem', color: 'text.secondary', borderRadius: 0.8, px: 0.75, py: 0.25, '&:hover': { bgcolor: 'action.hover' } }}
         >
           {showTable ? 'Chart' : 'Table'}
         </ButtonBase>
@@ -385,7 +385,7 @@ export function ChartBlock({ code }: { code: string }) {
                 transform: 'translate(-50%, -130%)',
                 px: 1,
                 py: 0.5,
-                borderRadius: 1,
+                borderRadius: 0.8,
                 bgcolor: 'background.paper',
                 border: 1,
                 borderColor: 'divider',

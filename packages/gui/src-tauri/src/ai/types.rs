@@ -15,7 +15,7 @@ pub enum Role {
 // ── Usage tracking ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct Usage {
     pub input: u32,
     pub output: u32,
@@ -92,7 +92,7 @@ pub struct ToolCall {
 /// back to a default) — a PNG screenshot from the `computer` tool would be
 /// rejected by Anthropic for not matching its declared media type.
 ///
-/// Only this provider-facing enum uses camelCase. `agent::types::MessageContent`
+/// Only this provider-facing enum uses camelCase. `agent::runtime::types::MessageContent`
 /// is a separate type whose TS mirror (`modules/ai/lib/types.ts`) genuinely
 /// expects snake_case — do not "fix" that one to match.
 #[derive(Debug, Clone, Serialize, Deserialize)]

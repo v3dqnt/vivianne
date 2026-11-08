@@ -15,6 +15,9 @@ Equations (`\ce`, `\pu`), structures and reactions, 3D proteins, sequences, plas
 **[projects/](projects/index.md)** — knowing the thing being built.
 What to do when a new project starts, when joining one that already exists, how to keep a living picture of the product and its objectives, and how to work so the next agent (or the next session) can pick up where you left off.
 
+**[tools/](tools/index.md)** — worked examples of tool calls.
+The call that works next to the one that doesn't, for files, the shell, scripts (JavaScript, Rust and C++), finding tools, and image generation.
+
 ## Use your own
 
 Fork this repository, change what's yours — brand colours, typefaces, tone, templates, the way your team works — and set **Settings → Mods → Guides** to your fork. Vivianne will follow it instead.

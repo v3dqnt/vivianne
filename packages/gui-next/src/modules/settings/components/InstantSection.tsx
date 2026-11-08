@@ -71,7 +71,7 @@ export function InstantSection() {
   return (
     <Stack sx={{ gap: 2.5 }}>
       <Stack sx={{ gap: 0.5 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           Viv Instant
         </Typography>
         <Typography variant="caption" color="text.secondary">
@@ -89,7 +89,7 @@ export function InstantSection() {
       <Divider />
 
       <Stack sx={{ gap: 0.75 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           Wake chord
         </Typography>
         <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
@@ -115,7 +115,7 @@ export function InstantSection() {
       </Stack>
 
       <Stack sx={{ gap: 0.75 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           Speech recognition
         </Typography>
         <TextField
@@ -150,7 +150,7 @@ export function InstantSection() {
 
       {engine === 'whisper' && (
       <Stack sx={{ gap: 0.75 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           Whisper model
         </Typography>
         <TextField
@@ -179,7 +179,7 @@ export function InstantSection() {
       <Divider />
 
       <Stack sx={{ gap: 0.75 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           Jev API key <Typography component="span" variant="caption" color="text.secondary">— optional</Typography>
         </Typography>
         <TextField

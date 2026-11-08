@@ -1,12 +1,11 @@
 import { useEffect } from 'react'
 import { Box, ButtonBase, IconButton, Orb, Stack, Tooltip, Typography, alpha, useTheme } from '../../../ui'
-import { AddLinear, SettingsLinear } from '../../../icons'
-import { openPanel } from '../../workspace/layout'
+import { SettingsLinear } from '../../../icons'
 import { useGeneralAgents } from '../store/generalAgentsStore'
 import { useTeamStore, type TeamAgent } from '../store/teamStore'
 import { useBotsStore, botKey } from '../store/botsStore'
 import { useBotFace } from './AgentFace'
-import { Avatar, colorOf } from './bits'
+import { Avatar, faceOf } from './bits'
 
 const EMPTY: TeamAgent[] = []
 
@@ -33,7 +32,7 @@ export function GeneralAgents({ labelSx }: { labelSx: object }) {
   const manage = (id: string | null) => {
     if (!root) return
     focus(root, id)
-    openPanel('agents')
+    if (id) setChannel(root, id)
   }
 
   return (
@@ -42,22 +41,11 @@ export function GeneralAgents({ labelSx }: { labelSx: object }) {
         <Typography variant="caption" color="text.secondary" sx={{ ...labelSx, flex: 1 }}>
           Agents{agents.length ? ` · ${agents.length}` : ''}
         </Typography>
-        <Tooltip title="Create an agent">
-          <IconButton size="small" aria-label="Create an agent" onClick={() => manage(null)}>
-            <AddLinear size={13} color="currentColor" />
-          </IconButton>
-        </Tooltip>
       </Stack>
       {agents.length === 0 ? (
-        <ButtonBase
-          onClick={() => manage(null)}
-          sx={{ display: 'block', width: '100%', textAlign: 'left', px: 1, py: 0.75, borderRadius: '8px', border: 1, borderStyle: 'dashed', borderColor: 'divider', '&:hover': { bgcolor: 'action.hover' } }}
-        >
-          <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.45 }}>
-            Make an agent of your own: its job, tools and model, and its own email and phone number. It works on its own, on a schedule
-            or when you message it.
-          </Typography>
-        </ButtonBase>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 1, py: 0.75 }}>
+          No agents yet.
+        </Typography>
       ) : (
         <Stack sx={{ gap: 0.25 }}>
           {agents.map((a) => {
@@ -109,5 +97,5 @@ export function GeneralAgents({ labelSx }: { labelSx: object }) {
  * agent's state rather than the list re-rendering for all of them. */
 function RowFace({ root, agent }: { root: string | null; agent: TeamAgent }) {
   const face = useBotFace(root, agent.id)
-  return <Avatar name={agent.name} color={colorOf(agent)} size={24} state={face} />
+  return <Avatar {...faceOf(agent)} size={24} state={face} animate />
 }

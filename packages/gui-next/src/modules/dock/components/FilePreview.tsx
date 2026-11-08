@@ -107,8 +107,11 @@ export function FileContent({
   bare = false,
   full = false,
   fresh = false,
+  dense = false,
 }: {
   path: string
+  /** Small, quiet code that folds when long: the tool-card look. */
+  dense?: boolean
   wrap?: boolean
   bare?: boolean
   /** Filling a panel: no height caps, and Markdown, HTML and CSV are shown
@@ -233,7 +236,7 @@ export function FileContent({
   if (data.kind === 'binary') {
     return (
       <Stack sx={{ minWidth: 0, gap: 0.5 }}>
-        <Typography variant="caption" sx={{ fontWeight: 600 }}>
+        <Typography variant="caption" sx={{ fontWeight: 500 }}>
           {data.note}
         </Typography>
         <Box
@@ -272,7 +275,7 @@ export function FileContent({
           minWidth: 0,
           m: 0,
           p: bare ? 0 : 1.5,
-          ...(bare ? { color: 'text.secondary' } : { borderRadius: 1, bgcolor: '#0d1117', color: '#c9d1d9' }),
+          ...(bare ? { color: 'text.secondary' } : { borderRadius: 0.8, bgcolor: '#0d1117', color: '#c9d1d9' }),
           fontFamily: '"Geist Mono", ui-monospace, monospace',
           fontSize: '0.75rem',
           lineHeight: 1.5,
@@ -286,7 +289,12 @@ export function FileContent({
   }
   return (
     <Box sx={{ minWidth: 0, '& > *': { minWidth: 0 } }}>
-      <CodeBlock code={data.content} lang={langFromPath(path)} wrap={wrap} bare={bare} />
+      {full ? (
+        // The file is the panel: no card, no fold, numbered lines.
+        <CodeBlock code={data.content} lang={langFromPath(path)} wrap={wrap} bare collapsible={false} showLineNumbers />
+      ) : (
+        <CodeBlock code={data.content} lang={langFromPath(path)} wrap={wrap} bare={bare} dense={dense} />
+      )}
       {data.truncated && meta(`Truncated — showing the first ${MAX_HIGHLIGHT_CHARS.toLocaleString()} characters`)}
     </Box>
   )
@@ -391,7 +399,7 @@ function RenderedText({ kind, path, content }: { kind: Rendered; path: string; c
 
   let body: ReactNode
   if (source) {
-    body = <CodeBlock code={content} lang={langFromPath(path)} wrap />
+    body = <CodeBlock code={content} lang={langFromPath(path)} wrap bare collapsible={false} showLineNumbers />
   } else if (kind === 'markdown') {
     body = (
       <Box sx={{ fontSize: '0.875rem', maxWidth: 760 }}>
@@ -461,7 +469,7 @@ function RenderedText({ kind, path, content }: { kind: Rendered; path: string; c
                 py: 0.25,
                 borderRadius: '6px',
                 fontSize: '0.6875rem',
-                fontWeight: 600,
+                fontWeight: 500,
                 color: on ? 'text.primary' : 'text.secondary',
                 bgcolor: on ? 'action.selected' : 'transparent',
                 '&:hover': { bgcolor: on ? 'action.selected' : 'action.hover' },
@@ -486,7 +494,7 @@ function RenderedText({ kind, path, content }: { kind: Rendered; path: string; c
  * for everything that isn't an office document. */
 export function FileViewer({ path }: { path: string }) {
   return (
-    <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', p: 1.5 }}>
+    <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', py: 1, pl: 0.5, pr: 1 }}>
       <FileContent path={path} wrap full fresh />
     </Box>
   )

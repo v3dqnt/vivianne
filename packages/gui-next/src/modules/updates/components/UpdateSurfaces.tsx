@@ -60,7 +60,7 @@ export function UpdateSurfaces() {
         fullWidth
         slotProps={{ paper: { sx: { backgroundImage: 'none', ...surfaceCard(theme.palette.mode) } } }}
       >
-        <DialogTitle sx={{ fontSize: '1rem', fontWeight: 700 }}>What's new in {version}</DialogTitle>
+        <DialogTitle sx={{ fontSize: '1rem', fontWeight: 600 }}>What's new in {version}</DialogTitle>
         <DialogContent dividers>{currentEntry && <ChangelogBody entries={[currentEntry]} />}</DialogContent>
         <DialogActions>
           <Button variant="contained" disableElevation onClick={() => void dismissWhatsNew()} sx={{ textTransform: 'none' }}>
@@ -99,7 +99,7 @@ export function UpdateSurfaces() {
                 }}
               />
               <Stack sx={{ flex: 1, minWidth: 0, gap: 0.25 }}>
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
                   {a.title}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
@@ -129,7 +129,7 @@ export function UpdateSurfaces() {
           {update && installStatus !== 'installing' && (
             <Stack direction="row" sx={{ ...surfaceCard(theme.palette.mode), p: 1.5, gap: 1, alignItems: 'center' }}>
               <Stack sx={{ flex: 1, minWidth: 0 }}>
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
                   Version {update.version} is available
                 </Typography>
                 <Typography variant="caption" color="text.secondary">

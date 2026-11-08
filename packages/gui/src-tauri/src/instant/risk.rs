@@ -2,7 +2,7 @@
 //!
 //! Viv Instant runs unattended: no approval prompt, nobody at the keyboard. The
 //! `dip` tool's mouse and keyboard actions are also the one part of this repo
-//! with **no undo** — `agent::checkpoints` snapshots file writes, and a
+//! with **no undo** — `agent::changes::checkpoints` snapshots file writes, and a
 //! synthesised keystroke is not a file write. So between a misheard word and a
 //! destroyed document there is exactly one thing, and it is this file.
 //!

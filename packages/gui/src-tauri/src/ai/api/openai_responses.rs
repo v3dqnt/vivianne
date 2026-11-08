@@ -14,7 +14,6 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
-use reqwest::Client;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 
@@ -341,10 +340,14 @@ pub async fn stream_responses(
     }
 
     let url = format!("{}/responses", base_url.trim_end_matches('/'));
-    let client = Client::new();
+    let client = crate::ai::http::client();
     let body = build_request_body(model_id, &context, &options);
 
-    let request = match client.post(&url).headers(header_map).json(&body).build() {
+    let mut rb = client.post(&url).headers(header_map).json(&body);
+    if let Some(ms) = options.timeout_ms {
+        rb = rb.timeout(std::time::Duration::from_millis(ms));
+    }
+    let request = match rb.build() {
         Ok(r) => r,
         Err(e) => return emit_err(&e.to_string()),
     };
@@ -397,7 +400,7 @@ pub async fn stream_responses(
 
                 while let Some(newline_pos) = buffer.find('\n') {
                     let line = buffer[..newline_pos].to_string();
-                    buffer = buffer[newline_pos + 1..].to_string();
+                    buffer.drain(..=newline_pos);
 
                     if let Some(data) = parse_sse_data(&line) {
                         match serde_json::from_str::<ResponsesStreamEvent>(data) {

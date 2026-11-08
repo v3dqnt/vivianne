@@ -63,7 +63,7 @@ function ConsentDialog({ mod, onClose }: { mod: ModInfo | null; onClose: () => v
               {mod.manifest.description}
             </Typography>
           )}
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>
             {mod.permissions.length ? 'It will be able to:' : 'It asks for no permissions.'}
           </Typography>
           {mod.permissions.map(([p, words]) => (
@@ -117,13 +117,13 @@ function ModRow({ mod, onConsent }: { mod: ModInfo; onConsent: (m: ModInfo) => v
   }
 
   return (
-    <Stack direction="row" sx={{ gap: 1.5, alignItems: 'flex-start', px: 1.5, py: 1.25, borderRadius: 2, border: 1, borderColor: 'divider' }}>
+    <Stack direction="row" sx={{ gap: 1.5, alignItems: 'flex-start', px: 1.5, py: 1.25, borderRadius: 1.6, border: 1, borderColor: 'divider' }}>
       <Box sx={{ pt: 0.25, color: 'text.secondary' }}>
         <LayerLinear size={16} color="currentColor" />
       </Box>
       <Stack sx={{ flex: 1, minWidth: 0, gap: 0.25 }}>
         <Stack direction="row" sx={{ gap: 0.75, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>
             {mod.manifest?.name ?? mod.key}
           </Typography>
           {mod.manifest?.version && (
@@ -143,9 +143,9 @@ function ModRow({ mod, onConsent }: { mod: ModInfo; onConsent: (m: ModInfo) => v
           {summary(mod)}
         </Typography>
         {mod.error && (
-          <Typography variant="caption" color="error">
+          <Alert severity="error">
             {mod.error}
-          </Typography>
+          </Alert>
         )}
         {mod.status === 'permissionsChanged' && (
           <Typography variant="caption" color="warning.main">
@@ -211,7 +211,7 @@ export function ModsManager() {
   return (
     <Stack sx={{ gap: 1 }}>
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600, flex: 1 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 500, flex: 1 }}>
           Mods
         </Typography>
         <Button size="small" startIcon={<FolderOpenLinear size={14} color="currentColor" />} onClick={() => void openFolder()} sx={{ textTransform: 'none' }}>
@@ -237,7 +237,7 @@ export function ModsManager() {
         </ButtonBase>
       </Typography>
       <Collapse in={rulesOpen}>
-        <Stack sx={{ gap: 0.5, px: 1.5, py: 1, borderRadius: 2, bgcolor: 'action.hover' }}>
+        <Stack sx={{ gap: 0.5, px: 1.5, py: 1, borderRadius: 1.6, bgcolor: 'action.hover' }}>
           {RULES.map(([title, text]) => (
             <Typography key={title} variant="caption">
               <b>{title}.</b> {text}

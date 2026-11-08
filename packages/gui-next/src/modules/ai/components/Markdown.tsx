@@ -1,6 +1,10 @@
-import { memo, type ReactNode } from 'react'
+import { memo, useMemo, type ReactNode } from 'react'
+import type React from 'react'
+import { ChatImage } from './ImageBlock'
+import { InteractiveBlock } from './InteractiveBlock'
+import { WidgetBlock } from './WidgetBlock'
 import { Box, Link } from '../../../ui'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import 'katex/dist/katex.min.css'
@@ -19,6 +23,12 @@ import { useThrottledValue } from '../../../lib/useThrottledValue'
 import { normalizeMath } from '../lib/mathText'
 import { useModsStore, chatRenderer } from '../../mods/store/modsStore'
 import { ModChatBlock } from '../../mods/components/ModChatBlock'
+import { remarkFiles } from '../lib/remarkFiles'
+import { remarkStreamWords, TAIL_CHARS } from '../lib/remarkStreamWords'
+import { FileLink } from './FileLink'
+import { isFilePath, splitAnchor } from '../lib/filePaths'
+import { CHAT_FONT } from '../lib/chatStyle'
+import { onWebLinkClick } from '../lib/openLink'
 
 const VIDEO_EXT = /\.(mp4|webm|mov|m4v)$/i
 const AUDIO_EXT = /\.(mp3|wav|ogg|m4a|flac)$/i
@@ -29,112 +39,156 @@ const AUDIO_EXT = /\.(mp3|wav|ogg|m4a|flac)$/i
  * `remend` closes those dangling markers before `react-markdown` parses the
  * string, so a partial token never flashes as broken/literal syntax.
  */
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+/** `animate`: the reply is still arriving, so the words that have just landed fade in (see `remarkStreamWords`). */
+export const Markdown = memo(function Markdown({ text, animate = false }: { text: string; animate?: boolean }) {
   // `remend` + `ReactMarkdown` re-parse the whole accumulated string from
   // scratch on every call — cheap for a settled message, but this component
   // gets a new `text` prop on every streamed token (often 10-60/sec), and
   // parse cost grows with message length. Throttling the actual parse to
   // ~100ms keeps the visible text live-feeling while cutting redundant
   // full-message reparses during long replies.
-  const throttledText = useThrottledValue(text, 100)
+  const throttledText = useThrottledValue(text, 50)
   // Re-render when mods load or change: a fence may have gained a renderer.
   const mods = useModsStore((s) => s.mods)
   const healed = normalizeMath(remend(throttledText))
+
+  // One stable map for the life of the component (it changes only when mods do). Built inline it would be a new set of component types on
+  // every streamed token, and React would remount every element each time: code blocks rebuilt, and every word replaying its fade.
+  const components = useMemo<Components>(
+    () => ({
+    // File names and paths (see `remarkFiles`) open in the Preview.
+    span: ({ children, className, ...rest }) => {
+      const file = (rest as Record<string, unknown>)['data-file']
+      if (typeof file === 'string') {
+        const line = Number((rest as Record<string, unknown>)['data-line'])
+        return <FileLink path={file} label={String(children)} prose line={Number.isFinite(line) && line > 0 ? line : undefined} />
+      }
+      return <span className={className}>{children}</span>
+    },
+    a: ({ href, children }) => {
+      // The model has no real way to emit a native <video>/<audio> tag
+      // through markdown — a plain link to a media file is the only
+      // signal available, so linked media renders as a player instead
+      // of a bare "click here" link.
+      if (href && VIDEO_EXT.test(href)) return <Box component="video" src={href} controls sx={{ maxWidth: '100%', borderRadius: 1.6, my: 1 }} />
+      if (href && AUDIO_EXT.test(href)) return <Box component="audio" src={href} controls sx={{ width: '100%', my: 1 }} />
+      // `[label](src/app.ts)`: a link to a file on disk, which is what models write by default, opens the file; it is not a web address.
+      if (href && !/^[a-z][a-z0-9+.-]*:/i.test(href.replace(/^[A-Za-z]:[\\/]/, '')) && isFilePath(decodeURIComponent(href))) {
+        const { path, anchor } = splitAnchor(decodeURIComponent(href))
+        return <FileLink path={path} label={typeof children === 'string' ? children : undefined} prose line={anchor?.line} />
+      }
+      return (
+        <Link href={href} target="_blank" rel="noopener noreferrer" title={href ? `${href}
+Click: open in Preview · Ctrl-click: open in your browser` : undefined} onClick={(e: React.MouseEvent) => onWebLinkClick(e, href)}>
+          {children}
+        </Link>
+      )
+    },
+    img: ({ src, alt }) => {
+      const url = typeof src === 'string' ? src : ''
+      if (VIDEO_EXT.test(url)) return <Box component="video" src={url} controls sx={{ maxWidth: '100%', borderRadius: 1.6, my: 1 }} />
+      if (AUDIO_EXT.test(url)) return <Box component="audio" src={url} controls sx={{ width: '100%', my: 1 }} />
+      return url ? <ChatImage src={url} alt={alt} inline /> : null
+    },
+    code(props) {
+      const { children, className } = props
+      const match = /language-([\w-]+)/.exec(className ?? '')
+      // Inline code has no `language-*` className and no surrounding
+      // `<pre>` — react-markdown gives both the same `code` renderer,
+      // so the className is the only reliable inline/block signal.
+      if (!match) return <code className={className}>{children}</code>
+      // Formulas: remark-math emits them as `language-math` code nodes.
+      if (match[1] === 'math') return <MathSpan tex={String(children).replace(/\n$/, '')} display={/math-display/.test(className ?? '')} />
+      const code = String(children).replace(/\n$/, '')
+      // Rich fence languages render as real figures rather than as
+      // source. Same mechanism mermaid already used — the model emits a
+      // fenced block inside its own message, so the figure appears where
+      // the explanation is, not buried in a collapsed tool card.
+      if (match[1] === 'mermaid') return <MermaidBlock code={code} />
+      if (match[1] === 'chart') return <ChartBlock code={code} />
+      if (match[1] === 'ui') return <InteractiveBlock code={code} />
+      if (match[1] === 'widget') return <WidgetBlock code={code} />
+      if (match[1] === 'model3d') return <Model3DBlock code={code} />
+      if (match[1] === 'chem') return <ChemBlock code={code} />
+      if (match[1] === 'bio') return <BioBlock code={code} />
+      if (match[1] === 'plot') return <PlotBlock code={code} />
+      if (match[1] === 'physics') return <PhysicsBlock code={code} />
+      if (match[1] === 'mol3d') return <Mol3DBlock code={code} />
+      // A fence a running mod renders (`contributes.chat`).
+      if (chatRenderer(mods, match[1])) return <ModChatBlock fence={match[1]} code={code} />
+      return <CodeBlock code={code} lang={match[1]} />
+    },
+    // The `code` renderer above already produces CodeBlock's own
+    // container for fenced blocks — an unwrapped <pre> would double up.
+    pre: ({ children }: { children?: ReactNode }) => <>{children}</>,
+    }),
+    [mods],
+  )
 
   return (
     <Box
       className="select-text"
       sx={{
-        '& > *:first-of-type': { mt: 0 },
-        '& > *:last-of-type': { mb: 0 },
-        '& p': { m: 0, mb: 1, lineHeight: 1.6, fontSize: '0.875rem' },
-        '& ul, & ol': { mt: 0, mb: 1, pl: 3, fontSize: '0.875rem' },
-        '& li': { mb: 0.25 },
+        // The chat's type follows the size set in Settings → Appearance
+        // (`CHAT_FONT.text`), on a line of about φ times it; headings are
+        // modest steps above it, and every gap a multiple of 4.
+        fontSize: CHAT_FONT.text,
+        lineHeight: 1.6,
+        '& > :first-child': { mt: 0 },
+        '& > :last-child': { mb: 0 },
+        '& p': { m: 0, mb: '12px', fontSize: 'inherit', lineHeight: 'inherit' },
+        '& ul, & ol': { mt: 0, mb: '12px', pl: '20px', fontSize: 'inherit', lineHeight: 'inherit' },
+        '& li': { mb: '4px', pl: '4px' },
+        '& li::marker': { color: 'text.secondary' },
         '& li > p': { mb: 0 },
-        '& h1, & h2, & h3, & h4': { mt: 1.5, mb: 0.75, fontWeight: 600, lineHeight: 1.35 },
-        '& h1': { fontSize: '1.25rem' },
-        '& h2': { fontSize: '1.125rem' },
-        '& h3': { fontSize: '1rem' },
-        '& h4': { fontSize: '0.9375rem' },
+        '& li > ul, & li > ol': { mt: '4px', mb: 0 },
+        '& h1, & h2, & h3, & h4': { mt: '20px', mb: '8px', fontWeight: 600, letterSpacing: '-0.01em', color: 'text.primary' },
+        '& h1': { fontSize: '1.428em', lineHeight: 1.3 },
+        '& h2': { fontSize: '1.214em', lineHeight: 1.35 },
+        '& h3': { fontSize: '1.071em', lineHeight: 1.45 },
+        '& h4': { fontSize: '0.857em', lineHeight: 1.5, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.04em' },
+        '& strong': { fontWeight: 600, color: 'text.primary' },
+        '& em': { fontStyle: 'italic' },
         '& blockquote': {
           m: 0,
-          mb: 1,
-          pl: 1.5,
-          borderLeft: 3,
-          borderColor: 'divider',
+          mb: '12px',
+          py: '4px',
+          pl: '12px',
+          borderLeft: '2px solid',
+          borderColor: 'primary.main',
           color: 'text.secondary',
+          '& p': { mb: '4px' },
         },
-        '& hr': { border: 0, borderTop: 1, borderColor: 'divider', my: 1.5 },
-        '& table': { borderCollapse: 'collapse', mb: 1, fontSize: '0.8125rem', display: 'block', overflowX: 'auto' },
-        '& th, & td': { border: 1, borderColor: 'divider', px: 1, py: 0.5, textAlign: 'left' },
-        '& th': { bgcolor: 'action.hover', fontWeight: 600 },
+        '& hr': { border: 0, borderTop: 1, borderColor: 'divider', my: '24px' },
+        '& table': { borderCollapse: 'separate', borderSpacing: 0, mb: '12px', fontSize: '0.929em', lineHeight: 1.5, display: 'block', overflowX: 'auto', border: 1, borderColor: 'divider', borderRadius: '8px', width: 'fit-content', maxWidth: '100%' },
+        '& th, & td': { px: '12px', py: '8px', textAlign: 'left' },
+        '& tr + tr td, & tbody tr:first-of-type td': { borderTop: 1, borderColor: 'divider' },
+        '& th': { bgcolor: 'action.hover', fontWeight: 600, color: 'text.secondary' },
+        // Inline code reads as code at a glance: the accent colour on a
+        // tint of it, not prose grey.
         '& code:not(pre code)': {
           fontFamily: '"Geist Mono", ui-monospace, monospace',
-          fontSize: '0.8125em',
+          fontSize: '0.857em',
+          color: 'text.primary',
           bgcolor: 'action.hover',
-          borderRadius: 1,
-          px: 0.5,
-          py: 0.15,
+          borderRadius: '4px',
+          px: '4px',
+          py: '1px',
         },
-        '& a': { color: 'primary.main' },
+        '& a': { color: 'primary.main', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } },
         // Display maths scrolls sideways instead of overflowing the bubble;
         // a long derivation is still readable, and the page never widens.
-        '& .katex-display': { overflowX: 'auto', overflowY: 'hidden', py: 0.5, my: 1 },
+        '& .katex-display': { overflowX: 'auto', overflowY: 'hidden', py: '4px', my: '8px' },
         '& .katex': { fontSize: '1.05em' },
+        // Streaming: a word new to the page fades in from a hair of blur, once.
+        '& .viv-w': { animation: 'viv-word-in 350ms cubic-bezier(0.22, 1, 0.36, 1) both' },
+        '@keyframes viv-word-in': { from: { opacity: 0, filter: 'blur(1px)' }, to: { opacity: 1, filter: 'blur(0)' } },
+        '@media (prefers-reduced-motion: reduce)': { '& .viv-w': { animation: 'none' } },
       }}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        components={{
-          a: ({ href, children }) => {
-            // The model has no real way to emit a native <video>/<audio> tag
-            // through markdown — a plain link to a media file is the only
-            // signal available, so linked media renders as a player instead
-            // of a bare "click here" link.
-            if (href && VIDEO_EXT.test(href)) return <Box component="video" src={href} controls sx={{ maxWidth: '100%', borderRadius: 1.5, my: 1 }} />
-            if (href && AUDIO_EXT.test(href)) return <Box component="audio" src={href} controls sx={{ width: '100%', my: 1 }} />
-            return (
-              <Link href={href} target="_blank" rel="noopener noreferrer">
-                {children}
-              </Link>
-            )
-          },
-          img: ({ src, alt }) => {
-            const url = typeof src === 'string' ? src : ''
-            if (VIDEO_EXT.test(url)) return <Box component="video" src={url} controls sx={{ maxWidth: '100%', borderRadius: 1.5, my: 1 }} />
-            if (AUDIO_EXT.test(url)) return <Box component="audio" src={url} controls sx={{ width: '100%', my: 1 }} />
-            return <Box component="img" src={url} alt={alt} sx={{ maxWidth: '100%', borderRadius: 1.5, my: 1 }} />
-          },
-          code(props) {
-            const { children, className } = props
-            const match = /language-([\w-]+)/.exec(className ?? '')
-            // Inline code has no `language-*` className and no surrounding
-            // `<pre>` — react-markdown gives both the same `code` renderer,
-            // so the className is the only reliable inline/block signal.
-            if (!match) return <code className={className}>{children}</code>
-            // Formulas: remark-math emits them as `language-math` code nodes.
-            if (match[1] === 'math') return <MathSpan tex={String(children).replace(/\n$/, '')} display={/math-display/.test(className ?? '')} />
-            const code = String(children).replace(/\n$/, '')
-            // Rich fence languages render as real figures rather than as
-            // source. Same mechanism mermaid already used — the model emits a
-            // fenced block inside its own message, so the figure appears where
-            // the explanation is, not buried in a collapsed tool card.
-            if (match[1] === 'mermaid') return <MermaidBlock code={code} />
-            if (match[1] === 'chart') return <ChartBlock code={code} />
-            if (match[1] === 'model3d') return <Model3DBlock code={code} />
-            if (match[1] === 'chem') return <ChemBlock code={code} />
-            if (match[1] === 'bio') return <BioBlock code={code} />
-            if (match[1] === 'plot') return <PlotBlock code={code} />
-            if (match[1] === 'physics') return <PhysicsBlock code={code} />
-            if (match[1] === 'mol3d') return <Mol3DBlock code={code} />
-            // A fence a running mod renders (`contributes.chat`).
-            if (chatRenderer(mods, match[1])) return <ModChatBlock fence={match[1]} code={code} />
-            return <CodeBlock code={code} lang={match[1]} />
-          },
-          // The `code` renderer above already produces CodeBlock's own
-          // container for fenced blocks — an unwrapped <pre> would double up.
-          pre: ({ children }: { children?: ReactNode }) => <>{children}</>,
-        }}
+        remarkPlugins={animate ? [remarkGfm, remarkMath, remarkFiles, [remarkStreamWords, { from: Math.max(0, healed.length - TAIL_CHARS) }]] : [remarkGfm, remarkMath, remarkFiles]}
+        components={components}
       >
         {healed}
       </ReactMarkdown>

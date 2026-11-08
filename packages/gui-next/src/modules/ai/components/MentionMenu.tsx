@@ -60,7 +60,7 @@ export function MentionShell({ title, children, width = 440 }: { title: string; 
         mb: 1,
         width: '100%',
         maxWidth: width,
-        borderRadius: '14px',
+        borderRadius: '12px',
         border: 1,
         borderColor: 'divider',
         bgcolor: 'background.paper',
@@ -72,7 +72,7 @@ export function MentionShell({ title, children, width = 440 }: { title: string; 
       }}
     >
       <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 1.5, pt: 1, pb: 0.75 }}>
-        <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, flex: 1 }}>{title}</Typography>
+        <Typography sx={{ fontSize: '0.75rem', fontWeight: 500, flex: 1 }}>{title}</Typography>
         <Stack direction="row" sx={{ gap: 0.5, alignItems: 'center' }}>
           {[
             ['↑↓', 'move'],
@@ -84,7 +84,7 @@ export function MentionShell({ title, children, width = 440 }: { title: string; 
                 component="kbd"
                 sx={{
                   fontFamily: MONO,
-                  fontSize: '0.625rem',
+                  fontSize: '0.6875rem',
                   lineHeight: 1,
                   px: 0.5,
                   py: 0.25,
@@ -97,7 +97,7 @@ export function MentionShell({ title, children, width = 440 }: { title: string; 
               >
                 {k}
               </Box>
-              <Typography sx={{ fontSize: '0.625rem', color: 'text.disabled' }}>{label}</Typography>
+              <Typography sx={{ fontSize: '0.6875rem', color: 'text.disabled' }}>{label}</Typography>
             </Stack>
           ))}
         </Stack>
@@ -111,8 +111,8 @@ export function MentionShell({ title, children, width = 440 }: { title: string; 
 export function MentionSection({ label, count }: { label: string; count: number }) {
   return (
     <Stack direction="row" sx={{ alignItems: 'baseline', gap: 0.75, px: 1.5, pt: 0.75, pb: 0.25 }}>
-      <Typography sx={{ fontSize: '0.625rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.6, color: 'text.secondary' }}>{label}</Typography>
-      <Typography sx={{ fontSize: '0.625rem', color: 'text.disabled', fontFamily: MONO }}>{count}</Typography>
+      <Typography sx={{ fontSize: '0.6875rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.6, color: 'text.secondary' }}>{label}</Typography>
+      <Typography sx={{ fontSize: '0.6875rem', color: 'text.disabled', fontFamily: MONO }}>{count}</Typography>
     </Stack>
   )
 }
@@ -163,7 +163,7 @@ export function MentionRow({
         pr: 1,
         py: 0.625,
         border: 'none',
-        borderRadius: '9px',
+        borderRadius: '8px',
         textAlign: 'left',
         cursor: 'pointer',
         color: 'text.primary',
@@ -176,7 +176,7 @@ export function MentionRow({
           top: 8,
           bottom: 8,
           width: 2,
-          borderRadius: 2,
+          borderRadius: 1.6,
           bgcolor: active ? 'primary.main' : 'transparent',
         },
       }}
@@ -184,7 +184,7 @@ export function MentionRow({
       <Box
         sx={{
           width: 26,
-          height: 26,
+          height: 28,
           borderRadius: '8px',
           flexShrink: 0,
           display: 'flex',
@@ -218,11 +218,11 @@ function Tag({ children, color }: { children: ReactNode; color?: string }) {
     <Typography
       component="span"
       sx={{
-        fontSize: '0.625rem',
+        fontSize: '0.6875rem',
         fontFamily: MONO,
         px: 0.625,
         py: 0.125,
-        borderRadius: '5px',
+        borderRadius: '4px',
         color: color ?? 'text.secondary',
         bgcolor: color ? alpha(color, 0.12) : 'action.hover',
       }}

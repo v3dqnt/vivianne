@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Stack, Typography, Box, Tooltip, ButtonBase } from '../../../ui'
 import { call } from '../../../ipc'
+import { UsageByModel } from './UsageByModel'
 
 export interface UsageDay {
   input: number
@@ -230,7 +231,7 @@ export function UsageSection() {
               borderColor: 'divider',
             }}
           >
-            <Typography sx={{ fontSize: '1.375rem', fontWeight: 600, lineHeight: 1.2 }}>{s.value}</Typography>
+            <Typography sx={{ fontSize: '1.5rem', fontWeight: 600, lineHeight: 1.2 }}>{s.value}</Typography>
             <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>
               {s.label}
             </Typography>
@@ -241,7 +242,7 @@ export function UsageSection() {
       {/* Activity heatmap */}
       <Box sx={{ p: 2, borderRadius: 1.2, border: 1, borderColor: 'divider' }}>
         <Stack direction="row" sx={{ alignItems: 'center', mb: 1.5, gap: 1 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600, flex: 1 }}>
+          <Typography variant="body2" sx={{ fontWeight: 500, flex: 1 }}>
             Token activity
           </Typography>
           <Stack direction="row" sx={{ gap: 0.25 }}>
@@ -252,8 +253,8 @@ export function UsageSection() {
                 sx={{
                   px: 1,
                   py: 0.375,
-                  borderRadius: 1.5,
-                  fontSize: '0.71875rem',
+                  borderRadius: 1.6,
+                  fontSize: '0.75rem',
                   textTransform: 'capitalize',
                   color: mode === m ? 'text.primary' : 'text.secondary',
                   bgcolor: mode === m ? 'action.selected' : 'transparent',
@@ -333,9 +334,11 @@ export function UsageSection() {
         )}
       </Box>
 
+      <UsageByModel />
+
       {/* Insights */}
       <Box sx={{ p: 2, borderRadius: 1.2, border: 1, borderColor: 'divider' }}>
-        <Typography variant="body2" sx={{ fontWeight: 600, mb: 1.5 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500, mb: 1.5 }}>
           Activity insights
         </Typography>
         <Stack sx={{ gap: 0 }}>

@@ -23,6 +23,38 @@ export const hasTauri = (): boolean =>
  */
 export async function call<T>(command: string, args?: Record<string, unknown>): Promise<T | null> {
   if (!hasTauri()) return null
+  // Reads that many components make as they open share one round trip.
+  if (SHARED_READS.has(command)) {
+    const key = `${command}:${args ? JSON.stringify(args) : ''}`
+    const hit = recentReads.get(key)
+    if (hit && Date.now() - hit.at < SHARED_READ_MS) return hit.value as Promise<T | null>
+    const value = callUncached<T>(command, args)
+    recentReads.set(key, { at: Date.now(), value })
+    value.catch(() => recentReads.delete(key))
+    return value
+  }
+  // A write makes what it changes worth reading again: dropped once it has
+  // finished, so a read made meanwhile can't re-cache the old value.
+  const reads = INVALIDATES.get(command)
+  if (!reads) return callUncached<T>(command, args)
+  try {
+    return await callUncached<T>(command, args)
+  } finally {
+    for (const k of [...recentReads.keys()]) if (reads.some((r) => k.startsWith(`${r}:`))) recentReads.delete(k)
+  }
+}
+
+/** Read-only commands whose answer is the same for everyone asking within
+ * a moment. ponytail: a short window, not invalidation by backend events;
+ * make it event-driven if a list ever needs to update faster than this. */
+const SHARED_READS = new Set(['cmd_get_settings', 'cmd_list_skills', 'cmd_list_tool_names'])
+const SHARED_READ_MS = 1500
+/** Reads whose every write goes through one command. Lists with several
+ * writers (mods, sessions) are deliberately not shared. */
+const INVALIDATES = new Map<string, string[]>([['cmd_save_settings', ['cmd_get_settings']]])
+const recentReads = new Map<string, { at: number; value: Promise<unknown> }>()
+
+async function callUncached<T>(command: string, args?: Record<string, unknown>): Promise<T | null> {
   let waited = 0
   for (;;) {
     try {

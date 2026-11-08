@@ -33,7 +33,7 @@ export function GuidesSubsection() {
 
   return (
     <Stack sx={{ gap: 0.75 }}>
-      <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
         Guides
       </Typography>
       <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.5 }}>

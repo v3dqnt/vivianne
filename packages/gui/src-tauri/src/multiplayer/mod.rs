@@ -20,7 +20,7 @@ pub use state::MultiplayerState;
 /// right now. This is the "not all of a person's agent's work should be
 /// shown" gate.
 fn authorized_peer_for_workspace(folders: &[String], connected_peer_id: &str) -> bool {
-    let Some(project) = crate::agent::projects::find_project_for_workspace(folders) else { return false };
+    let Some(project) = crate::agent::sessions::projects::find_project_for_workspace(folders) else { return false };
     let Some(mp) = project.multiplayer else { return false };
     mp.peer_id == connected_peer_id
 }
@@ -40,8 +40,8 @@ const SENSITIVE_PATTERNS: &[&str] = &[
     ".aws/credentials", ".netrc", "token",
 ];
 
-fn looks_sensitive(message: &crate::agent::types::AgentMessage) -> bool {
-    use crate::agent::types::AgentMessage;
+fn looks_sensitive(message: &crate::agent::runtime::types::AgentMessage) -> bool {
+    use crate::agent::runtime::types::AgentMessage;
     let AgentMessage::ToolResult { tool_name, arguments, details, .. } = message else { return false };
     let mut haystack = tool_name.to_lowercase();
     if let Some(args) = arguments {
@@ -58,7 +58,7 @@ fn looks_sensitive(message: &crate::agent::types::AgentMessage) -> bool {
 /// Queues `message` for broadcast unless `looks_sensitive` flags it —
 /// shared by every broadcast site so the filter can't be forgotten at a new
 /// call site.
-async fn broadcast_if_not_sensitive(state: &MultiplayerState, message: &crate::agent::types::AgentMessage) {
+async fn broadcast_if_not_sensitive(state: &MultiplayerState, message: &crate::agent::runtime::types::AgentMessage) {
     if looks_sensitive(message) {
         log::info!("[multiplayer] withheld a tool result from the peer (matched a sensitive-content pattern)");
         return;
@@ -80,8 +80,8 @@ async fn broadcast_if_not_sensitive(state: &MultiplayerState, message: &crate::a
 /// paired, the type never got managed (endpoint failed to bind at
 /// startup), or the workspace/peer check fails — multiplayer is optional
 /// and scoped, this must never be why a normal turn fails or over-shares.
-pub async fn broadcast_agent_event(app: &tauri::AppHandle, workspace_folders: &[String], event: &crate::agent::events::AgentEvent) {
-    use crate::agent::events::AgentEvent;
+pub async fn broadcast_agent_event(app: &tauri::AppHandle, workspace_folders: &[String], event: &crate::agent::runtime::events::AgentEvent) {
+    use crate::agent::runtime::events::AgentEvent;
     use tauri::Manager;
     let Some(state) = app.try_state::<std::sync::Arc<MultiplayerState>>() else { return };
     let state::ConnectionStatus::Connected { peer_id, .. } = state.status().await else { return };
@@ -99,7 +99,7 @@ pub async fn broadcast_agent_event(app: &tauri::AppHandle, workspace_folders: &[
 /// Same gate as `broadcast_agent_event`, for the one message that isn't an
 /// `AgentEvent` — the user's own prompt, broadcast at the top of
 /// `cmd_agent_prompt` before the turn even starts.
-pub async fn broadcast_user_message(app: &tauri::AppHandle, workspace_folders: &[String], message: &crate::agent::types::AgentMessage) {
+pub async fn broadcast_user_message(app: &tauri::AppHandle, workspace_folders: &[String], message: &crate::agent::runtime::types::AgentMessage) {
     use tauri::Manager;
     let Some(state) = app.try_state::<std::sync::Arc<MultiplayerState>>() else { return };
     let state::ConnectionStatus::Connected { peer_id, .. } = state.status().await else { return };

@@ -1,10 +1,14 @@
-import { useState, type ReactNode } from 'react'
-import { Stack, Typography, Divider, Box, ButtonBase, Button, Slider, ToggleButtonGroup, ToggleButton, IconButton, Tooltip, Alert } from '../../../ui'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Stack, Typography, Divider, Box, ButtonBase, Button, Slider, ToggleButtonGroup, ToggleButton, IconButton, Tooltip, Alert, Switch } from '../../../ui'
 import { AddLinear, EditLinear, TrashLinear, ExportLinear, ImportLinear, CloseLinear } from '../../../icons'
 import { call, hasTauri } from '../../../ipc'
 import { allPalettes, FONTS, onColor, type FontChoice, type PaletteDef } from '../../../theme'
 import { useThemeStore, type ChatWidth, type Density, type ModePref } from '../store/themeStore'
 import { ThemeBuilder } from './ThemeBuilder'
+import { FaceEditor } from '../../team/components/FaceEditor'
+import { useFacePrefs } from '../../team/store/faceStore'
+import { useReadAloudPref } from '../../ai/lib/readAloud'
+import { SUBAGENT_COLOR_HEX } from '../lib/subagentProfiles'
 
 const ACCENTS = ['#4a9eff', '#7c5cff', '#d97757', '#e5484d', '#f5a524', '#30a46c', '#12a594', '#e93d82']
 
@@ -66,21 +70,21 @@ function ThemeCard({
     <Box
       sx={{
         position: 'relative',
-        borderRadius: 2,
+        borderRadius: 1.6,
         border: 1,
         borderColor: active ? 'primary.main' : 'divider',
         bgcolor: active ? 'action.selected' : 'transparent',
         '&:hover .theme-actions': { opacity: 1 },
       }}
     >
-      <ButtonBase onClick={onPick} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1.25, width: '100%', justifyContent: 'flex-start', borderRadius: 2 }}>
+      <ButtonBase onClick={onPick} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1.25, width: '100%', justifyContent: 'flex-start', borderRadius: 1.6 }}>
         <Box sx={{ display: 'flex', flexShrink: 0, pl: 0.5 }}>
           {p.swatches.slice(0, 4).map((c, i) => (
             <Box key={`${c}${i}`} sx={{ width: 18, height: 18, borderRadius: '50%', bgcolor: c, border: 1, borderColor: 'rgba(128,128,128,0.4)', mx: -0.35 }} />
           ))}
         </Box>
         <Stack sx={{ textAlign: 'left', minWidth: 0 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>
+          <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
             {p.symbol} {p.label}
           </Typography>
           <Typography variant="caption" color="text.secondary" noWrap>
@@ -88,7 +92,7 @@ function ThemeCard({
           </Typography>
         </Stack>
       </ButtonBase>
-      <Stack direction="row" className="theme-actions" sx={{ position: 'absolute', right: 6, top: 6, opacity: 0, transition: 'opacity 120ms', bgcolor: 'background.paper', borderRadius: 1 }}>
+      <Stack direction="row" className="theme-actions" sx={{ position: 'absolute', right: 6, top: 6, opacity: 0, transition: 'opacity 120ms', bgcolor: 'background.paper', borderRadius: 0.8 }}>
         <Tooltip title={custom ? 'Edit' : 'Make a copy to edit'}>
           <IconButton size="small" onClick={onEdit}>
             <EditLinear size={13} color="currentColor" />
@@ -155,7 +159,7 @@ export function ThemesSection() {
 
   return (
     <Stack sx={{ gap: 1.5 }}>
-      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
         Appearance
       </Typography>
 
@@ -227,7 +231,7 @@ export function ThemesSection() {
           aria-label="Any colour"
           value={s.accent ?? '#4a9eff'}
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => s.update({ accent: e.target.value })}
-          sx={{ width: 26, height: 22, p: 0, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'transparent', cursor: 'pointer' }}
+          sx={{ width: 26, height: 24, p: 0, border: 1, borderColor: 'divider', borderRadius: 0.8, bgcolor: 'transparent', cursor: 'pointer' }}
         />
         {s.accent && (
           <Tooltip title="Back to the theme's accent">
@@ -288,6 +292,8 @@ export function ThemesSection() {
           onChange={(chatWidth) => s.update({ chatWidth })}
         />
       </Row>
+      <VisualsRow />
+      <ReadAloudRow />
 
       <Divider />
 
@@ -318,6 +324,9 @@ export function ThemesSection() {
         </>
       )}
 
+      <Divider />
+      <RobotHeads />
+
       {error && <Alert severity="error">{error}</Alert>}
 
       <Box>
@@ -328,5 +337,83 @@ export function ThemesSection() {
 
       {builder && <ThemeBuilder base={builder.base} editing={builder.editing} onClose={() => setBuilder(null)} />}
     </Stack>
+  )
+}
+
+/** Every agent's robot head: size, when they move, and Vivianne's own. */
+function RobotHeads() {
+  const f = useFacePrefs()
+  return (
+    <Stack sx={{ gap: 0.5 }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
+        Robot heads
+      </Typography>
+      <Row label="Size" hint="Every agent's head, everywhere">
+        <Box sx={{ width: 180 }}>
+          <Slider value={f.scale} min={0.85} max={1.25} step={0.05} aria-label="Head size" onChange={(_e, v) => f.update({ scale: v as number })} />
+        </Box>
+      </Row>
+      <Row label="Movement" hint="Busy: heads move only while their agent works">
+        <Segmented
+          value={f.motion}
+          options={[
+            ['busy', 'When busy'],
+            ['always', 'Always'],
+            ['never', 'Never'],
+          ]}
+          onChange={(motion) => f.update({ motion })}
+        />
+      </Row>
+      <Typography variant="body2" sx={{ fontWeight: 500, mt: 1, mb: 0.5 }}>
+        Vivianne
+      </Typography>
+      <FaceEditor
+        name="Vivianne"
+        color={f.viv.color ?? '#5b5b66'}
+        face={f.viv}
+        onChange={({ color, face }) => f.update({ viv: { ...(face ?? {}), color: color.startsWith('#') ? color : SUBAGENT_COLOR_HEX[color as keyof typeof SUBAGENT_COLOR_HEX] } })}
+      />
+    </Stack>
+  )
+}
+
+/** How much live UI (calculators, charts, mini-apps) Vivianne puts in her
+ * replies. Read by the backend into her instructions each turn. */
+function VisualsRow() {
+  const [v, setV] = useState<'fewer' | 'auto' | 'more'>('auto')
+  useEffect(() => {
+    void call<Record<string, unknown>>('cmd_get_settings').then((st) => {
+      const x = st?.chatVisuals
+      if (x === 'fewer' || x === 'more') setV(x)
+    })
+  }, [])
+  const set = async (next: 'fewer' | 'auto' | 'more') => {
+    setV(next)
+    const st = (await call<Record<string, unknown>>('cmd_get_settings')) ?? {}
+    await call('cmd_save_settings', { settings: { ...st, chatVisuals: next } })
+  }
+  return (
+    <Row label="Visuals in answers" hint="Charts, calculators and small interactive apps inside replies">
+      <Segmented
+        value={v}
+        options={[
+          ['fewer', 'Fewer'],
+          ['auto', 'Auto'],
+          ['more', 'More'],
+        ]}
+        onChange={(n) => void set(n)}
+      />
+    </Row>
+  )
+}
+
+/** Whether a reply to a spoken prompt is read out when it's done. */
+function ReadAloudRow() {
+  const on = useReadAloudPref((s) => s.whenDictated)
+  const set = useReadAloudPref((s) => s.set)
+  return (
+    <Row label="Read replies aloud after I dictate" hint="Speak the answer when the prompt was spoken with the mic. Every reply also has its own read button">
+      <Switch size="small" checked={on} onChange={(e) => set(e.target.checked)} />
+    </Row>
   )
 }
