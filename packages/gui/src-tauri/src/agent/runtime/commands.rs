@@ -566,6 +566,8 @@ pub async fn cmd_agent_abort(#[allow(non_snake_case)] threadId: Option<String>,
     // thread's; track them per thread if two threads run plans at once.
     crate::agent::team::plans::cancel_all();
     crate::agent::team::run::cancel_all();
+    // The thread's background subagents too: Stop used to end only the thread's own loop and leave them spending.
+    crate::agent::runtime::subagents::SubagentRegistry::global().cancel_thread(threadId.as_deref());
     Ok(())
 }
 

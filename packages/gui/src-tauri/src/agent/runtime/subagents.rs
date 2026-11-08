@@ -191,6 +191,13 @@ impl SubagentRegistry {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
     }
 
+    /// Stop every subagent still working for a thread (its children's children included, since they carry the same thread). The thread's Stop
+    /// button used to end only the thread's own loop and leave these spending. Returns how many were stopped.
+    pub fn cancel_thread(&self, thread: Option<&str>) -> usize {
+        let mine: Vec<_> = self.all().into_iter().filter(|h| h.lock().unwrap_or_else(|e| e.into_inner()).thread.as_deref() == thread).collect();
+        mine.iter().filter(|h| cancel_subagent(h, Some("the thread was stopped".into()))).count()
+    }
+
     /// How many subagents are still working (not yet completed, failed or cancelled).
     pub fn active_count(&self) -> usize {
         self.all().iter().filter(|h| !h.lock().unwrap_or_else(|e| e.into_inner()).status.is_terminal()).count()
@@ -487,6 +494,25 @@ mod tree_tests {
         let done = handle("direct-2", "direct-2", None, "t", SubagentStatus::Failed { error: "x".into() });
         SubagentRegistry::global().register_for_test(done);
         assert!(message_from_user("direct-2", "hi").await.unwrap_err().contains("finished"));
+    }
+
+    #[test]
+    fn stopping_a_thread_stops_its_running_subagents_and_only_those() {
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let other_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mine = handle("stop-1", "stop-1", None, "stop-thread", SubagentStatus::Running { turns: 0, tool_calls: 0 });
+        mine.lock().unwrap().abort = Some(flag.clone());
+        let grandchild = handle("stop-2", "stop-2", Some("stop-1"), "stop-thread", SubagentStatus::Running { turns: 0, tool_calls: 0 });
+        let finished = handle("stop-3", "stop-3", None, "stop-thread", SubagentStatus::Failed { error: "x".into() });
+        let elsewhere = handle("stop-4", "stop-4", None, "other-thread", SubagentStatus::Running { turns: 0, tool_calls: 0 });
+        elsewhere.lock().unwrap().abort = Some(other_flag.clone());
+        for h in [mine, grandchild, finished, elsewhere.clone()] {
+            SubagentRegistry::global().register_for_test(h);
+        }
+        assert_eq!(SubagentRegistry::global().cancel_thread(Some("stop-thread")), 2);
+        assert!(flag.load(std::sync::atomic::Ordering::SeqCst), "its loop is told to stop, not just its record");
+        assert!(!other_flag.load(std::sync::atomic::Ordering::SeqCst), "another thread's subagent keeps going");
+        assert!(!elsewhere.lock().unwrap().cancelled);
     }
 
     #[test]
