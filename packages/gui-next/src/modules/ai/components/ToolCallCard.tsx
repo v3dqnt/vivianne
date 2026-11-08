@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { call } from '../../../ipc'
+import { useEffect, useState } from 'react'
+import { call, on } from '../../../ipc'
 import { Box, Button, Collapse, CircularProgress, Typography, Stack } from '../../../ui'
 import {
   CommandLinear,
@@ -19,6 +19,7 @@ import {
 } from '../../../icons'
 import type { AgentMessage } from '../lib/types'
 import { shellOutcome } from '../lib/shellOutcome'
+import { phaseName, withProgress, type ProgressEvent } from '../lib/scriptProgress'
 import { contentToText, contentImages } from '../lib/types'
 import { ImageBlock } from './ImageBlock'
 import { DiffView } from './DiffView'
@@ -226,6 +227,13 @@ export function ToolCallCard({
   const Icon = iconFor(message.toolName)
   // A program is described by what it says it does; the code itself is in the body.
   const program = message.toolName === 'run_script' && typeof message.arguments?.code === 'string' ? (message.arguments.code as string) : null
+  // What a running script reports with log() and phase().
+  const [progress, setProgress] = useState<string[]>([])
+  useEffect(() => {
+    if (!program || message.isError !== null) return
+    const off = on<ProgressEvent>('script_progress', (e) => setProgress((lines) => withProgress(lines, e, message.toolCallId)))
+    return () => void off.then((f) => f())
+  }, [program, message.isError, message.toolCallId])
   const programNote = program && typeof message.arguments?.description === 'string' ? (message.arguments.description as string) : null
   const summary = programNote ?? argSummary(message.arguments)
   const [label, target] = declarationFor(message.toolName, pending, summary)
@@ -378,6 +386,15 @@ export function ToolCallCard({
                 </Box>
               ))}
               {program && <CodeBlock code={program} lang="javascript" wrap bare dense collapsible />}
+              {progress.length > 0 && (
+                <Stack sx={{ gap: '2px', fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem', color: 'text.secondary' }}>
+                  {progress.map((line, i) => (
+                    <Box key={i} sx={phaseName(line) ? { color: 'text.primary', fontWeight: 500, pt: '4px' } : undefined}>
+                      {phaseName(line) ?? line}
+                    </Box>
+                  ))}
+                </Stack>
+              )}
               {output && <ToolOutput code={output} lang={outputLang} />}
             </Stack>
           )}

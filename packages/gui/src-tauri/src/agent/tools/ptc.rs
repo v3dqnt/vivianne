@@ -52,7 +52,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
-const MAX_TIMEOUT_SECS: u64 = 600;
+/// A script that runs agents can take a long time; its children stop with it, so the limit is the one thing keeping a run bounded.
+const MAX_TIMEOUT_SECS: u64 = 1800;
 const MEMORY_LIMIT_BYTES: usize = 512 * 1024 * 1024;
 
 /// What one program may make: a call a minute at 1024 a minute of its own time limit (2048 at the default two minutes), never fewer than 64.
@@ -186,6 +187,55 @@ globalThis.parallel = async (items, fn, limit) => {
   await Promise.all(Array.from({ length: n }, () => worker()));
   return out;
 };
+// ── Orchestration: agents, phases, progress ──
+// log(...) and phase(name) reach the user while the script is still running (and are kept for the returned output); console.log only
+// shows when it ends.
+globalThis.__progress = (text) => { if (typeof __vivProgress === "function") __vivProgress(String(text).slice(0, 500)); };
+globalThis.phase = (name) => { __logs.push("== " + name + " =="); __progress("== " + name + " =="); };
+globalThis.log = (...a) => {
+  const s = a.map((v) => typeof v === "string" ? v : (() => { try { return JSON.stringify(v); } catch (e) { return String(v); } })()).join(" ");
+  __logs.push(s);
+  __progress(s);
+};
+// At most this many agents work at once across the whole program, and at most this many may be started in all. Anyone over the first
+// limit waits its turn in order; the second is a runaway guard.
+globalThis.__agents = { active: 0, max: 8, queue: [], started: 0, cap: 200 };
+const __acquire = () => new Promise((resolve) => {
+  if (__agents.active < __agents.max) { __agents.active++; resolve(); } else __agents.queue.push(resolve);
+});
+const __release = () => { const next = __agents.queue.shift(); if (next) next(); else __agents.active--; };
+// agent(prompt, { label, schema, model, provider, subagent_type }) runs a subagent and waits for it. It resolves to the answer: text, or
+// with a schema the parsed object. An agent that fails, or whose answer does not fit the schema, resolves to null so one bad item does
+// not end a fan-out; only a fault in the machinery (the agent cap, a bad call) throws. Agents stop with the script.
+globalThis.agent = async (prompt, opts) => {
+  const o = opts || {};
+  if (++__agents.started > __agents.cap) throw new Error("a program may start at most " + __agents.cap + " agents");
+  await __acquire();
+  try {
+    const args = { description: String(o.label || "script agent").slice(0, 60), prompt: String(prompt), subagent_type: o.subagent_type || "general-purpose", run_in_background: false };
+    if (o.schema) args.output_schema = o.schema;
+    if (o.model) { args.model = o.model; if (o.provider) args.provider = o.provider; }
+    let text;
+    try {
+      text = await __t("task", args);
+    } catch (e) {
+      if (e instanceof ToolCallError && /limit is|isn't available|not allowed/i.test(e.message)) throw e;
+      __progress("agent failed: " + String(e.message).slice(0, 160));
+      return null;
+    }
+    if (/^Subagent '[^']*' failed:/.test(text)) { __progress(text.slice(0, 200)); return null; }
+    const marker = "Structured answer:\n\n";
+    const at = text.indexOf(marker);
+    if (o.schema) {
+      if (at < 0) return null;
+      try { return JSON.parse(text.slice(at + marker.length)); } catch (e) { return null; }
+    }
+    const body = text.indexOf("):\n\n");
+    return body >= 0 ? text.slice(body + 4) : text;
+  } finally {
+    __release();
+  }
+};
 globalThis.callTool = (name, args) => __t(name, args ?? {});
 globalThis.tools = new Proxy({}, { get: (_, name) => (args) => __t(String(name), args ?? {}) });
 globalThis.listTools = () => (globalThis.__vivToolNames || []).slice();
@@ -305,6 +355,12 @@ async fn run_script(
                 }
             })))
         };
+        let bound = bound.and_then(|()| {
+            let (app, outer_id) = (app.clone(), outer_id.clone());
+            ctx.globals().set("__vivProgress", Func::from(move |text: String| {
+                let _ = tauri::Emitter::emit(&app, "script_progress", serde_json::json!({ "callId": outer_id, "text": text }));
+            }))
+        });
         let bound = bound.and_then(|()| {
             let allowed = allowed.clone();
             ctx.globals().set("__vivToolInfo", Func::from(Async(move |name: String| {
@@ -557,11 +613,29 @@ mod tests {
             let bound = ctx.globals().set("__vivTool", Func::from(Async(|name: String, args_json: String| async move {
                 let payload = if name == "explode" {
                     serde_json::json!({ "ok": false, "error": "explode failed" })
+                } else if name == "task" {
+                    let args: serde_json::Value = serde_json::from_str(&args_json).unwrap_or_default();
+                    let now = IN_FLIGHT.fetch_add(1, Ordering::SeqCst) + 1;
+                    MOST_AT_ONCE.fetch_max(now, Ordering::SeqCst);
+                    for _ in 0..4 {
+                        tokio::task::yield_now().await;
+                    }
+                    IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+                    let prompt = args["prompt"].as_str().unwrap_or("");
+                    match prompt {
+                        "fail" => serde_json::json!({ "ok": true, "text": "Subagent 'a' failed: boom" }),
+                        "refuse" => serde_json::json!({ "ok": false, "error": "the model refused" }),
+                        "limit" => serde_json::json!({ "ok": false, "error": "8 subagents are already working (the limit is 8)" }),
+                        _ if args.get("output_schema").is_some() && prompt == "unfit" => serde_json::json!({ "ok": true, "text": "Subagent 'a' completed (1 tool calls, 1 turns, stop: completed):\n\nplain words" }),
+                        _ if args.get("output_schema").is_some() => serde_json::json!({ "ok": true, "text": "Subagent 'a' completed (1 tool calls, 1 turns, stop: completed). Structured answer:\n\n{\"n\":3}" }),
+                        _ => serde_json::json!({ "ok": true, "text": format!("Subagent 'a' completed (1 tool calls, 1 turns, stop: completed):\n\nanswer to {prompt}") }),
+                    }
                 } else {
                     serde_json::json!({ "ok": true, "text": format!("{name}<-{args_json}") })
                 };
                 Ok::<String, rquickjs::Error>(payload.to_string())
             })));
+            let bound = bound.and_then(|()| ctx.globals().set("__vivProgress", Func::from(|_text: String| {})));
             let bound = bound.and_then(|()| ctx.globals().set("__vivToolInfo", Func::from(Async(|name: String| async move {
                 let p = if name == "web_search" {
                     serde_json::json!({ "ok": true, "info": { "name": name, "parameters": { "type": "object" } } })
@@ -591,6 +665,35 @@ mod tests {
         drop(ctx);
         drop(rt);
         result
+    }
+
+    static IN_FLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static MOST_AT_ONCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    #[tokio::test]
+    async fn agents_resolve_to_answers_objects_or_null_and_never_exceed_the_slot_limit() {
+        assert_eq!(run(r#"await agent("look")"#).await.unwrap(), "answer to look");
+        assert_eq!(run(r#"JSON.stringify(await agent("look", { schema: { type: "object" } }))"#).await.unwrap(), r#"{"n":3}"#);
+        // An ordinary failure, a refused call and an answer that does not fit are all null: the fan-out goes on.
+        assert_eq!(run(r#"String(await agent("fail"))"#).await.unwrap(), "null");
+        assert_eq!(run(r#"String(await agent("refuse"))"#).await.unwrap(), "null");
+        assert_eq!(run(r#"String(await agent("unfit", { schema: { type: "object" } }))"#).await.unwrap(), "null");
+        // A fault in the machinery is not swallowed.
+        assert!(run(r#"await agent("limit")"#).await.unwrap_err().contains("the limit is 8"));
+        // Twenty agents at once: never more than eight working together.
+        MOST_AT_ONCE.store(0, Ordering::SeqCst);
+        let out = run(r#"(await parallel(Array.from({length: 20}, (_, i) => i), (i) => agent("p" + i), 16)).filter(Boolean).length"#).await.unwrap();
+        assert_eq!(out, "20");
+        let most = MOST_AT_ONCE.load(Ordering::SeqCst);
+        assert!(most > 1 && most <= 8, "{most} agents at once");
+        // The runaway guard.
+        assert!(run(r#"for (let i = 0; i < 201; i++) await agent("x"); 1"#).await.unwrap_err().contains("at most 200 agents"));
+    }
+
+    #[tokio::test]
+    async fn phases_and_logs_are_kept_in_the_output() {
+        let out = run(r#"phase("scan"); log("found", 3, {a: 1}); "done""#).await.unwrap();
+        assert_eq!(out, "done");
     }
 
     /// `JSON.stringify` dropping `undefined` keys IS the optional-arg handling.

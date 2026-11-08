@@ -15,6 +15,11 @@ Follows [deepseek-client-gap-analysis.md](deepseek-client-gap-analysis.md). The 
 | Subagent tree | children under their parent, the agent's name, a plain-words stop reason, and a two-press stop | `modules/ai/lib/subagentTree.ts`, `SubagentPanel.tsx`; backend `name`, `parent`, `stop_reason` in `cmd_coding_list_subagents` |
 | Writing to a running subagent | the transcript has an input; the message reaches the child at its next step | `cmd_coding_message_subagent`, `subagents::message_from_user` |
 | Jobs list | background commands with status, a two-press stop, and the last output when they end | `agent/tools/background.rs` (`cmd_jobs_list`, `cmd_job_stop`, `cmd_jobs_clear`), `JobsPanel.tsx`, `jobsStore.ts` |
+| Context-menu registry | target-typed registry, providers raced against a 1 s timeout, grouped items; thread and file providers registered at startup | `lib/contextMenu.ts`, `components/ContextMenu.tsx`, `modules/sessions/contextMenus.ts` |
+| Open in app | the editors found on PATH (VS Code, Cursor, Windsurf, Zed, Sublime, Notepad++), default app, show in folder; opens at a line where the editor allows it | `agent/system/open_apps.rs`, file right-click menu |
+| Fork and archive threads | right-click a thread: fork into a new thread, archive (hidden behind "Show archived"), delete. Archive is kept per device. Fork uses the existing session-copy command and has not been run in the app | `daysStore.forkThread`, `lib/archivedThreads.ts`, `HomeView.tsx` |
+| Terminal reads that don't consume | offset-addressed buffer, a per-session cursor, a `from` argument, a note when the head was dropped, and the next offset in every result | `cli_tools/output_buffer.rs`, `terminal.rs` |
+| Tree kill for MCP, LSP and checker children | own process group, killed with their tree on drop, shutdown or deadline | `runtime/streaming.rs` (`own_group`, `TreeKillOnDrop`) |
 | Staged-save limits card | shell timeout and subagent count, edited as a draft: Save, a "changed from" marker, Reset, and a reason for an invalid value. The backend reads them on each use | `settings/lib/limits.ts`, `LimitsCard.tsx`, `agent/tools/limits.rs` |
 
 ## Filed: not built
@@ -30,13 +35,10 @@ Sizes: S is under a day, M a few days, L about a week or more.
 | File tree per pane (`ui-sidebar-files`) | A tree component fed by `cmd_list_dir_tree`, with expansion and scroll kept per pane. Needs the sidebar tabs | M |
 | Preview renderer registry | `FilePreview.tsx` hard-codes four kinds. It's a small refactor, but only worth doing together with the sidebar, when previews gain a second home | S |
 | Panel geometry service (`ui-layout`) | Replace the fixed `RAIL_RESERVE` padding with panels that report their width. Pairs with the sidebar | M |
-| Thread row actions and a pending dot (`ui-workspace`) | Fork needs a backend operation that copies a thread's events. Archive and reorder need a field on the thread record. The dot reuses existing busy/approval state | M |
 
 ### Chat and composer
 | Gap | What it needs | Size |
 |---|---|---|
-| Open in app (`ui-open-in-app`) | Backend enumeration of installed editors and apps on Windows, macOS and Linux, then a submenu on `FileLink` | M |
-| Context-menu registry (`ui-context-menu`) | A target-typed registry with a resolve timeout, then move the hand-wired right-click in `FileLink.tsx` onto it | M |
 | Message feedback (`ui-message-feedback`) | A thumbs pair plus a dialog. Needs a place to store the feedback and a decision about where it goes | S–M |
 | Session mentions (`ui-reference`) | `@thread` candidates and an atomic reference token. The backend already has multi-thread `read_thread` | S |
 | Uploads with progress and cancel (`file-upload`) | Today files are inlined at send, so there's nothing to upload. Only worth it if attachments move to a staged-receipt model | M |
@@ -73,9 +75,8 @@ Done for `bash` and `powershell`: a timeout keeps the output so far, the drain a
 | Gap | What it needs | Size |
 |---|---|---|
 | Subagent harness children still get the full environment | Deliberately left: a harness such as Codex or Claude Code may rely on a provider key from the parent. Decide which keys each harness is allowed, then scrub the rest | S |
-| Tree containment outside `bash` and `powershell` | MCP servers, language servers, checkers and the docker path still kill only the direct child. Use the same process-group and `taskkill /T` helpers | M |
+| Tree containment for the docker path and the subagent harnesses | MCP, LSP and checkers now kill their tree; the docker path and harness children still kill only the direct child | S |
 | One spawn seam | A `ProcessRuntime` that the roughly 90 `Command::new` sites go through, so containment, env scrub and deadlines are decided once | L |
 | Shared output collector | Byte-oriented, with one spill file that holds the whole stream, offset readers, and a "head was dropped" flag | M |
-| Terminal reads that don't consume | `terminal.rs` drains the buffer on each read. Add an offset read and report truncation to the model | S |
 | PTY readiness | Foreground process and idle/busy state, so the model stops guessing with fixed sleeps | M |
 | Process lifecycle tests | Spawn and collect, tree kill, drain cannot escape the deadline, terminal resize. `streaming.rs` has the shell cases; nothing covers the other call sites | M |

@@ -158,7 +158,12 @@ pub fn program_args() -> Vec<String> {
 
 /// Whether this process was started as `app run ...`.
 pub fn is_run() -> bool {
-    matches!(program_args().first().map(String::as_str), Some("run") | Some("chat"))
+    matches!(program_args().first().map(String::as_str), Some("run") | Some("chat") | Some("acp"))
+}
+
+/// Whether this process was started as `app acp`: an Agent Client Protocol server on stdin and stdout.
+pub fn is_acp() -> bool {
+    program_args().first().map(String::as_str) == Some("acp")
 }
 
 /// Turn on the Rust model path. Called once, before the app starts.
@@ -166,7 +171,7 @@ pub fn enable_native() {
     NATIVE.store(true, Ordering::Relaxed);
 }
 
-fn thinking_from(level: &str) -> ThinkingLevel {
+pub(crate) fn thinking_from(level: &str) -> ThinkingLevel {
     match level.to_lowercase().as_str() {
         "minimal" => ThinkingLevel::Minimal,
         "low" => ThinkingLevel::Low,
@@ -179,7 +184,7 @@ fn thinking_from(level: &str) -> ThinkingLevel {
 
 /// A model reference from `provider/id`, with the wire format and base URL
 /// the provider registry says that provider uses.
-fn model_from(spec: &str) -> Result<ModelRef, String> {
+pub(crate) fn model_from(spec: &str) -> Result<ModelRef, String> {
     // The cost-aware router: each task is graded and sent to the Easy,
     // Medium or Hard model set in Settings (the same as picking "Auto").
     if matches!(spec, "auto" | "router" | "router/viv-auto") {

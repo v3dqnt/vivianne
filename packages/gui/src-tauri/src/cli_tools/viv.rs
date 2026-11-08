@@ -49,6 +49,7 @@ servers
 agents
   chat [options]                a conversation in the terminal (/exit to leave)
   run \"<task>\" [options]        one agent task with no window; see `run --help`
+  acp                           serve the agent over the Agent Client Protocol on stdin/stdout
 
 setup
   doctor [--json]               what is installed, which keys are set, what is missing
@@ -70,7 +71,7 @@ pub fn handles(args: &[String]) -> bool {
 /// since the system launches the app with those.
 pub fn is_unknown_command(args: &[String]) -> bool {
     let Some(first) = args.first() else { return false };
-    if first.starts_with('-') || first.contains("://") || Path::new(first).exists() || first == "run" || first == "chat" {
+    if first.starts_with('-') || first.contains("://") || Path::new(first).exists() || first == "run" || first == "chat" || first == "acp" {
         return false;
     }
     first.chars().all(|c| c.is_ascii_alphabetic() || c == '-') && !COMMANDS.contains(&first.as_str())

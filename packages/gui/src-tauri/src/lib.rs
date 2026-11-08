@@ -109,6 +109,10 @@ try `viv help`", cli::program_args()[0]);
     println!("{}", cli::help());
     std::process::exit(0);
   }
+  // `app acp`: the agent as a protocol server. Model calls go through the Rust path, as for `run`.
+  if cli::is_acp() {
+    cli::enable_native();
+  }
   let cli_run = match cli::parse(&cli::program_args()) {
     Some(Ok(args)) => {
       cli::enable_native();
@@ -993,6 +997,10 @@ try `viv help`", cli::program_args()[0]);
       if let Some(args) = cli_run.clone() {
         let handle = app.handle().clone();
         tauri::async_runtime::spawn(async move { cli::run(handle, args).await });
+      }
+      if cli::is_acp() {
+        let handle = app.handle().clone();
+        tauri::async_runtime::spawn(async move { crate::cli_tools::acp::serve(handle).await });
       }
 
       // The overlay windows (DIP, Viv Instant, pointer) aren't created here:
