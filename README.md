@@ -35,6 +35,11 @@ Vivianne is a native desktop app (Tauri 2, Rust and React). You talk to it in a 
 - In a git project, each thread works in its own worktree and branch, cut from where you were. A checkpoint is saved around every turn on a hidden ref, so you can see what a turn changed or roll it back without touching your branch. Merge or drop the branch from the project rail.
 - Threads can start, message and ask each other. The project rail also shows each thread's context, its pull requests, and what it has spent.
 - A thread stopped by a usage limit picks itself up when the limit lifts.
+- The project rail has tabs: Overview, Files (a tree with per-language icons), Preview, and a real Terminal.
+- `/goal` in the composer sets an objective the thread keeps working toward.
+
+**Command line and editors**
+- `viv` manages local models and runs tasks from a terminal; `app run` runs one task headless, and `app acp` speaks the Agent Client Protocol so an editor can drive Vivianne.
 
 **Teams of agents**
 - A project can be a set of threads, a **company** (a master agent with employees), or an **agent team**: teammates you define, each with its own job, model, tools, rules and memory.

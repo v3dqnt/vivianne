@@ -2,7 +2,7 @@
 
 All notable changes to Vivianne are documented here.
 
-## [1.9.1-rdv2] — 2026-11-06
+## [1.9.1-rdv2] — 2026-11-08
 
 ### Changed
 
@@ -16,6 +16,13 @@ All notable changes to Vivianne are documented here.
 - **A quieter composer.** Two colours, a plus for attachments, shorter and taller, and no project picker (it moved to the rail). Icons are Solar.
 - **A new logo.** The app icon, taskbar icon and in-app mark are now the Vivianne tesseract.
 - **Old sessions import.** Sessions saved by older versions are now read when conversations are copied into the new thread database.
+- **Rail tabs.** The project rail has Overview, Files, Preview and Terminal tabs with a sliding selector. Files is a tree with a filter and per-language file icons (Material Icon Theme), Preview shows one file, and Terminal is a real shell that keeps its scrollback while you look at another tab. The working tabs widen the rail smoothly and the chat eases over to match.
+- **`/goal` lives in the composer.** `/goal <objective>`, `pause`, `resume`, `done` and `clear`, with a quiet goal line above the composer. Goal left the rail.
+- **Motion.** The reasoning label swaps through thinking states, and streamed words fade in. Streamed Markdown is no longer rebuilt on every token.
+- **`app acp`.** Vivianne speaks the Agent Client Protocol over stdio, so editors can drive it. Tried against the real binary for session setup and listing; a full prompt is not yet verified.
+- **Scripted agents.** `run_script` gets `agent()`, `phase()` and `log()` with live progress, an 8-at-once limit, a 200-agent cap and a 30-minute ceiling.
+- **Safer files and processes.** One writer per file, edits refused when the file changed since it was read, atomic writes, large files streamed. Shell, MCP, language-server and checker children run in their own process group and are killed as a tree; credentials are withheld from them.
+- **Tools.** Web fetch can be cancelled and returns summary and published date separately; language-server navigation tools; MCP routes calls by known server names, keeps a server's last tools when a re-list fails, and names non-text results; a broken agent profile is reported instead of silently losing tools.
 - **24/7 agents:** approvals appear as cards in the chat, Stop works mid-task, and there is a Widget Lab.
 
 ### Removed
