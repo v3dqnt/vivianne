@@ -22,14 +22,9 @@ export function RailTabs({ hasFolder }: { hasFolder: boolean }) {
   if (shown.length < 2) return null
   const tabs = shown.map(({ id, label, Icon }) => ({ id, label, icon: <Icon size={14} color="currentColor" /> }))
   return (
-    // The card asks its own width: icons only while it is narrow, names once it has widened.
-    <Box sx={{ mb: '12px', flexShrink: 0, '& .rail-wide': { display: 'none' }, '@container (min-width: 360px)': { '& .rail-wide': { display: 'block' }, '& .rail-narrow': { display: 'none' } } }}>
-      <Box className="rail-narrow">
-        <SegmentedTabs fill compact value={tab} onChange={setTab} tabs={tabs} />
-      </Box>
-      <Box className="rail-wide">
-        <SegmentedTabs fill value={tab} onChange={setTab} tabs={tabs} />
-      </Box>
+    // One set of tabs, so the chip slides between them; the names hide while the card is narrow (it asks its own width).
+    <Box sx={{ mb: '12px', flexShrink: 0, '& .seg-label': { display: 'none' }, '@container (min-width: 360px)': { '& .seg-label': { display: 'inline' } } }}>
+      <SegmentedTabs fill value={tab} onChange={setTab} tabs={tabs} />
     </Box>
   )
 }

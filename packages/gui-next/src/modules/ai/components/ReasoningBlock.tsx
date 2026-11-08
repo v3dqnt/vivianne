@@ -3,6 +3,8 @@ import { Box, Typography } from '../../../ui'
 import { ArrowDownLinear } from '../../../icons'
 import { useThrottledValue } from '../../../lib/useThrottledValue'
 import { CHAT_GUTTER } from '../lib/chatStyle'
+import { ThinkingStates } from '../../../components/ThinkingStates'
+import { THINKING_STATES } from './ThinkingIndicator'
 
 /** Collapsible model-reasoning text (`thinking` content blocks) — muted and auto-expanded while actively streaming so the reasoning is visible live, not just after the fact. */
 export const ReasoningBlock = memo(function ReasoningBlock({ text, streaming }: { text: string; streaming?: boolean }) {
@@ -34,7 +36,9 @@ export const ReasoningBlock = memo(function ReasoningBlock({ text, streaming }: 
           '&:hover': { color: 'text.primary' },
         }}
       >
-        <Typography variant="caption">{streaming ? 'Thinking…' : 'Reasoning'}</Typography>
+        <Typography variant="caption" component="span">
+          {streaming ? <ThinkingStates states={THINKING_STATES} /> : 'Reasoning'}
+        </Typography>
         <Box sx={{ display: 'flex', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
           <ArrowDownLinear size={12} color="currentColor" />
         </Box>

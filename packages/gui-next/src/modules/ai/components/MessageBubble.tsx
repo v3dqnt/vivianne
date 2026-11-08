@@ -163,7 +163,7 @@ function MessageBubbleImpl({
             </Typography>
           ) : (
             // A reply that reads like a report becomes a card once it is complete.
-            streaming ? <Markdown text={text} /> : <ReportMarkdown text={text} />
+            streaming ? <Markdown text={text} animate /> : <ReportMarkdown text={text} />
           )}
         </Box>
       )}

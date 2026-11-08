@@ -6,11 +6,12 @@ import { KitSection } from './KitSection'
 import { IconsSection } from './IconsSection'
 import { AppSection } from './AppSection'
 import { ScenesSection } from './ScenesSection'
+import { MotionSection } from './MotionSection'
 import { useThemeStore, themeOptions, activePaletteId } from '../modules/settings/store/themeStore'
 import { AppearanceEffects } from '../modules/settings/components/AppearanceEffects'
 import '../tailwind.css'
 
-const TABS = ['Scenes', 'Kit', 'Icons', 'App components'] as const
+const TABS = ['Scenes', 'Kit', 'Icons', 'App components', 'Motion'] as const
 
 function Gallery() {
   // The app's own appearance pipeline, so every component is drawn exactly as in the app: its palette, fonts, radius, density and wallpaper.
@@ -40,6 +41,7 @@ function Gallery() {
           {tab === 'Kit' && <KitSection />}
           {tab === 'Icons' && <IconsSection />}
           {tab === 'App components' && <AppSection />}
+          {tab === 'Motion' && <MotionSection />}
         </Suspense>
       </Box>
     </ThemeProvider>
