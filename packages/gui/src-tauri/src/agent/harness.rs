@@ -265,6 +265,9 @@ struct Conn {
     alive: Arc<AtomicBool>,
     session: tokio::sync::Mutex<Option<String>>,
     _child: tokio::sync::Mutex<tokio::process::Child>,
+    /// Ends the agent's whole process tree when the connection is dropped: `npx` and `.cmd` shims start the real agent as a grandchild, which
+    /// `kill_on_drop` alone would leave running.
+    _tree: crate::agent::runtime::streaming::TreeKillOnDrop,
 }
 
 impl Conn {
@@ -309,10 +312,12 @@ async fn spawn(h: &Harness, cwd: &str) -> Result<Arc<Conn>, String> {
     let program = h.cmd.clone();
     let mut command = tokio::process::Command::new(&program);
     command.args(&h.args).envs(&h.env).current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    crate::agent::runtime::streaming::own_group(&mut command);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     trace(&h.name, format!("starting: {program} {} (in {cwd})", h.args.join(" ")));
     let mut child = command.spawn().map_err(|e| format!("Couldn't start {} ({program}): {e}", h.name))?;
+    let pid = child.id();
     let stdin = child.stdin.take().ok_or("no stdin")?;
     let stdout = child.stdout.take().ok_or("no stdout")?;
     let stderr = child.stderr.take().ok_or("no stderr")?;
@@ -328,6 +333,7 @@ async fn spawn(h: &Harness, cwd: &str) -> Result<Arc<Conn>, String> {
         alive: alive.clone(),
         session: tokio::sync::Mutex::new(None),
         _child: tokio::sync::Mutex::new(child),
+        _tree: crate::agent::runtime::streaming::TreeKillOnDrop { pid },
     });
 
     // Its stderr is its log; the last lines explain a failed start.
@@ -648,7 +654,7 @@ pub async fn run_turn(
             Some(inc) = rx.recv() => match inc {
                 Incoming::Permission { id, params } => {
                     let options = params.get("options").and_then(|o| o.as_array()).cloned().unwrap_or_default();
-                    let pick = |kinds: &[&str]| options.iter().find(|o| o.get("kind").and_then(|k| k.as_str()).is_some_and(|k| kinds.contains(&k))).and_then(|o| o.get("optionId").cloned());
+                    let pick = |kinds: &[&str]| pick_option(&options, kinds);
                     let tc = params.get("toolCall").cloned().unwrap_or(Value::Null);
                     let approved = bypass || {
                         let call = AgentToolCall {
@@ -659,7 +665,8 @@ pub async fn run_turn(
                         let why = tc.get("title").and_then(|t| t.as_str()).map(|t| format!("{} wants to: {t}", h.name));
                         crate::agent::tools::exec::ask_permission(emit, &call, why).await
                     };
-                    let option = if approved { pick(&["allow_once", "allow_always"]) } else { pick(&["reject_once", "reject_always"]) };
+                    // Approval is for this call only: "allow_always" would grant the agent a standing permission the user never gave, so it is never picked.
+                    let option = if approved { pick(&["allow_once"]) } else { pick(&["reject_once", "reject_always"]) };
                     let outcome = match option {
                         Some(o) => json!({ "outcome": { "outcome": "selected", "optionId": o } }),
                         None => json!({ "outcome": { "outcome": "cancelled" } }),
@@ -1055,4 +1062,23 @@ async fn install_managed(app: &tauri::AppHandle, h: &Harness, package: &str) -> 
     emit("Done", crate::agent::harness_install::dir_bytes(&dir, 50_000));
     trace(&h.name, format!("installed: {}", script.display()));
     Ok(format!("{} is installed.", h.name))
+}
+
+/// The option of the first kind in `kinds` that the agent offered, in the order of `kinds` (not of the agent's own list).
+fn pick_option(options: &[Value], kinds: &[&str]) -> Option<Value> {
+    kinds.iter().find_map(|kind| options.iter().find(|o| o.get("kind").and_then(|k| k.as_str()) == Some(kind)).and_then(|o| o.get("optionId").cloned()))
+}
+
+#[cfg(test)]
+mod option_tests {
+    use super::*;
+
+    #[test]
+    fn approval_never_picks_a_standing_grant_and_follows_our_order() {
+        let offered = vec![json!({"kind":"allow_always","optionId":"a"}), json!({"kind":"allow_once","optionId":"o"}), json!({"kind":"reject_always","optionId":"ra"}), json!({"kind":"reject_once","optionId":"ro"})];
+        assert_eq!(pick_option(&offered, &["allow_once"]), Some(json!("o")), "allow_once wins even when allow_always is listed first");
+        assert_eq!(pick_option(&offered, &["reject_once", "reject_always"]), Some(json!("ro")));
+        let only_always = vec![json!({"kind":"allow_always","optionId":"a"})];
+        assert_eq!(pick_option(&only_always, &["allow_once"]), None, "no one-shot option: cancel instead of granting forever");
+    }
 }
