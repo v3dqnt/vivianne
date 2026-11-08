@@ -205,6 +205,11 @@ pub async fn harnesses() -> Vec<Harness> {
     list
 }
 
+/// Whether the agent with this id can run now: it is in the list and its launcher is on this computer.
+pub fn is_usable(list: &[Harness], id: &str) -> bool {
+    list.iter().any(|h| h.id == id && h.available)
+}
+
 #[tauri::command]
 pub async fn cmd_harness_list() -> Result<Vec<Harness>, String> {
     Ok(harnesses().await)
@@ -1080,5 +1085,21 @@ mod option_tests {
         assert_eq!(pick_option(&offered, &["reject_once", "reject_always"]), Some(json!("ro")));
         let only_always = vec![json!({"kind":"allow_always","optionId":"a"})];
         assert_eq!(pick_option(&only_always, &["allow_once"]), None, "no one-shot option: cancel instead of granting forever");
+    }
+}
+
+#[cfg(test)]
+mod usable_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_listed_agent_with_its_launcher_present_is_usable() {
+        let mut list = fallback();
+        for h in &mut list {
+            h.available = h.id == "claude-acp";
+        }
+        assert!(is_usable(&list, "claude-acp"));
+        assert!(!is_usable(&list, "codex-acp"), "listed but its launcher is missing");
+        assert!(!is_usable(&list, "nope"), "not listed");
     }
 }
