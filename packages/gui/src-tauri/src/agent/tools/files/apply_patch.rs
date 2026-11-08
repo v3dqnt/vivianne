@@ -272,7 +272,9 @@ impl Tool for ApplyPatchTool {
                     if let Some(parent) = path.parent() {
                         tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
                     }
-                    tokio::fs::write(path, text).await.map_err(|e| e.to_string())
+                    crate::agent::tools::files::guard::write_atomic(path, text.as_bytes()).await.map_err(|e| e.to_string())?;
+                    crate::agent::tools::files::guard::observe(path);
+                    Ok(())
                 }
                 None => tokio::fs::remove_file(path).await.map_err(|e| e.to_string()),
             }

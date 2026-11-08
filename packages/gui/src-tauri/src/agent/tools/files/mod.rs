@@ -4,3 +4,4 @@
 pub mod apply_patch;
 pub mod doc_design;
 pub mod documents;
+pub mod guard;

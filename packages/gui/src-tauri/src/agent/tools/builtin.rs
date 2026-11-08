@@ -310,9 +310,17 @@ impl Tool for WriteTool {
         // overwritten, so the UI can render a real diff instead of a bare
         // "written successfully" message. `None` (new file) is a legitimate
         // case, not an error — the frontend renders that as all-green added.
+        let _held = crate::agent::tools::files::guard::lock(&full_path).await;
+        if let Err(e) = crate::agent::tools::files::guard::check_fresh(&full_path, &path) {
+            return ToolResult { content: e, is_error: true, details: Some(json!({ "path": path, "stale": true })) };
+        }
         let previous_content = tokio::fs::read_to_string(&full_path).await.ok();
 
-        match tokio::fs::write(&full_path, &content).await {
+        let written = crate::agent::tools::files::guard::write_atomic(&full_path, content.as_bytes()).await;
+        if written.is_ok() {
+            crate::agent::tools::files::guard::observe(&full_path);
+        }
+        match written {
             Ok(_) => {
                 let full_str = full_path.display().to_string();
                 let mut text = format!("File written successfully: {}", path);
@@ -371,6 +379,10 @@ impl Tool for EditTool {
             };
         }
 
+        let _held = crate::agent::tools::files::guard::lock(&full_path).await;
+        if let Err(e) = crate::agent::tools::files::guard::check_fresh(&full_path, &path) {
+            return ToolResult { content: e, is_error: true, details: Some(json!({ "path": path, "stale": true })) };
+        }
         let raw = match tokio::fs::read(&full_path).await {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -435,7 +447,11 @@ impl Tool for EditTool {
         }
         out_bytes.extend_from_slice(new_content.as_bytes());
 
-        match tokio::fs::write(&full_path, &out_bytes).await {
+        let written = crate::agent::tools::files::guard::write_atomic(&full_path, &out_bytes).await;
+        if written.is_ok() {
+            crate::agent::tools::files::guard::observe(&full_path);
+        }
+        match written {
             Ok(_) => {
                 let full_str = full_path.display().to_string();
                 let mut text = format!("File edited successfully: {}", path);
@@ -1767,8 +1783,15 @@ impl Tool for ReadTool {
         }
 
         // ── Text ──
+        let size = tokio::fs::metadata(&full).await.map(|m| m.len()).unwrap_or(0);
+        if size > LARGE_READ_BYTES {
+            return read_large(&path, &full, size, args["offset"].as_u64().unwrap_or(0) as usize, args["limit"].as_u64().unwrap_or(0) as usize).await;
+        }
         let content = match tokio::fs::read_to_string(&full).await {
-            Ok(c) => c,
+            Ok(c) => {
+                crate::agent::tools::files::guard::observe(&full);
+                c
+            }
             Err(_) => {
                 // Not valid UTF-8: return the size + a hexdump of the first 128 bytes.
                 let bytes = match tokio::fs::read(&full).await {
@@ -2067,6 +2090,61 @@ fn read_notebook_summary(display_path: &str, nb: serde_json::Value) -> ToolResul
             "code_cells": ncode,
             "markdown_cells": nmd,
         })),
+    }
+}
+
+/// Past this size a text file is read as a stream, a window at a time, instead of whole into memory.
+const LARGE_READ_BYTES: u64 = 10 * 1024 * 1024;
+/// A single line longer than this is cut, with a marker, so one giant minified line can't fill the result.
+const MAX_LINE_CHARS: usize = 2000;
+
+/// A window of a large text file, streamed: lines `offset..offset+limit` (1-based, default the first 2000), each cut at
+/// `MAX_LINE_CHARS`, without holding the file in memory.
+async fn read_large(shown: &str, full: &Path, size: u64, offset: usize, limit: usize) -> ToolResult {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+    let file = match tokio::fs::File::open(full).await {
+        Ok(f) => f,
+        Err(e) => return ToolResult { content: format!("Error reading file: {e}"), is_error: true, details: None },
+    };
+    let start = offset.max(1);
+    let want = if limit == 0 { MAX_READ_LINES } else { limit.min(MAX_READ_LINES) };
+    let mut reader = tokio::io::BufReader::new(file);
+    let mut out = String::new();
+    let mut line_no = 0usize;
+    let mut shown_lines = 0usize;
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        // Bounded per line: read at most a little past the cap, then skip to the line's end.
+        let n = match (&mut reader).take((MAX_LINE_CHARS * 4 + 1) as u64).read_until(b'\n', &mut buf).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => return ToolResult { content: format!("Error reading file: {e}"), is_error: true, details: None },
+        };
+        let complete = buf.ends_with(b"\n");
+        if !complete && n > MAX_LINE_CHARS * 4 {
+            let mut rest = Vec::new();
+            let _ = reader.read_until(b'\n', &mut rest).await;
+        }
+        line_no += 1;
+        if line_no < start {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&buf);
+        let text = text.trim_end_matches(['\n', '\r']);
+        let cut: String = text.chars().take(MAX_LINE_CHARS).collect();
+        let marker = if cut.len() < text.len() || (!complete && n > MAX_LINE_CHARS * 4) { " [line cut]" } else { "" };
+        out.push_str(&format!("{:>6}\t{cut}{marker}\n", line_no));
+        shown_lines += 1;
+        if shown_lines >= want || out.len() >= MAX_READ_BYTES {
+            break;
+        }
+    }
+    crate::agent::tools::files::guard::observe(full);
+    ToolResult {
+        content: format!("{out}\n[{shown}: {size} bytes, read as a stream; showing lines {start}-{}. Use offset/limit for more, or grep to find a part.]", start + shown_lines.saturating_sub(1)),
+        is_error: false,
+        details: Some(json!({ "path": shown, "size": size, "streamed": true, "from": start, "lines": shown_lines })),
     }
 }
 
