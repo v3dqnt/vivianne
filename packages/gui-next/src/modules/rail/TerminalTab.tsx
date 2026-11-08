@@ -6,6 +6,9 @@ import { Box, ButtonBase, Stack, Typography, useTheme } from '../../ui'
 import { call, on } from '../../ipc'
 import { useWorkspaceStore } from '../ai/store/workspaceStore'
 
+/** xterm measures its cells in pixels, not rem. */
+const TERMINAL_FONT_PX = 12
+
 interface ShellOption {
   id: string
   label: string
@@ -37,7 +40,7 @@ export function TerminalTab({ visible }: { visible: boolean }) {
     const dark = theme.palette.mode === 'dark'
     const term = new Terminal({
       fontFamily: '"Geist Mono", ui-monospace, monospace',
-      fontSize: '0.75rem',
+      fontSize: TERMINAL_FONT_PX,
       lineHeight: 1.25,
       cursorBlink: true,
       allowTransparency: true,
