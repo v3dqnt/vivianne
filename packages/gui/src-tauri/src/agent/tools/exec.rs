@@ -2552,15 +2552,21 @@ async fn execute_list_subagent_profiles_tool(project_root: Option<String>) -> Ag
         return text_result("No subagent profiles found (not even the built-ins — this shouldn't happen).".to_string());
     }
     lines.sort();
+    // Profiles that can't be used as written are named, so a typo doesn't just make an agent vanish or lose a tool.
+    // The built-in tool names never change while the app runs.
+    static KNOWN: std::sync::LazyLock<std::collections::HashSet<String>> = std::sync::LazyLock::new(|| crate::agent::tools::schemas::static_tool_definitions().iter().filter_map(|d| d["name"].as_str().map(String::from)).collect());
+    let problems = crate::agent::system::paths::viv_subagents_dir().ok().map(|d| crate::agent::profiles::subagent::profile_problems(&d.to_string_lossy(), &KNOWN)).unwrap_or_default();
+    let broken = if problems.is_empty() { String::new() } else { format!("\n\nProfiles with problems (tell the user; they won't work as written):\n{}", problems.iter().map(|p| format!("- {}: {}", p.file, p.reason)).collect::<Vec<_>>().join("\n")) };
     AgentToolResult {
         content: vec![MessageContent::Text {
             text: format!(
-                "{} subagent profiles available:\n{}\n\nCall task with subagent_type set to one of these; for a [pointer-ready] profile, pass 'context' instead of 'prompt'.",
+                "{} subagent profiles available:\n{}\n\nCall task with subagent_type set to one of these; for a [pointer-ready] profile, pass 'context' instead of 'prompt'.{}",
                 lines.len(),
-                lines.join("\n")
+                lines.join("\n"),
+                broken
             ),
         }],
-        details: serde_json::json!({ "profiles": details }),
+        details: serde_json::json!({ "profiles": details, "problems": problems }),
         terminate: None,
     }
 }

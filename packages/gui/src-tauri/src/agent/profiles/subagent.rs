@@ -228,6 +228,48 @@ pub fn load_profiles_from_dir(dir: &str) -> Vec<SubagentProfile> {
     profiles
 }
 
+/// Something wrong with a profile file, said so instead of the profile quietly missing or quietly losing its tools.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ProfileProblem {
+    pub file: String,
+    pub reason: String,
+}
+
+/// Every profile file in `dir` that can't be used as written: unreadable, frontmatter that isn't valid YAML for a profile (its settings
+/// are then ignored), or `allowed_tools` naming tools that don't exist (that agent would silently lack them). Tool names with `__` or
+/// `.` belong to MCP servers and are not checked here.
+pub fn profile_problems(dir: &str, known_tools: &std::collections::HashSet<String>) -> Vec<ProfileProblem> {
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let file = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                out.push(ProfileProblem { file, reason: format!("can't be read: {e}") });
+                continue;
+            }
+        };
+        static FENCE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?s)^---\s*\n(.*?)\n---\s*\n").expect("valid regex"));
+        let Some(yaml) = FENCE.captures(&content).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()) else { continue };
+        match serde_yaml::from_str::<SubagentFrontmatter>(&yaml) {
+            Err(e) => out.push(ProfileProblem { file, reason: format!("its frontmatter isn't valid, so its settings are ignored: {e}") }),
+            Ok(fm) => {
+                let unknown: Vec<String> = fm.allowed_tools.unwrap_or_default().into_iter().filter(|t| !t.contains("__") && !t.contains('.') && !known_tools.contains(t)).collect();
+                if !unknown.is_empty() {
+                    out.push(ProfileProblem { file, reason: format!("allowed_tools names tools that don't exist: {}", unknown.join(", ")) });
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.file.cmp(&b.file));
+    out
+}
+
 fn load_profile_from_file(path: &Path) -> Result<SubagentProfile, Box<dyn std::error::Error>> {
     let content = fs::read_to_string(path)?;
     let (fm, body) = parse_frontmatter::<SubagentFrontmatter>(&content);
@@ -251,6 +293,22 @@ fn load_profile_from_file(path: &Path) -> Result<SubagentProfile, Box<dyn std::e
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn broken_profiles_are_reported_not_hidden() {
+        let dir = std::env::temp_dir().join(format!("viv-profiles-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("good.md"), "---\nname: good\nallowed_tools: [read, grep, mcp__gh__search]\n---\nDo things.").unwrap();
+        fs::write(dir.join("typo.md"), "---\nname: typo\nallowed_tools: [read, web_serach]\n---\nSearch.").unwrap();
+        fs::write(dir.join("bad-yaml.md"), "---\nname: [unclosed\n---\nBody").unwrap();
+        fs::write(dir.join("plain.md"), "No frontmatter at all.").unwrap();
+        let known: std::collections::HashSet<String> = ["read", "grep", "web_search"].iter().map(|s| s.to_string()).collect();
+        let problems = profile_problems(dir.to_str().unwrap(), &known);
+        assert_eq!(problems.iter().map(|p| p.file.as_str()).collect::<Vec<_>>(), vec!["bad-yaml.md", "typo.md"]);
+        assert!(problems[1].reason.contains("web_serach") && !problems[1].reason.contains("read"));
+        assert!(problems[0].reason.contains("isn't valid"));
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn builtins_have_the_expected_tool_restrictions() {

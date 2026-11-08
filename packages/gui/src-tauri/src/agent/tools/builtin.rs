@@ -1034,15 +1034,11 @@ impl Tool for WebSearchTool {
                         if let Found::Hits { hits, .. } = &mut found {
                             hits.retain(|h| seen.insert(h.url.clone()));
                         }
-                        format!("## {q}
-{}", found.render(q, max))
+                        format!("## {q}\n{}", found.render(q, max))
                     }
-                    Err(e) => format!("## {q}
-Error: {e}"),
+                    Err(e) => format!("## {q}\nError: {e}"),
                 }).collect();
-                ToolResult { content: sections.join("
-
-"), is_error: failed, details: None }
+                ToolResult { content: sections.join("\n\n"), is_error: failed, details: None }
             }
         }
     }
@@ -1070,19 +1066,15 @@ impl Found {
 async fn search_one(query: &str) -> Result<Found, String> {
     // A search API when one is configured: fast, structured, and not
     // subject to the bot checks and rate limits a scraped engine is.
-    let mut note = String::new();
     // A named engine whose key is gone is said out loud, not quietly replaced.
-    if let Some(label) = chosen_engine_without_key().await {
-        note = format!("({label} is selected in Settings but has no key; used DuckDuckGo instead)
-
-");
-    }
+    let mut note = match chosen_engine_without_key().await {
+        Some(label) => format!("({label} is selected in Settings but has no key; used DuckDuckGo instead)\n\n"),
+        None => String::new(),
+    };
     if let Some((provider, key)) = configured_search_api().await {
         match api_search(provider, &key, query).await {
             Ok(hits) => return Ok(Found::Hits { note, hits, engine: Some(provider.label()) }),
-            Err(e) => note = format!("({} search failed: {e}; used DuckDuckGo instead)
-
-", provider.label()),
+            Err(e) => note = format!("({} search failed: {e}; used DuckDuckGo instead)\n\n", provider.label()),
         }
     }
     match duckduckgo(query).await {
@@ -2097,6 +2089,8 @@ fn read_notebook_summary(display_path: &str, nb: serde_json::Value) -> ToolResul
 const LARGE_READ_BYTES: u64 = 10 * 1024 * 1024;
 /// A single line longer than this is cut, with a marker, so one giant minified line can't fill the result.
 const MAX_LINE_CHARS: usize = 2000;
+/// The most bytes read for one line: room for `MAX_LINE_CHARS` characters of up to four bytes each.
+const MAX_LINE_BYTES: usize = MAX_LINE_CHARS * 4;
 
 /// A window of a large text file, streamed: lines `offset..offset+limit` (1-based, default the first 2000), each cut at
 /// `MAX_LINE_CHARS`, without holding the file in memory.
@@ -2116,13 +2110,14 @@ async fn read_large(shown: &str, full: &Path, size: u64, offset: usize, limit: u
     loop {
         buf.clear();
         // Bounded per line: read at most a little past the cap, then skip to the line's end.
-        let n = match (&mut reader).take((MAX_LINE_CHARS * 4 + 1) as u64).read_until(b'\n', &mut buf).await {
+        let n = match (&mut reader).take((MAX_LINE_BYTES + 1) as u64).read_until(b'\n', &mut buf).await {
             Ok(0) => break,
             Ok(n) => n,
             Err(e) => return ToolResult { content: format!("Error reading file: {e}"), is_error: true, details: None },
         };
-        let complete = buf.ends_with(b"\n");
-        if !complete && n > MAX_LINE_CHARS * 4 {
+        // A line longer than the cap: what was read stands for it, and the rest of it is skipped.
+        let overlong = !buf.ends_with(b"\n") && n > MAX_LINE_BYTES;
+        if overlong {
             let mut rest = Vec::new();
             let _ = reader.read_until(b'\n', &mut rest).await;
         }
@@ -2133,7 +2128,7 @@ async fn read_large(shown: &str, full: &Path, size: u64, offset: usize, limit: u
         let text = String::from_utf8_lossy(&buf);
         let text = text.trim_end_matches(['\n', '\r']);
         let cut: String = text.chars().take(MAX_LINE_CHARS).collect();
-        let marker = if cut.len() < text.len() || (!complete && n > MAX_LINE_CHARS * 4) { " [line cut]" } else { "" };
+        let marker = if cut.len() < text.len() || overlong { " [line cut]" } else { "" };
         out.push_str(&format!("{:>6}\t{cut}{marker}\n", line_no));
         shown_lines += 1;
         if shown_lines >= want || out.len() >= MAX_READ_BYTES {

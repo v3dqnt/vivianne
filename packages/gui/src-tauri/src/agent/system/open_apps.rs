@@ -23,7 +23,7 @@ enum Goto {
     /// `file:line`
     Suffix,
     /// The editor takes a plain path only.
-    None,
+    Plain,
 }
 
 const EDITORS: &[Editor] = &[
@@ -32,7 +32,7 @@ const EDITORS: &[Editor] = &[
     Editor { id: "windsurf", label: "Windsurf", commands: &["windsurf"], goto: Goto::Flag },
     Editor { id: "zed", label: "Zed", commands: &["zed"], goto: Goto::Suffix },
     Editor { id: "sublime", label: "Sublime Text", commands: &["subl"], goto: Goto::Suffix },
-    Editor { id: "notepadpp", label: "Notepad++", commands: &["notepad++"], goto: Goto::None },
+    Editor { id: "notepadpp", label: "Notepad++", commands: &["notepad++"], goto: Goto::Plain },
 ];
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -85,7 +85,8 @@ pub async fn cmd_open_in_app(path: String, app: String, line: Option<u32>) -> Re
             #[cfg(windows)]
             {
                 use std::os::windows::process::CommandExt;
-                cmd.creation_flags(0x0800_0000);
+                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                cmd.creation_flags(CREATE_NO_WINDOW);
             }
             cmd.spawn().map(|_| ()).map_err(|er| format!("Couldn't start {}: {er}", e.label))
         }

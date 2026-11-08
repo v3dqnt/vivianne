@@ -83,6 +83,13 @@ async fn client_for(path: &str, root_dir: &str) -> Option<Arc<LspClient>> {
     spawned
 }
 
+/// Shut down the server a slot holds, if it holds one.
+async fn stop_slot(slot: &Slot) {
+    if let Some(Some(c)) = slot.client.lock().await.take() {
+        c.shutdown().await;
+    }
+}
+
 /// Stop the least recently used running server(s) beyond `MAX_SERVERS`, never the one just started.
 fn evict_over_cap(just_started: &str) {
     let mut victims: Vec<Arc<Slot>> = Vec::new();
@@ -101,11 +108,7 @@ fn evict_over_cap(just_started: &str) {
         }
     }
     for s in victims {
-        tokio::spawn(async move {
-            if let Some(Some(c)) = s.client.lock().await.take() {
-                c.shutdown().await;
-            }
-        });
+        tokio::spawn(async move { stop_slot(&s).await });
     }
 }
 
@@ -122,10 +125,8 @@ fn ensure_reaper() {
                     keys.into_iter().filter_map(|k| map.remove(&k)).collect()
                 };
                 for s in stale {
-                    if let Some(Some(c)) = s.client.lock().await.take() {
-                        log::info!("lsp: stopping an idle language server");
-                        c.shutdown().await;
-                    }
+                    log::info!("lsp: stopping an idle language server");
+                    stop_slot(&s).await;
                 }
             }
         });
@@ -144,9 +145,7 @@ pub async fn diagnostics_for(path: &str, root_dir: &str) -> Vec<Diagnostic> {
 pub async fn shutdown_all() {
     let slots: Vec<Arc<Slot>> = CLIENTS.lock().unwrap_or_else(|e| e.into_inner()).drain().map(|(_, s)| s).collect();
     for s in slots {
-        if let Some(Some(c)) = s.client.lock().await.take() {
-            c.shutdown().await;
-        }
+        stop_slot(&s).await;
     }
 }
 

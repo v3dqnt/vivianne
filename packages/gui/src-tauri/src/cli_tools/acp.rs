@@ -397,15 +397,11 @@ impl Sink for ConnSink {
     }
 }
 
-struct Live {
-    /// A prompt is running on this session.
-    prompting: bool,
-}
-
 pub struct Server<H: Host> {
     host: Arc<H>,
     conn: Arc<Conn>,
-    sessions: StdMutex<HashMap<String, Live>>,
+    /// Sessions open on this connection, and whether a prompt is running on each.
+    sessions: StdMutex<HashMap<String, bool>>,
     initialized: StdMutex<bool>,
 }
 
@@ -500,7 +496,7 @@ impl<H: Host> Server<H> {
                     return Err(invalid("attaching MCP servers over the protocol is not supported; configure them in Vivianne's settings"));
                 }
                 let id = self.host.new_session(&cwd).await.map_err(internal)?;
-                self.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), Live { prompting: false });
+                self.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), false);
                 Ok(json!({ "sessionId": id, "configOptions": self.host.options(&id).await }))
             }
             "session/resume" => {
@@ -517,7 +513,7 @@ impl<H: Host> Server<H> {
                     Some(_) => {}
                 }
                 self.host.resume_session(&id, &cwd).await.map_err(internal)?;
-                self.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), Live { prompting: false });
+                self.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), false);
                 Ok(json!({ "configOptions": self.host.options(&id).await }))
             }
             "session/list" => {
@@ -555,16 +551,16 @@ impl<H: Host> Server<H> {
                 let (text, images) = admit_prompt(&params["prompt"])?;
                 {
                     let mut s = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
-                    let live = s.get_mut(&id).ok_or_else(|| invalid("no such open session"))?;
-                    if live.prompting {
+                    let prompting = s.get_mut(&id).ok_or_else(|| invalid("no such open session"))?;
+                    if *prompting {
                         return Err(invalid("a prompt is already running on this session"));
                     }
-                    live.prompting = true;
+                    *prompting = true;
                 }
                 let sink: Arc<dyn Sink> = Arc::new(ConnSink { conn: self.conn.clone() });
                 let outcome = self.host.prompt(&id, text, images, sink).await;
-                if let Some(live) = self.sessions.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&id) {
-                    live.prompting = false;
+                if let Some(prompting) = self.sessions.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&id) {
+                    *prompting = false;
                 }
                 outcome.map(|s| json!({ "stopReason": s.as_str() })).map_err(internal)
             }
@@ -618,17 +614,14 @@ fn load_index() -> Vec<SessionRecord> {
 
 fn save_index(records: &[SessionRecord]) {
     if let Ok(p) = index_path() {
-        if let Ok(json) = serde_json::to_string_pretty(records) {
-            let tmp = p.with_extension("json.tmp");
-            if std::fs::write(&tmp, json).is_ok() {
-                let _ = std::fs::rename(&tmp, &p);
-            }
+        if let Err(e) = crate::agent::system::paths::write_json_atomic(&p, records) {
+            log::warn!("[acp] couldn't save the session index: {e}");
         }
     }
 }
 
 fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
+    crate::agent::runtime::commands::now_ms() as i64
 }
 
 const THINKING_LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high", "max"];

@@ -265,6 +265,13 @@ impl Tool for ApplyPatchTool {
             }
         }
 
+        // A file changed on disk since the agent last read it: refuse the whole patch before anything is written.
+        for (path, _) in writes.iter() {
+            if let Err(e) = crate::agent::tools::files::guard::check_fresh(path, &path.display().to_string()) {
+                return ToolResult { content: format!("Error: {e} (no files were modified)"), is_error: true, details: None };
+            }
+        }
+
         // ── Phase 2: commit, restoring everything if any step fails ────────
         async fn put(path: &PathBuf, content: &Option<String>) -> Result<(), String> {
             match content {
