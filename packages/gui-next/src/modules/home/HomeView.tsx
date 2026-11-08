@@ -20,6 +20,7 @@ import { useAppView } from '../git/components/GitView'
 import { mainPane } from '../../theme'
 import { useTheme } from '../../ui'
 import { useArchivedThreads } from '../../lib/archivedThreads'
+import { SegmentedTabs } from '../../components/SegmentedTabs'
 
 const GENERAL = { id: GENERAL_PROJECT_ID, name: 'General', color: null } as const
 
@@ -97,19 +98,7 @@ export function HomeView() {
     <Box sx={{ flex: 1, minWidth: 0, height: '100%', bgcolor: 'background.chrome', pr: 1, pb: 1, pl: 0.5 }}>
       <Box sx={{ height: '100%', ...mainPane(theme), overflowY: 'auto' }}>
         <Stack sx={{ maxWidth: 1040, mx: 'auto', px: '32px', pt: '32px' }}>
-          <Stack direction="row" role="tablist" sx={{ gap: '4px', p: '2px', borderRadius: '8px', bgcolor: 'action.hover', alignSelf: 'flex-start' }}>
-            {([['projects', 'Projects'], ['agents', '24/7 agents']] as const).map(([id, label]) => (
-              <ButtonBase
-                key={id}
-                role="tab"
-                aria-selected={tab === id}
-                onClick={() => setTab(id)}
-                sx={{ height: 28, px: '12px', borderRadius: '6px', fontSize: '0.8125rem', fontWeight: tab === id ? 600 : 500, color: tab === id ? 'text.primary' : 'text.secondary', bgcolor: tab === id ? 'background.paper' : 'transparent', '&:hover': { color: 'text.primary' } }}
-              >
-                {label}
-              </ButtonBase>
-            ))}
-          </Stack>
+          <SegmentedTabs value={tab} onChange={setTab} tabs={[{ id: 'projects', label: 'Projects' }, { id: 'agents', label: '24/7 agents' }]} />
         </Stack>
         {tab === 'agents' ? (
           <AlwaysOnAgents />

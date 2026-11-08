@@ -108,8 +108,8 @@ export function FilesTab() {
   if (!root) return <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', px: '8px' }}>This thread has no folder.</Typography>
   return (
     <Stack sx={{ minHeight: 0, flex: 1, gap: '8px' }}>
-      <Stack direction="row" sx={{ alignItems: 'center', gap: '8px', height: 32, px: '10px', borderRadius: '8px', bgcolor: 'action.hover', color: 'text.disabled', flexShrink: 0 }}>
-        <SearchNormalLinear size={13} color="currentColor" />
+      <Stack direction="row" sx={{ alignItems: 'center', gap: '8px', height: 36, px: '12px', borderRadius: '8px', bgcolor: 'action.hover', color: 'text.disabled', flexShrink: 0 }}>
+        <SearchNormalLinear size={14} color="currentColor" />
         <InputBase value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter files" sx={{ flex: 1, fontSize: '0.8125rem', color: 'text.primary' }} />
       </Stack>
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', mx: '-4px', px: '4px' }}>

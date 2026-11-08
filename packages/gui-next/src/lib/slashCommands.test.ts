@@ -48,6 +48,7 @@ function fake(initial: 'ask' | 'auto' | 'plan' = 'ask') {
     goal: async (a, t) => {
       log.push(`goal:${a}:${t ?? ''}`)
     },
+    currentGoal: async () => null,
     stop: async () => void log.push('stop'),
     openModelPicker: () => void log.push('picker'),
     notice: (t) => void log.push(`say:${t}`),

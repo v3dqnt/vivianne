@@ -17,6 +17,8 @@ export interface SlashContext {
   mode(): 'ask' | 'auto' | 'plan'
   /** A goal action on this thread; `text` for create and edit. */
   goal(action: 'create' | 'edit' | 'pause' | 'resume' | 'complete' | 'clear', text?: string): Promise<void>
+  /** The thread's goal as a line of text, or null when it has none. */
+  currentGoal(): Promise<string | null>
   /** Stop the running turn. */
   stop(): Promise<void>
   /** Open the model picker. */
@@ -70,7 +72,10 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
       const word = arg.toLowerCase()
       if (word === 'pause' || word === 'resume' || word === 'clear') return ctx.goal(word)
       if (word === 'done' || word === 'complete') return ctx.goal('complete')
-      if (!arg) return ctx.notice('Say what the goal is: /goal ship the release.')
+      if (!arg) {
+        const now = await ctx.currentGoal()
+        return ctx.notice(now ? `Goal: ${now}. Change it with /goal <objective>, or pause, resume, done, clear.` : 'No goal yet. Set one with /goal <objective>.')
+      }
       try {
         await ctx.goal('create', arg)
       } catch {

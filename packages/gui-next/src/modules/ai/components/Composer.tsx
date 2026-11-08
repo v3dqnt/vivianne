@@ -16,6 +16,7 @@ import { RunStatusBar as RunStatusBarImpl } from './RunStatusBar'
 import { usePlanStore } from '../../plan/store/planStore'
 import { SubagentPanel as SubagentPanelImpl } from './SubagentPanel'
 import { JobsPanel as JobsPanelImpl } from './JobsPanel'
+import { GoalLine } from './GoalLine'
 import { ComputerUseBanner as ComputerUseBannerImpl } from './ComputerUseBanner'
 import { QueuePanel as QueuePanelImpl } from './QueuePanel'
 import { UnifiedMentionMenu, type MentionItem, type MentionableFile, type MentionableSkill } from './MentionMenu'
@@ -316,6 +317,10 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
     goal: async (action, goalText) => {
       await call('cmd_goal_do', { threadId: activeThreadId(), action, text: goalText })
     },
+    currentGoal: async () => {
+      const g = await call<{ objective: string; phase: string } | null>('cmd_goal_get', { threadId: activeThreadId() })
+      return g ? `${g.objective} (${g.phase})` : null
+    },
     stop: () => abort(),
     openModelPicker: () => window.dispatchEvent(new Event('viv:open-model-picker')),
     notice: (t) => toast(t),
@@ -428,6 +433,7 @@ export function Composer({ toolbar }: { toolbar?: ReactNode } = {}) {
         <ComputerUseBanner />
         <SubagentPanel />
         <JobsPanel />
+        <GoalLine />
         <StreamStatusLine />
         <QueuePanel />
         <ChatComposer

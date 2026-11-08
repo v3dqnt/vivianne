@@ -7,7 +7,6 @@ import { useAppView } from '../../git/components/GitView'
 import { ContextBreakdown, ContextPercent } from '../../ai/components/ContextUsageBar'
 import { ThreadWorktree } from './ThreadWorktree'
 import { ThreadPrs } from './ThreadPrs'
-import { ThreadGoal } from './ThreadGoal'
 import { ProjectPill } from '../../sessions/components/ProjectPicker'
 import { useDaysStore } from '../../sessions/store/daysStore'
 import { useProjectsStore } from '../../sessions/store/projectsStore'
@@ -91,9 +90,9 @@ function Section({ id, title, right, children }: { id: string; title: string; ri
         <ButtonBase
           onClick={toggle}
           aria-expanded={!closed}
-          sx={{ flex: '1 0 auto', justifyContent: 'flex-start', gap: '4px', px: '8px', height: 20, borderRadius: '6px', color: 'text.disabled', '& .chev': { opacity: closed ? 1 : 0, transition: 'opacity 0.15s' }, '&:hover': { color: 'text.primary' }, '&:hover .chev': { opacity: 1 } }}
+          sx={{ flex: '1 0 auto', justifyContent: 'flex-start', gap: '4px', px: '8px', height: 28, borderRadius: '6px', color: 'text.secondary', '& .chev': { opacity: closed ? 1 : 0, transition: 'opacity 0.15s' }, '&:hover': { color: 'text.primary' }, '&:hover .chev': { opacity: 1 } }}
         >
-          <Typography noWrap sx={{ fontSize: '0.6875rem', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'inherit', flexShrink: 0 }}>{title}</Typography>
+          <Typography noWrap sx={{ fontSize: '0.8125rem', fontWeight: 500, color: 'inherit', flexShrink: 0 }}>{title}</Typography>
           <Box className="chev" sx={{ display: 'flex', transform: closed ? 'none' : 'rotate(90deg)', transition: 'transform 0.15s ease, opacity 0.15s' }}>
             <ChevronRightLinear size={12} color="currentColor" />
           </Box>
@@ -206,11 +205,6 @@ function Overview({ hasFolder }: { hasFolder: boolean }) {
               </Box>
             )}
           </Section>
-          <Box className="git" sx={{ minWidth: 0 }}>
-            <Section id="goal" title="Goal">
-              <ThreadGoal />
-            </Section>
-          </Box>
           {hasFolder && (
           <Box className="git" sx={{ minWidth: 0 }}>
             <Section
