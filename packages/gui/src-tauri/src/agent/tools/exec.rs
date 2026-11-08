@@ -1166,8 +1166,8 @@ pub async fn execute_tool_calls(
                 Some((res, _)) => tool_result_to_agent_result(res, vision_capable),
                 None => AgentToolResult { content: vec![MessageContent::Text { text: format!("Error: `{}` couldn't run.", tool_call.name) }], details: serde_json::json!({ FAILED_KEY: true }), terminate: None },
             }
-        } else if let Some((server, real_name)) = tool_call.name.strip_prefix("mcp__").and_then(|rest| rest.split_once("__")) {
-            match crate::mcp::call_tool(server, real_name, tool_call.arguments.clone()).await {
+        } else if let Some((server, real_name)) = crate::mcp::route(&tool_call.name) {
+            match crate::mcp::call_tool(&server, &real_name, tool_call.arguments.clone()).await {
                 Ok(text) => AgentToolResult {
                     content: vec![MessageContent::Text { text }],
                     details: serde_json::Value::Null,
@@ -2469,7 +2469,7 @@ async fn execute_list_tools_tool(disabled_tools: &[String]) -> AgentToolResult {
     let mut lines = Vec::with_capacity(defs.len());
     for def in defs.iter() {
         let Some(name) = def.get("name").and_then(|v| v.as_str()) else { continue };
-        let source = if let Some(server) = name.strip_prefix("mcp__").and_then(|rest| rest.split_once("__")).map(|(s, _)| s) {
+        let source = if let Some((server, _)) = crate::mcp::route(name) {
             format!("mcp:{server}")
         } else if playbook_names.contains(name) {
             "playbook".to_string()

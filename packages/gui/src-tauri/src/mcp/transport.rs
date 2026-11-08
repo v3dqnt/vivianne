@@ -57,11 +57,25 @@ impl McpConnection {
                     .envs(env)
                     .stdin(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::piped())
                     .kill_on_drop(true);
                 let mut child = cmd.spawn().map_err(|e| format!("failed to spawn '{command}': {e}"))?;
                 let stdin = child.stdin.take().ok_or("no stdin")?;
                 let stdout = child.stdout.take().ok_or("no stdout")?;
+                // What the server writes to stderr is kept in the log, so a server that fails leaves a trail.
+                if let Some(stderr) = child.stderr.take() {
+                    let name = config.name.clone();
+                    tokio::spawn(async move {
+                        let mut lines = BufReader::new(stderr).lines();
+                        let mut n = 0u32;
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            n += 1;
+                            if n <= 500 {
+                                log::info!("mcp[{name}] {line}");
+                            }
+                        }
+                    });
+                }
                 let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>> = Arc::new(Mutex::new(HashMap::new()));
                 tokio::spawn(stdio_read_loop(stdout, pending.clone()));
                 let tree = crate::agent::runtime::streaming::TreeKillOnDrop { pid: child.id() };
@@ -227,17 +241,7 @@ impl McpConnection {
         let result = self.request("tools/call", json!({ "name": tool_name, "arguments": arguments })).await?;
         // MCP tool results are `{ content: [{type: "text", text: "..."}], isError?: bool }`.
         let is_error = result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false);
-        let text = result
-            .get("content")
-            .and_then(|c| c.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-            .unwrap_or_default();
+        let text = result.get("content").and_then(|c| c.as_array()).map(|items| content_text(items)).unwrap_or_default();
         if is_error {
             Err(if text.is_empty() { "tool call failed".to_string() } else { text })
         } else {
@@ -294,6 +298,51 @@ fn extract_result(message: Value) -> Result<Value, String> {
     Ok(message.get("result").cloned().unwrap_or(Value::Null))
 }
 
+/// A tool result's content as text. Text blocks are kept; anything else (an image, audio, an embedded resource) is named with its type
+/// and size instead of disappearing, and an embedded resource's own text is included.
+pub(crate) fn content_text(items: &[Value]) -> String {
+    items
+        .iter()
+        .filter_map(|item| match item.get("type").and_then(|t| t.as_str()) {
+            Some("text") => item.get("text").and_then(|t| t.as_str()).map(String::from),
+            Some(kind @ ("image" | "audio")) => {
+                let mime = item.get("mimeType").and_then(|m| m.as_str()).unwrap_or("unknown type");
+                let bytes = item.get("data").and_then(|d| d.as_str()).map(|d| d.len() * 3 / 4).unwrap_or(0);
+                Some(format!("[{kind} ({mime}, about {bytes} bytes) returned by the tool; not shown]"))
+            }
+            Some("resource") => {
+                let r = item.get("resource");
+                let uri = r.and_then(|r| r.get("uri")).and_then(|u| u.as_str()).unwrap_or("?");
+                Some(match r.and_then(|r| r.get("text")).and_then(|t| t.as_str()) {
+                    Some(t) => format!("[resource {uri}]\n{t}"),
+                    None => format!("[resource {uri}: binary, not shown]"),
+                })
+            }
+            Some("resource_link") => item.get("uri").and_then(|u| u.as_str()).map(|u| format!("[resource link: {u}]")),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+mod content_tests {
+    use super::content_text;
+    use serde_json::json;
+
+    #[test]
+    fn non_text_content_is_named_instead_of_dropped() {
+        let out = content_text(&[
+            json!({ "type": "text", "text": "done" }),
+            json!({ "type": "image", "mimeType": "image/png", "data": "AAAA" }),
+            json!({ "type": "resource", "resource": { "uri": "file:///a.txt", "text": "hello" } }),
+            json!({ "type": "resource", "resource": { "uri": "file:///b.bin", "blob": "AAAA" } }),
+            json!({ "type": "resource_link", "uri": "https://x" }),
+        ]);
+        assert_eq!(out, "done\n[image (image/png, about 3 bytes) returned by the tool; not shown]\n[resource file:///a.txt]\nhello\n[resource file:///b.bin: binary, not shown]\n[resource link: https://x]");
+    }
+}
+
 async fn stdio_read_loop(stdout: tokio::process::ChildStdout, pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>) {
     let mut reader = BufReader::new(stdout).lines();
     loop {
@@ -304,12 +353,16 @@ async fn stdio_read_loop(stdout: tokio::process::ChildStdout, pending: Arc<Mutex
                     continue;
                 }
                 let Ok(message) = serde_json::from_str::<Value>(trimmed) else { continue };
+                // The server's tool list changed: the next turn reads it again.
+                if message.get("method").and_then(|m| m.as_str()) == Some("notifications/tools/list_changed") {
+                    crate::agent::tools::exec::invalidate_tool_defs_cache();
+                    continue;
+                }
                 if let Some(id) = message.get("id").and_then(|v| v.as_i64()) {
                     if let Some(tx) = pending.lock().await.remove(&id) {
                         let _ = tx.send(message);
                     }
                 }
-                // Server->client notifications (e.g. tools/list_changed) are ignored for now.
             }
             _ => return,
         }
