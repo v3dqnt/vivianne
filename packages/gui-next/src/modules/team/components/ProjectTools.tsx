@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Box, ButtonBase, Collapse, Stack, Typography } from '../../../ui'
 import { ChevronRightLinear } from '../../../icons'
 import { WorkspaceSelector } from '../../ai/components/WorkspaceSelector'
@@ -11,6 +11,11 @@ import { ThreadGoal } from './ThreadGoal'
 import { ProjectPill } from '../../sessions/components/ProjectPicker'
 import { useDaysStore } from '../../sessions/store/daysStore'
 import { useProjectsStore } from '../../sessions/store/projectsStore'
+import { RailTabs } from '../../rail/RailTabs'
+import { FilesTab } from '../../rail/FilesTab'
+import { PreviewTab } from '../../rail/PreviewTab'
+import { TerminalTab } from '../../rail/TerminalTab'
+import { isWide, useRail, type RailTab } from '../../rail/railStore'
 
 /** Every action in the column is the same row: left-aligned on one edge,
  * one line, muted until hovered. */
@@ -48,6 +53,10 @@ export const RAIL_VARS = {
   '--rail-w': 'clamp(216px, 17vw, 340px)',
   '@media (min-width: 1700px)': { '--rail-w': 'clamp(520px, 32vw, 640px)' },
 } as const
+/** While a working tab (files, preview, terminal) is open the rail widens to this, and the chat narrows to match. */
+export const RAIL_WIDE = { '--rail-w': 'clamp(400px, 38vw, 760px)' } as const
+/** How the rail and the chat beside it change width: one easing for both, so they move as one. */
+export const RAIL_EASE = '320ms cubic-bezier(0.2, 0.8, 0.2, 1)'
 /** The chat leaves the rail plus a 24px gutter either side. */
 export const RAIL_RESERVE = 'calc(var(--rail-w) + 48px)'
 
@@ -98,27 +107,76 @@ function Section({ id, title, right, children }: { id: string; title: string; ri
   )
 }
 
-/** The project rail, on the chat's right: the folder the project works in,
- * version control and the context window. */
+/** The project rail, on the chat's right. Its overview holds the project, goal, version control and context; its working tabs
+ * (files, a file's preview, a terminal) widen the same card instead of opening another panel. */
 export function ProjectTools() {
   const todayId = useDaysStore((s) => s.todayId)
   const hasFolder = useProjectsStore((s) => {
     const id = todayId ? s.sessionProjectMap[todayId] : undefined
     return !!s.projects.find((p) => p.id === id)?.path
   })
+  const chosen = useRail((s) => s.tab)
+  // Without a folder there is nothing for the working tabs to show.
+  const tab: RailTab = hasFolder ? chosen : 'overview'
+  const wide = isWide(tab)
+  // The terminal stays mounted once opened, so its scrollback survives a trip to another tab.
+  const [terminalOpened, setTerminalOpened] = useState(tab === 'terminal')
+  useEffect(() => {
+    if (tab === 'terminal') setTerminalOpened(true)
+  }, [tab])
   return (
     <Box
       sx={{
         position: 'absolute',
         right: 24,
         top: 24,
+        // Wide tabs take the column's full height; the overview keeps its own.
+        bottom: wide ? 24 : 'auto',
         width: 'var(--rail-w)',
+        transition: `width ${RAIL_EASE}`,
         containerType: 'inline-size',
         zIndex: 3,
-        p: '16px 14px',
+        p: '12px 14px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
         ...CARD,
       }}
     >
+      <RailTabs hasFolder={hasFolder} />
+      {tab === 'files' && <Pane><FilesTab /></Pane>}
+      {tab === 'preview' && <Pane><PreviewTab /></Pane>}
+      {terminalOpened && hasFolder && (
+        <Box sx={{ display: tab === 'terminal' ? 'flex' : 'none', flex: 1, minHeight: 0, animation: tab === 'terminal' ? 'viv-rail-in 220ms ease-out' : undefined }}>
+          <TerminalTab visible={tab === 'terminal'} />
+        </Box>
+      )}
+      {tab === 'overview' && <Overview hasFolder={hasFolder} />}
+    </Box>
+  )
+}
+
+/** A working tab's body: fills the card and fades in as the card finishes widening. */
+function Pane({ children }: { children: ReactNode }) {
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+        animation: 'viv-rail-in 220ms ease-out',
+        '@keyframes viv-rail-in': { from: { opacity: 0, transform: 'translateY(4px)' }, to: { opacity: 1, transform: 'none' } },
+      }}
+    >
+      {children}
+    </Box>
+  )
+}
+
+function Overview({ hasFolder }: { hasFolder: boolean }) {
+  return (
+    <Box sx={{ animation: 'viv-rail-in 220ms ease-out', '@keyframes viv-rail-in': { from: { opacity: 0, transform: 'translateY(4px)' }, to: { opacity: 1, transform: 'none' } } }}>
       {/* Stacked in the narrow card, side by side in the landscape one: the card asks its
           own width, not the window's. */}
       <Box

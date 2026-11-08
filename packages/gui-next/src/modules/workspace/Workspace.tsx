@@ -2,7 +2,10 @@ import { Alert, Box, useTheme } from '../../ui'
 import { hasTauri } from '../../ipc'
 import { SURFACE_RADIUS } from '../../theme'
 import { ChatView } from '../ai/components/ChatView'
-import { ProjectTools, RAIL_RESERVE, RAIL_VARS } from '../team/components/ProjectTools'
+import { ProjectTools, RAIL_EASE, RAIL_RESERVE, RAIL_VARS, RAIL_WIDE } from '../team/components/ProjectTools'
+import { isWide, useRail } from '../rail/railStore'
+import { useDaysStore } from '../sessions/store/daysStore'
+import { useProjectsStore } from '../sessions/store/projectsStore'
 
 /** Every panel fills its box and scrolls itself; the group never scrolls. */
 function Fill({ children }: { children: React.ReactNode }) {
@@ -16,6 +19,13 @@ function Fill({ children }: { children: React.ReactNode }) {
 }
 
 function Chat() {
+  // The rail widens for its working tabs; the chat gives up the same room, on the same curve.
+  const todayId = useDaysStore((s) => s.todayId)
+  const hasFolder = useProjectsStore((s) => {
+    const id = todayId ? s.sessionProjectMap[todayId] : undefined
+    return !!s.projects.find((p) => p.id === id)?.path
+  })
+  const wide = useRail((s) => hasFolder && isWide(s.tab))
   if (!hasTauri()) {
     return (
       <Fill>
@@ -43,7 +53,9 @@ function Chat() {
           // The tools strip sits on the pane's right; the threads are not on
           // the pane at all, so nothing is reserved on the left.
           ...RAIL_VARS,
+          ...(wide && RAIL_WIDE),
           pr: RAIL_RESERVE,
+          transition: `padding-right ${RAIL_EASE}`,
         }}
       >
         <ProjectTools />
