@@ -3,6 +3,7 @@ import { call } from '../../../ipc'
 import { dirName } from '../lib/filePaths'
 import { usePanelStore } from '../../dock/store/panelStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
+import { useContextMenu } from '../../../components/ContextMenu'
 
 const ABSOLUTE = /^(?:[a-zA-Z]:[\\/]|[\\/]{1,2})/
 
@@ -38,7 +39,10 @@ export function FileLink({ path, label, prose = false, line }: { path: string; l
   const full = resolvePath(path, root)
   const open = () => usePanelStore.getState().openDocument(full)
   const reveal = () => void call('cmd_open_external', { path: dirName(full), target: 'explorer' })
+  const { onContextMenu, menu } = useContextMenu('file', { path: full, line })
   return (
+    <>
+    {menu}
     <Box
       component="span"
       role="link"
@@ -50,11 +54,7 @@ export function FileLink({ path, label, prose = false, line }: { path: string; l
         if (e.ctrlKey || e.metaKey) reveal()
         else open()
       }}
-      onContextMenu={(e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        reveal()
-      }}
+      onContextMenu={onContextMenu}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
           e.stopPropagation()
@@ -94,5 +94,6 @@ export function FileLink({ path, label, prose = false, line }: { path: string; l
     >
       {label ?? baseName(path)}
     </Box>
+    </>
   )
 }

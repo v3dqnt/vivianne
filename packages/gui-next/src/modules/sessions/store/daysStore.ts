@@ -70,6 +70,8 @@ interface ConversationState {
   openThread: (id: string) => Promise<void>
   renameThread: (id: string, name: string) => Promise<void>
   deleteThread: (id: string) => Promise<void>
+  /** A new thread that starts from a copy of this one's conversation; the original is left as it is. */
+  forkThread: (id: string) => Promise<void>
 
   // ── Tabs: the threads open along the top ──
   /** Session ids, left to right. A thread gets a tab whenever it opens. */
@@ -280,6 +282,18 @@ export const useDaysStore = create<ConversationState>((set, get) => ({
     await call('cmd_rename_session', { id, name })
     await get().refreshThreads()
   },
+
+  forkThread: (id) =>
+    serialized(async () => {
+      // A new thread first, then the copy is adopted into it: the source thread's own agent is never touched.
+      const fresh = await call<string>('cmd_new_session', { threadId: `session_${Date.now()}`, inheritFrom: id })
+      if (!fresh) return
+      await call<string>('cmd_fork_session', { id, threadId: fresh })
+      const project = useProjectsStore.getState().sessionProjectMap[id]
+      if (project) await useProjectsStore.getState().assign(fresh, project)
+      await show(fresh, false)
+      await get().refreshThreads()
+    }),
 
   deleteThread: async (id) => {
     await get().closeTab(id)

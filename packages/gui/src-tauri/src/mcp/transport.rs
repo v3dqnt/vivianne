@@ -16,6 +16,8 @@ enum Inner {
         stdin: Mutex<tokio::process::ChildStdin>,
         child: Mutex<tokio::process::Child>,
         pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>,
+        /// Ends the server and whatever it started when the connection is dropped.
+        _tree: crate::agent::runtime::streaming::TreeKillOnDrop,
     },
     Http {
         url: String,
@@ -50,6 +52,7 @@ impl McpConnection {
                 let mut cmd = tokio::process::Command::new(command);
                 // The server gets the user's environment minus credentials, plus the variables its own config names.
                 crate::agent::tools::code::sandbox::scrub_env(&mut cmd);
+                crate::agent::runtime::streaming::own_group(&mut cmd);
                 cmd.args(args)
                     .envs(env)
                     .stdin(std::process::Stdio::piped())
@@ -61,7 +64,8 @@ impl McpConnection {
                 let stdout = child.stdout.take().ok_or("no stdout")?;
                 let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>> = Arc::new(Mutex::new(HashMap::new()));
                 tokio::spawn(stdio_read_loop(stdout, pending.clone()));
-                Inner::Stdio { stdin: Mutex::new(stdin), child: Mutex::new(child), pending }
+                let tree = crate::agent::runtime::streaming::TreeKillOnDrop { pid: child.id() };
+                Inner::Stdio { stdin: Mutex::new(stdin), child: Mutex::new(child), pending, _tree: tree }
             }
             McpTransportConfig::Http { url, headers } => {
                 let client = reqwest::Client::builder()

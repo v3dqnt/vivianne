@@ -19,6 +19,7 @@ import { PairProjectDialog } from '../multiplayer/components/PairProjectDialog'
 import { useAppView } from '../git/components/GitView'
 import { mainPane } from '../../theme'
 import { useTheme } from '../../ui'
+import { useArchivedThreads } from '../../lib/archivedThreads'
 
 const GENERAL = { id: GENERAL_PROJECT_ID, name: 'General', color: null } as const
 
@@ -75,6 +76,12 @@ export function HomeView() {
     const q = query.trim().toLowerCase()
     return q ? list.filter((t) => titleOf(t).toLowerCase().includes(q)) : list
   }, [sessions, scope, query, map])
+
+  // Archived threads are put away until asked for.
+  const archivedIds = useArchivedThreads((s) => s.ids)
+  const [showArchived, setShowArchived] = useState(false)
+  const archivedCount = threads?.filter((t) => archivedIds.includes(t.id)).length ?? 0
+  const visible = (threads ?? []).filter((t) => showArchived || !archivedIds.includes(t.id))
 
   const enter = async (thread: string | null) => {
     const days = useDaysStore.getState()
@@ -155,12 +162,17 @@ export function HomeView() {
                 <Stack sx={{ gap: '2px' }}>
                   {threads === null ? (
                     <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', px: '12px' }}>Loading…</Typography>
-                  ) : threads.length === 0 ? (
+                  ) : visible.length === 0 ? (
                     <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', px: '12px' }}>{query ? 'No threads match.' : 'No threads yet. Start one.'}</Typography>
                   ) : (
-                    threads.map((t) => <ThreadRow key={t.id} thread={t} active={t.id === openId} onOpen={() => void enter(t.id)} />)
+                    visible.map((t) => <ThreadRow key={t.id} thread={t} active={t.id === openId} onOpen={() => void enter(t.id)} />)
                   )}
                 </Stack>
+                {archivedCount > 0 && (
+                  <ButtonBase onClick={() => setShowArchived((v) => !v)} sx={{ alignSelf: 'flex-start', px: '12px', height: 28, borderRadius: '6px', fontSize: '0.75rem', color: 'text.secondary', '&:hover': { color: 'text.primary' } }}>
+                    {showArchived ? 'Hide archived' : `Show archived (${archivedCount})`}
+                  </ButtonBase>
+                )}
               </>
           </Stack>
         </Stack>

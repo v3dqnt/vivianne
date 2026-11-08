@@ -114,7 +114,7 @@ const KILL_GRACE: Duration = Duration::from_secs(3);
 /// End a process and everything it started (`npm run dev` → `sh` → `node`), not just the process itself, which would leave orphans holding the
 /// port. On Windows that is `taskkill /T`; elsewhere the command ran as the leader of its own process group, so the whole group is signalled:
 /// first politely, then for good once the grace period is over.
-async fn kill_tree(pid: u32) {
+pub(crate) async fn kill_tree(pid: u32) {
     #[cfg(windows)]
     {
         let _ = tokio::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F", "/T"]).output().await;
@@ -128,9 +128,16 @@ async fn kill_tree(pid: u32) {
     }
 }
 
+/// Put the command in its own process group, so its whole tree can be signalled at once. Call before spawning.
+pub(crate) fn own_group(cmd: &mut tokio::process::Command) -> &mut tokio::process::Command {
+    #[cfg(unix)]
+    cmd.process_group(0);
+    cmd
+}
+
 /// Ends the command's whole process tree if the call that runs it is dropped (the turn was stopped) before it finished.
-struct TreeKillOnDrop {
-    pid: Option<u32>,
+pub(crate) struct TreeKillOnDrop {
+    pub(crate) pid: Option<u32>,
 }
 
 impl Drop for TreeKillOnDrop {

@@ -41,16 +41,17 @@ struct PtySession {
     shell_id: String,
     cwd: String,
     started_at_epoch_ms: u64,
-    /// Output accumulated since the last `read()`. `read()` fully drains it
-    /// rather than tracking a cursor, so the cap's front-truncation has no
-    /// stale offset to invalidate.
+    /// Output retained for the model, addressed by absolute offset. `read()` advances `cursor` but removes nothing, so another reader (or the
+    /// same one, asking `from` an earlier offset) still sees it.
     ///
     /// `None` for a GUI-opened tab: those render from the live
     /// `terminal-output` event and nothing ever reads this back, so retaining
     /// (and repeatedly compacting) hundreds of KB for them is pure waste on
     /// the output pump's hot path. Only `terminal` open — the model-facing
     /// tool, which has no way to subscribe to events — asks for a buffer.
-    output: Option<Arc<StdMutex<String>>>,
+    output: Option<Arc<StdMutex<super::output_buffer::OutputBuffer>>>,
+    /// Where the default `read()` continues from.
+    cursor: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// One live terminal session, for the Background Tasks panel's list.
@@ -205,8 +206,8 @@ pub fn spawn(
         .map_err(|e| format!("failed to open pty writer: {e}"))?;
 
     let child = Arc::new(StdMutex::new(child));
-    let output: Option<Arc<StdMutex<String>>> =
-        retain_output.then(|| Arc::new(StdMutex::new(String::new())));
+    let output: Option<Arc<StdMutex<super::output_buffer::OutputBuffer>>> =
+        retain_output.then(|| Arc::new(StdMutex::new(super::output_buffer::OutputBuffer::new(OUTPUT_BUFFER_CAP_BYTES))));
 
     // How often accumulated output is flushed to the frontend as one event.
     // A build/test run can produce hundreds to thousands of `read()`s a
@@ -244,19 +245,7 @@ pub fn spawn(
                     Ok(n) => {
                         let data = String::from_utf8_lossy(&buf[..n]).into_owned();
                         if let Some(output) = &output {
-                            let mut out = output.lock().unwrap();
-                            out.push_str(&data);
-                            // Compact only once the buffer has grown a whole
-                            // cap past the limit, then drop back to it.
-                            // Trimming on every overflowing chunk instead
-                            // memmoves the full retained buffer per ~8KB read
-                            // — a ~32x write amplification on a path that
-                            // sees every byte a build prints.
-                            if out.len() > OUTPUT_BUFFER_CAP_BYTES * 2 {
-                                let mut cut = out.len() - OUTPUT_BUFFER_CAP_BYTES;
-                                while cut < out.len() && !out.is_char_boundary(cut) { cut += 1; }
-                                out.drain(..cut);
-                            }
+                            output.lock().unwrap().push(&data);
                         }
                         pending_emit.lock().unwrap().push_str(&data);
                     }
@@ -331,22 +320,27 @@ pub fn spawn(
             cwd: cwd_for_info,
             started_at_epoch_ms,
             output,
+            cursor: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         },
     );
     Ok(())
 }
 
-/// Drain and return everything written since the last `read()` (or since
-/// spawn, on the first call). Errors for a user-opened tab, which retains no
-/// buffer to drain — only sessions the agent opened are readable this way.
-pub fn read(registry: &TerminalRegistry, tab_id: &str) -> Result<String, String> {
+/// What was written since the last `read()` (or since spawn, on the first call), or from absolute offset `from` when given. Nothing is
+/// removed, so reading again from an earlier offset returns the same text; the result says where to continue and how many bytes were lost
+/// to the buffer cap. Errors for a user-opened tab, which retains no buffer — only sessions the agent opened are readable this way.
+pub fn read(registry: &TerminalRegistry, tab_id: &str, from: Option<u64>) -> Result<super::output_buffer::Chunk, String> {
     let sessions = registry.sessions.lock().unwrap();
     let session = sessions.get(tab_id).ok_or_else(|| format!("no terminal session for tab {tab_id}"))?;
     let output = session.output.as_ref().ok_or_else(|| {
         format!("terminal {tab_id} is a user-opened tab and keeps no readable buffer; open your own with terminal (action open)")
     })?;
-    let drained = std::mem::take(&mut *output.lock().unwrap());
-    Ok(drained)
+    let start = from.unwrap_or_else(|| session.cursor.load(Ordering::SeqCst));
+    let chunk = output.lock().unwrap().read_from(start);
+    if from.is_none() {
+        session.cursor.store(chunk.next, Ordering::SeqCst);
+    }
+    Ok(chunk)
 }
 
 /// Send an interrupt (Ctrl-C) to the foreground process without closing the

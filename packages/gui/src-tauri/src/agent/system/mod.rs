@@ -3,5 +3,6 @@
 
 pub mod dev_server_manager;
 pub mod notifications;
+pub mod open_apps;
 pub mod paths;
 pub mod telemetry;

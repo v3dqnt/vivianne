@@ -2675,16 +2675,17 @@ async fn execute_terminal_read_tool(args: &serde_json::Value, app: &tauri::AppHa
     let registry = app.state::<std::sync::Arc<crate::terminal::TerminalRegistry>>();
     let tab_id = args.get("tab_id").and_then(|v| v.as_str()).unwrap_or("");
     if tab_id.is_empty() { return text_result("Error: 'tab_id' is required".to_string()); }
-    match crate::terminal::read(&registry, tab_id) {
-        Ok(data) if data.is_empty() => text_result("(no new output since the last read)".to_string()),
+    let from = args.get("from").and_then(|v| v.as_u64());
+    match crate::terminal::read(&registry, tab_id, from) {
+        Ok(c) if c.data.is_empty() => text_result(format!("(no new output since the last read; next offset {})", c.next)),
         // Same budget bash/powershell output goes through — a verbose build
         // in a PTY can otherwise put a quarter-megabyte of scrollback into
         // one tool result with no notice that anything was elided.
-        Ok(data) => text_result(crate::agent::runtime::context_shaping::trim_middle_bytes(
-            &data,
-            TERMINAL_READ_BUDGET_BYTES / 4,
-            3 * TERMINAL_READ_BUDGET_BYTES / 4,
-        )),
+        Ok(c) => {
+            let lost = if c.dropped > 0 { format!("[{} earlier bytes were dropped before they could be read]\n", c.dropped) } else { String::new() };
+            let body = crate::agent::runtime::context_shaping::trim_middle_bytes(&c.data, TERMINAL_READ_BUDGET_BYTES / 4, 3 * TERMINAL_READ_BUDGET_BYTES / 4);
+            text_result(format!("{lost}{body}\n\n[next offset {}]", c.next))
+        }
         Err(e) => text_result(format!("Error: {e}")),
     }
 }

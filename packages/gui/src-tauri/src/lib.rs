@@ -292,6 +292,8 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::sessions::projects::cmd_create_multiplayer_project,
       crate::agent::sessions::projects::cmd_update_project,
       crate::agent::sessions::projects::cmd_open_external,
+      crate::agent::system::open_apps::cmd_list_open_apps,
+      crate::agent::system::open_apps::cmd_open_in_app,
       crate::agent::sessions::projects::cmd_open_path,
       crate::agent::sessions::projects::cmd_delete_project,
       crate::agent::sessions::projects::cmd_get_session_project_map,

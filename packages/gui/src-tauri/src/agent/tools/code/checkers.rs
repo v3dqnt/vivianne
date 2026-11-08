@@ -27,12 +27,17 @@ fn command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     crate::agent::tools::code::sandbox::scrub_env(&mut cmd);
+    crate::agent::runtime::streaming::own_group(&mut cmd);
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     cmd
 }
 
 async fn run(mut cmd: tokio::process::Command, timeout: Duration) -> Option<(bool, String)> {
-    let out = tokio::time::timeout(timeout, cmd.output()).await.ok()?.ok()?;
+    // A checker that outlives its deadline takes everything it started with it.
+    let child = cmd.spawn().ok()?;
+    let mut guard = crate::agent::runtime::streaming::TreeKillOnDrop { pid: child.id() };
+    let out = tokio::time::timeout(timeout, child.wait_with_output()).await.ok()?.ok()?;
+    guard.pid = None;
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     Some((out.status.success(), text))
 }

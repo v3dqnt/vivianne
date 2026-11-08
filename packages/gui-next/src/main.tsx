@@ -11,6 +11,7 @@ import { initProviderDispatcher } from './modules/ai/providers/dispatcher'
 import { initNotchDelegate } from './modules/instant/lib/notchDelegate'
 import { initNotificationReply } from './modules/ai/lib/notificationReply'
 import { initDiagramCheck } from './modules/ai/lib/diagramCheck'
+import { registerContextMenus } from './modules/sessions/contextMenus'
 import App from './App.tsx'
 import './tailwind.css'
 
@@ -38,6 +39,7 @@ if (hasTauri() && getCurrentWindow().label === 'main') {
   initNotificationReply()
   // The agent's check_diagram tool, answered with the same code the chat draws with.
   initDiagramCheck()
+  registerContextMenus()
   // Only now is it safe to create the notch's window (see `cmd_notch_app_ready`).
   const ready = () => void invoke('cmd_notch_app_ready').catch(() => {})
   if (document.readyState === 'complete') ready()

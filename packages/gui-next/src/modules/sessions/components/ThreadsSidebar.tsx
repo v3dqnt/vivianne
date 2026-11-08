@@ -6,6 +6,7 @@ import { useAgentStore } from '../../ai/store/agentStore'
 import { useThreadGit } from '../../git/store/threadGitStore'
 import { changedCount } from '../../git/store/gitStatusStore'
 import type { SessionInfo } from '../lib/types'
+import { useContextMenu } from '../../../components/ContextMenu'
 
 
 /** One rhythm for every row: the same height, inset and corner. */
@@ -48,8 +49,9 @@ export function ThreadRow({ thread, active, onOpen }: { thread: SessionInfo; act
   // open thread, where it is about the work on screen.
   const changed = git && active ? changedCount(git) : 0
   const title = titleOf(thread)
+  const { onContextMenu, menu } = useContextMenu('thread', { id: thread.id, title })
   return (
-    <Stack direction="row" sx={{ position: 'relative', '&:hover .row-delete': { opacity: 1 }, '&:hover .row-meta': { opacity: 0 } }}>
+    <Stack direction="row" onContextMenu={onContextMenu} sx={{ position: 'relative', '&:hover .row-delete': { opacity: 1 }, '&:hover .row-meta': { opacity: 0 } }}>
       <ButtonBase
         onClick={onOpen}
         aria-current={active ? 'true' : undefined}
@@ -67,6 +69,7 @@ export function ThreadRow({ thread, active, onOpen }: { thread: SessionInfo; act
           {title}
         </Box>
       </ButtonBase>
+      {menu}
       <Box className="row-meta" sx={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', fontSize: '0.75rem', color: git?.conflicted ? 'error.main' : 'warning.main', pointerEvents: 'none', transition: 'opacity 120ms' }}>
         {changed > 0 ? `+${changed}` : ''}
       </Box>

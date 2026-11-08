@@ -691,7 +691,8 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
                     "tab_id": { "type": "string", "description": "Session id (all but open and list)" },
                     "data": { "type": "string", "description": "send: the line to type" },
                     "shell_id": { "type": "string", "description": "open: which shell (default: powershell on Windows, bash elsewhere)" },
-                    "cwd": { "type": "string", "description": "open: starting folder (default: the workspace root)" }
+                    "cwd": { "type": "string", "description": "open: starting folder (default: the workspace root)" },
+                    "from": { "type": "number", "description": "read: a byte offset to read from (the [next offset] of an earlier read). Reading does not remove output, so an earlier offset returns it again." }
                 },
                 "required": ["action"]
             }
