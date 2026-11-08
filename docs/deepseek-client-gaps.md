@@ -20,6 +20,15 @@ Follows [deepseek-client-gap-analysis.md](deepseek-client-gap-analysis.md). The 
 | Fork and archive threads | right-click a thread: fork into a new thread, archive (hidden behind "Show archived"), delete. Archive is kept per device. Fork uses the existing session-copy command and has not been run in the app | `daysStore.forkThread`, `lib/archivedThreads.ts`, `HomeView.tsx` |
 | Terminal reads that don't consume | offset-addressed buffer, a per-session cursor, a `from` argument, a note when the head was dropped, and the next offset in every result | `cli_tools/output_buffer.rs`, `terminal.rs` |
 | Tree kill for MCP, LSP and checker children | own process group, killed with their tree on drop, shutdown or deadline | `runtime/streaming.rs` (`own_group`, `TreeKillOnDrop`) |
+| Rail tabs (Overview, Files, Preview, Terminal) | the project rail is one card with tabs; the working tabs widen it smoothly and the chat eases over to match. Files is a tree with a filter and per-file-type icons (Material Icon Theme); Preview shows one file; Terminal is a real shell (xterm over the existing PTY backend) that keeps its scrollback while another tab shows | `modules/rail/*`, `components/FileTypeIcon.tsx`, `lib/fileIcons.ts` |
+| Sliding tabs | one shared segmented control (Home and the rail) with a chip that slides between tabs | `components/SegmentedTabs.tsx` |
+| `/goal` in the composer | Goal left the rail; `/goal <objective>`, `pause`, `resume`, `done`, `clear`, and a quiet goal line above the composer | `modules/ai/components/GoalLine.tsx`, `lib/slashCommands.ts` |
+| Thinking-states line and streaming words | the reasoning label swaps through states with a shimmer; streamed words fade in (only the last ~400 characters animate). `Markdown` now keeps one stable component map, so streamed elements are no longer rebuilt on every token | `components/ThinkingStates.tsx`, `modules/ai/lib/remarkStreamWords.ts`, `Markdown.tsx` |
+| ACP server (`app acp`) | Agent Client Protocol over stdio: initialize, session/new, prompt, cancel, list, resume, close, set_config_option, permission requests; refuses client MCP servers and audio/embedded content | `cli_tools/acp.rs` |
+| Scripted agents (`run_script`) | `agent()`, `phase()`, `log()` with live progress in the script card, a shared 8-at-once agent limit, a 200-agent cap, and a 30-minute ceiling | `agent/tools/ptc.rs` |
+| File safety | one writer per file, edits refused when the file changed since it was read, atomic writes, streamed reads of files over 10 MB with a per-line cap | `agent/tools/files/guard.rs` |
+| MCP routing and resilience | calls route by known server names (not by splitting on `__`), a failed re-list keeps a server's last tools, `tools/list_changed` re-reads, non-text results are named, server stderr is logged | `mcp/mod.rs`, `mcp/transport.rs` |
+| Broken agent profiles reported | a misspelled `allowed_tools` entry or invalid frontmatter is named in `list_subagent_profiles` instead of the profile silently losing tools | `agent/profiles/subagent.rs` |
 | Staged-save limits card | shell timeout and subagent count, edited as a draft: Save, a "changed from" marker, Reset, and a reason for an invalid value. The backend reads them on each use | `settings/lib/limits.ts`, `LimitsCard.tsx`, `agent/tools/limits.rs` |
 
 ## Filed: not built
@@ -29,11 +38,9 @@ Sizes: S is under a day, M a few days, L about a week or more.
 ### Layout and panels
 | Gap | What it needs | Size |
 |---|---|---|
-| Right-sidebar tab system (`ui-sidebar-right`) | Decide where it docks relative to the project rail and `RAIL_RESERVE`. Add a tab-type registry (terminal, browser, files, preview) and a per-thread tab set that survives switching threads. Everything below hangs off this | L |
-| Interactive terminal (`ui-sidebar-terminal`) | xterm.js on the frontend. A PTY backend (`portable-pty`) with a retained-process list so tabs survive a reload. Needs the sidebar tabs first | L |
+| In-app browser tab (`ui-sidebar-browser`) | A sandboxed webview as a fifth rail tab, loopback allowed. The existing Browser panel is a different mechanism, so decide whether to reuse it | M |
+| Terminal that survives a reload | The shell is kept per folder while the app runs and rejoined on return. After a window reload the screen starts empty (the process is still there); replaying its scrollback needs the offset buffer exposed to the GUI | S |
 | In-app browser tab (`ui-sidebar-browser`) | A sandboxed Tauri webview per tab, with loopback allowed. The existing Browser panel is a different mechanism, so decide whether to reuse it | M |
-| File tree per pane (`ui-sidebar-files`) | A tree component fed by `cmd_list_dir_tree`, with expansion and scroll kept per pane. Needs the sidebar tabs | M |
-| Preview renderer registry | `FilePreview.tsx` hard-codes four kinds. It's a small refactor, but only worth doing together with the sidebar, when previews gain a second home | S |
 | Panel geometry service (`ui-layout`) | Replace the fixed `RAIL_RESERVE` padding with panels that report their width. Pairs with the sidebar | M |
 
 ### Chat and composer
@@ -80,3 +87,23 @@ Done for `bash` and `powershell`: a timeout keeps the output so far, the drain a
 | Shared output collector | Byte-oriented, with one spill file that holds the whole stream, offset readers, and a "head was dropped" flag | M |
 | PTY readiness | Foreground process and idle/busy state, so the model stops guessing with fixed sleeps | M |
 | Process lifecycle tests | Spawn and collect, tree kill, drain cannot escape the deadline, terminal resize. `streaming.rs` has the shell cases; nothing covers the other call sites | M |
+
+## MCP (from the `mcp` audit)
+
+| Gap | What it needs | Size |
+|---|---|---|
+| Reconnect with backoff | A stdio child that exits or an HTTP server that fails stays dead until re-added. One retry budget per outage, doubling delay, reset after stability, and a typed status | M |
+| Resources | `resources/list`, `resources/read` and templates as shared tools with an explicit `server` argument; binary payloads described, not pasted | M |
+| Server instructions | Read `initialize.instructions`, bound it, attribute it, add it to the prompt | S |
+| Secrets out of the config file | `mcp_servers.json` stores `env` in plaintext. Store references, resolve at runtime, redact resolved values from errors | M |
+| Probe and restart | Test a server config without registering it; restart one | S–M |
+| Image content passed to the model | Images are now named instead of dropped; admitting them needs a modality check and an attachment path | M |
+
+## Not verified
+
+- **ACP:** exercised end to end against the real binary for initialize, session/new, list, an invalid-cwd error and close. A real `session/prompt` was not run: the only configured model was rate-limited. Permission requests, cancel and resume are covered by tests against a fake host only.
+- **`agent()` in `run_script`:** covered by tests against a stubbed `task` tool. Not run with real subagents.
+- **Thread fork:** uses the existing session-copy command; not run in the app.
+- **Streaming words, thinking states:** watched in the component gallery (Motion tab) and sampled for opacity; not watched on a real streamed reply, for the same rate-limit reason.
+- **MCP changes:** unit-tested (name routing, non-text content); not run against a live MCP server.
+- **File guard on shell writes:** `bash` and `powershell` can still change a file behind the guard's back; only `write`, `edit` and `apply_patch` are checked.
