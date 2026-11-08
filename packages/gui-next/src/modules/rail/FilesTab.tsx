@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Box, ButtonBase, InputBase, Stack, Typography } from '../../ui'
-import { ChevronRightLinear, DocumentLinear, FolderLinear, SearchNormalLinear } from '../../icons'
+import { ChevronRightLinear, SearchNormalLinear } from '../../icons'
+import { FileTypeIcon } from '../../components/FileTypeIcon'
 import { call } from '../../ipc'
 import { useWorkspaceStore } from '../ai/store/workspaceStore'
 import { useContextMenu } from '../../components/ContextMenu'
@@ -38,7 +39,7 @@ function Row({ node, depth, open, onToggle, active }: { node: TreeNode; depth: n
         <Box sx={{ width: 12, display: 'flex', flexShrink: 0, opacity: dir ? 0.7 : 0, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s ease' }}>
           <ChevronRightLinear size={12} color="currentColor" />
         </Box>
-        <Box sx={{ display: 'flex', flexShrink: 0, opacity: 0.8 }}>{dir ? <FolderLinear size={14} color="currentColor" /> : <DocumentLinear size={14} color="currentColor" />}</Box>
+        <FileTypeIcon name={node.name} dir={dir} open={open} size={16} />
         <Box component="span" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {node.name}
         </Box>
