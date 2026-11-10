@@ -1,6 +1,6 @@
 {
   "name": "gui",
-  "version": "1.9.1-rdv2",
+  "version": "1.9.1-rdv2-silent",
   "private": true,
   "scripts": {
     "tauri": "node scripts/dev-env.mjs"

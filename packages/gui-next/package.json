@@ -1,7 +1,7 @@
 {
   "name": "gui-next",
   "private": true,
-  "version": "1.9.1-rdv2",
+  "version": "1.9.1-rdv2-silent",
   "type": "module",
   "scripts": {
     "dev": "vite",
