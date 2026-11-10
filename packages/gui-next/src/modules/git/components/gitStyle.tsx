@@ -18,9 +18,9 @@ export const T = {
   /** Buttons, tabs, secondary lines. */
   small: { fontSize: '0.75rem', lineHeight: '16px' },
   /** Meta lines under a title, counts, times. */
-  meta: { fontSize: '0.6875rem', lineHeight: '16px' },
+  meta: { fontSize: '0.75rem', lineHeight: '16px' },
   /** Section labels. */
-  label: { fontSize: '0.6875rem', lineHeight: '16px', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' },
+  label: { fontSize: '0.75rem', lineHeight: '16px', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' },
   mono: { fontFamily: MONO_FONT },
 } as const
 

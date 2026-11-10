@@ -1,3 +1,4 @@
+import { confirm } from '../../../components/ConfirmDialog'
 import { useCallback, useEffect, useState } from 'react'
 import { Alert, Box, Button, ButtonBase, Dialog, DialogActions, DialogContent, DialogTitle, InputBase, Stack, ToggleButton, ToggleButtonGroup, Typography, alpha, useTheme } from '../../../ui'
 import { LockLinear, TrashLinear } from '../../../icons'
@@ -56,7 +57,7 @@ export function VaultSection() {
   }, [load])
 
   const remove = async (e: Entry) => {
-    if (!window.confirm(`Delete "${e.label}" from the vault? This cannot be undone.`)) return
+    if (!(await confirm(`Delete "${e.label}" from the vault? This cannot be undone.`))) return
     try {
       await call('cmd_vault_delete', { id: e.id })
       await load()

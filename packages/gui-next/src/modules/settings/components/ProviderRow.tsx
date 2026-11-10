@@ -1,3 +1,4 @@
+import { confirm, orToast } from '../../../components/ConfirmDialog'
 import { useEffect, useState } from 'react'
 import { Box, Stack, Typography, InputBase, IconButton, CircularProgress, Popover, Tooltip, Select, MenuItem, Divider, Button } from '../../../ui'
 import { TickCircleLinear, TrashLinear, KeyLinear, LayerLinear, AddLinear, RefreshLinear } from '../../../icons'
@@ -31,9 +32,10 @@ export function ProviderRow({ provider }: { provider: ProviderMeta }) {
   }
 
   const remove = async () => {
+    if (!(await confirm(`Remove the ${provider.label} key? Models from this provider stop working until you add one again.`, { action: 'Remove' }))) return
     setBusy(true)
     try {
-      await deleteKey(provider.id)
+      await orToast('Could not remove the key', () => deleteKey(provider.id))
     } finally {
       setBusy(false)
     }
@@ -65,7 +67,7 @@ export function ProviderRow({ provider }: { provider: ProviderMeta }) {
               <LayerLinear size={15} color="currentColor" />
             </IconButton>
           </Tooltip>
-          <IconButton size="small" onClick={() => void remove()} disabled={busy}>
+          <IconButton size="small" aria-label="Remove key" onClick={() => void remove()} disabled={busy}>
             {busy ? <CircularProgress size={14} /> : <TrashLinear size={15} color="currentColor" />}
           </IconButton>
           <Popover
@@ -97,7 +99,7 @@ export function ProviderRow({ provider }: { provider: ProviderMeta }) {
               py: 0.5,
             }}
           />
-          <IconButton size="small" onClick={() => void save()} disabled={busy || !draft.trim()}>
+          <IconButton size="small" aria-label="Save key" onClick={() => void save()} disabled={busy || !draft.trim()}>
             {busy ? <CircularProgress size={14} /> : <TickCircleLinear size={16} color="currentColor" />}
           </IconButton>
         </>
@@ -180,7 +182,7 @@ function KeyPoolPanel({ providerId, providerLabel }: { providerId: string; provi
               {statusLabel(entry)}
             </Typography>
             {entry.source === 'pool' && (
-              <IconButton size="small" onClick={() => void removeKey(providerId, entry.id)} sx={{ flexShrink: 0 }}>
+              <IconButton size="small" aria-label="Remove key" onClick={async () => (await confirm('Remove this key from the pool?', { action: 'Remove' })) && void orToast('Could not remove the key', () => removeKey(providerId, entry.id))} sx={{ flexShrink: 0 }}>
                 <TrashLinear size={12} color="currentColor" />
               </IconButton>
             )}
@@ -208,7 +210,7 @@ function KeyPoolPanel({ providerId, providerLabel }: { providerId: string; provi
             onKeyDown={(e) => e.key === 'Enter' && void add()}
             sx={{ fontSize: '0.8125rem', fontFamily: '"Geist Mono", ui-monospace, monospace', bgcolor: 'action.hover', borderRadius: 1.6, px: 1.25, py: 0.5 }}
           />
-          <IconButton size="small" onClick={() => void add()} disabled={busy || !key.trim()}>
+          <IconButton size="small" aria-label="Add key" onClick={() => void add()} disabled={busy || !key.trim()}>
             {busy ? <CircularProgress size={14} /> : <AddLinear size={16} color="currentColor" />}
           </IconButton>
         </Stack>

@@ -18,7 +18,7 @@ function Step({ n, title, done, children }: { n: number; title: string; done: bo
           flexShrink: 0,
           display: 'grid',
           placeItems: 'center',
-          fontSize: '0.6875rem',
+          fontSize: '0.75rem',
           fontWeight: 500,
           bgcolor: done ? alpha(theme.palette.success.main, 0.15) : 'action.hover',
           color: done ? 'success.main' : 'text.secondary',

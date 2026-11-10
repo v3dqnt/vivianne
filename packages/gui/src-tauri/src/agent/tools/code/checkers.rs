@@ -20,7 +20,7 @@ pub struct CheckResult {
 
 fn command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
     #[allow(unused_mut)]
-    let mut cmd = tokio::process::Command::new(program);
+    let mut cmd = crate::proc::quiet(program);
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;

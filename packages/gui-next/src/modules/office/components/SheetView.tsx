@@ -157,7 +157,7 @@ export function SheetView({ bytes, onEditCell }: { bytes: Uint8Array; onEditCell
           </ButtonBase>
         ))}
         <Box sx={{ flex: 1 }} />
-        <Typography variant="caption" color="text.disabled" sx={{ whiteSpace: 'nowrap', fontSize: '0.6875rem' }}>
+        <Typography variant="caption" color="text.disabled" sx={{ whiteSpace: 'nowrap', fontSize: '0.75rem' }}>
           {clipped ? `Showing the first ${MAX_ROWS} rows × ${MAX_COLS} columns · ` : ''}
           {onEditCell ? 'Double-click a cell to edit' : 'Read-only'}
         </Typography>

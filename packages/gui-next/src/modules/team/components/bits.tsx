@@ -60,7 +60,7 @@ export function Tag({ children }: { children: React.ReactNode }) {
   return (
     <Box
       component="span"
-      sx={{ px: 0.75, py: 0.125, borderRadius: '6px', bgcolor: 'action.hover', color: 'text.secondary', fontSize: '0.6875rem', whiteSpace: 'nowrap' }}
+      sx={{ px: 0.75, py: 0.125, borderRadius: '6px', bgcolor: 'action.hover', color: 'text.secondary', fontSize: '0.75rem', whiteSpace: 'nowrap' }}
     >
       {children}
     </Box>
@@ -69,7 +69,7 @@ export function Tag({ children }: { children: React.ReactNode }) {
 
 export function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.6875rem', px: 0.5 }}>
+    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.75rem', px: 0.5 }}>
       {children}
     </Typography>
   )

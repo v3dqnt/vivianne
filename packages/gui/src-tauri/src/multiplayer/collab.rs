@@ -398,7 +398,7 @@ fn activity_block(partner: &str, fresh: &[ActivityEntry], mine: &[ActivityEntry]
 // ── Git ───────────────────────────────────────────────────────────────────
 
 pub(crate) async fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = crate::proc::quiet("git");
     cmd.args(args).current_dir(dir).stdin(std::process::Stdio::null()).kill_on_drop(true);
     #[cfg(windows)]
     {

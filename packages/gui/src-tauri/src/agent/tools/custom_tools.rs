@@ -201,7 +201,7 @@ async fn run_python(dir: &Path, args: &serde_json::Value, cwd: &str, timeout: Du
     if let Err(e) = std::fs::write(&runner, RUNNER) {
         return ToolResult { content: format!("Couldn't prepare the tool runner: {e}"), is_error: true, details: None };
     }
-    let mut cmd = tokio::process::Command::new(python);
+    let mut cmd = crate::proc::quiet(python);
     cmd.arg("-X").arg("utf8").arg(&runner).arg(dir.join("tool.py"));
     let workdir = if Path::new(cwd).is_dir() { cwd.to_string() } else { dir.to_string_lossy().into_owned() };
     cmd.current_dir(workdir).kill_on_drop(true);

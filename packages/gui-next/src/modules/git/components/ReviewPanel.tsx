@@ -56,7 +56,7 @@ function dirName(p: string): string {
 }
 const isMarkdown = (p: string) => /\.(md|markdown|mdx)$/i.test(p)
 
-const MONO = { fontFamily: MONO_FONT, fontSize: '0.6875rem', lineHeight: '18px' } as const
+const MONO = { fontFamily: MONO_FONT, fontSize: '0.75rem', lineHeight: '18px' } as const
 
 function lineBg(kind: DiffLine['kind']): string {
   if (kind === 'add') return 'rgba(61, 214, 140, 0.13)'

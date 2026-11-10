@@ -117,14 +117,14 @@ const KILL_GRACE: Duration = Duration::from_secs(3);
 pub(crate) async fn kill_tree(pid: u32) {
     #[cfg(windows)]
     {
-        let _ = tokio::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F", "/T"]).output().await;
+        let _ = crate::proc::quiet("taskkill").args(["/PID", &pid.to_string(), "/F", "/T"]).output().await;
     }
     #[cfg(not(windows))]
     {
         let group = format!("-{pid}");
-        let _ = tokio::process::Command::new("kill").args(["-TERM", &group]).output().await;
+        let _ = crate::proc::quiet("kill").args(["-TERM", &group]).output().await;
         tokio::time::sleep(KILL_GRACE).await;
-        let _ = tokio::process::Command::new("kill").args(["-KILL", &group]).output().await;
+        let _ = crate::proc::quiet("kill").args(["-KILL", &group]).output().await;
     }
 }
 
@@ -144,9 +144,9 @@ impl Drop for TreeKillOnDrop {
     fn drop(&mut self) {
         let Some(pid) = self.pid.take() else { return };
         #[cfg(windows)]
-        let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F", "/T"]).spawn();
+        let _ = crate::proc::quiet_std("taskkill").args(["/PID", &pid.to_string(), "/F", "/T"]).spawn();
         #[cfg(not(windows))]
-        let _ = std::process::Command::new("kill").args(["-KILL", &format!("-{pid}")]).spawn();
+        let _ = crate::proc::quiet_std("kill").args(["-KILL", &format!("-{pid}")]).spawn();
     }
 }
 
@@ -187,7 +187,7 @@ fn render(stdout: &str, stderr: &str, ending: &str) -> String {
 /// as the tool failing: `is_error` is for a command that could not run, or that timed out having said nothing. Shared by `bash` and
 /// `powershell` (see the module doc).
 pub(crate) async fn run_streaming(tool: &'static str, exe: &str, args: &[&str], cwd: &str, timeout_secs: u64) -> ToolResult {
-    let mut cmd = tokio::process::Command::new(exe);
+    let mut cmd = crate::proc::quiet(exe);
     cmd.args(args)
         .current_dir(cwd)
         .kill_on_drop(true)
@@ -291,7 +291,7 @@ mod shell_tests {
     use super::*;
 
     fn have_bash() -> bool {
-        std::process::Command::new("bash").arg("-c").arg("true").output().map(|o| o.status.success()).unwrap_or(false)
+        crate::proc::quiet_std("bash").arg("-c").arg("true").output().map(|o| o.status.success()).unwrap_or(false)
     }
 
     async fn run(cmd: &str, secs: u64) -> ToolResult {

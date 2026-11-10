@@ -84,7 +84,7 @@ export function MentionShell({ title, children, width = 440 }: { title: string; 
                 component="kbd"
                 sx={{
                   fontFamily: MONO,
-                  fontSize: '0.6875rem',
+                  fontSize: '0.75rem',
                   lineHeight: 1,
                   px: 0.5,
                   py: 0.25,
@@ -97,7 +97,7 @@ export function MentionShell({ title, children, width = 440 }: { title: string; 
               >
                 {k}
               </Box>
-              <Typography sx={{ fontSize: '0.6875rem', color: 'text.disabled' }}>{label}</Typography>
+              <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled' }}>{label}</Typography>
             </Stack>
           ))}
         </Stack>
@@ -111,8 +111,8 @@ export function MentionShell({ title, children, width = 440 }: { title: string; 
 export function MentionSection({ label, count }: { label: string; count: number }) {
   return (
     <Stack direction="row" sx={{ alignItems: 'baseline', gap: 0.75, px: 1.5, pt: 0.75, pb: 0.25 }}>
-      <Typography sx={{ fontSize: '0.6875rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.6, color: 'text.secondary' }}>{label}</Typography>
-      <Typography sx={{ fontSize: '0.6875rem', color: 'text.disabled', fontFamily: MONO }}>{count}</Typography>
+      <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.6, color: 'text.secondary' }}>{label}</Typography>
+      <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled', fontFamily: MONO }}>{count}</Typography>
     </Stack>
   )
 }
@@ -203,7 +203,7 @@ export function MentionRow({
           {title}
         </Typography>
         {subtitle && (
-          <Typography noWrap sx={{ fontSize: '0.6875rem', color: 'text.secondary', lineHeight: 1.35 }}>
+          <Typography noWrap sx={{ fontSize: '0.75rem', color: 'text.secondary', lineHeight: 1.35 }}>
             {subtitle}
           </Typography>
         )}
@@ -218,7 +218,7 @@ function Tag({ children, color }: { children: ReactNode; color?: string }) {
     <Typography
       component="span"
       sx={{
-        fontSize: '0.6875rem',
+        fontSize: '0.75rem',
         fontFamily: MONO,
         px: 0.625,
         py: 0.125,

@@ -485,7 +485,7 @@ export function AgentSettingsPanel({
                 >
                   <p.Icon size={18} color={on ? color : 'currentColor'} />
                   <Typography sx={{ fontSize: '0.8125rem', fontWeight: on ? 600 : 500, color: 'inherit', textAlign: 'center' }}>{p.label}</Typography>
-                  {p.note && <Typography sx={{ fontSize: '0.6875rem', color: 'text.disabled' }}>{p.note}</Typography>}
+                  {p.note && <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled' }}>{p.note}</Typography>}
                 </ButtonBase>
               )
             })}

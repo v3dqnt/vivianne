@@ -271,11 +271,11 @@ async fn run_verify(root: &str) -> Option<String> {
     let text = std::fs::read_to_string(std::path::Path::new(root).join(".viv").join("verify")).ok()?;
     let command = text.lines().map(str::trim).find(|l| !l.is_empty())?.to_string();
     let mut cmd = if cfg!(windows) {
-        let mut c = tokio::process::Command::new("cmd");
+        let mut c = crate::proc::quiet("cmd");
         c.args(["/C", &command]);
         c
     } else {
-        let mut c = tokio::process::Command::new("sh");
+        let mut c = crate::proc::quiet("sh");
         c.args(["-c", &command]);
         c
     };

@@ -219,7 +219,7 @@ export function CodeBlock({
           <Box
             component="span"
             sx={{
-              fontSize: '0.6875rem',
+              fontSize: '0.75rem',
               color: 'text.secondary',
               fontFamily: filename ? '"Geist Mono", ui-monospace, monospace' : undefined,
               textTransform: filename ? 'none' : 'uppercase',
@@ -234,7 +234,7 @@ export function CodeBlock({
             {filename || lang}
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
-            <Box component="span" sx={{ fontSize: '0.6875rem', color: 'text.disabled' }}>
+            <Box component="span" sx={{ fontSize: '0.75rem', color: 'text.disabled' }}>
               {lineCount} {lineCount === 1 ? 'line' : 'lines'}
             </Box>
             {copyButton}
@@ -275,7 +275,7 @@ export function CodeBlock({
           sx={{
             width: '100%',
             py: 0.5,
-            fontSize: '0.6875rem',
+            fontSize: '0.75rem',
             color: 'text.secondary',
             borderTop: bare ? 0 : 1,
             borderColor: 'divider',

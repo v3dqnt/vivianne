@@ -107,7 +107,7 @@ function ToolsSubsection() {
                 fontWeight: 600,
                 textTransform: 'uppercase',
                 letterSpacing: '0.08em',
-                fontSize: '0.6875rem',
+                fontSize: '0.75rem',
                 px: 1,
                 pt: 1,
                 pb: 0.5,

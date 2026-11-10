@@ -144,7 +144,7 @@ export function GitView() {
           >
             {label}
             {count(id) > 0 && (
-              <Box component="span" sx={{ minWidth: 16, height: 16, px: u(1), borderRadius: '4px', fontSize: '0.6875rem', lineHeight: '16px', fontWeight: 500, textAlign: 'center', boxSizing: 'border-box', bgcolor: id === 'actions' ? 'error.main' : 'action.selected', color: id === 'actions' ? 'error.contrastText' : 'text.secondary' }}>
+              <Box component="span" sx={{ minWidth: 16, height: 16, px: u(1), borderRadius: '4px', fontSize: '0.75rem', lineHeight: '16px', fontWeight: 500, textAlign: 'center', boxSizing: 'border-box', bgcolor: id === 'actions' ? 'error.main' : 'action.selected', color: id === 'actions' ? 'error.contrastText' : 'text.secondary' }}>
                 {count(id)}
               </Box>
             )}

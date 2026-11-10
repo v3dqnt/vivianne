@@ -164,7 +164,7 @@ export function FileContent({
   }
 
   const meta = (text: string) => (
-    <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 0.5, fontSize: '0.6875rem' }}>
+    <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 0.5, fontSize: '0.75rem' }}>
       {text}
     </Typography>
   )
@@ -245,7 +245,7 @@ export function FileContent({
             m: 0,
             p: 0,
             fontFamily: '"Geist Mono", ui-monospace, monospace',
-            fontSize: '0.6875rem',
+            fontSize: '0.75rem',
             lineHeight: 1.5,
             color: 'text.disabled',
             overflowX: 'auto',
@@ -275,7 +275,7 @@ export function FileContent({
           minWidth: 0,
           m: 0,
           p: bare ? 0 : 1.5,
-          ...(bare ? { color: 'text.secondary' } : { borderRadius: 0.8, bgcolor: '#0d1117', color: '#c9d1d9' }),
+          ...(bare ? { color: 'text.secondary' } : { borderRadius: 0.8, bgcolor: 'action.hover', color: 'text.primary' }),
           fontFamily: '"Geist Mono", ui-monospace, monospace',
           fontSize: '0.75rem',
           lineHeight: 1.5,
@@ -468,7 +468,7 @@ function RenderedText({ kind, path, content }: { kind: Rendered; path: string; c
                 px: 1,
                 py: 0.25,
                 borderRadius: '6px',
-                fontSize: '0.6875rem',
+                fontSize: '0.75rem',
                 fontWeight: 500,
                 color: on ? 'text.primary' : 'text.secondary',
                 bgcolor: on ? 'action.selected' : 'transparent',

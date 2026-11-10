@@ -106,6 +106,7 @@ export function WorkspaceSelector({ title }: { title?: string } = {}) {
                 </Typography>
                 <IconButton
                   size="small"
+                  aria-label="Remove folder"
                   className="ws-remove"
                   onClick={() => void removeFolder(f)}
                   disabled={loading}

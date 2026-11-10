@@ -28,7 +28,7 @@ pub struct Snapshot {
 }
 
 async fn git(dir: &Path, env: &[(&str, &Path)], args: &[&str]) -> Result<String, String> {
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = crate::proc::quiet("git");
     cmd.args(args).current_dir(dir);
     for (k, v) in env {
         cmd.env(k, v);
@@ -54,7 +54,7 @@ fn ref_for(scope: &str, ordinal: u32) -> String {
 }
 
 fn temp_index(dir: &Path) -> Result<PathBuf, String> {
-    let git_dir = std::process::Command::new("git").args(["rev-parse", "--absolute-git-dir"]).current_dir(dir).output().map_err(|e| e.to_string())?;
+    let git_dir = crate::proc::quiet_std("git").args(["rev-parse", "--absolute-git-dir"]).current_dir(dir).output().map_err(|e| e.to_string())?;
     if !git_dir.status.success() {
         return Err("This folder isn't a git repository.".into());
     }
@@ -216,7 +216,7 @@ pub async fn rollback(dir: &Path, scope: &str, ordinal: u32) -> Result<RollbackR
             if let Some(parent) = full.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            let body = tokio::process::Command::new("git").args(["show", &format!("{}:{}", target.commit, path)]).current_dir(dir).output().await.map_err(|e| e.to_string())?;
+            let body = crate::proc::quiet("git").args(["show", &format!("{}:{}", target.commit, path)]).current_dir(dir).output().await.map_err(|e| e.to_string())?;
             if !body.status.success() {
                 return Err(format!("Couldn't read {path} from checkpoint {ordinal}."));
             }
@@ -331,7 +331,7 @@ mod tests {
     use super::*;
 
     fn run(dir: &Path, args: &[&str]) -> String {
-        let out = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
+        let out = crate::proc::quiet_std("git").args(args).current_dir(dir).output().unwrap();
         assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }

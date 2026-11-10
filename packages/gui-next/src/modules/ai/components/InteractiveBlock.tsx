@@ -223,9 +223,9 @@ export function InteractiveBlock({ code }: { code: string }) {
           <Box key={k} sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 1 }}>
             {b.items.map((s, j) => (
               <Stack key={j} sx={{ p: 1.25, borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.04), gap: 0.25, minWidth: 0 }}>
-                <Typography sx={{ fontSize: '0.6875rem', color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4 }}>{s.label}</Typography>
+                <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4 }}>{s.label}</Typography>
                 <Typography sx={{ fontSize: '1.25rem', fontWeight: 600, fontVariantNumeric: 'tabular-nums', lineHeight: 1.25 }}>{format(val(s.value), s.format, s.unit)}</Typography>
-                {s.hint && <Typography sx={{ fontSize: '0.6875rem', color: 'text.disabled' }}>{text(s.hint)}</Typography>}
+                {s.hint && <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled' }}>{text(s.hint)}</Typography>}
               </Stack>
             ))}
           </Box>
@@ -334,7 +334,7 @@ export function InteractiveBlock({ code }: { code: string }) {
                         borderRadius: '50%',
                         display: 'grid',
                         placeItems: 'center',
-                        fontSize: '0.6875rem',
+                        fontSize: '0.75rem',
                         fontWeight: 500,
                         lineHeight: 1,
                         color: hollow ? c : theme.palette.background.paper,
@@ -399,7 +399,7 @@ export function InteractiveBlock({ code }: { code: string }) {
             <Box sx={{ height: 8, borderRadius: '4px', bgcolor: alpha(theme.palette.text.primary, 0.08), overflow: 'hidden' }}>
               <Box sx={{ height: '100%', width: `${v * 100}%`, borderRadius: '4px', bgcolor: 'primary.main', transition: 'width 300ms' }} />
             </Box>
-            {b.hint && <Typography sx={{ fontSize: '0.6875rem', color: 'text.disabled' }}>{text(b.hint)}</Typography>}
+            {b.hint && <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled' }}>{text(b.hint)}</Typography>}
           </Stack>
         )
       }
@@ -486,7 +486,7 @@ function Chip({ label, tone }: { label: string; tone?: Tone }) {
   return (
     <Box
       component="span"
-      sx={{ px: 0.875, height: 20, display: 'inline-flex', alignItems: 'center', borderRadius: '999px', fontSize: '0.6875rem', fontWeight: 500, whiteSpace: 'nowrap', color: c, bgcolor: alpha(c, 0.14) }}
+      sx={{ px: 0.875, height: 20, display: 'inline-flex', alignItems: 'center', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 500, whiteSpace: 'nowrap', color: c, bgcolor: alpha(c, 0.14) }}
     >
       {label}
     </Box>

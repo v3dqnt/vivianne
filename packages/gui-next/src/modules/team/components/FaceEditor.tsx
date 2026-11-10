@@ -77,7 +77,7 @@ function ColorRow({ label, value, presets, onChange }: { label: string; value: s
         aria-label={`${label}: automatic`}
         aria-pressed={!value}
         onClick={() => onChange(undefined)}
-        sx={{ height: SWATCH, px: '8px', borderRadius: '999px', fontSize: '0.6875rem', fontWeight: 500, color: value ? 'text.secondary' : 'text.primary', bgcolor: value ? 'transparent' : 'action.selected', boxShadow: (t) => `inset 0 0 0 1px ${t.palette.divider}` }}
+        sx={{ height: SWATCH, px: '8px', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 500, color: value ? 'text.secondary' : 'text.primary', bgcolor: value ? 'transparent' : 'action.selected', boxShadow: (t) => `inset 0 0 0 1px ${t.palette.divider}` }}
       >
         Auto
       </ButtonBase>
@@ -103,7 +103,7 @@ export function FaceStage({ name, color, face, size = 128 }: { name: string; col
             key={s}
             onClick={() => setMood(s)}
             aria-pressed={mood === s}
-            sx={{ px: '8px', height: 24, borderRadius: '999px', fontSize: '0.6875rem', textTransform: 'capitalize', color: mood === s ? 'text.primary' : 'text.secondary', bgcolor: mood === s ? 'action.selected' : 'transparent', '&:hover': { color: 'text.primary' } }}
+            sx={{ px: '8px', height: 24, borderRadius: '999px', fontSize: '0.75rem', textTransform: 'capitalize', color: mood === s ? 'text.primary' : 'text.secondary', bgcolor: mood === s ? 'action.selected' : 'transparent', '&:hover': { color: 'text.primary' } }}
           >
             {s}
           </ButtonBase>

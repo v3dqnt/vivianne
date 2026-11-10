@@ -9,7 +9,7 @@ use serde::Serialize;
 
 /// Run git in `dir`; its stdout, or its stderr as the error.
 pub async fn git(dir: &str, args: &[&str]) -> Result<String, String> {
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = crate::proc::quiet("git");
     cmd.args(args).current_dir(dir);
     #[cfg(windows)]
     {

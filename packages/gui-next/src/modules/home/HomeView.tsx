@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Box, ButtonBase, InputBase, Stack, Typography } from '../../ui'
-import { AddLinear, SearchNormalLinear } from '../../icons'
+import { AddLinear, MessageLinear, SearchNormalLinear } from '../../icons'
+import { EmptyState } from '../../components/EmptyState'
 import { call } from '../../ipc'
 import { useProjectsStore, GENERAL_PROJECT_ID } from '../sessions/store/projectsStore'
 import { useDaysStore, threadsOf, isThreaded, GENERAL_SCOPE } from '../sessions/store/daysStore'
@@ -152,7 +153,15 @@ export function HomeView() {
                   {threads === null ? (
                     <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', px: '12px' }}>Loading…</Typography>
                   ) : visible.length === 0 ? (
-                    <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', px: '12px' }}>{query ? 'No threads match.' : 'No threads yet. Start one.'}</Typography>
+                    query ? (
+                      <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', px: '12px' }}>No threads match “{query.trim()}”.</Typography>
+                    ) : (
+                      <EmptyState
+                        icon={<MessageLinear size={18} color="currentColor" />}
+                        title="No threads yet"
+                        hint={project ? `Each thread is its own conversation about ${project.name}, working on a branch of its own.` : 'Ask anything here. Each thread is its own conversation.'}
+                      />
+                    )
                   ) : (
                     visible.map((t) => <ThreadRow key={t.id} thread={t} active={t.id === openId} onOpen={() => void enter(t.id)} />)
                   )}
@@ -221,7 +230,7 @@ function AlwaysOnAgents() {
       </Stack>
       {root && <NewAgentDialog root={root} open={creating} count={agents.length} onClose={() => setCreating(false)} />}
       {active.length === 0 ? (
-        <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary' }}>No 24/7 agents yet.</Typography>
+        <EmptyState icon={<AddLinear size={18} color="currentColor" />} title="No 24/7 agents yet" hint="Give one a job and a schedule, and it works while you are away. Start with New agent." />
       ) : (
         <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' }}>
           {active.map((a) => {
@@ -241,7 +250,7 @@ function AlwaysOnAgents() {
                   </Box>
                   <Stack direction="row" sx={{ alignItems: 'center', gap: '4px', flexShrink: 0 }}>
                     <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: working ? 'success.main' : paused ? 'warning.main' : 'text.disabled' }} />
-                    <Box component="span" sx={{ fontSize: '0.6875rem', color: 'text.disabled' }}>{working ? 'Working' : paused ? 'Paused' : 'Idle'}</Box>
+                    <Box component="span" sx={{ fontSize: '0.75rem', color: 'text.disabled' }}>{working ? 'Working' : paused ? 'Paused' : 'Idle'}</Box>
                   </Stack>
                 </Stack>
                 <Box component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>

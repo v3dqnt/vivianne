@@ -402,8 +402,8 @@ impl LlamaManager {
             LocalEngine::MistralRs => None,
         };
         let mut cmd = match &installed {
-            Some(path) => tokio::process::Command::new(path),
-            None => tokio::process::Command::new(binary),
+            Some(path) => crate::proc::quiet(path),
+            None => crate::proc::quiet(binary),
         };
 
         match config.engine {

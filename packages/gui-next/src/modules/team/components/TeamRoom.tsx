@@ -126,7 +126,7 @@ function DirectMessage({ root, bot, team, readOnly, messenger }: { root: string;
               @{bot.id}
             </Typography>
           </Stack>
-          <Typography variant="caption" color={state === 'working' ? 'success.main' : 'text.secondary'} noWrap sx={{ fontSize: '0.6875rem' }}>
+          <Typography variant="caption" color={state === 'working' ? 'success.main' : 'text.secondary'} noWrap sx={{ fontSize: '0.75rem' }}>
             {state === 'working' ? (st?.activity ?? 'Working…') : state === 'paused' ? 'Paused' : bot.role}
           </Typography>
         </Stack>

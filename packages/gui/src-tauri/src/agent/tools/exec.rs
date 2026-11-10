@@ -473,7 +473,9 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
     } }),
     tool!("list_subagent_models" => |cx| {
         let allowed = crate::agent::tools::child_routes::allowed(&cx.state.model().await).await;
-        text_result(format!("Models a subagent may be started on (pass provider and model to task):\n{}", allowed.iter().map(|m| format!("{}/{}", m.provider, m.id)).collect::<Vec<_>>().join("\n")))
+        let agents: Vec<String> = crate::agent::harness::harnesses().await.into_iter().filter(|h| h.available && h.ready).map(|h| format!("{}/{} ({})", crate::agent::harness::PROVIDER, h.id, h.name)).collect();
+        let agents = if agents.is_empty() { String::new() } else { format!("\n\nOther coding agents set up on this computer (task waits for their report; they don't see this conversation, so the prompt must stand alone):\n{}", agents.join("\n")) };
+        text_result(format!("Models a subagent may be started on (pass provider and model to task):\n{}{agents}", allowed.iter().map(|m| format!("{}/{}", m.provider, m.id)).collect::<Vec<_>>().join("\n")))
     }),
     tool!("list_agents" => |cx| text_result(crate::agent::runtime::subagents::render_tree(&crate::agent::runtime::subagents::SubagentRegistry::global().on_thread(crate::agent::orchestration::turn_thread().as_deref())))),
     tool!("interrupt_agent" => |cx| {
@@ -523,7 +525,22 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
     tool!("browser_session_status" => |cx| via_user_browser("tabs", cx.args, cx.vision).await),
     tool!("browser_import_cookies" => |cx| text_result("The browser is the user's own, already signed in where they are. If a site needs a sign-in, ask the user to sign in there themselves.")),
     tool!("math" => |cx| crate::agent::tools::math::execute(cx.args, cx.state.primary_workspace_folder().await, cx.vision).await),
-    tool!("task" => |cx| execute_task_tool(cx.args, cx.depth, cx.state, cx.app).await),
+    tool!("task" => |cx| {
+        let arg = |k: &str| cx.args.get(k).and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+        // Another coding agent (Claude Code, Codex…) does the job instead of a subagent.
+        if arg("provider") == Some(crate::agent::harness::PROVIDER) {
+            match (arg("model"), arg("prompt")) {
+                _ if cx.state.plan_mode().await => text_result("Error: a coding agent changes files, which plan mode doesn't allow. Use a plain subagent to research.".to_string()),
+                (Some(id), Some(prompt)) => match crate::agent::harness::delegate(cx.state, cx.emit, id, prompt).await {
+                    Ok(report) => text_result(format!("{id} reported back:\n\n{report}")),
+                    Err(e) => text_result(format!("Error: {id} couldn't finish: {e}")),
+                },
+                _ => text_result("Error: a coding agent needs 'model' (its id from list_subagent_models) and a self-contained 'prompt'.".to_string()),
+            }
+        } else {
+            execute_task_tool(cx.args, cx.depth, cx.state, cx.app).await
+        }
+    }),
     tool!("list_subagent_profiles" => |cx| execute_list_subagent_profiles_tool(cx.state.primary_workspace_folder().await).await),
     tool!("hire_agent" => |cx| text_result(crate::agent::team::execute_hire_tool(cx.args, cx.state.primary_workspace_folder().await, cx.app).await)),
     tool!("generate_image" => |cx| execute_generate_image_tool(cx.args, cx.app).await),
@@ -2843,7 +2860,7 @@ async fn execute_sandbox_tool(args: &serde_json::Value) -> AgentToolResult {
     // Fail fast with a clear message rather than a raw "os error 2" if
     // Docker Desktop isn't installed/running — this tool's whole point is
     // real isolation, so there's no unsandboxed fallback to run instead.
-    let docker_ok = tokio::process::Command::new("docker")
+    let docker_ok = crate::proc::quiet("docker")
         .arg("info")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -2869,7 +2886,7 @@ async fn execute_sandbox_tool(args: &serde_json::Value) -> AgentToolResult {
     let mount_arg = format!("{}:/sandbox:ro", temp_dir.display());
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
-        tokio::process::Command::new("docker")
+        crate::proc::quiet("docker")
             .args(["run", "--rm", "--network", "none"])
             .args(["--memory", "256m", "--cpus", "1", "--pids-limit", "128"])
             .args(["--security-opt", "no-new-privileges"])

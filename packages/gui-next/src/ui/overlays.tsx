@@ -1,6 +1,8 @@
 import {
+  cloneElement,
   createContext,
   forwardRef,
+  isValidElement,
   useContext,
   useEffect,
   useLayoutEffect,
@@ -525,6 +527,15 @@ export interface TooltipProps {
 
 /** A hover/focus label (Radix Tooltip). An empty `title` renders just the
  * child. The child must accept a ref. */
+/** The trigger, named by the tooltip's text when it has no name of its own
+ * (an icon-only button): Radix only describes it while the tooltip is open. */
+function named(child: ReactNode, title: ReactNode): ReactNode {
+  if (typeof title !== 'string' || !isValidElement<Record<string, unknown>>(child)) return child
+  const props = child.props
+  if (props['aria-label'] || props['aria-labelledby']) return child
+  return cloneElement(child, { 'aria-label': title })
+}
+
 export function Tooltip({ title, children, placement = 'bottom', enterDelay, disableInteractive, open }: TooltipProps) {
   const theme = useTheme()
   if (title === '' || title === null || title === undefined || title === false) return children
@@ -557,7 +568,7 @@ export function Tooltip({ title, children, placement = 'bottom', enterDelay, dis
   }
   return (
     <RadixTooltip.Root delayDuration={enterDelay ?? 400} disableHoverableContent={disableInteractive ?? true} open={open}>
-      <RadixTooltip.Trigger asChild>{children}</RadixTooltip.Trigger>
+      <RadixTooltip.Trigger asChild>{named(children, title)}</RadixTooltip.Trigger>
       <RadixTooltip.Portal>
         <RadixTooltip.Content asChild side={side} align={align ?? 'center'} sideOffset={8} collisionPadding={8} hideWhenDetached>
           {render('div', { className: 'ui-Tooltip', children: title }, styles, undefined, theme)}

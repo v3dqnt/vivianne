@@ -129,7 +129,7 @@ pub async fn cmd_multiplayer_launch_test_partner(
     )?;
 
     let exe = std::env::current_exe().map_err(|e| format!("couldn't find the app's executable: {e}"))?;
-    let mut cmd = std::process::Command::new(exe);
+    let mut cmd = crate::proc::quiet_std(exe);
     cmd.env("VIV_PROFILE", TEST_PARTNER_PROFILE).env("VIV_DISPLAY_NAME", "Test partner");
     // The partner's own data folder decides its webview storage (see `run`).
     cmd.env_remove("WEBVIEW2_USER_DATA_FOLDER");

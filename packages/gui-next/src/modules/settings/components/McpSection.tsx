@@ -1,3 +1,4 @@
+import { confirm, orToast } from '../../../components/ConfirmDialog'
 import { useEffect, useState } from 'react'
 import { Stack, Typography, Divider, Button, ButtonBase, IconButton, CircularProgress, Dialog, TextField, Select, MenuItem, Chip, Collapse, Alert } from '../../../ui'
 import { ImportLinear, TrashLinear, Link2Linear, CommandLinear, GlobalLinear, ArrowDownLinear } from '../../../icons'
@@ -10,9 +11,10 @@ function ServerRow({ server, toolCount }: { server: McpServerConfig; toolCount: 
   const isHttp = server.transport.kind === 'http'
 
   const doRemove = async () => {
+    if (!(await confirm(`Remove the "${server.name}" server? Its tools stop being available.`, { action: 'Remove' }))) return
     setBusy(true)
     try {
-      await removeServer(server.name)
+      await orToast('Could not remove the server', () => removeServer(server.name))
     } finally {
       setBusy(false)
     }
@@ -33,8 +35,8 @@ function ServerRow({ server, toolCount }: { server: McpServerConfig; toolCount: 
               : 'Built in'}
         </Typography>
       </Stack>
-      <Chip size="small" label={`${toolCount} tool${toolCount === 1 ? '' : 's'}`} sx={{ fontSize: '0.6875rem' }} />
-      <IconButton size="small" onClick={() => void doRemove()} disabled={busy}>
+      <Chip size="small" label={`${toolCount} tool${toolCount === 1 ? '' : 's'}`} sx={{ fontSize: '0.75rem' }} />
+      <IconButton size="small" aria-label="Remove server" onClick={() => void doRemove()} disabled={busy}>
         {busy ? <CircularProgress size={14} /> : <TrashLinear size={15} color="currentColor" />}
       </IconButton>
     </Stack>

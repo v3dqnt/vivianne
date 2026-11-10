@@ -112,7 +112,7 @@ pub async fn ensure_running(wait: Duration) -> bool {
         let Ok(exe) = bin("laya-serve") else { return false };
         let key = uuid::Uuid::new_v4().simple().to_string();
         let log = home().ok().and_then(|h| std::fs::File::create(h.join("serve.log")).ok());
-        let mut cmd = std::process::Command::new(exe);
+        let mut cmd = crate::proc::quiet_std(exe);
         cmd.env("LAYA_HOST", "127.0.0.1")
             .env("LAYA_PORT", PORT.to_string())
             .env("LAYA_MODELS", "english")
@@ -244,7 +244,7 @@ fn find_python() -> Option<Vec<String>> {
         &[&["python3"], &["python"]]
     };
     for c in candidates {
-        let mut cmd = std::process::Command::new(c[0]);
+        let mut cmd = crate::proc::quiet_std(c[0]);
         cmd.args(&c[1..]).args(["-c", "import sys; print(int(sys.version_info >= (3, 10)))"]);
         if let Ok(out) = quiet(&mut cmd).output() {
             if out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "1" {
@@ -301,12 +301,12 @@ fn install_blocking(progress: Progress) -> Result<(), String> {
     std::fs::create_dir_all(home()?).map_err(|e| e.to_string())?;
     if !dir.join(if cfg!(windows) { "Scripts" } else { "bin" }).exists() {
         progress("Creating its environment…");
-        let mut cmd = std::process::Command::new(&python[0]);
+        let mut cmd = crate::proc::quiet_std(&python[0]);
         cmd.args(&python[1..]).arg("-m").arg("venv").arg(&dir);
         run_logged(&progress, &mut cmd).map_err(|e| format!("couldn't create the environment: {e}"))?;
     }
     progress("Installing Laya and PyTorch (CPU)…");
-    let mut cmd = std::process::Command::new(bin("python")?);
+    let mut cmd = crate::proc::quiet_std(bin("python")?);
     cmd.args(["-m", "pip", "install", "--upgrade", "--disable-pip-version-check", PACKAGE]);
     // CPU wheels: a GPU build of PyTorch is gigabytes for a model that
     // answers in tens of milliseconds on a CPU anyway. (On Windows and

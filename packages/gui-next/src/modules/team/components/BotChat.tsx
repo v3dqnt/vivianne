@@ -46,7 +46,7 @@ function Message({ m, team, prev, root }: { m: BotMessage; team: TeamAgent[]; pr
   const grouped = prev && prev.from === m.from && m.ts - prev.ts < 5 * 60_000 && prev.kind === m.kind
   if (m.from === 'system') {
     return (
-      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center', py: 0.5, fontSize: '0.6875rem' }}>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center', py: 0.5, fontSize: '0.75rem' }}>
         {m.text}
       </Typography>
     )
@@ -90,7 +90,7 @@ function Message({ m, team, prev, root }: { m: BotMessage; team: TeamAgent[]; pr
               <Typography
                 variant="caption"
                 sx={{
-                  fontSize: '0.6875rem',
+                  fontSize: '0.75rem',
                   fontWeight: 600,
                   textTransform: 'uppercase',
                   letterSpacing: 0.4,
@@ -100,7 +100,7 @@ function Message({ m, team, prev, root }: { m: BotMessage; team: TeamAgent[]; pr
                 {label}
               </Typography>
             )}
-            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
+            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.75rem' }}>
               {time(m.ts)}
             </Typography>
           </Stack>
@@ -300,7 +300,7 @@ export function BotChat({
                         icon={o.agent ? <Avatar {...faceOf(o.agent)} size={20} /> : <Box component="span" sx={{ fontSize: '0.75rem', fontWeight: 500 }}>@</Box>}
                         title={o.label}
                         subtitle={o.agent ? (o.agent.role || `@${o.id}`) : 'Everyone on the team'}
-                        tag={<Box component="span" sx={{ fontSize: '0.6875rem', color: 'text.disabled', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>@{o.id}</Box>}
+                        tag={<Box component="span" sx={{ fontSize: '0.75rem', color: 'text.disabled', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>@{o.id}</Box>}
                       />
                     ))}
                   </Box>

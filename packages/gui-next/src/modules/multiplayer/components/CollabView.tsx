@@ -80,7 +80,7 @@ function clock(ms: number): string {
   return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
 
-const SECTION = { fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.6875rem', color: 'text.secondary' } as const
+const SECTION = { fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.75rem', color: 'text.secondary' } as const
 
 /** Usage, activity and sync for one multiplayer project — `multiplayer::collab`. */
 export function CollabView({ projectId, partnerName }: { projectId: string; partnerName: string }) {
@@ -135,7 +135,7 @@ export function UsageBlock({ data, partnerName }: { data: CollabData; partnerNam
           <ButtonBase
             key={r}
             onClick={() => setRange(r)}
-            sx={{ fontSize: '0.6875rem', px: 0.75, py: 0.125, borderRadius: '6px', color: range === r ? 'text.primary' : 'text.secondary', bgcolor: range === r ? 'action.selected' : 'transparent' }}
+            sx={{ fontSize: '0.75rem', px: 0.75, py: 0.125, borderRadius: '6px', color: range === r ? 'text.primary' : 'text.secondary', bgcolor: range === r ? 'action.selected' : 'transparent' }}
           >
             {r === 'today' ? 'Today' : 'All time'}
           </ButtonBase>
@@ -184,7 +184,7 @@ export function UsageBlock({ data, partnerName }: { data: CollabData; partnerNam
         </tbody>
       </Box>
       {total.unknown && (
-        <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
+        <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.75rem' }}>
           + some requests used a model with no known price.
         </Typography>
       )}
@@ -212,7 +212,7 @@ function SyncBlock({ data, projectId, onChange }: { data: CollabData; projectId:
       {data.notes.length > 0 && (
         <ButtonBase
           onClick={() => void call('cmd_multiplayer_dismiss_notes', { projectId }).then(onChange)}
-          sx={{ alignSelf: 'flex-start', fontSize: '0.6875rem', color: 'text.secondary', px: 0.5, borderRadius: '6px' }}
+          sx={{ alignSelf: 'flex-start', fontSize: '0.75rem', color: 'text.secondary', px: 0.5, borderRadius: '6px' }}
         >
           Dismiss
         </ButtonBase>
@@ -257,7 +257,7 @@ function ActivityRow({ entry, who, mine }: { entry: ActivityEntry; who: string; 
         <Typography variant="caption" sx={{ fontWeight: 500, color }}>
           {who}
         </Typography>
-        <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
+        <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.75rem' }}>
           {clock(entry.at)}
           {entry.commit ? ` · ${entry.commit}` : ''}
         </Typography>
@@ -266,7 +266,7 @@ function ActivityRow({ entry, who, mine }: { entry: ActivityEntry; who: string; 
         {entry.request}
       </Typography>
       {entry.files.length > 0 && (
-        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.6875rem', wordBreak: 'break-all' }}>
+        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem', wordBreak: 'break-all' }}>
           {entry.files
             .slice(0, 5)
             .map((f) => `${f.op === 'created' ? '+' : f.op === 'deleted' ? '−' : '~'} ${f.path}`)
@@ -275,7 +275,7 @@ function ActivityRow({ entry, who, mine }: { entry: ActivityEntry; who: string; 
         </Typography>
       )}
       {entry.commands.length > 0 && (
-        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>
+        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
           {entry.commands.map((c) => `${c.ok ? '✓' : '✗'} ${c.command}`).join('   ')}
         </Typography>
       )}

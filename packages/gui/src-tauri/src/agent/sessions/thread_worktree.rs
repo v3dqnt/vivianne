@@ -36,7 +36,7 @@ pub enum Removed {
 }
 
 async fn git(dir: &str, args: &[&str]) -> Result<String, String> {
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = crate::proc::quiet("git");
     cmd.args(args).current_dir(dir);
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
@@ -333,7 +333,7 @@ mod tests {
     }
 
     fn sh(dir: &Path, args: &[&str]) -> String {
-        let out = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
+        let out = crate::proc::quiet_std("git").args(args).current_dir(dir).output().unwrap();
         assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }

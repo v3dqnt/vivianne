@@ -77,7 +77,7 @@ async fn token() -> Option<String> {
     static GH: tokio::sync::OnceCell<Option<String>> = tokio::sync::OnceCell::const_new();
     GH.get_or_init(|| async {
         let gh = which::which("gh").ok()?;
-        let mut cmd = tokio::process::Command::new(gh);
+        let mut cmd = crate::proc::quiet(gh);
         cmd.args(["auth", "token"]).stdin(std::process::Stdio::null()).kill_on_drop(true);
         no_window(&mut cmd);
         let out = tokio::time::timeout(Duration::from_secs(10), cmd.output()).await.ok()?.ok()?;
@@ -89,7 +89,7 @@ async fn token() -> Option<String> {
 }
 
 async fn git(cwd: &str, args: &[&str]) -> Result<String, String> {
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = crate::proc::quiet("git");
     cmd.args(args).current_dir(cwd).stdin(std::process::Stdio::null()).kill_on_drop(true);
     no_window(&mut cmd);
     let out = tokio::time::timeout(Duration::from_secs(120), cmd.output())

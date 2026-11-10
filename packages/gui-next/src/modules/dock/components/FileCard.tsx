@@ -33,7 +33,7 @@ export function FileCard({ path, onExpand }: { path: string; onExpand?: () => vo
           {name}
         </Typography>
         {dir && (
-          <Typography noWrap sx={{ fontSize: '0.6875rem', color: 'text.disabled', fontFamily: '"Geist Mono", ui-monospace, monospace', minWidth: 0, flex: 1, direction: 'rtl', textAlign: 'left' }} title={dir}>
+          <Typography noWrap sx={{ fontSize: '0.75rem', color: 'text.disabled', fontFamily: '"Geist Mono", ui-monospace, monospace', minWidth: 0, flex: 1, direction: 'rtl', textAlign: 'left' }} title={dir}>
             {dir}
           </Typography>
         )}

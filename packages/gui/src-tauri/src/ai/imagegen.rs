@@ -334,7 +334,7 @@ pub async fn generate_local(model_file: &str, prompt: &str, size: &str, abort: &
     let (steps, cfg) = sampling_for(model_file);
     let (w, h) = size_for(model_file, size);
 
-    let mut command = tokio::process::Command::new(&exe);
+    let mut command = crate::proc::quiet(&exe);
     command
         .args(["-m"])
         .arg(&model)

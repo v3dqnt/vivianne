@@ -59,7 +59,7 @@ export const RAIL_EASE = '320ms cubic-bezier(0.2, 0.8, 0.2, 1)'
 /** The chat leaves the rail plus a 24px gutter either side. */
 export const RAIL_RESERVE = 'calc(var(--rail-w) + 48px)'
 
-export const LABEL = { fontSize: '0.6875rem', fontWeight: 500, color: 'text.disabled', px: '8px', pb: '4px' } as const
+export const LABEL = { fontSize: '0.75rem', fontWeight: 500, color: 'text.disabled', px: '8px', pb: '4px' } as const
 
 const KEY = 'viv.projectRail.closed'
 const readClosed = (): string[] => {

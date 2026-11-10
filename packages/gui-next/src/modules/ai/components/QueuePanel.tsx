@@ -63,16 +63,16 @@ export function QueuePanel() {
             borderColor: 'divider',
           }}
         >
-          <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.6875rem', fontWeight: 500, flexShrink: 0 }}>
+          <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.75rem', fontWeight: 500, flexShrink: 0 }}>
             Queued
           </Typography>
           <Typography variant="caption" noWrap title={row.text} sx={{ flex: 1, minWidth: 0, color: 'text.primary' }}>
             {row.text}
           </Typography>
-          <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.6875rem', flexShrink: 0 }}>
+          <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.75rem', flexShrink: 0 }}>
             {row.key === 'steering' ? 'sends at the next step' : 'after this task'}
           </Typography>
-          <IconButton size="small" onClick={() => void removeQueued(row.key, row.index)} sx={{ p: 0.25, flexShrink: 0 }}>
+          <IconButton size="small" aria-label="Remove from queue" onClick={() => void removeQueued(row.key, row.index)} sx={{ p: 0.25, flexShrink: 0 }}>
             <CloseCircleLinear size={13} color="currentColor" />
           </IconButton>
         </Stack>
@@ -92,7 +92,7 @@ export function QueuePanel() {
             }}
             sx={{ fontSize: '0.75rem' }}
           />
-          <IconButton size="small" onClick={addFollowUp} disabled={!followUpText.trim()} sx={{ flexShrink: 0 }}>
+          <IconButton size="small" aria-label="Add follow-up" onClick={addFollowUp} disabled={!followUpText.trim()} sx={{ flexShrink: 0 }}>
             <AddLinear size={13} color="currentColor" />
           </IconButton>
         </Stack>

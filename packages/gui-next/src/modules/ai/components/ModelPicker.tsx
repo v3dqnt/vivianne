@@ -488,7 +488,7 @@ export function ModelPicker(
                         px: 1,
                         height: 24,
                         borderRadius: '999px',
-                        fontSize: '0.6875rem',
+                        fontSize: '0.75rem',
                         fontWeight: 500,
                         border: 1,
                         borderColor: on ? ring : 'divider',
@@ -538,7 +538,7 @@ export function ModelPicker(
                     sx={{ position: 'sticky', top: 0, zIndex: 1, bgcolor: 'background.paper', alignItems: 'center', gap: 0.75, px: 1, pt: 1, pb: 0.5 }}
                   >
                     {r.provider && <ProviderMark provider={r.provider} size={12} />}
-                    <Typography sx={{ fontSize: '0.6875rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>{r.label}</Typography>
+                    <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>{r.label}</Typography>
                   </Stack>
                 )
               }
@@ -587,7 +587,7 @@ export function ModelPicker(
                             flexShrink: 0,
                             px: 0.625,
                             borderRadius: '6px',
-                            fontSize: '0.6875rem',
+                            fontSize: '0.75rem',
                             fontWeight: 500,
                             lineHeight: '18px',
                             color: 'text.secondary',
@@ -601,12 +601,12 @@ export function ModelPicker(
                         {split!.rest}
                       </Typography>
                       {m!.supportsVision && (
-                        <Box component="span" sx={{ flexShrink: 0, px: 0.5, borderRadius: '4px', fontSize: '0.6875rem', fontWeight: 500, lineHeight: '16px', color: 'text.secondary', border: 1, borderColor: 'divider' }}>
+                        <Box component="span" sx={{ flexShrink: 0, px: 0.5, borderRadius: '4px', fontSize: '0.75rem', fontWeight: 500, lineHeight: '16px', color: 'text.secondary', border: 1, borderColor: 'divider' }}>
                           Vision
                         </Box>
                       )}
                       {fmtCtx(m!.contextWindow) && (
-                        <Typography sx={{ fontSize: '0.6875rem', color: 'text.disabled', fontFamily: MONO, flexShrink: 0, width: 38, textAlign: 'right' }}>{fmtCtx(m!.contextWindow)}</Typography>
+                        <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled', fontFamily: MONO, flexShrink: 0, width: 38, textAlign: 'right' }}>{fmtCtx(m!.contextWindow)}</Typography>
                       )}
                       <ButtonBase
                         className="fav"
@@ -660,7 +660,7 @@ export function ModelPicker(
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <Stack sx={{ gap: 0.125, minWidth: 0 }}>
-      <Typography sx={{ fontSize: '0.6875rem', textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.disabled' }}>{label}</Typography>
+      <Typography sx={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.disabled' }}>{label}</Typography>
       <Typography sx={{ fontSize: '0.75rem', fontFamily: MONO }}>{value}</Typography>
     </Stack>
   )
@@ -726,13 +726,13 @@ function AgentList({
                 <Typography noWrap sx={{ fontSize: '0.8125rem', fontWeight: selected ? 600 : 500 }}>
                   {h.name}
                 </Typography>
-                <Typography noWrap sx={{ fontSize: '0.6875rem', color: 'text.secondary' }}>
+                <Typography noWrap sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
                   {working ? (progress[h.id] ? `${(progress[h.id].bytes / 1e6).toFixed(0)} MB downloaded · ${progress[h.id].line}` : 'Starting the download…') : h.description}
                 </Typography>
               </Stack>
               {status === 'missing' && (
                 <Tooltip title="Needs Node.js (npx) or uv (uvx) installed to start this agent.">
-                  <Box component="span" sx={{ flexShrink: 0, px: 0.75, borderRadius: '6px', fontSize: '0.6875rem', fontWeight: 500, lineHeight: '18px', color: 'text.secondary', border: 1, borderColor: 'divider' }}>
+                  <Box component="span" sx={{ flexShrink: 0, px: 0.75, borderRadius: '6px', fontSize: '0.75rem', fontWeight: 500, lineHeight: '18px', color: 'text.secondary', border: 1, borderColor: 'divider' }}>
                     Not installed
                   </Box>
                 </Tooltip>
@@ -744,14 +744,14 @@ function AgentList({
                     e.stopPropagation()
                     void install(h.id)
                   }}
-                  sx={{ flexShrink: 0, px: 1, height: 24, borderRadius: '6px', fontSize: '0.6875rem', fontWeight: 500, border: 1, borderColor: 'divider', '&:hover': { bgcolor: 'action.selected' } }}
+                  sx={{ flexShrink: 0, px: 1, height: 24, borderRadius: '6px', fontSize: '0.75rem', fontWeight: 500, border: 1, borderColor: 'divider', '&:hover': { bgcolor: 'action.selected' } }}
                 >
                   {working ? 'Setting up…' : 'Set up'}
                 </ButtonBase>
               )}
               <Box sx={{ width: 14, display: 'flex', color: 'primary.main', flexShrink: 0 }}>{selected && <TickCircleLinear size={14} color="currentColor" />}</Box>
             </Stack>
-            {failure && <Typography sx={{ px: 1, pb: 0.75, fontSize: '0.6875rem', color: 'error.main', whiteSpace: 'pre-wrap' }}>{failure}</Typography>}
+            {failure && <Typography sx={{ px: 1, pb: 0.75, fontSize: '0.75rem', color: 'error.main', whiteSpace: 'pre-wrap' }}>{failure}</Typography>}
           </Stack>
         )
       })}

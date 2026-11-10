@@ -49,7 +49,7 @@ impl McpConnection {
         let timeout = std::time::Duration::from_millis(config.timeout_ms.unwrap_or(30_000) as u64);
         let inner = match &config.transport {
             McpTransportConfig::Stdio { command, args, env } => {
-                let mut cmd = tokio::process::Command::new(command);
+                let mut cmd = crate::proc::quiet(command);
                 // The server gets the user's environment minus credentials, plus the variables its own config names.
                 crate::agent::tools::code::sandbox::scrub_env(&mut cmd);
                 crate::agent::runtime::streaming::own_group(&mut cmd);

@@ -4,6 +4,7 @@ use tauri::Manager;
 
 pub mod browser;
 pub mod system;
+pub mod proc;
 pub mod ui;
 pub mod models;
 pub mod skills;
@@ -1047,7 +1048,7 @@ try `viv help`", cli::program_args()[0]);
 #[cfg(target_os = "macos")]
 fn fix_macos_path() {
   let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-  let out = std::process::Command::new(&shell)
+  let out = crate::proc::quiet_std(&shell)
     .args(["-l", "-i", "-c", "printf '__VIV_PATH__%s' \"$PATH\""])
     .stdin(std::process::Stdio::null())
     .output();

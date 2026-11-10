@@ -101,7 +101,7 @@ export function DocumentViewer({ path }: { path: string }) {
           <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }} noWrap title={path}>
             {fileName(path)}
           </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }} noWrap>
+          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }} noWrap>
             {extOf(path).toUpperCase()}
             {editable ? '' : ' · preview only'}
             {busy ? ' · saving…' : ''}
@@ -254,7 +254,7 @@ function PartEditor({ part, onSave }: { part: DocPart; onSave: (part: string, te
       })}
     >
       <Tooltip title={part.label}>
-        <Typography variant="caption" color="text.disabled" sx={{ fontFamily: '"Geist Mono", monospace', fontSize: '0.6875rem', pt: 0.5, minWidth: 44 }}>
+        <Typography variant="caption" color="text.disabled" sx={{ fontFamily: '"Geist Mono", monospace', fontSize: '0.75rem', pt: 0.5, minWidth: 44 }}>
           {part.id}
         </Typography>
       </Tooltip>
@@ -285,11 +285,11 @@ function PartEditor({ part, onSave }: { part: DocPart; onSave: (part: string, te
                 setSaving(false)
               }
             }}
-            sx={{ minWidth: 0, fontSize: '0.6875rem', py: 0.125, borderRadius: '6px' }}
+            sx={{ minWidth: 0, fontSize: '0.75rem', py: 0.125, borderRadius: '6px' }}
           >
             Save
           </Button>
-          <Button size="small" color="inherit" disabled={saving} onClick={() => setText(part.text)} sx={{ minWidth: 0, fontSize: '0.6875rem', py: 0.125, borderRadius: '6px' }}>
+          <Button size="small" color="inherit" disabled={saving} onClick={() => setText(part.text)} sx={{ minWidth: 0, fontSize: '0.75rem', py: 0.125, borderRadius: '6px' }}>
             Reset
           </Button>
         </Stack>

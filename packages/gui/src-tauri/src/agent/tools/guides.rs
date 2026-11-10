@@ -72,7 +72,7 @@ async fn repo_url() -> String {
 }
 
 fn git(args: &[&str], cwd: Option<&Path>) -> bool {
-    let mut cmd = std::process::Command::new("git");
+    let mut cmd = crate::proc::quiet_std("git");
     cmd.args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     if let Some(d) = cwd {
         cmd.current_dir(d);
@@ -96,7 +96,7 @@ fn sync(url: String) {
     }
     std::thread::spawn(move || {
         let origin_ok = dir.join(".git").exists()
-            && std::process::Command::new("git").args(["config", "--get", "remote.origin.url"]).current_dir(&dir).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim() == url).unwrap_or(false);
+            && crate::proc::quiet_std("git").args(["config", "--get", "remote.origin.url"]).current_dir(&dir).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim() == url).unwrap_or(false);
         if origin_ok {
             git(&["pull", "--ff-only", "--depth", "1"], Some(&dir));
         } else {

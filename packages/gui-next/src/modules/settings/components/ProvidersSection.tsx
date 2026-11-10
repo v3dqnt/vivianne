@@ -267,7 +267,7 @@ function CustomProviderForm({ providerId, onSaved, onRemoved }: { providerId: st
               <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
                 {Math.round(m.contextWindow / 1000)}K ctx
               </Typography>
-              <IconButton size="small" onClick={() => void handleRemoveModel(m.id)}>
+              <IconButton size="small" aria-label="Remove model" onClick={() => void handleRemoveModel(m.id)}>
                 <TrashLinear size={13} color="currentColor" />
               </IconButton>
             </Stack>
@@ -330,7 +330,7 @@ export function ProvidersSection() {
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.6875rem', px: 1, mb: 0.5 }}
+            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.75rem', px: 1, mb: 0.5 }}
           >
             Providers
           </Typography>
@@ -344,7 +344,7 @@ export function ProvidersSection() {
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.6875rem', px: 1, mb: 0.5 }}
+            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.75rem', px: 1, mb: 0.5 }}
           >
             Models
           </Typography>
@@ -366,7 +366,7 @@ export function ProvidersSection() {
             <Typography variant="body2" sx={{ flex: 1, textAlign: 'left' }}>
               Cost-aware routing
             </Typography>
-            <Typography variant="caption" sx={{ fontWeight: 500, color: 'warning.main', fontSize: '0.6875rem' }}>
+            <Typography variant="caption" sx={{ fontWeight: 500, color: 'warning.main', fontSize: '0.75rem' }}>
               BETA
             </Typography>
           </ButtonBase>
@@ -376,7 +376,7 @@ export function ProvidersSection() {
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.6875rem', px: 1, mb: 0.5 }}
+            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.75rem', px: 1, mb: 0.5 }}
           >
             Coding agents
           </Typography>
@@ -405,7 +405,7 @@ export function ProvidersSection() {
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.6875rem', px: 1, mb: 0.5 }}
+            sx={{ fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', fontSize: '0.75rem', px: 1, mb: 0.5 }}
           >
             Custom providers
           </Typography>

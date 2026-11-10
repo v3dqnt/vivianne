@@ -73,7 +73,7 @@ export function GeneralAgents({ labelSx }: { labelSx: object }) {
                     <Typography variant="body2" noWrap sx={{ fontSize: '0.8125rem', fontWeight: active ? 600 : 500 }}>
                       {a.name}
                     </Typography>
-                    <Typography variant="caption" color={working ? 'primary.main' : 'text.secondary'} noWrap sx={{ fontSize: '0.6875rem' }}>
+                    <Typography variant="caption" color={working ? 'primary.main' : 'text.secondary'} noWrap sx={{ fontSize: '0.75rem' }}>
                       {working ? (st?.activity ?? 'Working') : a.role || 'Idle'}
                     </Typography>
                   </Stack>

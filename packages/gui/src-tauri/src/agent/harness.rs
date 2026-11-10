@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -269,6 +269,12 @@ struct Conn {
     sink: Arc<Mutex<Option<mpsc::UnboundedSender<Incoming>>>>,
     alive: Arc<AtomicBool>,
     session: tokio::sync::Mutex<Option<String>>,
+    /// What it said it can do, in its answer to `initialize`.
+    caps: std::sync::OnceLock<Value>,
+    /// How many of the thread's messages its session has been told about.
+    seen: AtomicUsize,
+    /// The session's running cost as it last reported it, to take a turn's share from.
+    cost: Mutex<f64>,
     _child: tokio::sync::Mutex<tokio::process::Child>,
     /// Ends the agent's whole process tree when the connection is dropped: `npx` and `.cmd` shims start the real agent as a grandchild, which
     /// `kill_on_drop` alone would leave running.
@@ -315,7 +321,7 @@ async fn spawn(h: &Harness, cwd: &str) -> Result<Arc<Conn>, String> {
     let program = if h.cmd == "node" { "node".to_string() } else { format!("{}.cmd", h.cmd) };
     #[cfg(not(windows))]
     let program = h.cmd.clone();
-    let mut command = tokio::process::Command::new(&program);
+    let mut command = crate::proc::quiet(&program);
     command.args(&h.args).envs(&h.env).current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     crate::agent::runtime::streaming::own_group(&mut command);
     #[cfg(windows)]
@@ -337,6 +343,9 @@ async fn spawn(h: &Harness, cwd: &str) -> Result<Arc<Conn>, String> {
         sink: sink.clone(),
         alive: alive.clone(),
         session: tokio::sync::Mutex::new(None),
+        caps: std::sync::OnceLock::new(),
+        seen: AtomicUsize::new(0),
+        cost: Mutex::new(0.0),
         _child: tokio::sync::Mutex::new(child),
         _tree: crate::agent::runtime::streaming::TreeKillOnDrop { pid },
     });
@@ -414,7 +423,7 @@ async fn spawn(h: &Harness, cwd: &str) -> Result<Arc<Conn>, String> {
         }
     });
 
-    conn.request(
+    let hello = conn.request(
         "initialize",
         json!({
             "protocolVersion": PROTOCOL_VERSION,
@@ -426,6 +435,10 @@ async fn spawn(h: &Harness, cwd: &str) -> Result<Arc<Conn>, String> {
     )
     .await
     .map_err(|e| format!("{} didn't start: {e}", h.name))?;
+    if let Some(v) = hello.get("protocolVersion").and_then(|v| v.as_u64()).filter(|v| *v != PROTOCOL_VERSION) {
+        return Err(format!("{} speaks version {v} of the agent protocol; Vivianne speaks version {PROTOCOL_VERSION}. Update Vivianne or the agent.", h.name));
+    }
+    let _ = conn.caps.set(hello);
     mark_ready(&h.id);
     Ok(conn)
 }
@@ -530,6 +543,146 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
+/// The thread id a delegated job runs under: never saved, never resumed.
+const DELEGATE: &str = "delegate-";
+
+fn session_key(thread_id: &str, harness_id: &str) -> String {
+    format!("{thread_id}|{harness_id}")
+}
+
+/// Each thread's session with each agent, and how much of the thread it had
+/// seen: `~/.viv/acp-sessions.json`, read after a restart to reopen it.
+// ponytail: one file rewritten each turn and never pruned; move to the thread's own record if it grows.
+fn saved_sessions() -> HashMap<String, (String, usize)> {
+    std::fs::read_to_string(crate::agent::system::paths::viv_home_path(&["acp-sessions.json"])).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+fn save_session(key: &str, session: &str, seen: usize) {
+    let mut all = saved_sessions();
+    all.insert(key.to_string(), (session.to_string(), seen));
+    if let Ok(t) = serde_json::to_string(&all) {
+        let _ = std::fs::write(crate::agent::system::paths::viv_home_path(&["acp-sessions.json"]), t);
+    }
+}
+
+/// What the agent's session hasn't seen of the thread, as one block of text
+/// put before the user's message: the newest `DIGEST_CHARS` of what was said.
+/// Tool calls are left out; what they changed is on disk for it to read.
+const DIGEST_CHARS: usize = 8000;
+
+fn digest(missed: &[AgentMessage]) -> Option<String> {
+    let mut lines = Vec::new();
+    for m in missed {
+        let (who, content) = match m {
+            AgentMessage::User { content, .. } => ("User", content),
+            AgentMessage::Assistant { content, .. } => ("Assistant", content),
+            _ => continue,
+        };
+        let text = content.iter().filter_map(|c| if let MessageContent::Text { text } = c { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n");
+        if !text.trim().is_empty() {
+            lines.push(format!("{who}: {}", text.trim()));
+        }
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    let all = lines.join("\n\n");
+    let skip = all.chars().count().saturating_sub(DIGEST_CHARS);
+    let tail: String = all.chars().skip(skip).collect();
+    Some(format!(
+        "<earlier_conversation>\nThis thread was already under way before you joined it. What was said{}:\n\n{tail}\n</earlier_conversation>\n\nThat is background, not a request. The user's message follows.",
+        if skip > 0 { " (the newest part)" } else { "" }
+    ))
+}
+
+/// The user's MCP servers in the shape `session/new` takes, so the agent has
+/// the same connected tools Vivianne does. Left out: built-in connectors
+/// (they have no process or URL to hand over) and servers signed in through
+/// the keychain (their token isn't Vivianne's to pass on).
+fn mcp_servers(configs: &[crate::mcp::McpServerConfig], http_ok: bool) -> Vec<Value> {
+    use crate::mcp::McpTransportConfig as T;
+    let pairs = |m: &HashMap<String, String>| m.iter().map(|(k, v)| json!({ "name": k, "value": v })).collect::<Vec<_>>();
+    configs
+        .iter()
+        .filter_map(|c| match &c.transport {
+            T::Stdio { command, args, env } => {
+                // The protocol asks for an absolute path.
+                let path = which::which(command).map(|p| p.display().to_string()).unwrap_or_else(|_| command.clone());
+                Some(json!({ "name": c.name, "command": path, "args": args, "env": pairs(env) }))
+            }
+            T::Http { url, headers } if http_ok && c.auth.is_none() => Some(json!({ "type": "http", "name": c.name, "url": url, "headers": pairs(headers) })),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A turn's tokens from the answer to `session/prompt`, and its cost when
+/// the agent reported one. `None` when it reported neither.
+fn turn_usage(answer: &Value, cost: Option<f64>) -> Option<crate::ai::types::Usage> {
+    let u = answer.get("usage");
+    if u.is_none() && cost.is_none() {
+        return None;
+    }
+    let n = |key: &str| u.and_then(|u| u.get(key)).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let (input, output, total) = (n("inputTokens"), n("outputTokens"), n("totalTokens"));
+    Some(crate::ai::types::Usage {
+        input,
+        output,
+        cache_read: n("cachedReadTokens"),
+        cache_write: n("cachedWriteTokens"),
+        total_tokens: if total > 0 { total } else { input + output },
+        cost: cost.map(|total| crate::ai::types::CostBreakdown { total, ..Default::default() }),
+    })
+}
+
+/// Hand one self-contained job to a coding agent and wait for its answer:
+/// what `task` does when asked for `provider: "harness"`. The agent starts
+/// fresh in the parent's folder, asks the parent's user for permission, and
+/// is ended when the job is.
+pub async fn delegate(parent: &crate::agent::runtime::state::AgentState, emit: &EventSender, harness_id: &str, prompt: &str) -> Result<String, String> {
+    // Stop reaches it through the turn's own flag; the limit is for an agent that never finishes.
+    const LIMIT: Duration = Duration::from_secs(20 * 60);
+    struct End((String, String));
+    impl Drop for End {
+        fn drop(&mut self) {
+            CONNS.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+        }
+    }
+    let state = crate::agent::runtime::state::AgentState::new();
+    if let Some(dir) = parent.primary_workspace_folder().await {
+        state.add_workspace_folder(dir).await;
+    }
+    let thread = format!("{DELEGATE}{}", uuid::Uuid::new_v4());
+    let _end = End((thread.clone(), harness_id.to_string()));
+    // Its transcript stays its own; only its questions reach the user.
+    let (tx, mut rx) = crate::agent::runtime::events::event_bus();
+    let up = emit.clone();
+    tokio::spawn(async move {
+        while let Some(e) = rx.rx.recv().await {
+            if matches!(e, AgentEvent::PermissionAsked { .. } | AgentEvent::PermissionResolved { .. }) {
+                up.emit(e);
+            }
+        }
+    });
+    let bypass = crate::agent::tools::exec::read_bypass_mode().await || parent.auto_approve().await;
+    let user = AgentMessage::User { content: vec![MessageContent::Text { text: prompt.to_string() }], timestamp: now_ms() };
+    let abort = crate::agent::orchestration::TURN_ABORT.try_with(|f| f.clone()).unwrap_or_else(|_| Arc::new(AtomicBool::new(false)));
+    let out = tokio::time::timeout(LIMIT, run_turn(&state, &tx, &thread, harness_id, user, &abort, bypass))
+        .await
+        .map_err(|_| format!("it was still working after {} minutes and was stopped.", LIMIT.as_secs() / 60))?;
+    let mut said = Vec::new();
+    for m in &out {
+        if let AgentMessage::Assistant { content, error_message, .. } = m {
+            if let Some(e) = error_message {
+                return Err(e.clone());
+            }
+            said.extend(content.iter().filter_map(|c| if let MessageContent::Text { text } = c { Some(text.clone()) } else { None }));
+        }
+    }
+    // The last thing it said is its report; what came before was narration.
+    said.pop().filter(|t| !t.trim().is_empty()).ok_or_else(|| "it finished without saying anything.".to_string())
+}
+
 /// Run one turn of `thread_id` on harness `id`: send the user's message,
 /// stream what the agent does into `emit`, and return the transcript
 /// messages it produced (the user's first). Stopping cancels the prompt.
@@ -544,6 +697,7 @@ pub async fn run_turn(
     bypass: bool,
 ) -> Vec<AgentMessage> {
     emit.emit(AgentEvent::AgentStart);
+    let earlier = state.messages().await;
     state.add_message(user.clone()).await;
     emit.emit(AgentEvent::MessageStart { message: user.clone() });
     emit.emit(AgentEvent::MessageEnd { message: user.clone() });
@@ -578,11 +732,23 @@ pub async fn run_turn(
         let session = {
             let mut s = conn.session.lock().await;
             if s.is_none() {
-                let r = conn
-                    .request("session/new", json!({ "cwd": cwd, "mcpServers": [] }), Some(Duration::from_secs(120)))
-                    .await
-                    .map_err(|e| explain_start_failure(&h, &e))?;
-                *s = r.get("sessionId").and_then(|v| v.as_str()).map(String::from);
+                let http_ok = conn.caps.get().and_then(|c| c.pointer("/agentCapabilities/mcpCapabilities/http")).and_then(|v| v.as_bool()).unwrap_or(false);
+                let servers = mcp_servers(&crate::mcp::list_servers().await, http_ok);
+                // After a restart, an agent that can reopen its own session carries on in it, knowing everything it knew.
+                let can_load = conn.caps.get().and_then(|c| c.pointer("/agentCapabilities/loadSession")).and_then(|v| v.as_bool()).unwrap_or(false);
+                if let Some((id, seen)) = saved_sessions().remove(&session_key(thread_id, &h.id)).filter(|_| can_load) {
+                    if conn.request("session/load", json!({ "sessionId": id, "cwd": cwd, "mcpServers": servers }), Some(Duration::from_secs(120))).await.is_ok() {
+                        conn.seen.store(seen, Ordering::SeqCst);
+                        *s = Some(id);
+                    }
+                }
+                if s.is_none() {
+                    let r = conn
+                        .request("session/new", json!({ "cwd": cwd, "mcpServers": servers }), Some(Duration::from_secs(120)))
+                        .await
+                        .map_err(|e| explain_start_failure(&h, &e))?;
+                    *s = r.get("sessionId").and_then(|v| v.as_str()).map(String::from);
+                }
             }
             s.clone().ok_or("the agent opened no session")?
         };
@@ -601,12 +767,20 @@ pub async fn run_turn(
         }
     };
 
-    // The user's message as ACP content.
+    // What the thread said that this session wasn't there for: all of it on
+    // a first turn or after a restart, and whatever another model answered since.
     let mut prompt = Vec::new();
+    let missed = earlier.get(conn.seen.load(Ordering::SeqCst)..).unwrap_or(&earlier);
+    if let Some(d) = digest(missed) {
+        prompt.push(json!({ "type": "text", "text": d }));
+    }
+    // The user's message as ACP content.
+    let images_ok = conn.caps.get().and_then(|c| c.pointer("/agentCapabilities/promptCapabilities/image")).and_then(|v| v.as_bool()).unwrap_or(false);
     if let AgentMessage::User { content, .. } = &user {
         for c in content {
             match c {
                 MessageContent::Text { text } => prompt.push(json!({ "type": "text", "text": text })),
+                MessageContent::Image { .. } if !images_ok => prompt.push(json!({ "type": "text", "text": format!("(The user attached an image, which {} can't read.)", h.name) })),
                 MessageContent::Image { base64: Some(data), media_type, .. } => {
                     prompt.push(json!({ "type": "image", "data": data, "mimeType": media_type.clone().unwrap_or_else(|| "image/png".into()) }))
                 }
@@ -629,6 +803,7 @@ pub async fn run_turn(
     let mut open = false;
     let mut calls: HashMap<String, Call> = HashMap::new();
     let mut cancelled = false;
+    let mut cost_now: Option<f64> = None;
     let close = |text: &mut String, thinking: &mut String, open: &mut bool, out: &mut Vec<AgentMessage>, stop: &str| {
         if !*open {
             return;
@@ -765,6 +940,12 @@ pub async fn run_turn(
                             });
                             out.push(AgentMessage::ToolResult { tool_call_id: id, tool_name: "todo_write".into(), content, details: None, is_error: Some(false), timestamp: now_ms(), arguments: Some(json!({})) });
                         }
+                        // The session's running cost, where the agent reports one.
+                        "usage_update" => {
+                            if let Some(c) = u.pointer("/cost/amount").and_then(|c| c.as_f64()) {
+                                cost_now = Some(c);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -789,6 +970,20 @@ pub async fn run_turn(
         Ok(r) => {
             let stop = r.get("stopReason").and_then(|s| s.as_str()).unwrap_or("end_turn");
             close(&mut text, &mut thinking, &mut open, &mut out, if stop == "cancelled" { "aborted" } else { "stop" });
+            // This turn's share of the session's cost, and its tokens, on the message the turn ended on.
+            let spent = cost_now.map(|now| {
+                let mut last = conn.cost.lock().unwrap_or_else(|e| e.into_inner());
+                let share = (now - *last).max(0.0);
+                *last = now;
+                share
+            });
+            if let Some(usage) = turn_usage(&r, spent) {
+                let thread = crate::agent::orchestration::turn_thread().unwrap_or_else(|| thread_id.to_string());
+                crate::agent::orchestration::record_usage(&thread, PROVIDER, &h.id, &usage);
+                if let Some(AgentMessage::Assistant { usage: slot, .. }) = out.iter_mut().rev().find(|m| matches!(m, AgentMessage::Assistant { .. })) {
+                    *slot = Some(usage);
+                }
+            }
             match stop {
                 "refusal" => fail(&mut out, format!("{} declined to continue.", h.name)),
                 "max_tokens" | "max_turn_requests" => fail(&mut out, format!("{} stopped: it hit its limit ({stop}).", h.name)),
@@ -806,6 +1001,11 @@ pub async fn run_turn(
     }
     for m in &out[1..] {
         state.add_message(m.clone()).await;
+    }
+    let seen = state.messages().await.len();
+    conn.seen.store(seen, Ordering::SeqCst);
+    if !thread_id.starts_with(DELEGATE) {
+        save_session(&session_key(thread_id, &h.id), &session, seen);
     }
     emit.emit(AgentEvent::AgentEnd { messages: out.clone(), stats: None, cost: None });
     out
@@ -978,7 +1178,7 @@ pub async fn cmd_harness_install(app: tauri::AppHandle, id: String) -> Result<St
     let program = format!("{}.cmd", h.cmd);
     #[cfg(not(windows))]
     let program = h.cmd.clone();
-    let mut command = tokio::process::Command::new(&program);
+    let mut command = crate::proc::quiet(&program);
     command.args(&h.args).envs(&h.env).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
@@ -1008,7 +1208,7 @@ async fn install_managed(app: &tauri::AppHandle, h: &Harness, package: &str) -> 
     let npm = which::which("npm").map_err(|_| format!("{} needs npm, which isn't on this computer's PATH. Install Node.js first.", h.name))?;
     let dir = crate::agent::harness_install::agent_dir(&h.id);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let mut command = tokio::process::Command::new(npm);
+    let mut command = crate::proc::quiet(npm);
     command
         .args(["install", "--prefix"])
         .arg(&dir)
@@ -1085,6 +1285,53 @@ mod option_tests {
         assert_eq!(pick_option(&offered, &["reject_once", "reject_always"]), Some(json!("ro")));
         let only_always = vec![json!({"kind":"allow_always","optionId":"a"})];
         assert_eq!(pick_option(&only_always, &["allow_once"]), None, "no one-shot option: cancel instead of granting forever");
+    }
+}
+
+#[cfg(test)]
+mod handoff_tests {
+    use super::*;
+
+    fn said(user: bool, text: &str) -> AgentMessage {
+        let content = vec![MessageContent::Text { text: text.into() }];
+        if user { AgentMessage::User { content, timestamp: 0 } } else { AgentMessage::Assistant { content, stop_reason: "stop".into(), error_message: None, timestamp: 0, usage: None } }
+    }
+
+    #[test]
+    fn a_joining_agent_is_told_what_was_said_and_only_the_newest_of_a_long_thread() {
+        assert_eq!(digest(&[]), None, "a new thread has nothing to hand over");
+        let d = digest(&[said(true, "Use tabs."), said(false, "Tabs it is.")]).unwrap();
+        assert!(d.contains("User: Use tabs.\n\nAssistant: Tabs it is."), "{d}");
+        assert!(!d.contains("newest part"));
+        let long = digest(&[said(true, &"old ".repeat(5000)), said(false, "the latest answer")]).unwrap();
+        assert!(long.contains("the latest answer") && long.contains("newest part"));
+        assert!(long.chars().count() < DIGEST_CHARS + 400, "cut to size");
+    }
+
+    #[test]
+    fn the_users_mcp_servers_are_handed_over_without_keychain_sign_ins() {
+        use crate::mcp::{McpServerConfig, McpTransportConfig as T};
+        let cfg = |name: &str, transport, auth: Option<&str>| McpServerConfig { name: name.into(), transport, timeout_ms: None, auth: auth.map(String::from) };
+        let all = vec![
+            cfg("files", T::Stdio { command: "no-such-binary-xyz".into(), args: vec!["--stdio".into()], env: HashMap::from([("K".to_string(), "v".to_string())]) }, None),
+            cfg("docs", T::Http { url: "https://example.com/mcp".into(), headers: HashMap::new() }, None),
+            cfg("mail", T::Http { url: "https://mail.example.com/mcp".into(), headers: HashMap::new() }, Some("google")),
+            cfg("built-in", T::Native { connector: "x".into() }, None),
+        ];
+        let with_http = mcp_servers(&all, true);
+        assert_eq!(with_http.len(), 2, "{with_http:?}");
+        assert_eq!(with_http[0], json!({ "name": "files", "command": "no-such-binary-xyz", "args": ["--stdio"], "env": [{ "name": "K", "value": "v" }] }));
+        assert_eq!(with_http[1]["url"], "https://example.com/mcp");
+        assert_eq!(mcp_servers(&all, false).len(), 1, "an agent that can't reach HTTP servers gets only the local ones");
+    }
+
+    #[test]
+    fn a_turns_tokens_and_cost_are_read_when_the_agent_reports_them() {
+        assert_eq!(turn_usage(&json!({ "stopReason": "end_turn" }), None), None);
+        let u = turn_usage(&json!({ "usage": { "inputTokens": 1200, "outputTokens": 300, "cachedReadTokens": 900 } }), Some(0.04)).unwrap();
+        assert_eq!((u.input, u.output, u.cache_read, u.total_tokens), (1200, 300, 900, 1500));
+        assert_eq!(u.cost.unwrap().total, 0.04);
+        assert_eq!(turn_usage(&json!({}), Some(0.01)).unwrap().cost.unwrap().total, 0.01, "a cost alone still counts");
     }
 }
 

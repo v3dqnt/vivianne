@@ -751,7 +751,7 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
                     "run_in_background": { "type": "boolean", "description": "false to wait for the result", "default": true },
                     "name": { "type": "string", "description": "A name to address it by afterwards (lower-case letters, digits, dashes; e.g. \"auditor\"). Defaults to agent-1, agent-2…" },
                     "fork": { "type": "boolean", "description": "true to start the subagent from this conversation so far (it already knows what you know), instead of from a blank page. Then prompt can be short.", "default": false },
-                    "provider": { "type": "string", "description": "With model: run this subagent on a specific route (see list_subagent_models). Omit both to use the default." },
+                    "provider": { "type": "string", "description": "With model: run this subagent on a specific route (see list_subagent_models). Omit both to use the default. \"harness\" hands the prompt to another coding agent (model is its id, e.g. claude-acp or codex-acp) and waits for its report." },
                     "model": { "type": "string", "description": "With provider." },
                     "output_schema": { "type": "object", "description": "A JSON schema. The subagent must answer with one JSON object matching it; you get it parsed, and a reply that doesn't fit counts as a failure." }
                 },

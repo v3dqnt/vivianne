@@ -85,7 +85,7 @@ export function RoutingPanel() {
           <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
             Cost-aware routing
           </Typography>
-          <Box component="span" sx={{ px: 0.75, height: 18, lineHeight: '18px', borderRadius: '4px', fontSize: '0.6875rem', fontWeight: 500, letterSpacing: 0.4, bgcolor: alpha(theme.palette.warning.main, 0.16), color: 'warning.main' }}>
+          <Box component="span" sx={{ px: 0.75, height: 18, lineHeight: '18px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 500, letterSpacing: 0.4, bgcolor: alpha(theme.palette.warning.main, 0.16), color: 'warning.main' }}>
             BETA
           </Box>
         </Stack>

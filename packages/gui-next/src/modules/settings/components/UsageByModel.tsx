@@ -102,7 +102,7 @@ export function UsageByModel() {
               <Box sx={{ mt: 0.5, height: 4, borderRadius: 1.6, bgcolor: 'action.hover', overflow: 'hidden' }}>
                 <Box sx={{ width: `${Math.max(2, ((r.input + r.output) / max) * 100)}%`, height: '100%', bgcolor: 'primary.main' }} />
               </Box>
-              <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
+              <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.75rem' }}>
                 {r.requests} request{r.requests === 1 ? '' : 's'}
               </Typography>
             </Box>

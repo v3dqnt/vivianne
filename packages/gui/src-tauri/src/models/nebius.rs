@@ -98,7 +98,7 @@ pub async fn describe(args: &serde_json::Value) -> String {
 }
 
 async fn run(exe: &std::path::Path, argv: &[String]) -> Result<String, String> {
-    let mut cmd = tokio::process::Command::new(exe);
+    let mut cmd = crate::proc::quiet(exe);
     cmd.args(argv).stdin(std::process::Stdio::null()).kill_on_drop(true);
     #[cfg(windows)]
     {
