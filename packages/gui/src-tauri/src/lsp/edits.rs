@@ -373,7 +373,7 @@ mod tests {
         std::fs::write(&moved, "m").unwrap();
         let edit = json!({ "documentChanges": [
             { "textDocument": { "uri": super::super::uri::path_to_uri(&a.to_string_lossy()), "version": null }, "edits": [{ "range": range(0, 0, 0, 5), "newText": "bye" }] },
-            { "textDocument": { "uri": super::super::uri::path_to_uri(&a.to_string_lossy()), "version": null }, "edits": [{ "range": range(0, 6, 0, 11), "newText": "all" }] },
+            { "textDocument": { "uri": super::super::uri::path_to_uri(&a.to_string_lossy()), "version": null }, "edits": [{ "range": range(0, 4, 0, 9), "newText": "all" }] },
             { "kind": "create", "uri": super::super::uri::path_to_uri(&root.join("sub/new.txt").to_string_lossy()) },
             { "kind": "delete", "uri": super::super::uri::path_to_uri(&gone.to_string_lossy()) },
             { "kind": "rename", "oldUri": super::super::uri::path_to_uri(&moved.to_string_lossy()), "newUri": super::super::uri::path_to_uri(&root.join("new.txt").to_string_lossy()) },
