@@ -23,6 +23,7 @@ pub mod rerank;
 pub mod rrf;
 pub mod sleep;
 pub mod store;
+pub mod temporal;
 #[cfg(test)]
 mod bench;
 
@@ -673,6 +674,8 @@ pub(crate) async fn recall_in(
     }
 
     let embedding = crate::ai::embedding::embed_query(auth.map(|a| a.as_ref()), query).await.ok().flatten();
+    // A time in the question ("last spring", "in March 2025") is a window: what happened in it is its own list, and a fact that fits it ranks higher.
+    let window = as_of.is_none().then(|| self::temporal::window_of(query, chrono::Utc::now().date_naive())).flatten();
     // This project's store and the user's own, searched together: each
     // gives a keyword list and a vector list, and all four are fused.
     let search = |store: &'static str, user_wide: bool| {
@@ -701,7 +704,11 @@ pub(crate) async fn recall_in(
                 Some(t) => named.into_iter().filter(|e| e.created_at <= t).collect(),
                 None => named,
             };
-            vec![mark(fts), mark(vec), mark(named)]
+            let timed = match window {
+                Some(w) => self::store::entries_in_window(&store_root, w.start, w.end, MAX_RECALL_HITS * 2).await.unwrap_or_default(),
+                None => Vec::new(),
+            };
+            vec![mark(fts), mark(vec), mark(named), mark(timed)]
         }
     };
     let (project_lists, user_lists) = tokio::join!(search("", false), search(USER_ROOT, true));
@@ -732,6 +739,18 @@ pub(crate) async fn recall_in(
             (entry, (rrf_score as f32) * conf)
         })
         .collect();
+    // A question with a time in it: a fact from that time gains a little and one from far away loses a little (bounded; see `temporal`).
+    if let Some(w) = window {
+        for (store, user_wide) in [(root, false), (USER_ROOT, true)] {
+            let ids: Vec<String> = confidence_decayed.iter().filter(|(e, _)| e.user_wide == user_wide).map(|(e, _)| e.id.clone()).collect();
+            let times = self::store::times_of(store, &ids).await.unwrap_or_default();
+            for (e, score) in confidence_decayed.iter_mut().filter(|(e, _)| e.user_wide == user_wide) {
+                if let Some(t) = times.get(&e.id) {
+                    *score *= self::temporal::multiplier(*t, w);
+                }
+            }
+        }
+    }
 
     // Sort by the confidence-decayed score descending
     confidence_decayed.sort_by(|a, b| b.1.total_cmp(&a.1));

@@ -1030,6 +1030,47 @@ pub async fn entries_with_scene(root: &str, scene_name: &str, limit: usize) -> R
     .map_err(|e| format!("scene query task panicked: {e}"))?
 }
 
+/// Live entries whose time (when it happened, else when it was learned) falls in `[start, end)`, newest first.
+pub async fn entries_in_window(root: &str, start: u64, end: u64, limit: usize) -> Result<Vec<MemoryEntry>, String> {
+    let root = root.to_string();
+    tokio::task::spawn_blocking(move || {
+        with_conn(&root, |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, key, text, kind, session_id, created_at, confidence, access_count, last_accessed_at, embedding_model
+                     FROM memories WHERE COALESCE(occurred_at, created_at) >= ?1 AND COALESCE(occurred_at, created_at) < ?2
+                       AND invalid_at IS NULL AND archived_at IS NULL ORDER BY COALESCE(occurred_at, created_at) DESC LIMIT ?3",
+                )
+                .map_err(|e| format!("failed to prepare query: {e}"))?;
+            let rows = stmt.query_map(params![start as i64, end as i64, limit as i64], row_to_entry).map_err(|e| format!("failed to query window: {e}"))?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("failed to read window: {e}"))
+        })
+    })
+    .await
+    .map_err(|e| format!("query task panicked: {e}"))?
+}
+
+/// When each of these entries happened (or was learned), by id.
+pub async fn times_of(root: &str, ids: &[String]) -> Result<std::collections::HashMap<String, u64>, String> {
+    if ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let root = root.to_string();
+    let ids = ids.to_vec();
+    tokio::task::spawn_blocking(move || {
+        with_conn(&root, |conn| {
+            let placeholders: Vec<String> = (0..ids.len()).map(|i| format!("?{}", i + 1)).collect();
+            let sql = format!("SELECT id, COALESCE(occurred_at, created_at) FROM memories WHERE id IN ({})", placeholders.join(", "));
+            let mut stmt = conn.prepare(&sql).map_err(|e| format!("failed to prepare query: {e}"))?;
+            let params: Vec<&dyn rusqlite::types::ToSql> = ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+            let rows = stmt.query_map(params.as_slice(), |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))).map_err(|e| format!("failed to query times: {e}"))?;
+            rows.collect::<Result<_, _>>().map_err(|e| format!("failed to read times: {e}"))
+        })
+    })
+    .await
+    .map_err(|e| format!("query task panicked: {e}"))?
+}
+
 /// Load multiple memory entries by their IDs in one query.
 pub async fn get_entries_by_ids(root: &str, ids: &[String]) -> Result<Vec<MemoryEntry>, String> {
     if ids.is_empty() {
@@ -1184,6 +1225,34 @@ mod tests {
         let then: Vec<String> = search_fts_at(&root, "editor", 10, Some(3_000)).await.unwrap().into_iter().map(|e| e.id).collect();
         assert_eq!(then, vec!["old".to_string()]);
         assert_eq!(entry_count(&root).await.unwrap(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A fact is placed in time by when it happened when that is known, and by when it was learned otherwise.
+    #[tokio::test]
+    async fn a_time_window_uses_when_it_happened_before_when_it_was_learned() {
+        let dir = std::env::temp_dir().join(format!("vivianne_memstore_window_{}", uuid::Uuid::new_v4()));
+        let root = dir.to_string_lossy().to_string();
+        let fact = |id: &str, at: u64| MemoryEntry {
+            id: id.into(), key: id.into(), text: format!("fact {id}"), kind: "episodic".into(), session_id: None, created_at: at,
+            confidence: 1.0, access_count: 0, last_accessed_at: 0, embedding_model: None, user_wide: false,
+        };
+        insert_entry(&root, &fact("learned_inside", 5_000)).await.unwrap();
+        insert_entry(&root, &fact("learned_outside", 50_000)).await.unwrap();
+        // Learned long after the window, but it happened inside it.
+        insert_entry(&root, &fact("happened_inside", 90_000)).await.unwrap();
+        // Learned inside the window, but it happened long before.
+        insert_entry(&root, &fact("happened_outside", 6_000)).await.unwrap();
+        with_conn(&root, |c| {
+            c.execute("UPDATE memories SET occurred_at = 4000 WHERE id = 'happened_inside'", []).map_err(|e| e.to_string())?;
+            c.execute("UPDATE memories SET occurred_at = 100 WHERE id = 'happened_outside'", []).map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+        let ids: Vec<String> = entries_in_window(&root, 1_000, 10_000, 10).await.unwrap().into_iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec!["learned_inside".to_string(), "happened_inside".to_string()], "newest first by the time it counts as");
+        let times = times_of(&root, &["happened_inside".to_string(), "learned_outside".to_string()]).await.unwrap();
+        assert_eq!((times["happened_inside"], times["learned_outside"]), (4_000, 50_000));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
