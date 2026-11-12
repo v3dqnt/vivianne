@@ -29,6 +29,8 @@ const START_RETRY: Duration = Duration::from_secs(3 * 60);
 const INLINE_WAIT: Duration = Duration::from_millis(500);
 /// How long that background task waits for the server.
 const DEFERRED_WAIT: Duration = Duration::from_secs(12);
+/// What a cold server start may add to an edit's wait before the edit's result goes back without it (the start carries on in the background).
+const START_GRACE: Duration = Duration::from_secs(5);
 
 enum State {
     Empty,
@@ -120,7 +122,8 @@ async fn client_for(path: &str, workspace: &str) -> Result<Option<Arc<LspClient>
         }
         Err(e) => {
             log::warn!("lsp: failed to start {} for {language_id}: {e}", def.command);
-            *guard = State::Failed(Instant::now(), e.clone());
+            // A start that merely ran out of time may work next time; only a start that failed is remembered.
+            *guard = if e.contains("timed out") { State::Empty } else { State::Failed(Instant::now(), e.clone()) };
             slot.running.store(false, Ordering::SeqCst);
             Err(format!("{} did not start: {e}", def.command))
         }
@@ -248,14 +251,20 @@ struct Outcome {
 }
 
 async fn check(path: &str, root_dir: &str, wait: Duration) -> Outcome {
-    let client = match client_for(path, root_dir).await {
-        Ok(Some(c)) => c,
-        Ok(None) => return Outcome { report: Report::NoServer, waiting: None },
+    // The start runs as its own task: if it outlasts this edit's wait the edit goes on without it, and the server is there for the next one.
+    let start = {
+        let (p, r) = (path.to_string(), root_dir.to_string());
+        tokio::spawn(async move { client_for(&p, &r).await })
+    };
+    let client = match tokio::time::timeout(wait + START_GRACE, start).await {
+        Ok(Ok(Ok(Some(c)))) => c,
+        Ok(Ok(Ok(None))) | Ok(Err(_)) => return Outcome { report: Report::NoServer, waiting: None },
         // A server that is installed but would not start is not a file without problems.
-        Err(e) => {
+        Ok(Ok(Err(e))) => {
             log::warn!("lsp: {e}");
             return Outcome { report: Report::NoServer, waiting: None };
         }
+        Err(_) => return Outcome { report: Report::NotReported, waiting: None },
     };
     // What the server said before this edit is not an answer about it: only a report for the text just sent counts.
     let mark = match client.touch_file(path).await {
@@ -265,6 +274,7 @@ async fn check(path: &str, root_dir: &str, wait: Duration) -> Outcome {
             return Outcome { report: Report::NotReported, waiting: None };
         }
     };
+    client.did_save(path).await;
     match client.fresh_report(path, &mark, wait).await {
         Some(items) => Outcome { report: Report::Published(items), waiting: None },
         None => Outcome { report: Report::NotReported, waiting: Some((client, mark)) },
@@ -450,22 +460,45 @@ pub async fn rename_file(from: &str, to: &str, root_dir: &str) -> Result<Vec<Str
     let mut done = Vec::new();
     let c = client_for(from, root_dir).await.ok().flatten();
     let files = json!({ "files": [{ "oldUri": path_to_uri(from), "newUri": path_to_uri(to) }] });
-    let will = match &c {
-        Some(c) if c.capabilities().await.pointer("/workspace/fileOperations/willRename").is_some() => c.call("workspace/willRenameFiles", files.clone()).await.ok().filter(|v| !v.is_null()),
+    // If the server can say what the move breaks and fails to, nothing is moved: a half-done move leaves imports pointing nowhere.
+    let edit = match &c {
+        Some(c) if c.capabilities().await.pointer("/workspace/fileOperations/willRename").is_some() => match c.call("workspace/willRenameFiles", files.clone()).await {
+            Ok(v) if !v.is_null() => Some(v),
+            Ok(_) => None,
+            Err(e) => return Err(format!("the language server could not work out what the move changes ({e}); nothing was moved")),
+        },
         _ => None,
     };
-    if let (Some(c), Some(edit)) = (&c, &will) {
+    // What the edit will overwrite, kept so a failed move puts it back.
+    let mut snapshots: Vec<(std::path::PathBuf, String)> = Vec::new();
+    if let Some(edit) = &edit {
+        for p in super::edits::touched(edit) {
+            if let Ok(text) = std::fs::read_to_string(&p) {
+                snapshots.push((std::path::PathBuf::from(p), text));
+            }
+        }
+    }
+    if let (Some(c), Some(edit)) = (&c, &edit) {
         done.extend(apply_and_refresh(c, root_dir, edit).await?);
     }
-    if let Some(dir) = Path::new(to).parent() {
-        tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
+    let moved = async {
+        if let Some(dir) = Path::new(to).parent() {
+            tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
+        }
+        tokio::fs::rename(from, to).await.map_err(|e| format!("can't move {from}: {e}"))
     }
-    tokio::fs::rename(from, to).await.map_err(|e| format!("can't move {from}: {e}"))?;
+    .await;
+    if let Err(e) = moved {
+        for (p, text) in &snapshots {
+            let _ = crate::agent::tools::files::guard::write_atomic(p, text.as_bytes()).await;
+        }
+        return Err(format!("{e}; the reference edits were undone"));
+    }
     done.push(format!("moved {from} to {to}"));
     if let Some(c) = &c {
         let _ = c.call("workspace/didRenameFiles", files).await;
     }
-    if will.is_none() {
+    if edit.is_none() {
         done.push("the server did not update references to the file; check the imports".into());
     }
     Ok(done)
@@ -490,6 +523,8 @@ pub async fn format_file(path: &str, root_dir: &str) -> Result<bool, String> {
         return Ok(false);
     }
     crate::agent::tools::files::guard::write_atomic(Path::new(path), formatted.as_bytes()).await.map_err(|e| e.to_string())?;
+    // Our own write: the agent's next edit of this file must not be refused as "changed on disk since you read it".
+    crate::agent::tools::files::guard::observe(Path::new(path));
     c.refresh(path).await;
     Ok(true)
 }

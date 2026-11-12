@@ -25,6 +25,8 @@ const SETTLE: Duration = Duration::from_millis(250);
 const COLD_PUBLISH: Duration = Duration::from_secs(3);
 const POLL: Duration = Duration::from_millis(50);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+/// `initialize` of a big project (rust-analyzer, tsserver) is slow: omp allows 30 seconds.
+const INIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// How many documents stay open in one server before the longest-open is closed.
 const MAX_OPEN_DOCS: usize = 40;
 
@@ -148,7 +150,7 @@ impl LspClient {
         let stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let client = Self::over(Box::new(stdout), Box::new(stdin), Some(child), root_dir, settings.clone());
-        client.handshake(root_dir, init_options).await?;
+        client.handshake(root_dir, init_options, settings).await?;
         Ok(client)
     }
 
@@ -177,7 +179,7 @@ impl LspClient {
         })
     }
 
-    async fn handshake(&self, root_dir: &str, init_options: &Value) -> Result<(), String> {
+    async fn handshake(&self, root_dir: &str, init_options: &Value, settings: &Value) -> Result<(), String> {
         let mut params = json!({
             "processId": std::process::id(),
             "rootUri": path_to_uri(root_dir),
@@ -210,9 +212,18 @@ impl LspClient {
         if !init_options.is_null() {
             params["initializationOptions"] = init_options.clone();
         }
-        let init = self.request("initialize", params).await?;
+        let init = self.request_within("initialize", params, INIT_TIMEOUT).await?;
         *self.capabilities.lock().await = init.get("capabilities").cloned().unwrap_or(Value::Null);
-        self.notify("initialized", json!({})).await
+        self.notify("initialized", json!({})).await?;
+        // Servers read their settings from here as well as by asking for them.
+        self.notify("workspace/didChangeConfiguration", json!({ "settings": if settings.is_null() { json!({}) } else { settings.clone() } })).await
+    }
+
+    /// The file was written: servers that check on save (rust-analyzer runs cargo check, others lint) only report errors after this.
+    pub async fn did_save(&self, path: &str) {
+        if self.docs.lock().await.version.contains_key(&path_key(path)) {
+            let _ = self.notify("textDocument/didSave", json!({ "textDocument": { "uri": path_to_uri(path) } })).await;
+        }
     }
 
     pub fn is_closed(&self) -> bool {
@@ -535,7 +546,10 @@ async fn dispatch(message: Value, shared: &Shared) {
                     };
                     json!({ "jsonrpc": "2.0", "id": id, "result": result })
                 }
+                "workspace/workspaceFolders" => json!({ "jsonrpc": "2.0", "id": id, "result": [{ "uri": path_to_uri(&shared.root), "name": std::path::Path::new(&shared.root).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default() }] }),
+                "window/showDocument" => json!({ "jsonrpc": "2.0", "id": id, "result": { "success": false } }),
                 "window/workDoneProgress/create" | "client/registerCapability" | "client/unregisterCapability" | "window/showMessageRequest" => json!({ "jsonrpc": "2.0", "id": id, "result": null }),
+                m if m.starts_with("workspace/") && m.ends_with("/refresh") => json!({ "jsonrpc": "2.0", "id": id, "result": null }),
                 _ => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "method not supported" } }),
             };
             let _ = write_frame(writer, &reply).await;
@@ -611,6 +625,10 @@ mod tests {
         assert_eq!(recv(&mut server).await["result"]["applied"], false);
         send(&mut server, json!({ "jsonrpc": "2.0", "id": 9, "method": "weird/thing" })).await;
         assert_eq!(recv(&mut server).await["error"]["code"], -32601);
+        send(&mut server, json!({ "jsonrpc": "2.0", "id": 11, "method": "window/showDocument", "params": {} })).await;
+        assert_eq!(recv(&mut server).await["result"]["success"], false);
+        send(&mut server, json!({ "jsonrpc": "2.0", "id": 12, "method": "workspace/semanticTokens/refresh" })).await;
+        assert!(recv(&mut server).await["result"].is_null());
         for method in ["window/workDoneProgress/create", "client/registerCapability"] {
             send(&mut server, json!({ "jsonrpc": "2.0", "id": 10, "method": method, "params": {} })).await;
             assert!(recv(&mut server).await.get("error").is_none(), "{method} is accepted");

@@ -11,6 +11,8 @@ use super::builtin::{Tool, ToolResult};
 
 const MAX_LOCATIONS: usize = 100;
 const MAX_CHARS: usize = 16_000;
+/// omp's cap on a workspace symbol search.
+const MAX_SYMBOLS: usize = 200;
 
 pub struct LspTool {
     cwd: String,
@@ -92,7 +94,7 @@ fn render_symbols(result: &Value, cwd: &str) -> String {
     let mut count = 0usize;
     fn walk(v: &Value, depth: usize, out: &mut String, count: &mut usize, kind: &dyn Fn(Option<u64>) -> &'static str, cwd: &str) {
         for s in v.as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
-            if *count >= MAX_LOCATIONS {
+            if *count >= MAX_SYMBOLS {
                 return;
             }
             *count += 1;
@@ -110,8 +112,8 @@ fn render_symbols(result: &Value, cwd: &str) -> String {
     if out.is_empty() {
         return "No symbols found.".into();
     }
-    if count >= MAX_LOCATIONS {
-        out.push_str(&format!("[cut at {MAX_LOCATIONS} symbols]\n"));
+    if count >= MAX_SYMBOLS {
+        out.push_str(&format!("[cut at {MAX_SYMBOLS} symbols]\n"));
     }
     out.trim_end().to_string()
 }
