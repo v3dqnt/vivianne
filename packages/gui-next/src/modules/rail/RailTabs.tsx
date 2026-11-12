@@ -1,13 +1,15 @@
 import { Box } from '../../ui'
-import { CommandSquareLinear, DocumentTextLinear, FolderLinear, LayerLinear } from '../../icons'
+import { CommandSquareLinear, PlayCircleLinear, DocumentTextLinear, FolderLinear, LayerLinear } from '../../icons'
 import { SegmentedTabs } from '../../components/SegmentedTabs'
 import { useRail, type RailTab } from './railStore'
+import { useDebug } from '../debug/debugStore'
 
 const TABS: { id: RailTab; label: string; Icon: typeof LayerLinear; needsFolder: boolean }[] = [
   { id: 'overview', label: 'Overview', Icon: LayerLinear, needsFolder: false },
   { id: 'files', label: 'Files', Icon: FolderLinear, needsFolder: true },
   { id: 'preview', label: 'Preview', Icon: DocumentTextLinear, needsFolder: true },
   { id: 'terminal', label: 'Terminal', Icon: CommandSquareLinear, needsFolder: true },
+  { id: 'debug', label: 'Debug', Icon: PlayCircleLinear, needsFolder: true },
 ]
 
 /**
@@ -17,8 +19,9 @@ const TABS: { id: RailTab; label: string; Icon: typeof LayerLinear; needsFolder:
 export function RailTabs({ hasFolder }: { hasFolder: boolean }) {
   const tab = useRail((s) => s.tab)
   const hasPreview = useRail((s) => s.previewPath !== null)
+  const debugging = useDebug((s) => s.session !== null)
   const setTab = useRail((s) => s.setTab)
-  const shown = TABS.filter((t) => (!t.needsFolder || hasFolder) && (t.id !== 'preview' || hasPreview))
+  const shown = TABS.filter((t) => (!t.needsFolder || hasFolder) && (t.id !== 'preview' || hasPreview) && (t.id !== 'debug' || debugging || tab === 'debug'))
   if (shown.length < 2) return null
   const tabs = shown.map(({ id, label, Icon }) => ({ id, label, icon: <Icon size={14} color="currentColor" /> }))
   return (

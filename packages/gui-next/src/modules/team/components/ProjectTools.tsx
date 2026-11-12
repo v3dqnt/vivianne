@@ -14,6 +14,8 @@ import { RailTabs } from '../../rail/RailTabs'
 import { FilesTab } from '../../rail/FilesTab'
 import { PreviewTab } from '../../rail/PreviewTab'
 import { TerminalTab } from '../../rail/TerminalTab'
+import { DebugTab } from '../../debug/DebugTab'
+import { watchDebug } from '../../debug/debugStore'
 import { isWide, useRail, type RailTab } from '../../rail/railStore'
 
 /** Every action in the column is the same row: left-aligned on one edge,
@@ -119,6 +121,8 @@ export function ProjectTools() {
   const tab: RailTab = hasFolder ? chosen : 'overview'
   const wide = isWide(tab)
   // The terminal stays mounted once opened, so its scrollback survives a trip to another tab.
+  // The Debug tab shows up once the agent is debugging something in this thread.
+  useEffect(() => (todayId ? watchDebug(todayId) : undefined), [todayId])
   const [terminalOpened, setTerminalOpened] = useState(tab === 'terminal')
   useEffect(() => {
     if (tab === 'terminal') setTerminalOpened(true)
@@ -145,6 +149,7 @@ export function ProjectTools() {
       <RailTabs hasFolder={hasFolder} />
       {tab === 'files' && <Pane><FilesTab /></Pane>}
       {tab === 'preview' && <Pane><PreviewTab /></Pane>}
+      {tab === 'debug' && <Pane><DebugTab /></Pane>}
       {terminalOpened && hasFolder && (
         <Box sx={{ display: tab === 'terminal' ? 'flex' : 'none', flex: 1, minHeight: 0, animation: tab === 'terminal' ? 'viv-rail-in 220ms ease-out' : undefined }}>
           <TerminalTab visible={tab === 'terminal'} />

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 /** What the project rail shows: its overview (project, goal, version control, context), or one of the working tabs. */
-export type RailTab = 'overview' | 'files' | 'preview' | 'terminal'
+export type RailTab = 'overview' | 'files' | 'preview' | 'terminal' | 'debug'
 
 /** The working tabs need room, so the rail widens while one is open; the overview keeps its compact card. */
 export const isWide = (tab: RailTab) => tab !== 'overview'

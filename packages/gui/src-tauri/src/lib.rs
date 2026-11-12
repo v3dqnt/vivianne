@@ -237,6 +237,8 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::runtime::commands::cmd_agent_set_steering_mode,
       crate::agent::runtime::commands::cmd_agent_set_follow_up_mode,
       crate::agent::runtime::commands::cmd_debug_agent_status,
+      crate::dap::ui::cmd_debug_snapshot,
+      crate::dap::ui::cmd_debug_control,
       crate::agent::runtime::commands::cmd_agent_session_stats,
       crate::agent::runtime::commands::cmd_get_models_config,
       crate::agent::runtime::commands::cmd_save_models_config,
