@@ -19,6 +19,7 @@ pub mod arg_check;
 pub mod background;
 pub mod limits;
 pub mod lsp_nav;
+pub mod debug;
 pub mod present;
 pub mod web_fetch;
 pub mod child_routes;

@@ -42,6 +42,9 @@ const GATED_TOOLS: &[&str] = &[
     "create_tool",
     // Acts in the user's own browser, signed in as them.
     "user_browser_driver",
+    // Starts a debug adapter and runs a program under it, evaluates code in that program and changes its variables. `debug`, which only
+    // looks, is not here.
+    "debug_run",
 ];
 
 /// Tools whose `path` argument gets checked against the workspace folder
@@ -499,6 +502,22 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
     }),
     tool!("team_run" => |cx| crate::agent::team::run::execute_team_run(cx.args, cx.depth, cx.state, cx.app).await),
     tool!("list_threads" => |cx| crate::agent::thread_msgs::execute_list_threads(cx.state, cx.app).await),
+    // Debugging a running program: `debug` looks, `debug_run` starts, steers and ends (gated; a launch always asks).
+    tool!("debug" => |cx| {
+        let thread = crate::agent::orchestration::turn_thread().unwrap_or_default();
+        match crate::agent::tools::debug::read(cx.args, &thread).await {
+            Ok(text) => text_result(text),
+            Err(e) => text_result(format!("Error: {e}")),
+        }
+    }),
+    tool!("debug_run" => |cx| {
+        let thread = crate::agent::orchestration::turn_thread().unwrap_or_default();
+        let cwd = cx.state.primary_workspace_folder().await.unwrap_or_else(|| ".".to_string());
+        match crate::agent::tools::debug::run(cx.args, &thread, &cwd).await {
+            Ok(text) => text_result(text),
+            Err(e) => text_result(format!("Error: {e}")),
+        }
+    }),
     tool!("read_thread" => |cx| crate::agent::thread_msgs::execute_read_thread(cx.args, cx.state).await),
     tool!("message_thread" => |cx| crate::agent::thread_msgs::execute_message_thread(cx.args, cx.state, cx.app).await),
     tool!("ask_thread" => |cx| crate::agent::thread_msgs::execute_ask_thread(cx.args, cx.state, cx.app).await),
@@ -759,6 +778,8 @@ fn always_asks(tc: &AgentToolCall) -> bool {
     match tc.name.as_str() {
         "vault" => action == Some("fill"),
         "nebius_job" => matches!(action, Some("submit" | "cancel")),
+        // A launch starts a program under a debug adapter: it asks every time, and says which command it will start.
+        "debug_run" => action == Some("launch"),
         _ => false,
     }
 }
@@ -772,6 +793,7 @@ async fn describe_sensitive(tc: &AgentToolCall) -> Option<String> {
     match tc.name.as_str() {
         "vault" => Some(crate::vault::describe_fill(&tc.arguments).await),
         "nebius_job" => Some(crate::nebius::describe(&tc.arguments).await),
+        "debug_run" => Some(crate::dap::config::describe_call(&tc.arguments)),
         _ => None,
     }
 }

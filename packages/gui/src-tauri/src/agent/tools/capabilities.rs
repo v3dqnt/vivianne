@@ -113,6 +113,17 @@ pub const GROUPS: &[CapabilityGroup] = &[
         triggers: &["screenshot", "screen shot", "my screen", "click on", "desktop", "open the app", "launch ", "window", "type into", "gui"],
     },
     CapabilityGroup {
+        name: "Debug a running program",
+        when: "A program fails or misbehaves in a way reading the code does not explain, and watching it run would.",
+        tools: &["debug", "debug_run"],
+        how: Some(
+            "debug_run launch with the breakpoints you want (the program stops at its start), then continue or step. \
+             debug stack_trace, scopes and variables read it while it is stopped; evaluate runs an expression in the program. \
+             terminate when you are done. Reading the code first is cheaper: debug when you need to see the values.",
+        ),
+        triggers: &["debugger", "breakpoint", "step through", "debug this", "stack trace", "why does it crash"],
+    },
+    CapabilityGroup {
         name: "Read and search code",
         when: "Finding or understanding anything in the workspace, before changing it.",
         tools: &["read", "grep", "glob", "code_search", "ls", "repo_clone", "repo_overview", "diagnostics", "lsp"],

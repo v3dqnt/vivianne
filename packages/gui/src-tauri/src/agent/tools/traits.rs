@@ -34,14 +34,14 @@ pub fn effect(tool: &str) -> Option<Effect> {
         "read" | "grep" | "glob" | "code_search" | "ls" | "repo_overview" | "diagnostics" | "lsp" | "inspect_document" | "web_search"
         | "web_fetch" | "recall" | "read_skill" | "list_tools" | "search_tools" | "load_tools" | "list_subagent_profiles" | "get_current_time"
         | "get_goal" | "github" | "guide" | "check_diagram" | "math" | "task_output" | "list_agents" | "list_subagent_models" | "team_read" | "list_automations"
-        | "list_custom_tools" | "sleep" | "list_threads" | "read_thread" => Read,
+        | "list_custom_tools" | "sleep" | "list_threads" | "read_thread" | "debug" => Read,
         "question" | "confirm_action" | "todo_write" | "submit_plan" | "present_snippet" | "present" | "message_agent" | "message_parent"
         | "team_post" | "pair_activity" | "message_thread" | "ask_thread" => Talk,
         "task" | "team_run" | "kill_task" | "interrupt_agent" | "hire_agent" | "assign_plan_steps" | "ask_agent" | "spawn_thread" => Delegate,
         "write" | "edit" | "apply_patch" | "notebook_edit" | "create_document" | "edit_document" | "generate_image" | "remember"
         | "create_goal" | "update_goal" | "create_automation" | "delete_automation" | "set_automation_enabled" | "create_tool"
         | "delete_tool" | "repo_clone" => Change,
-        "bash" | "powershell" | "run_script" | "run_native" | "sandbox_execute" | "terminal" | "connect_mcp_server" => Run,
+        "bash" | "powershell" | "run_script" | "run_native" | "sandbox_execute" | "terminal" | "connect_mcp_server" | "debug_run" => Run,
         "dip" | "computer" | "user_browser_driver" | "web_preview" | "github_act" | "github_api" | "email" | "phone" | "vault"
         | "nebius_job" => Act,
         t if t.starts_with("browser_") => Act,

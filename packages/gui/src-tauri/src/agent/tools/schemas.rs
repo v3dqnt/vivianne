@@ -421,6 +421,49 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
             }
         }),
         serde_json::json!({
+            "name": "debug",
+            "description": "Look at a program being debugged (started with debug_run launch). Changes nothing. status says where it is; stack_trace, scopes and variables read it while it is stopped; output is what it printed; breakpoints lists them; threads lists its threads.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["status", "sessions", "output", "breakpoints", "threads", "stack_trace", "scopes", "variables"], "default": "status" },
+                    "levels": { "type": "number", "description": "stack_trace: how many frames (default 20, at most 100)" },
+                    "frame_id": { "type": "number", "description": "scopes: a frame id from stack_trace (default: the top frame)" },
+                    "variable_ref": { "type": "number", "description": "variables: a variable_ref from scopes or from another variable" },
+                    "start": { "type": "number", "description": "variables: skip this many" },
+                    "count": { "type": "number", "description": "variables: how many (default 100, at most 200)" }
+                }
+            }
+        }),
+        serde_json::json!({
+            "name": "debug_run",
+            "description": "Debug a program: launch it under a debug adapter (debugpy for Python, lldb-dap or gdb for Rust and C/C++, netcoredbg for .NET), set breakpoints, run and step, evaluate expressions, end it. The program stops at its start, so set breakpoints, then continue. A wait that runs out says the program is still running. Use it when reading the code does not explain a failure; read the result with debug. A launch asks the user first and shows the command it starts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["launch", "set_breakpoint", "remove_breakpoint", "exception_breakpoints", "continue", "step_over", "step_in", "step_out", "pause", "evaluate", "set_variable", "terminate"] },
+                    "program": { "type": "string", "description": "launch: the file to run (a script, or a built binary)" },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "launch: the program's arguments" },
+                    "cwd": { "type": "string", "description": "launch: the working directory (default: the workspace)" },
+                    "adapter": { "type": "string", "enum": ["debugpy", "lldb-dap", "gdb", "netcoredbg"], "description": "launch: only to override the choice made from the file type" },
+                    "breakpoints": { "type": "array", "items": { "type": "object", "properties": { "file": { "type": "string" }, "line": { "type": "number" }, "condition": { "type": "string" } }, "required": ["file", "line"] }, "description": "launch: breakpoints set before the program runs" },
+                    "file": { "type": "string", "description": "set_breakpoint / remove_breakpoint: the file" },
+                    "line": { "type": "number", "description": "set_breakpoint / remove_breakpoint: 1-based line" },
+                    "function": { "type": "string", "description": "set_breakpoint / remove_breakpoint: a function name instead of file and line" },
+                    "condition": { "type": "string", "description": "set_breakpoint: stop only when this is true" },
+                    "filters": { "type": "array", "items": { "type": "string" }, "description": "exception_breakpoints: the adapter's filters (for example raised, uncaught); an empty list clears them" },
+                    "expression": { "type": "string", "description": "evaluate: runs in the program, in the stopped frame" },
+                    "frame_id": { "type": "number", "description": "evaluate: a frame id from debug stack_trace (default: the top frame)" },
+                    "context": { "type": "string", "description": "evaluate: repl (default), watch or hover" },
+                    "variable_ref": { "type": "number", "description": "set_variable: the scope or variable that holds it" },
+                    "name": { "type": "string", "description": "set_variable: the variable" },
+                    "value": { "type": "string", "description": "set_variable: the new value, as an expression in the program's language" },
+                    "timeout": { "type": "number", "description": "continue and the steps: seconds to wait for the next stop (5 to 300, default 30)" }
+                },
+                "required": ["action"]
+            }
+        }),
+        serde_json::json!({
             "name": "remember",
             "description": "Save a fact or note to persistent project memory, so it's available in future sessions on this project.",
             "parameters": {

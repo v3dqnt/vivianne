@@ -28,6 +28,7 @@ use crate::multiplayer::MultiplayerState;
 
 // New modules
 pub mod lsp;
+pub mod dap;
 pub mod mcp;
 
 /// Makes `cargo test` able to run at all on Windows.
@@ -408,8 +409,8 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::harness::cmd_harness_install,
       crate::agent::harness::cmd_harness_trace,
       crate::agent::harness::cmd_harness_reset,
-      crate::agent::runtime::commands::cmd_agent_answer_question,
       crate::agent::harness::cmd_harness_session_info,
+      crate::agent::runtime::commands::cmd_agent_answer_question,
       crate::agent::runtime::commands::cmd_agent_respond_confirmation,
       crate::agent::runtime::commands::cmd_memory_status,
       crate::agent::runtime::commands::cmd_memory_enable,
@@ -1027,6 +1028,8 @@ try `viv help`", cli::program_args()[0]);
       if let tauri::RunEvent::Exit = event {
         crate::ai::laya::stop();
         tauri::async_runtime::block_on(async {
+          // No debug adapter, and no program under one, outlives the app.
+          crate::dap::session::shutdown_all().await;
           if let Some(registry) = app_handle.try_state::<crate::agent::runtime::commands::AgentRegistry>() {
             registry.cancel_all(crate::agent::runtime::cancel::CancelKind::Shutdown, "the app closed").await;
           }
