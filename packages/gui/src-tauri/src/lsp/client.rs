@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{oneshot, Mutex};
 
-use super::uri::{path_key, path_to_uri, utf16_col};
+use super::uri::{path_key, path_to_uri, uri_to_path, utf16_col};
 use super::Diagnostic;
 
 const MAX_HEADER_BYTES: u64 = 1 << 16;
@@ -24,6 +24,7 @@ const SETTLE: Duration = Duration::from_millis(250);
 /// An empty publish without a version from a server this young is the server saying "nothing yet", not "no problems".
 const COLD_PUBLISH: Duration = Duration::from_secs(3);
 const POLL: Duration = Duration::from_millis(50);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How many documents stay open in one server before the longest-open is closed.
 const MAX_OPEN_DOCS: usize = 40;
 
@@ -60,6 +61,7 @@ pub struct LspClient {
     started: Instant,
     docs: Mutex<OpenDocs>,
     capabilities: Mutex<Value>,
+    root: String,
     closed: Arc<AtomicBool>,
     child: Mutex<Option<tokio::process::Child>>,
     /// Ends the server and whatever it started when the client is dropped.
@@ -73,17 +75,64 @@ struct OpenDocs {
     order: VecDeque<(String, String)>,
 }
 
+/// One frame, written whole. The wait for the writer's turn and the write itself are bounded together: a server that stops reading its stdin
+/// (its pipe full) must cost the caller a failure, not a hang, and must not hold the lock against the frames queued behind this one.
 async fn write_frame(writer: &Writer, message: &Value) -> Result<(), String> {
     let body = serde_json::to_string(message).map_err(|e| e.to_string())?;
-    let mut w = writer.lock().await;
-    w.write_all(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes()).await.map_err(|e| e.to_string())?;
-    w.write_all(body.as_bytes()).await.map_err(|e| e.to_string())?;
-    w.flush().await.map_err(|e| e.to_string())
+    let frame = format!("Content-Length: {}\r\n\r\n{body}", body.len());
+    let write = async {
+        let mut w = writer.lock().await;
+        w.write_all(frame.as_bytes()).await.map_err(|e| e.to_string())?;
+        w.flush().await.map_err(|e| e.to_string())
+    };
+    match tokio::time::timeout(WRITE_TIMEOUT, write).await {
+        Ok(r) => r,
+        Err(_) => Err("the language server is not reading its input".into()),
+    }
+}
+
+/// Sends `$/cancelRequest` for a request whose caller went away (timed out, or the turn was stopped and the future dropped).
+struct CancelOnDrop {
+    id: i64,
+    pending: Pending,
+    writer: Writer,
+    armed: bool,
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let (id, pending, writer) = (self.id, self.pending.clone(), self.writer.clone());
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move {
+                pending.lock().await.remove(&id);
+                let _ = write_frame(&writer, &json!({ "jsonrpc": "2.0", "method": "$/cancelRequest", "params": { "id": id } })).await;
+            });
+        }
+    }
+}
+
+/// The section of a `workspace/configuration` request, looked up by its dotted name in what the client was configured with (`null` when absent).
+pub(crate) fn config_section(settings: &Value, section: &str) -> Value {
+    if section.is_empty() {
+        return settings.clone();
+    }
+    let mut cur = settings;
+    for part in section.split('.') {
+        match cur.get(part) {
+            Some(v) => cur = v,
+            // A flat key such as "python.analysis" is also a valid way to write settings.
+            None => return settings.get(section).cloned().unwrap_or(Value::Null),
+        }
+    }
+    cur.clone()
 }
 
 impl LspClient {
     /// Spawn `command args...` and perform the LSP `initialize`/`initialized` handshake.
-    pub async fn spawn(command: &str, args: &[&str], root_dir: &str) -> Result<Arc<Self>, String> {
+    pub async fn spawn(command: &str, args: &[&str], root_dir: &str, init_options: &Value, settings: &Value) -> Result<Arc<Self>, String> {
         let mut cmd = crate::proc::quiet(command);
         crate::agent::tools::code::sandbox::scrub_env(&mut cmd);
         crate::agent::runtime::streaming::own_group(&mut cmd);
@@ -98,19 +147,20 @@ impl LspClient {
             .map_err(|e| format!("failed to spawn {command}: {e}"))?;
         let stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
-        let client = Self::over(Box::new(stdout), Box::new(stdin), Some(child));
-        client.handshake(root_dir).await?;
+        let client = Self::over(Box::new(stdout), Box::new(stdin), Some(child), root_dir, settings.clone());
+        client.handshake(root_dir, init_options).await?;
         Ok(client)
     }
 
     /// A client over any pair of streams (the process pipes, or a test's in-memory ones).
-    fn over(read: Box<dyn AsyncRead + Unpin + Send>, write: Box<dyn AsyncWrite + Unpin + Send>, child: Option<tokio::process::Child>) -> Arc<Self> {
+    fn over(read: Box<dyn AsyncRead + Unpin + Send>, write: Box<dyn AsyncWrite + Unpin + Send>, child: Option<tokio::process::Child>, root: &str, settings: Value) -> Arc<Self> {
         let writer: Writer = Arc::new(Mutex::new(write));
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let diagnostics = Arc::new(Mutex::new(HashMap::new()));
         let publishes = Arc::new(AtomicU64::new(0));
         let closed = Arc::new(AtomicBool::new(false));
-        tokio::spawn(read_loop(read, writer.clone(), pending.clone(), diagnostics.clone(), publishes.clone(), closed.clone()));
+        let shared = Shared { writer: writer.clone(), pending: pending.clone(), diagnostics: diagnostics.clone(), publishes: publishes.clone(), root: root.to_string(), settings };
+        tokio::spawn(read_loop(read, shared, closed.clone()));
         Arc::new(Self {
             writer,
             next_id: AtomicI64::new(1),
@@ -120,34 +170,47 @@ impl LspClient {
             started: Instant::now(),
             docs: Mutex::new(OpenDocs::default()),
             capabilities: Mutex::new(Value::Null),
+            root: root.to_string(),
             closed,
             _tree: child.as_ref().map(|c| crate::agent::runtime::streaming::TreeKillOnDrop { pid: c.id() }),
             child: Mutex::new(child),
         })
     }
 
-    async fn handshake(&self, root_dir: &str) -> Result<(), String> {
-        let init = self
-            .request(
-                "initialize",
-                json!({
-                    "processId": std::process::id(),
-                    "rootUri": path_to_uri(root_dir),
-                    "capabilities": {
-                        "general": { "positionEncodings": ["utf-16"] },
-                        "textDocument": {
-                            "publishDiagnostics": { "relatedInformation": true, "versionSupport": true },
-                            "diagnostic": { "dynamicRegistration": false, "relatedDocumentSupport": false },
-                            "synchronization": { "didSave": true },
-                            "definition": { "linkSupport": false },
-                            "references": {},
-                            "implementation": { "linkSupport": false },
-                            "hover": { "contentFormat": ["markdown", "plaintext"] }
-                        }
-                    }
-                }),
-            )
-            .await?;
+    async fn handshake(&self, root_dir: &str, init_options: &Value) -> Result<(), String> {
+        let mut params = json!({
+            "processId": std::process::id(),
+            "rootUri": path_to_uri(root_dir),
+            "workspaceFolders": [{ "uri": path_to_uri(root_dir), "name": std::path::Path::new(root_dir).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default() }],
+            "capabilities": {
+                "general": { "positionEncodings": ["utf-16"] },
+                "window": { "workDoneProgress": true },
+                "workspace": {
+                    "configuration": true,
+                    "applyEdit": true,
+                    "workspaceEdit": { "documentChanges": true, "resourceOperations": ["create", "rename", "delete"] },
+                    "symbol": {}
+                },
+                "textDocument": {
+                    "publishDiagnostics": { "relatedInformation": true, "versionSupport": true },
+                    "diagnostic": { "dynamicRegistration": false, "relatedDocumentSupport": false },
+                    "synchronization": { "didSave": true },
+                    "definition": { "linkSupport": false },
+                    "typeDefinition": { "linkSupport": false },
+                    "references": {},
+                    "implementation": { "linkSupport": false },
+                    "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
+                    "rename": { "prepareSupport": true },
+                    "codeAction": { "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["", "quickfix", "refactor", "refactor.extract", "refactor.inline", "refactor.rewrite", "source", "source.organizeImports", "source.fixAll"] } }, "resolveSupport": { "properties": ["edit"] } },
+                    "formatting": {},
+                    "hover": { "contentFormat": ["markdown", "plaintext"] }
+                }
+            }
+        });
+        if !init_options.is_null() {
+            params["initializationOptions"] = init_options.clone();
+        }
+        let init = self.request("initialize", params).await?;
         *self.capabilities.lock().await = init.get("capabilities").cloned().unwrap_or(Value::Null);
         self.notify("initialized", json!({})).await
     }
@@ -171,14 +234,18 @@ impl LspClient {
             self.pending.lock().await.remove(&id);
             return Err(e);
         }
+        // Armed until an answer is in: a timeout, or this future being dropped when the turn is stopped, tells the server to stop working on it.
+        let mut cancel = CancelOnDrop { id, pending: self.pending.clone(), writer: self.writer.clone(), armed: true };
         match tokio::time::timeout(limit, rx).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(_)) => Err(format!("{method}: the language server closed the connection")),
-            Err(_) => {
-                self.pending.lock().await.remove(&id);
-                let _ = self.notify("$/cancelRequest", json!({ "id": id })).await;
-                Err(format!("{method} timed out"))
+            Ok(Ok(r)) => {
+                cancel.armed = false;
+                r
             }
+            Ok(Err(_)) => {
+                cancel.armed = false;
+                Err(format!("{method}: the language server closed the connection"))
+            }
+            Err(_) => Err(format!("{method} timed out")),
         }
     }
 
@@ -292,22 +359,58 @@ impl LspClient {
             "goToDefinition" => ("textDocument/definition", "definitionProvider"),
             "findReferences" => ("textDocument/references", "referencesProvider"),
             "goToImplementation" => ("textDocument/implementation", "implementationProvider"),
+            "goToTypeDefinition" => ("textDocument/typeDefinition", "typeDefinitionProvider"),
             "hover" => ("textDocument/hover", "hoverProvider"),
             other => return Err(format!("unknown operation '{other}'")),
         };
         if !self.supports(provider).await {
             return Err(format!("this language server does not support {op}"));
         }
+        let mut params = self.position_params(path, line, col).await?;
+        if op == "findReferences" {
+            params["context"] = json!({ "includeDeclaration": true });
+        }
+        self.request(method, params).await
+    }
+
+    /// `TextDocumentPositionParams` for a 1-based `line` and character `col`, after the file's current text has been sent to the server.
+    pub async fn position_params(&self, path: &str, line: u32, col: u32) -> Result<Value, String> {
         let text = tokio::fs::read_to_string(path).await.map_err(|e| format!("can't read {path}: {e}"))?;
         let line0 = line.saturating_sub(1);
         let text_line = text.lines().nth(line0 as usize).ok_or_else(|| format!("line {line} is past the end of the file"))?;
         let character = utf16_col(text_line, col.saturating_sub(1));
         self.sync(path, text).await?;
-        let mut params = json!({ "textDocument": { "uri": path_to_uri(path) }, "position": { "line": line0, "character": character } });
-        if op == "findReferences" {
-            params["context"] = json!({ "includeDeclaration": true });
-        }
+        Ok(json!({ "textDocument": { "uri": path_to_uri(path) }, "position": { "line": line0, "character": character } }))
+    }
+
+    /// Any request, for the tools that ask for more than navigation. The caller has checked `supports` where it matters.
+    pub async fn call(&self, method: &str, params: Value) -> Result<Value, String> {
         self.request(method, params).await
+    }
+
+    /// Whether the server advertised `provider` (a `…Provider` capability).
+    pub async fn has(&self, provider: &str) -> bool {
+        self.supports(provider).await
+    }
+
+    pub async fn capabilities(&self) -> Value {
+        self.capabilities.lock().await.clone()
+    }
+
+    pub fn root(&self) -> &str {
+        &self.root
+    }
+
+    /// The paths this server has open, and how many diagnostics it last published for each.
+    pub async fn open_files(&self) -> Vec<String> {
+        self.docs.lock().await.order.iter().map(|(_, uri)| uri_to_path(uri)).collect()
+    }
+
+    /// Tell the server a file on disk was written by someone else (a workspace edit, a rename) so its view matches.
+    pub async fn refresh(&self, path: &str) {
+        if self.docs.lock().await.version.contains_key(&path_key(path)) {
+            let _ = self.touch_file(path).await;
+        }
     }
 
     pub async fn shutdown(&self) {
@@ -376,11 +479,24 @@ fn is_fresh(p: &Published, mark: &SyncMark, server_age: Duration, now: Instant) 
     }
 }
 
-async fn read_loop(read: Box<dyn AsyncRead + Unpin + Send>, writer: Writer, pending: Pending, diagnostics: Arc<Mutex<PublishedByFile>>, publishes: Arc<AtomicU64>, closed: Arc<AtomicBool>) {
+/// What the reading task needs from the client.
+struct Shared {
+    writer: Writer,
+    pending: Pending,
+    diagnostics: Arc<Mutex<PublishedByFile>>,
+    publishes: Arc<AtomicU64>,
+    /// The workspace: an edit the server asks us to apply must stay inside it.
+    root: String,
+    /// What the client answers `workspace/configuration` from.
+    settings: Value,
+}
+
+async fn read_loop(read: Box<dyn AsyncRead + Unpin + Send>, shared: Shared, closed: Arc<AtomicBool>) {
     let mut reader = BufReader::new(read);
+    let pending = shared.pending.clone();
     loop {
         match read_frame(&mut reader).await {
-            Frame::Message(m) => dispatch(m, &writer, &pending, &diagnostics, &publishes).await,
+            Frame::Message(m) => dispatch(m, &shared).await,
             Frame::Eof => break,
             Frame::Fault(why) => {
                 log::warn!("lsp: closing the connection: {why}");
@@ -395,7 +511,8 @@ async fn read_loop(read: Box<dyn AsyncRead + Unpin + Send>, writer: Writer, pend
     }
 }
 
-async fn dispatch(message: Value, writer: &Writer, pending: &Pending, diagnostics: &Arc<Mutex<PublishedByFile>>, publishes: &AtomicU64) {
+async fn dispatch(message: Value, shared: &Shared) {
+    let (writer, pending, diagnostics, publishes) = (&shared.writer, &shared.pending, &shared.diagnostics, &*shared.publishes);
     let method = message.get("method").and_then(|m| m.as_str());
     let id = message.get("id").cloned().filter(|v| !v.is_null());
     match (method, id) {
@@ -403,11 +520,21 @@ async fn dispatch(message: Value, writer: &Writer, pending: &Pending, diagnostic
         (Some(method), Some(id)) => {
             let reply = match method {
                 "workspace/configuration" => {
-                    let n = message.pointer("/params/items").and_then(|i| i.as_array()).map(|a| a.len()).unwrap_or(0);
-                    json!({ "jsonrpc": "2.0", "id": id, "result": vec![Value::Null; n] })
+                    let items = message.pointer("/params/items").and_then(|i| i.as_array()).cloned().unwrap_or_default();
+                    let answers: Vec<Value> = items.iter().map(|i| config_section(&shared.settings, i.get("section").and_then(|s| s.as_str()).unwrap_or(""))).collect();
+                    json!({ "jsonrpc": "2.0", "id": id, "result": answers })
                 }
-                // This client never applies edits on a server's say-so.
-                "workspace/applyEdit" => json!({ "jsonrpc": "2.0", "id": id, "result": { "applied": false, "failureReason": "this client does not apply edits" } }),
+                // An edit a server asks for (a code action it runs itself) is applied only inside the workspace, all or nothing.
+                "workspace/applyEdit" => {
+                    let result = match message.pointer("/params/edit") {
+                        None => json!({ "applied": false, "failureReason": "no edit was sent" }),
+                        Some(edit) => match super::edits::apply_workspace_edit(&shared.root, edit).await {
+                            Ok(_) => json!({ "applied": true }),
+                            Err(why) => json!({ "applied": false, "failureReason": why }),
+                        },
+                    };
+                    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+                }
                 "window/workDoneProgress/create" | "client/registerCapability" | "client/unregisterCapability" | "window/showMessageRequest" => json!({ "jsonrpc": "2.0", "id": id, "result": null }),
                 _ => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "method not supported" } }),
             };
@@ -446,7 +573,7 @@ mod tests {
     fn wired() -> (Arc<LspClient>, DuplexStream) {
         let (client_end, server_end) = duplex(1 << 20);
         let (r, w) = tokio::io::split(client_end);
-        (LspClient::over(Box::new(r), Box::new(w), None), server_end)
+        (LspClient::over(Box::new(r), Box::new(w), None, &std::env::temp_dir().to_string_lossy(), json!({ "python": { "analysis": { "mode": "strict" } }, "flat.key": 5 })), server_end)
     }
 
     async fn send(server: &mut DuplexStream, v: Value) {
@@ -474,15 +601,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_requests_are_answered_and_edits_are_refused() {
+    async fn server_requests_are_answered_with_the_clients_settings() {
         let (_client, mut server) = wired();
-        send(&mut server, json!({ "jsonrpc": "2.0", "id": 7, "method": "workspace/configuration", "params": { "items": [{}, {}] } })).await;
+        // Dotted sections are looked up; an unknown one is null; no section is the whole of it.
+        send(&mut server, json!({ "jsonrpc": "2.0", "id": 7, "method": "workspace/configuration", "params": { "items": [{ "section": "python.analysis.mode" }, { "section": "nothing.here" }, { "section": "flat.key" }] } })).await;
         let a = recv(&mut server).await;
-        assert_eq!((a["id"].clone(), a["result"].clone()), (json!(7), json!([null, null])));
+        assert_eq!((a["id"].clone(), a["result"].clone()), (json!(7), json!(["strict", null, 5])));
         send(&mut server, json!({ "jsonrpc": "2.0", "id": 8, "method": "workspace/applyEdit", "params": {} })).await;
         assert_eq!(recv(&mut server).await["result"]["applied"], false);
         send(&mut server, json!({ "jsonrpc": "2.0", "id": 9, "method": "weird/thing" })).await;
         assert_eq!(recv(&mut server).await["error"]["code"], -32601);
+        for method in ["window/workDoneProgress/create", "client/registerCapability"] {
+            send(&mut server, json!({ "jsonrpc": "2.0", "id": 10, "method": method, "params": {} })).await;
+            assert!(recv(&mut server).await.get("error").is_none(), "{method} is accepted");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_server_requested_edit_is_applied_inside_the_workspace_and_refused_outside() {
+        let (_client, mut server) = wired();
+        let inside = temp_file("one two");
+        let edit = |p: &str| json!({ "changes": { path_to_uri(p): [{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 3 } }, "newText": "1" }] } });
+        send(&mut server, json!({ "jsonrpc": "2.0", "id": 1, "method": "workspace/applyEdit", "params": { "edit": edit(&inside) } })).await;
+        assert_eq!(recv(&mut server).await["result"]["applied"], true);
+        assert_eq!(std::fs::read_to_string(&inside).unwrap(), "1 two");
+        let outside = std::path::PathBuf::from("/definitely-elsewhere/a.txt");
+        send(&mut server, json!({ "jsonrpc": "2.0", "id": 2, "method": "workspace/applyEdit", "params": { "edit": edit(&outside.to_string_lossy()) } })).await;
+        let r = recv(&mut server).await;
+        assert_eq!(r["result"]["applied"], false);
+        assert!(r["result"]["failureReason"].as_str().unwrap().contains("outside the workspace"), "{r}");
+        std::fs::remove_file(&inside).ok();
+    }
+
+    #[tokio::test]
+    async fn dropping_a_waiting_request_cancels_it_at_the_server() {
+        let (client, mut server) = scripted();
+        let c = client.clone();
+        let call = tokio::spawn(async move { c.request("textDocument/hover", json!({})).await });
+        let req = server.recv_method("textDocument/hover").await;
+        call.abort(); // the turn was stopped
+        let cancel = server.recv_method("$/cancelRequest").await;
+        assert_eq!(cancel["params"]["id"], req["id"]);
+        assert!(client.pending.lock().await.is_empty(), "nothing is left waiting");
+    }
+
+    #[test]
+    fn config_sections_are_dotted_paths() {
+        let s = json!({ "a": { "b": 1 }, "c.d": 2 });
+        assert_eq!(config_section(&s, "a.b"), json!(1));
+        assert_eq!(config_section(&s, "c.d"), json!(2));
+        assert_eq!(config_section(&s, "a.x"), Value::Null);
+        assert_eq!(config_section(&s, ""), s);
     }
 
     #[tokio::test]
@@ -561,7 +730,7 @@ mod tests {
         let (client_end, server_end) = duplex(1 << 20);
         let (r, w) = tokio::io::split(client_end);
         let (sr, sw) = tokio::io::split(server_end);
-        (LspClient::over(Box::new(r), Box::new(w), None), Server { r: BufReader::new(sr), w: sw })
+        (LspClient::over(Box::new(r), Box::new(w), None, &std::env::temp_dir().to_string_lossy(), Value::Null), Server { r: BufReader::new(sr), w: sw })
     }
 
     fn temp_file(text: &str) -> String {

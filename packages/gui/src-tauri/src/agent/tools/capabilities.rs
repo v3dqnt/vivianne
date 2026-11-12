@@ -137,8 +137,8 @@ pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Change code",
         when: "Writing or modifying files in the workspace.",
-        tools: &["write", "edit", "apply_patch", "notebook_edit"],
-        how: Some("Read a file before editing it. edit for a targeted change, write to create or fully replace."),
+        tools: &["write", "edit", "apply_patch", "lsp_edit", "notebook_edit"],
+        how: Some("Read a file before editing it. edit for a targeted change, write to create or fully replace. lsp_edit renames a symbol or moves a file and fixes every reference through the language server (rename, rename_file), applies its code actions and formats."),
         triggers: &["refactor", "rename ", "fix the", "implement ", "add a function"],
     },
     CapabilityGroup {

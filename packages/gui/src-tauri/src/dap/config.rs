@@ -4,7 +4,8 @@
 //! say "the debugger for this is `./bin/dlv`" would run its own binary the moment the user approved a launch of a file in it. Adapters are
 //! found on PATH only. (oh-my-pi reads adapter definitions from the project and lets a repo-local binary beat the one on PATH; this does not.)
 //!
-//! Only adapters that speak DAP on stdio are here. Adapters that listen on a port (delve, js-debug) come with the TCP transport.
+//! Adapters that speak DAP on stdio, and delve, which listens on a loopback port Vivianne picks and connects to. js-debug (a second
+//! connection per child session) is not here yet.
 
 use serde_json::{json, Value};
 
@@ -19,13 +20,16 @@ pub struct Adapter {
     pub extensions: &'static [&'static str],
     /// What to tell the user when it is not installed.
     pub hint: &'static str,
+    /// It listens on a TCP port instead of speaking on stdio (delve). `{port}` in `args` is replaced by a free port chosen at start.
+    pub listen: bool,
 }
 
 pub const ADAPTERS: &[Adapter] = &[
-    Adapter { name: "debugpy", commands: &["python", "python3"], args: &["-m", "debugpy.adapter"], extensions: &["py", "pyw"], hint: "install it with `pip install debugpy`" },
-    Adapter { name: "lldb-dap", commands: &["lldb-dap"], args: &[], extensions: &["rs", "c", "cc", "cpp", "cxx", "h", "hpp", "m", "mm", "swift", "zig", ""], hint: "it comes with LLVM" },
-    Adapter { name: "gdb", commands: &["gdb"], args: &["-i", "dap"], extensions: &["rs", "c", "cc", "cpp", "cxx", ""], hint: "it needs GDB 14 or newer" },
-    Adapter { name: "netcoredbg", commands: &["netcoredbg"], args: &["--interpreter=vscode"], extensions: &["cs", "fs", "dll"], hint: "install netcoredbg from Samsung/netcoredbg" },
+    Adapter { name: "debugpy", commands: &["python", "python3"], args: &["-m", "debugpy.adapter"], extensions: &["py", "pyw"], hint: "install it with `pip install debugpy`", listen: false },
+    Adapter { name: "lldb-dap", commands: &["lldb-dap"], args: &[], extensions: &["rs", "c", "cc", "cpp", "cxx", "h", "hpp", "m", "mm", "swift", "zig", ""], hint: "it comes with LLVM", listen: false },
+    Adapter { name: "gdb", commands: &["gdb"], args: &["-i", "dap"], extensions: &["rs", "c", "cc", "cpp", "cxx", ""], hint: "it needs GDB 14 or newer", listen: false },
+    Adapter { name: "netcoredbg", commands: &["netcoredbg"], args: &["--interpreter=vscode"], extensions: &["cs", "fs", "dll"], hint: "install netcoredbg from Samsung/netcoredbg", listen: false },
+    Adapter { name: "delve", commands: &["dlv"], args: &["dap", "--listen=127.0.0.1:{port}"], extensions: &["go"], hint: "install it with `go install github.com/go-delve/delve/cmd/dlv@latest`", listen: true },
 ];
 
 /// An adapter and the command that starts it here.
@@ -77,6 +81,7 @@ pub fn launch_arguments(adapter: &Adapter, program: &str, cwd: &str, args: &[Str
         "debugpy" => json!({ "request": "launch", "type": "python", "program": program, "cwd": cwd, "args": args, "stopOnEntry": true, "justMyCode": false, "console": "internalConsole" }),
         "gdb" => json!({ "program": program, "cwd": cwd, "args": args, "stopAtBeginningOfMainSubprogram": true }),
         "netcoredbg" => json!({ "program": program, "cwd": cwd, "args": args, "stopAtEntry": true }),
+        "delve" => json!({ "request": "launch", "mode": "debug", "program": program, "cwd": cwd, "args": args, "stopOnEntry": true }),
         _ => json!({ "program": program, "cwd": cwd, "args": args, "stopOnEntry": true }),
     }
 }
@@ -147,5 +152,13 @@ mod tests {
     fn a_project_cannot_add_an_adapter() {
         // The table is the only source: nothing here reads a file from the project.
         assert!(ADAPTERS.iter().all(|a| !a.commands.iter().any(|c| c.contains('/') || c.contains('\\') || c.starts_with('.'))), "commands are bare names found on PATH");
+    }
+
+    #[test]
+    fn go_programs_go_to_delve_on_a_port_vivianne_picks() {
+        let r = select_with("cmd/app/main.go", None, &installed(&["dlv"])).unwrap();
+        assert_eq!(r.adapter.name, "delve");
+        assert!(r.adapter.listen && r.args.iter().any(|a| a.contains("{port}")));
+        assert_eq!(launch_arguments(r.adapter, "main.go", "/w", &[])["mode"], "debug");
     }
 }

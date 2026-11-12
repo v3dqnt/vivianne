@@ -11,7 +11,7 @@ use tokio::sync::oneshot;
 /// ls, grep, find, glob, sleep, todo_write) are never gated — only tools with
 /// real side effects or that reach outside the sandboxed workspace.
 const GATED_TOOLS: &[&str] = &[
-    "bash", "powershell", "write", "edit", "apply_patch", "dip", "computer", "web_fetch", "web_search", "generate_image",
+    "bash", "powershell", "write", "edit", "apply_patch", "lsp_edit", "dip", "computer", "web_fetch", "web_search", "generate_image",
     // Same real-shell-execution risk as bash/powershell, just persistent and
     // interactive rather than one-shot. `terminal_signal`/`terminal_close`
     // are here because the registry is shared with the GUI: they can stop or
@@ -55,7 +55,7 @@ const GATED_TOOLS: &[&str] = &[
 /// arbitrary shell command might touch would need parsing command text, which
 /// is unreliable — those two stay covered only by GATED_TOOLS's blanket
 /// approval (every bash/powershell call already asks, workspace or not).
-const PATH_SCOPED_TOOLS: &[&str] = &["read", "write", "edit", "apply_patch", "ls", "grep", "glob", "code_search"];
+const PATH_SCOPED_TOOLS: &[&str] = &["read", "write", "edit", "apply_patch", "lsp_edit", "ls", "grep", "glob", "code_search"];
 
 /// How many fast-path (read-only) calls may run at once. `join_all` used to
 /// start the whole batch simultaneously — a 20-call grep/read burst spawned
@@ -182,7 +182,7 @@ pub fn invalidate_tool_defs_cache() {
 /// or the cache is explicitly invalidated (by `invalidate_tool_defs_cache`).
 /// Tools a read-only workspace takes away — the same set persona mode's
 /// read-only variants restrict.
-const WORKSPACE_MUTATING_TOOLS: &[&str] = &["write", "edit", "apply_patch", "bash", "powershell"];
+const WORKSPACE_MUTATING_TOOLS: &[&str] = &["write", "edit", "apply_patch", "lsp_edit", "bash", "powershell"];
 
 /// The four sources that can take a tool away from the agent this turn.
 pub(crate) struct Restrictions {

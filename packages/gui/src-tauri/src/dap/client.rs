@@ -113,6 +113,66 @@ impl DapClient {
         Ok((client, events))
     }
 
+    /// Start an adapter that listens on a TCP port (delve) and connect to it. `{port}` in `args` becomes a free port on the loopback interface. The
+    /// adapter's own output is kept as its stderr tail. Gives up when the adapter exits or does not accept a connection in 15 seconds.
+    pub async fn spawn_listening(command: &str, args: &[String], cwd: &str) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<AdapterEvent>), String> {
+        let port = {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| format!("no free port: {e}"))?;
+            probe.local_addr().map_err(|e| e.to_string())?.port()
+        };
+        let args: Vec<String> = args.iter().map(|a| a.replace("{port}", &port.to_string())).collect();
+        let mut cmd = crate::proc::quiet(command);
+        crate::agent::tools::code::sandbox::scrub_env(&mut cmd);
+        crate::agent::runtime::streaming::own_group(&mut cmd);
+        let mut child = cmd
+            .args(&args)
+            .current_dir(cwd)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| format!("failed to start {command}: {e}"))?;
+        let tail: Arc<StdMutex<VecDeque<String>>> = Arc::new(StdMutex::new(VecDeque::new()));
+        // Both streams are read, so the adapter never blocks on a full pipe; what it says is the tail shown when it fails.
+        fn drain<R: AsyncRead + Unpin + Send + 'static>(r: Option<R>, tail: Arc<StdMutex<VecDeque<String>>>) {
+            if let Some(r) = r {
+                tokio::spawn(async move {
+                    let mut lines = BufReader::new(r).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let mut t = tail.lock().unwrap_or_else(|e| e.into_inner());
+                        if t.len() >= STDERR_LINES {
+                            t.pop_front();
+                        }
+                        t.push_back(line);
+                    }
+                });
+            }
+        }
+        drain(child.stdout.take(), tail.clone());
+        drain(child.stderr.take(), tail.clone());
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let stream = loop {
+            match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+                Ok(s) => break s,
+                Err(e) => {
+                    if let Ok(Some(status)) = child.try_wait() {
+                        let said = tail.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect::<Vec<_>>().join(" | ");
+                        return Err(format!("{command} exited ({status}) before it accepted a connection: {said}"));
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Err(format!("{command} did not accept a connection on port {port} ({e})"));
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        };
+        let (r, w) = tokio::io::split(stream);
+        let (client, events) = Self::over(Box::new(r), Box::new(w), Some(child));
+        *client.stderr.lock().unwrap_or_else(|e| e.into_inner()) = tail.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        Ok((client, events))
+    }
+
     /// A client over any pair of streams (the adapter's pipes, or a test's in-memory ones).
     pub(crate) fn over(read: Box<dyn AsyncRead + Unpin + Send>, write: Box<dyn AsyncWrite + Unpin + Send>, child: Option<tokio::process::Child>) -> (Arc<Self>, mpsc::UnboundedReceiver<AdapterEvent>) {
         let writer: Writer = Arc::new(Mutex::new(write));
@@ -379,5 +439,21 @@ mod tests {
         adapter.send_raw_header(64 * 1024 * 1024).await;
         let e = tokio::time::timeout(Duration::from_secs(5), call).await.expect("freed").unwrap().unwrap_err();
         assert!(e.message.contains("could not be trusted"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn an_adapter_that_listens_on_a_port_is_started_and_connected_to() {
+        let Ok(python) = which::which("python3").or_else(|_| which::which("python")) else { return };
+        let script = "import socket,sys,json\ns=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('127.0.0.1',int(sys.argv[1])));s.listen(1);c,_=s.accept();f=c.makefile('rb')\nn=0\nwhile True:\n  l=f.readline()\n  if l.lower().startswith(b'content-length:'): n=int(l.split(b':')[1])\n  if l in (b'\\r\\n',b'\\n'):\n    m=json.loads(f.read(n));b=json.dumps({'seq':1,'type':'response','request_seq':m['seq'],'success':True,'command':m['command'],'body':{'threads':[]}}).encode();c.sendall(b'Content-Length: %d\\r\\n\\r\\n'%len(b)+b);break\n";
+        let (client, _events) = DapClient::spawn_listening(&python.to_string_lossy(), &["-c".into(), script.into(), "{port}".into()], &std::env::temp_dir().to_string_lossy()).await.expect("connected");
+        let reply = client.request("threads", Value::Null, Duration::from_secs(5)).await.expect("answered");
+        assert_eq!(reply["threads"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn an_adapter_that_exits_before_listening_says_what_it_said() {
+        let Ok(python) = which::which("python3").or_else(|_| which::which("python")) else { return };
+        let e = DapClient::spawn_listening(&python.to_string_lossy(), &["-c".into(), "import sys; print('no such flag'); sys.exit(3)".into()], &std::env::temp_dir().to_string_lossy()).await.err().expect("failed");
+        assert!(e.contains("exited") && e.contains("no such flag"), "{e}");
     }
 }

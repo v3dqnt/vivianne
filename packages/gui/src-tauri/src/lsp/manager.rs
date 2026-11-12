@@ -1,93 +1,160 @@
-//! Spawns and reuses one LSP client per language *and project folder*, lazily, the first time a file of that language is touched.
+//! Spawns and reuses one LSP client per language, project root and server configuration, lazily, the first time a file of that language is touched.
 //! Best-effort: if no server for a language is on PATH, `touch_file` is a silent no-op.
 //!
 //! Language servers are heavy (rust-analyzer or tsserver can hold hundreds of MB to over a GB), and every agent edit starts one for post-edit
 //! diagnostics. So they don't live for the whole session: a server idle for `IDLE_TIMEOUT` is shut down, and at most `MAX_SERVERS` run at once
-//! (the least recently used goes first). The next edit simply starts it again.
+//! (the least recently used goes first). The next edit simply starts it again. A server that fails to start is not tried again for
+//! `START_RETRY`, so a broken install costs one attempt and not one per edit.
 //!
 //! Starting one is single-flight per key: the map lock is held only to find the slot, so a slow cold start of one language never blocks the others.
 
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-use super::client::LspClient;
-use super::uri::path_key;
-use super::{server_candidates, Diagnostic};
+use super::client::{LspClient, SyncMark};
+use super::servers::{self, ServerDef};
+use super::uri::{path_key, path_to_uri};
+use super::Diagnostic;
 
 const IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MAX_SERVERS: usize = 3;
+/// How long a failed start is remembered.
+const START_RETRY: Duration = Duration::from_secs(3 * 60);
+/// How long an edit's result waits inline; what is not in by then is handed to a background task.
+const INLINE_WAIT: Duration = Duration::from_millis(500);
+/// How long that background task waits for the server.
+const DEFERRED_WAIT: Duration = Duration::from_secs(12);
+
+enum State {
+    Empty,
+    Up(Arc<LspClient>),
+    /// The start failed at this time, for this reason.
+    Failed(Instant, String),
+}
 
 struct Slot {
-    /// Outer `None`: not tried yet. Inner `None`: no server is installed, remembered so PATH isn't searched on every edit.
-    client: Mutex<Option<Option<Arc<LspClient>>>>,
+    state: Mutex<State>,
     last_used: StdMutex<Instant>,
     running: AtomicBool,
+    language: String,
+    root: String,
+    line: String,
 }
 
 lazy_static::lazy_static! {
-    /// Keyed by `language` + `root` — a server is rooted at one project, and reusing it for another would diagnose files against the wrong tree.
+    /// Keyed by language, root, command line and configuration — a server is rooted at one project, and reusing it for another would diagnose
+    /// files against the wrong tree; the same server started with other settings is a different server.
     static ref CLIENTS: StdMutex<HashMap<String, Arc<Slot>>> = StdMutex::new(HashMap::new());
+    /// What the agent was last told about each file's errors.
+    static ref LEDGER: StdMutex<super::ledger::Ledger> = StdMutex::new(super::ledger::Ledger::default());
+    /// How many times each file has been edited through the agent: a late report is dropped if the file has moved on.
+    static ref EDITS: StdMutex<HashMap<String, Arc<AtomicU64>>> = StdMutex::new(HashMap::new());
+}
+
+/// Whether an edit is formatted by the server before its errors are read: the `lspFormatOnWrite` setting, off unless the user turns it on.
+pub fn format_on_write_from(settings: &Value) -> bool {
+    settings.get("lspFormatOnWrite").and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
 fn extension_of(path: &str) -> Option<String> {
     Path::new(path).extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase())
 }
 
-/// Find the first candidate server binary for `language_id` that's on PATH.
-fn resolve_server(language_id: &str) -> Option<(&'static str, &'static [&'static str])> {
-    server_candidates(language_id).iter().find(|(cmd, _)| which::which(cmd).is_ok()).copied()
+fn config_digest(def: &ServerDef) -> u64 {
+    // FNV-1a over the pieces that change what the server does.
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in def.init_options.to_string().bytes().chain(def.settings.to_string().bytes()) {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
 }
 
-/// Get or lazily spawn the client for whichever language `path` belongs to.
-/// Returns `None` when the extension is unrecognized or no server is installed.
-async fn client_for(path: &str, root_dir: &str) -> Option<Arc<LspClient>> {
-    let ext = extension_of(path)?;
-    let language_id = super::language_id_for_extension(&ext)?;
-    let key = format!("{language_id}|{}", path_key(root_dir));
+/// The first server for `language_id` that is installed, with every definition tried and what was left out.
+fn resolve_server(language_id: &str, workspace: &str) -> (Option<ServerDef>, servers::Candidates) {
+    let c = servers::candidates(language_id, workspace);
+    let found = c.defs.iter().find(|d| which::which(&d.command).is_ok()).cloned();
+    (found, c)
+}
+
+/// Get or lazily start the client for whichever language `path` belongs to.
+async fn client_for(path: &str, workspace: &str) -> Result<Option<Arc<LspClient>>, String> {
+    let Some(ext) = extension_of(path) else { return Ok(None) };
+    let Some(language_id) = super::language_id_for_extension(&ext) else { return Ok(None) };
+    let (def, cands) = resolve_server(language_id, workspace);
+    for p in &cands.problems {
+        log::warn!("lsp: {p}");
+    }
+    let Some(def) = def else { return Ok(None) };
+    let root = servers::find_root(Path::new(path), workspace, &def.root_markers);
+    let key = format!("{language_id}|{}|{}|{:016x}", path_key(&root), def.line(), config_digest(&def));
 
     ensure_reaper();
     let slot = {
         let mut map = CLIENTS.lock().unwrap_or_else(|e| e.into_inner());
-        map.entry(key.clone()).or_insert_with(|| Arc::new(Slot { client: Mutex::new(None), last_used: StdMutex::new(Instant::now()), running: AtomicBool::new(false) })).clone()
+        map.entry(key.clone())
+            .or_insert_with(|| Arc::new(Slot { state: Mutex::new(State::Empty), last_used: StdMutex::new(Instant::now()), running: AtomicBool::new(false), language: language_id.to_string(), root: root.clone(), line: def.line() }))
+            .clone()
     };
     *slot.last_used.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
 
-    let mut guard = slot.client.lock().await;
-    if let Some(Some(c)) = guard.as_ref() {
-        if c.is_closed() {
-            *guard = None; // it died; start a fresh one
+    let mut guard = slot.state.lock().await;
+    match &*guard {
+        State::Up(c) if !c.is_closed() => return Ok(Some(c.clone())),
+        State::Failed(at, why) if at.elapsed() < START_RETRY => return Err(format!("{} did not start {}s ago ({why}); not retried for {} minutes", def.command, at.elapsed().as_secs(), START_RETRY.as_secs() / 60)),
+        _ => {}
+    }
+    let args: Vec<&str> = def.args.iter().map(|a| a.as_str()).collect();
+    match LspClient::spawn(&def.command, &args, &root, &def.init_options, &def.settings).await {
+        Ok(client) => {
+            *guard = State::Up(client.clone());
+            slot.running.store(true, Ordering::SeqCst);
+            drop(guard);
+            evict_over_cap(&key);
+            Ok(Some(client))
+        }
+        Err(e) => {
+            log::warn!("lsp: failed to start {} for {language_id}: {e}", def.command);
+            *guard = State::Failed(Instant::now(), e.clone());
+            slot.running.store(false, Ordering::SeqCst);
+            Err(format!("{} did not start: {e}", def.command))
         }
     }
-    if let Some(found) = guard.as_ref() {
-        return found.clone();
+}
+
+/// A started client, or why there isn't one.
+pub async fn client(path: &str, workspace: &str) -> Result<Arc<LspClient>, String> {
+    match client_for(path, workspace).await? {
+        Some(c) => Ok(c),
+        None => Err(no_server_message(path, workspace)),
     }
-    let spawned = match resolve_server(language_id) {
-        Some((cmd, args)) => match LspClient::spawn(cmd, args, root_dir).await {
-            Ok(client) => Some(client),
-            Err(e) => {
-                log::warn!("lsp: failed to start {cmd} for {language_id}: {e}");
-                None
-            }
-        },
-        None => None,
+}
+
+fn no_server_message(path: &str, workspace: &str) -> String {
+    let Some(language_id) = extension_of(path).and_then(|e| super::language_id_for_extension(&e)) else {
+        return "no language server handles this file type".into();
     };
-    *guard = Some(spawned.clone());
-    if spawned.is_some() {
-        slot.running.store(true, Ordering::SeqCst);
-        evict_over_cap(&key);
+    let c = servers::candidates(language_id, workspace);
+    let tried: Vec<String> = c.defs.iter().map(|d| d.command.clone()).collect();
+    let mut msg = if tried.is_empty() { format!("no language server is known for {language_id}") } else { format!("no language server for {language_id} is installed (tried {})", tried.join(", ")) };
+    if !c.ignored.is_empty() {
+        msg.push_str(&format!("; this project defines {} but it is ignored until the project is trusted", c.ignored.join(" and ")));
     }
-    spawned
+    msg
 }
 
 /// Shut down the server a slot holds, if it holds one.
 async fn stop_slot(slot: &Slot) {
-    if let Some(Some(c)) = slot.client.lock().await.take() {
+    let mut state = slot.state.lock().await;
+    if let State::Up(c) = std::mem::replace(&mut *state, State::Empty) {
         c.shutdown().await;
     }
+    slot.running.store(false, Ordering::SeqCst);
 }
 
 /// Stop the least recently used running server(s) beyond `MAX_SERVERS`, never the one just started.
@@ -149,6 +216,21 @@ pub async fn shutdown_all() {
     }
 }
 
+/// Stop every server rooted in `workspace` and forget failed starts, so the next use starts them afresh (a changed config, a newly installed server).
+pub async fn reload(workspace: &str) -> usize {
+    let ws = path_key(workspace);
+    let slots: Vec<Arc<Slot>> = {
+        let mut map = CLIENTS.lock().unwrap_or_else(|e| e.into_inner());
+        let keys: Vec<String> = map.iter().filter(|(_, s)| { let r = path_key(&s.root); r == ws || r.starts_with(&format!("{}/", ws.trim_end_matches('/'))) }).map(|(k, _)| k.clone()).collect();
+        keys.into_iter().filter_map(|k| map.remove(&k)).collect()
+    };
+    let n = slots.len();
+    for s in slots {
+        stop_slot(&s).await;
+    }
+    n
+}
+
 /// What a language server said about one file.
 pub enum Report {
     /// No server is installed for this file type.
@@ -159,34 +241,325 @@ pub enum Report {
     Published(Vec<Diagnostic>),
 }
 
-/// Like `diagnostics_for`, but tells "no server", "no answer yet" and "no problems" apart, and waits up to `wait` for the first report.
-pub async fn report(path: &str, root_dir: &str, wait: Duration) -> Report {
-    let Some(client) = client_for(path, root_dir).await else { return Report::NoServer };
+/// What an edit's check found, and, when the server hadn't answered, what to wait on afterwards.
+struct Outcome {
+    report: Report,
+    waiting: Option<(Arc<LspClient>, SyncMark)>,
+}
+
+async fn check(path: &str, root_dir: &str, wait: Duration) -> Outcome {
+    let client = match client_for(path, root_dir).await {
+        Ok(Some(c)) => c,
+        Ok(None) => return Outcome { report: Report::NoServer, waiting: None },
+        // A server that is installed but would not start is not a file without problems.
+        Err(e) => {
+            log::warn!("lsp: {e}");
+            return Outcome { report: Report::NoServer, waiting: None };
+        }
+    };
     // What the server said before this edit is not an answer about it: only a report for the text just sent counts.
     let mark = match client.touch_file(path).await {
         Ok(mark) => mark,
         Err(e) => {
             log::warn!("lsp: touch_file failed for {path}: {e}");
-            return Report::NotReported;
+            return Outcome { report: Report::NotReported, waiting: None };
         }
     };
     match client.fresh_report(path, &mark, wait).await {
-        Some(items) => Report::Published(items),
-        None => Report::NotReported,
+        Some(items) => Outcome { report: Report::Published(items), waiting: None },
+        None => Outcome { report: Report::NotReported, waiting: Some((client, mark)) },
     }
 }
 
-/// The text added to a write/edit/patch result: the file's errors, or a note when the server hadn't answered (so silence never reads as "clean").
+/// Like `diagnostics_for`, but tells "no server", "no answer yet" and "no problems" apart, and waits up to `wait` for the first report.
+pub async fn report(path: &str, root_dir: &str, wait: Duration) -> Report {
+    check(path, root_dir, wait).await.report
+}
+
+fn edit_counter(path: &str) -> Arc<AtomicU64> {
+    EDITS.lock().unwrap_or_else(|e| e.into_inner()).entry(path_key(path)).or_default().clone()
+}
+
+/// The text added to a write/edit/patch result: the errors that are new since the agent was last told, or a note when the server hadn't
+/// answered (so silence never reads as "clean"). A late answer comes back later as a notice in the thread, if the file hasn't changed again.
 pub async fn post_edit_block(path: &str, root_dir: &str) -> Option<String> {
-    match report(path, root_dir, Duration::from_millis(2500)).await {
-        Report::Published(items) => super::format_diagnostics(path, &items),
-        Report::NotReported => Some(format!("<diagnostics file=\"{path}\">\n(the language server hadn't reported yet; call diagnostics to check this file)\n</diagnostics>")),
+    let counter = edit_counter(path);
+    let edit = counter.fetch_add(1, Ordering::SeqCst) + 1;
+    if format_on_write_from(&crate::agent::tools::exec::read_settings_json().await) {
+        if let Err(e) = format_file(path, root_dir).await {
+            log::info!("lsp: not formatted: {e}");
+        }
+    }
+    let outcome = check(path, root_dir, INLINE_WAIT).await;
+    match outcome.report {
+        Report::Published(items) => block_for(path, &items),
         Report::NoServer => None,
+        Report::NotReported => {
+            let thread = crate::agent::orchestration::turn_thread();
+            let can_follow_up = thread.is_some() && crate::agent::orchestration::app().is_some();
+            if let (Some((client, mark)), true) = (outcome.waiting, can_follow_up) {
+                spawn_deferred(path.to_string(), client, mark, counter, edit, thread.unwrap_or_default());
+                Some(format!("<diagnostics file=\"{path}\">\n(the language server hadn't reported yet; if it finds errors they are sent to you as a note, or call lsp diagnostics for this file)\n</diagnostics>"))
+            } else {
+                Some(format!("<diagnostics file=\"{path}\">\n(the language server hadn't reported yet; call lsp diagnostics for this file)\n</diagnostics>"))
+            }
+        }
     }
 }
 
-/// A navigation query (`goToDefinition`, `findReferences`, `goToImplementation`, `hover`) at a 1-based `line` and character `col`.
-pub async fn query(op: &str, path: &str, root_dir: &str, line: u32, col: u32) -> Result<serde_json::Value, String> {
-    let client = client_for(path, root_dir).await.ok_or_else(|| "no language server is available for this file type".to_string())?;
-    client.query(op, path, line, col).await
+/// The block for a report, through the ledger: only what is new, with a count of what was already reported.
+fn block_for(path: &str, items: &[Diagnostic]) -> Option<String> {
+    let review = LEDGER.lock().unwrap_or_else(|e| e.into_inner()).review(&path_key(path), path, items);
+    if review.new.is_empty() {
+        return (review.repeated > 0).then(|| format!("<diagnostics file=\"{path}\">\n({} error{} already reported, nothing new)\n</diagnostics>", review.repeated, if review.repeated == 1 { "" } else { "s" }));
+    }
+    let note = (review.repeated > 0).then(|| format!("({} earlier error{} in this file unchanged)", review.repeated, if review.repeated == 1 { "" } else { "s" }));
+    super::format_with_note(path, &review.new, note.as_deref())
+}
+
+/// Wait longer for a report the edit could not wait for, and hand it to the thread when it comes — unless the file was edited again meanwhile
+/// (the report is about text that is gone) or the thread is not running (nobody is waiting; a turn is not started for a diagnostic).
+fn spawn_deferred(path: String, client: Arc<LspClient>, mark: SyncMark, counter: Arc<AtomicU64>, edit: u64, thread: String) {
+    tokio::spawn(async move {
+        let Some(items) = client.fresh_report(&path, &mark, DEFERRED_WAIT).await else { return };
+        if counter.load(Ordering::SeqCst) != edit {
+            return;
+        }
+        let Some(text) = block_for(&path, &items) else { return };
+        let Some(app) = crate::agent::orchestration::app() else { return };
+        let note = format!("Late language-server result for a file you edited:\n{text}");
+        if let Err(e) = crate::agent::thread_msgs::deliver_if_running(&app, &thread, &note).await {
+            log::info!("lsp: dropped a late report for {path}: {e}");
+        }
+    });
+}
+
+/// A navigation query (`goToDefinition`, `findReferences`, `goToImplementation`, `goToTypeDefinition`, `hover`) at a 1-based `line` and character `col`.
+pub async fn query(op: &str, path: &str, root_dir: &str, line: u32, col: u32) -> Result<Value, String> {
+    client(path, root_dir).await?.query(op, path, line, col).await
+}
+
+/// The symbols of one file (a tree or a flat list, as the server sends them), or, with `query` and no path, the workspace's.
+pub async fn symbols(path: &str, root_dir: &str, query: Option<&str>) -> Result<Value, String> {
+    let c = client(path, root_dir).await?;
+    match query {
+        Some(q) if !q.is_empty() => {
+            if !c.has("workspaceSymbolProvider").await {
+                return Err("this language server does not search workspace symbols".into());
+            }
+            c.call("workspace/symbol", json!({ "query": q })).await
+        }
+        _ => {
+            if !c.has("documentSymbolProvider").await {
+                return Err("this language server does not list a file's symbols".into());
+            }
+            c.touch_file(path).await?;
+            c.call("textDocument/documentSymbol", json!({ "textDocument": { "uri": path_to_uri(path) } })).await
+        }
+    }
+}
+
+/// Rename the symbol at a 1-based position everywhere the server finds it, applying the edit inside the workspace. Returns one line per change.
+pub async fn rename(path: &str, root_dir: &str, line: u32, col: u32, new_name: &str) -> Result<Vec<String>, String> {
+    if new_name.trim().is_empty() {
+        return Err("the new name is empty".into());
+    }
+    let c = client(path, root_dir).await?;
+    if !c.has("renameProvider").await {
+        return Err("this language server does not rename".into());
+    }
+    let mut params = c.position_params(path, line, col).await?;
+    params["newName"] = json!(new_name);
+    let edit = c.call("textDocument/rename", params).await?;
+    if edit.is_null() {
+        return Err("the server found nothing to rename at that position".into());
+    }
+    apply_and_refresh(&c, root_dir, &edit).await
+}
+
+async fn apply_and_refresh(c: &LspClient, root_dir: &str, edit: &Value) -> Result<Vec<String>, String> {
+    let done = super::edits::apply_workspace_edit(root_dir, edit).await?;
+    for p in super::edits::touched(edit) {
+        c.refresh(&p).await;
+    }
+    Ok(done)
+}
+
+/// What a code-action request lists: the title, the kind, and whether it changes files itself.
+pub async fn code_actions(path: &str, root_dir: &str, line: u32, col: u32, end_line: Option<u32>, end_col: Option<u32>) -> Result<Vec<Value>, String> {
+    let c = client(path, root_dir).await?;
+    if !c.has("codeActionProvider").await {
+        return Err("this language server offers no code actions".into());
+    }
+    let start = c.position_params(path, line, col).await?;
+    let pos = start["position"].clone();
+    let end = match (end_line, end_col) {
+        (Some(l), Some(ec)) => c.position_params(path, l, ec).await?["position"].clone(),
+        _ => pos.clone(),
+    };
+    let diagnostics: Vec<Value> = c.diagnostics.lock().await.get(&path_key(path)).map(|p| p.items.iter().filter(|d| d.range.start.line == pos["line"].as_u64().unwrap_or(0) as u32).filter_map(|d| serde_json::to_value(d).ok()).collect()).unwrap_or_default();
+    let result = c.call("textDocument/codeAction", json!({ "textDocument": { "uri": path_to_uri(path) }, "range": { "start": pos, "end": end }, "context": { "diagnostics": diagnostics } })).await?;
+    Ok(result.as_array().cloned().unwrap_or_default())
+}
+
+/// Run the `index`th action `code_actions` listed for the same position: its edit is applied inside the workspace, and a command is sent to the
+/// server (which asks us to apply what it changes).
+pub async fn apply_code_action(path: &str, root_dir: &str, line: u32, col: u32, end_line: Option<u32>, end_col: Option<u32>, index: usize) -> Result<Vec<String>, String> {
+    let actions = code_actions(path, root_dir, line, col, end_line, end_col).await?;
+    let mut action = actions.get(index).cloned().ok_or_else(|| format!("there is no action {index} (the server listed {})", actions.len()))?;
+    let c = client(path, root_dir).await?;
+    if action.get("edit").is_none() && action.get("command").is_none() && c.has("codeActionProvider").await {
+        // Lazily filled: ask the server to finish it.
+        if let Ok(full) = c.call("codeAction/resolve", action.clone()).await {
+            if !full.is_null() {
+                action = full;
+            }
+        }
+    }
+    let mut done = Vec::new();
+    if let Some(edit) = action.get("edit").filter(|e| !e.is_null()) {
+        done.extend(apply_and_refresh(&c, root_dir, edit).await?);
+    }
+    if let Some(cmd) = action.get("command").filter(|c| c.is_object()) {
+        // A bare `Command` has the name in "command"; a `CodeAction` holds one as an object.
+        c.call("workspace/executeCommand", json!({ "command": cmd["command"], "arguments": cmd.get("arguments").cloned().unwrap_or(json!([])) })).await?;
+        done.push(format!("ran the server's command {}", cmd["command"].as_str().unwrap_or("")));
+    } else if let Some(name) = action.get("command").and_then(|c| c.as_str()) {
+        c.call("workspace/executeCommand", json!({ "command": name, "arguments": action.get("arguments").cloned().unwrap_or(json!([])) })).await?;
+        done.push(format!("ran the server's command {name}"));
+    }
+    if done.is_empty() {
+        return Err("that action changes nothing".into());
+    }
+    Ok(done)
+}
+
+/// Move a file, letting the server fix what refers to it first when it can (`workspace/willRenameFiles`).
+pub async fn rename_file(from: &str, to: &str, root_dir: &str) -> Result<Vec<String>, String> {
+    for p in [from, to] {
+        if !super::edits::inside_root(Path::new(p), root_dir) {
+            return Err(format!("{p} is outside the workspace"));
+        }
+    }
+    if !Path::new(from).exists() {
+        return Err(format!("{from} does not exist"));
+    }
+    if Path::new(to).exists() {
+        return Err(format!("{to} already exists"));
+    }
+    let mut done = Vec::new();
+    let c = client_for(from, root_dir).await.ok().flatten();
+    let files = json!({ "files": [{ "oldUri": path_to_uri(from), "newUri": path_to_uri(to) }] });
+    let will = match &c {
+        Some(c) if c.capabilities().await.pointer("/workspace/fileOperations/willRename").is_some() => c.call("workspace/willRenameFiles", files.clone()).await.ok().filter(|v| !v.is_null()),
+        _ => None,
+    };
+    if let (Some(c), Some(edit)) = (&c, &will) {
+        done.extend(apply_and_refresh(c, root_dir, edit).await?);
+    }
+    if let Some(dir) = Path::new(to).parent() {
+        tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
+    }
+    tokio::fs::rename(from, to).await.map_err(|e| format!("can't move {from}: {e}"))?;
+    done.push(format!("moved {from} to {to}"));
+    if let Some(c) = &c {
+        let _ = c.call("workspace/didRenameFiles", files).await;
+    }
+    if will.is_none() {
+        done.push("the server did not update references to the file; check the imports".into());
+    }
+    Ok(done)
+}
+
+/// Format a file with its server, using the file's `.editorconfig` or its own indentation. `Ok(false)`: it was already formatted.
+pub async fn format_file(path: &str, root_dir: &str) -> Result<bool, String> {
+    let c = client(path, root_dir).await?;
+    if !c.has("documentFormattingProvider").await {
+        return Err("this language server does not format".into());
+    }
+    let text = tokio::fs::read_to_string(path).await.map_err(|e| format!("can't read {path}: {e}"))?;
+    c.touch_file(path).await?;
+    let options = super::edits::formatting_options(Path::new(path), &text, root_dir);
+    let result = c.call("textDocument/formatting", json!({ "textDocument": { "uri": path_to_uri(path) }, "options": options })).await?;
+    let edits = result.as_array().cloned().unwrap_or_default();
+    if edits.is_empty() {
+        return Ok(false);
+    }
+    let formatted = super::edits::apply_text_edits(&text, &edits)?;
+    if formatted == text {
+        return Ok(false);
+    }
+    crate::agent::tools::files::guard::write_atomic(Path::new(path), formatted.as_bytes()).await.map_err(|e| e.to_string())?;
+    c.refresh(path).await;
+    Ok(true)
+}
+
+/// A request the tools do not wrap, sent as given.
+pub async fn raw_request(path: &str, root_dir: &str, method: &str, params: Value) -> Result<Value, String> {
+    client(path, root_dir).await?.call(method, params).await
+}
+
+/// What is running, what failed, and what a project defines that is not in use.
+pub async fn status(workspace: &str) -> String {
+    let slots: Vec<Arc<Slot>> = CLIENTS.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect();
+    let mut lines = Vec::new();
+    for s in slots {
+        let age = s.last_used.lock().unwrap_or_else(|e| e.into_inner()).elapsed().as_secs();
+        match &*s.state.lock().await {
+            State::Up(c) if !c.is_closed() => lines.push(format!("running  {} ({}) at {} — {} file(s) open, used {age}s ago", s.language, s.line, s.root, c.open_files().await.len())),
+            State::Up(_) => lines.push(format!("exited   {} ({}) at {}", s.language, s.line, s.root)),
+            State::Failed(at, why) => lines.push(format!("failed   {} ({}) at {} — {why}; retried after {}s", s.language, s.line, s.root, START_RETRY.as_secs().saturating_sub(at.elapsed().as_secs()))),
+            State::Empty => {}
+        }
+    }
+    lines.sort();
+    if lines.is_empty() {
+        lines.push("no language server is running".into());
+    }
+    if let Ok(text) = std::fs::read_to_string(Path::new(workspace).join(".viv").join("lsp.json")) {
+        let trusted = crate::mods::project_trusted(workspace);
+        let defined: Vec<String> = serde_json::from_str::<Value>(&text).ok().and_then(|v| v.get("servers").and_then(|s| s.as_object()).cloned()).map(|m| m.keys().flat_map(|lang| servers::from_config(&text, lang, servers::Source::Project).unwrap_or_default().into_iter().map(move |d| format!("{lang}: {}", d.line()))).collect()).unwrap_or_default();
+        if !defined.is_empty() {
+            lines.push(if trusted { format!("project definitions in use: {}", defined.join("; ")) } else { format!("project definitions IGNORED until the project is trusted: {}", defined.join("; ")) });
+        }
+    }
+    lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_on_write_is_off_unless_asked_for() {
+        assert!(!format_on_write_from(&json!({})));
+        assert!(!format_on_write_from(&json!({ "lspFormatOnWrite": "yes" })));
+        assert!(format_on_write_from(&json!({ "lspFormatOnWrite": true })));
+    }
+
+    #[test]
+    fn a_server_with_other_settings_is_another_server() {
+        let mut a = ServerDef { command: "x".into(), args: vec![], root_markers: vec![], init_options: Value::Null, settings: Value::Null, source: servers::Source::User };
+        let b = a.clone();
+        a.settings = json!({ "strict": true });
+        assert_ne!(config_digest(&a), config_digest(&b));
+        a.settings = Value::Null;
+        a.init_options = json!({ "x": 1 });
+        assert_ne!(config_digest(&a), config_digest(&b));
+        assert_eq!(config_digest(&b), config_digest(&b.clone()));
+    }
+
+    #[test]
+    fn a_second_report_shows_only_what_is_new() {
+        let d = |m: &str| Diagnostic { range: super::super::Range { start: super::super::Position { line: 0, character: 0 }, end: super::super::Position { line: 0, character: 1 } }, severity: Some(1), message: m.into(), source: None, code: None };
+        let f = "/w/ledger-test.rs";
+        let first = block_for(f, &[d("one")]).unwrap();
+        assert!(first.contains("one"));
+        let second = block_for(f, &[d("one"), d("two")]).unwrap();
+        assert!(second.contains("two") && !second.contains("] one") && second.contains("1 earlier error in this file unchanged"), "{second}");
+        let third = block_for(f, &[d("one"), d("two")]).unwrap();
+        assert!(third.contains("2 errors already reported, nothing new"), "{third}");
+        assert!(block_for(f, &[]).is_none(), "clean");
+        assert!(block_for(f, &[d("one")]).unwrap().contains("one"), "an error that comes back is told again");
+    }
 }

@@ -117,6 +117,19 @@ pub async fn deliver_note(app: &tauri::AppHandle, thread: &str, text: &str) -> R
     Ok(())
 }
 
+/// Queue a note for a thread only if a turn is running on it (the agent sees it at its next step). An idle thread gets nothing: a late
+/// diagnostic is not worth waking a model for, and nobody is waiting on it.
+pub async fn deliver_if_running(app: &tauri::AppHandle, thread: &str, text: &str) -> Result<(), String> {
+    let registry = app.state::<AgentRegistry>();
+    let target = registry.resolve(if thread.is_empty() { None } else { Some(thread) }).await;
+    if target.is_idle() {
+        return Err("the thread is not running".into());
+    }
+    target.follow_up_queue.write().await.push(AgentMessage::User { content: vec![MessageContent::Text { text: text.to_string() }], timestamp: crate::agent::runtime::commands::now_ms() });
+    crate::agent::runtime::inbox::persist(if thread.is_empty() { None } else { Some(thread) }, &target.steering_queue, &target.follow_up_queue).await;
+    Ok(())
+}
+
 /// One line per thread: id, title, project, whether it is running, and whose child it is.
 pub fn format_threads(rows: &[crate::agent::orchestration::ThreadRow], projects: &HashMap<String, String>, running: &dyn Fn(&str) -> bool, me: &str) -> String {
     if rows.is_empty() {

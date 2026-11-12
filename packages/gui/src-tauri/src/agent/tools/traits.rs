@@ -38,7 +38,7 @@ pub fn effect(tool: &str) -> Option<Effect> {
         "question" | "confirm_action" | "todo_write" | "submit_plan" | "present_snippet" | "present" | "message_agent" | "message_parent"
         | "team_post" | "pair_activity" | "message_thread" | "ask_thread" => Talk,
         "task" | "team_run" | "kill_task" | "interrupt_agent" | "hire_agent" | "assign_plan_steps" | "ask_agent" | "spawn_thread" => Delegate,
-        "write" | "edit" | "apply_patch" | "notebook_edit" | "create_document" | "edit_document" | "generate_image" | "remember"
+        "write" | "edit" | "apply_patch" | "lsp_edit" | "notebook_edit" | "create_document" | "edit_document" | "generate_image" | "remember"
         | "create_goal" | "update_goal" | "create_automation" | "delete_automation" | "set_automation_enabled" | "create_tool"
         | "delete_tool" | "repo_clone" => Change,
         "bash" | "powershell" | "run_script" | "run_native" | "sandbox_execute" | "terminal" | "connect_mcp_server" | "debug_run" => Run,

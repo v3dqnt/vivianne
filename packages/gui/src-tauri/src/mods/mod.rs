@@ -303,6 +303,13 @@ pub async fn cmd_mods_set_enabled(key: String, enabled: bool) -> Result<(), Stri
     Ok(())
 }
 
+/// Whether the user has trusted this project folder: what a project's own files ask Vivianne to run (its mods, its language-server
+/// definitions) counts only once they have.
+pub fn project_trusted(project: &str) -> bool {
+    let wanted = std::path::Path::new(project).to_string_lossy().to_string();
+    read_state().trusted_projects.iter().any(|p| std::path::Path::new(p).to_string_lossy() == wanted)
+}
+
 /// Trust (or stop trusting) the mods in a project folder.
 #[tauri::command]
 pub async fn cmd_mods_trust_project(project: String, trusted: bool) -> Result<(), String> {

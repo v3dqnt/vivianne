@@ -69,6 +69,7 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         Box::new(TodoWriteTool::new()),
         Box::new(DiagnosticsTool::new(cwd.clone())),
         Box::new(crate::agent::tools::lsp_nav::LspTool::new(cwd.clone())),
+        Box::new(crate::agent::tools::lsp_nav::LspEditTool::new(cwd.clone())),
         // ── Grok-parity: subagent orchestration ────────────────────────────
         // No `task` entry here: it is in `exec::AGENT_TOOLS`, which the loop
         // consults before this registry, so a

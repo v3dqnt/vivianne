@@ -748,7 +748,7 @@ pub async fn launch(thread: &str, program: &str, cwd: &str, args: &[String], ada
         old.terminate().await;
     }
     let resolved = super::config::select(program, adapter)?;
-    let (client, events) = DapClient::spawn(&resolved.command, &resolved.args, cwd).await?;
+    let (client, events) = if resolved.adapter.listen { DapClient::spawn_listening(&resolved.command, &resolved.args, cwd).await? } else { DapClient::spawn(&resolved.command, &resolved.args, cwd).await? };
     let id = format!("debug-{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
     let launch_args = super::config::launch_arguments(resolved.adapter, program, cwd, args);
     let session = Session::start(id, resolved.adapter.name, program, cwd, client, events, launch_args, breakpoints).await?;
