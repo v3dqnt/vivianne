@@ -1193,6 +1193,13 @@ pub async fn cmd_agent_session_stats(
 
     let context_tokens = calculate_context_tokens(&messages);
     let context_window = model.context_window.max(1);
+    // A coding agent keeps the conversation in its own session and says how
+    // full it is: its figure, not an estimate from the messages Vivianne kept.
+    let from_agent = if model.provider == crate::agent::harness::PROVIDER { crate::agent::harness::context_usage(threadId.as_deref().unwrap_or("")) } else { None };
+    let (context_tokens, context_window) = match from_agent {
+        Some((used, size)) => (used.min(u32::MAX as u64) as u32, size.clamp(1, u32::MAX as u64) as u32),
+        None => (context_tokens, context_window),
+    };
     let context_percent =
         ((context_tokens as f64 / context_window as f64) * 100.0).min(100.0);
 

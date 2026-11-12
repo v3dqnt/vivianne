@@ -409,6 +409,7 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::harness::cmd_harness_trace,
       crate::agent::harness::cmd_harness_reset,
       crate::agent::runtime::commands::cmd_agent_answer_question,
+      crate::agent::harness::cmd_harness_session_info,
       crate::agent::runtime::commands::cmd_agent_respond_confirmation,
       crate::agent::runtime::commands::cmd_memory_status,
       crate::agent::runtime::commands::cmd_memory_enable,

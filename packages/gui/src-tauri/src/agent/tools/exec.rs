@@ -779,8 +779,15 @@ async fn describe_sensitive(tc: &AgentToolCall) -> Option<String> {
 /// Ask the user about a call and wait for the answer (15 minutes at most, so
 /// a closed window can't hang the turn). `false` when refused or unanswered.
 pub(crate) async fn ask_permission(emit: &EventSender, tc: &AgentToolCall, reason: Option<String>) -> bool {
+    ask_permission_unless(emit, tc, reason, &std::sync::atomic::AtomicBool::new(false)).await.unwrap_or(false)
+}
+
+/// `ask_permission` for a caller that must not be held up by the dialog: it
+/// gives up when `stop` is set (Stop pressed), withdraws the card, and returns
+/// `None`. `Some(false)` is a refusal or the 15 minutes running out.
+pub(crate) async fn ask_permission_unless(emit: &EventSender, tc: &AgentToolCall, reason: Option<String>, stop: &std::sync::atomic::AtomicBool) -> Option<bool> {
     let request_id = uuid::Uuid::new_v4().to_string();
-    let (tx, rx) = oneshot::channel();
+    let (tx, mut rx) = oneshot::channel();
     if let Ok(mut pending) = PENDING_PERMISSIONS.lock() {
         pending.insert(request_id.clone(), tx);
     }
@@ -791,17 +798,59 @@ pub(crate) async fn ask_permission(emit: &EventSender, tc: &AgentToolCall, reaso
         args: tc.arguments.clone(),
         reason,
     });
-    let approved = match tokio::time::timeout(std::time::Duration::from_secs(900), rx).await {
-        Ok(Ok(approved)) => approved,
-        _ => {
-            if let Ok(mut pending) = PENDING_PERMISSIONS.lock() {
-                pending.remove(&request_id);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(900);
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(200));
+    let answer = loop {
+        tokio::select! {
+            r = &mut rx => break Some(r.unwrap_or(false)),
+            _ = tick.tick() => {
+                if stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    break None;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    break Some(false);
+                }
             }
-            false
         }
     };
-    emit.emit(AgentEvent::PermissionResolved { request_id, approved });
-    approved
+    if let Ok(mut pending) = PENDING_PERMISSIONS.lock() {
+        pending.remove(&request_id);
+    }
+    emit.emit(AgentEvent::PermissionResolved { request_id, approved: answer == Some(true) });
+    answer
+}
+
+/// Put questions to the user for something that is not a tool call of ours (a
+/// coding agent's form) and wait for the answers, one list of chosen labels
+/// per question. Gives up when `stop` is set (`None`); 30 minutes at most,
+/// after which every question comes back unanswered (an empty list).
+pub(crate) async fn ask_questions_unless(emit: &EventSender, tool_call_id: &str, questions: Vec<QuestionSpec>, stop: &std::sync::atomic::AtomicBool) -> Option<Vec<Vec<String>>> {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let (tx, mut rx) = oneshot::channel();
+    if let Ok(mut pending) = PENDING_QUESTIONS.lock() {
+        pending.insert(request_id.clone(), tx);
+    }
+    emit.emit(AgentEvent::QuestionAsked { request_id: request_id.clone(), tool_call_id: tool_call_id.to_string(), questions: questions.clone() });
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1800);
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(200));
+    let answers = loop {
+        tokio::select! {
+            r = &mut rx => break Some(r.unwrap_or_else(|_| vec![Vec::new(); questions.len()])),
+            _ = tick.tick() => {
+                if stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    break None;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    break Some(vec![Vec::new(); questions.len()]);
+                }
+            }
+        }
+    };
+    if let Ok(mut pending) = PENDING_QUESTIONS.lock() {
+        pending.remove(&request_id);
+    }
+    emit.emit(AgentEvent::QuestionResolved { request_id });
+    answers
 }
 
 /// Set in a result's `details` when the tool itself said it failed.

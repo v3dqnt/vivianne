@@ -600,6 +600,11 @@ pub async fn cmd_thread_consumed_work(#[allow(non_snake_case)] threadId: String)
 static STORE: OnceLock<Mutex<Option<Store>>> = OnceLock::new();
 static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
 
+/// The app handle, once the app has started: none in a test or a headless run.
+pub(crate) fn app() -> Option<tauri::AppHandle> {
+    APP.get().cloned()
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
