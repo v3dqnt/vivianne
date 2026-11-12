@@ -43,6 +43,7 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("inspect_document", "read a Word, Excel or PowerPoint file"),
     ("edit_document", "change a Word, Excel or PowerPoint file"),
     ("user_browser_driver", "drive the user's own browser, signed in as them"),
+    ("debug", "look at a program being debugged in this thread: its stack, variables and output (read-only; it cannot start or steer one)"),
     ("lsp", "ask a language server: definitions, references, types, symbols, and the errors in a file (read-only)"),
 ];
 

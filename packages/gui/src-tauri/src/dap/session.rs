@@ -2011,4 +2011,265 @@ mod tests {
         let _keep_open = server.await.unwrap();
         session.terminate().await;
     }
+
+    // ── the rest of what a serious debugger needs ──
+
+    fn rich_caps() -> Value {
+        let mut c = full_caps();
+        for k in [
+            "supportsHitConditionalBreakpoints", "supportsLogPoints", "supportsInstructionBreakpoints", "supportsDataBreakpoints", "supportsExceptionInfoRequest", "supportsRestartRequest", "supportsGotoTargetsRequest",
+            "supportsCompletionsRequest", "supportsSteppingGranularity", "supportsModulesRequest", "supportsLoadedSourcesRequest", "supportsDisassembleRequest", "supportsReadMemoryRequest", "supportsWriteMemoryRequest",
+        ] {
+            c[k] = json!(true);
+        }
+        c
+    }
+
+    #[tokio::test]
+    async fn log_points_and_hit_counts_are_sent_only_to_adapters_that_offer_them() {
+        let (session, _adapter, _) = started(full_caps(), breakpoints_arg()).await;
+        let e = session.set_breakpoint_with("/w/app.py", 9, BpOpts { log_message: Some("x={x}".into()), ..Default::default() }).await.unwrap_err();
+        assert!(e.contains("does not support log points"), "{e}");
+        let e = session.set_breakpoint_with("/w/app.py", 9, BpOpts { hit_condition: Some("> 2".into()), ..Default::default() }).await.unwrap_err();
+        assert!(e.contains("hit conditions"), "{e}");
+
+        let (session, mut adapter, _) = started(rich_caps(), breakpoints_arg()).await;
+        let s = session.clone();
+        let call = tokio::spawn(async move { s.set_breakpoint_with("/w/app.py", 9, BpOpts { condition: None, hit_condition: Some("> 2".into()), log_message: Some("x={x}".into()) }).await });
+        let req = adapter.expect("setBreakpoints").await;
+        let items = req["arguments"]["breakpoints"].as_array().unwrap().clone();
+        assert_eq!((items[0]["line"].clone(), items[1]["line"].clone(), items[1]["hitCondition"].clone(), items[1]["logMessage"].clone()), (json!(3), json!(9), json!("> 2"), json!("x={x}")));
+        adapter.respond(&req, json!({ "breakpoints": [{ "id": 1, "verified": true }, { "id": 2, "verified": true }] })).await;
+        let list = call.await.unwrap().unwrap();
+        assert_eq!((list[1].hit_condition.as_deref(), list[1].log_message.as_deref()), (Some("> 2"), Some("x={x}")));
+    }
+
+    #[tokio::test]
+    async fn instruction_and_data_breakpoints_use_the_adapters_own_ids() {
+        let (session, mut adapter, _) = started(full_caps(), breakpoints_arg()).await;
+        assert!(session.set_instruction_breakpoint("0x10", None, None, None).await.unwrap_err().contains("does not support instruction breakpoints"));
+        assert!(session.data_breakpoint_info("x", None, None).await.unwrap_err().contains("does not support data breakpoints"));
+
+        let (session, mut adapter2, _) = started(rich_caps(), breakpoints_arg()).await;
+        let s = session.clone();
+        let call = tokio::spawn(async move { s.set_instruction_breakpoint("0x4010", Some(4), Some("rax == 1".into()), None).await });
+        let req = adapter2.expect("setInstructionBreakpoints").await;
+        assert_eq!((req["arguments"]["breakpoints"][0]["instructionReference"].clone(), req["arguments"]["breakpoints"][0]["offset"].clone()), (json!("0x4010"), json!(4)));
+        adapter2.respond(&req, json!({ "breakpoints": [{ "id": 5, "verified": true }] })).await;
+        assert!(call.await.unwrap().unwrap()[0].verified);
+
+        let s = session.clone();
+        let call = tokio::spawn(async move { s.data_breakpoint_info("counter", Some(6), None).await });
+        let req = adapter2.expect("dataBreakpointInfo").await;
+        assert_eq!((req["arguments"]["variablesReference"].clone(), req["arguments"]["frameId"].clone()), (json!(6), json!(100)), "the top frame, when none is named");
+        adapter2.respond(&req, json!({ "dataId": "d-1", "description": "counter (int)", "accessTypes": ["write", "readWrite"] })).await;
+        let info = call.await.unwrap().unwrap();
+        assert_eq!((info.data_id.as_deref(), info.access_types.len()), (Some("d-1"), 2));
+
+        let s = session.clone();
+        let call = tokio::spawn(async move { s.set_data_breakpoint("d-1", Some("write".into()), None, None).await });
+        let req = adapter2.expect("setDataBreakpoints").await;
+        adapter2.respond(&req, json!({ "breakpoints": [{ "id": 9, "verified": false, "message": "not now" }] })).await;
+        let list = call.await.unwrap().unwrap();
+        assert_eq!((list[0].verified, list[0].message.as_deref()), (false, Some("not now")));
+        // Removing what was never set says so, and sends nothing.
+        assert!(session.remove_data_breakpoint("other").await.unwrap_err().contains("no data breakpoint"));
+        let _ = &mut adapter;
+    }
+
+    #[tokio::test]
+    async fn an_exception_says_what_it_was_and_memory_is_decoded_and_bounded() {
+        let (session, mut adapter, _) = started(rich_caps(), breakpoints_arg()).await;
+        let s = session.clone();
+        let call = tokio::spawn(async move { s.exception_info().await });
+        let req = adapter.expect("exceptionInfo").await;
+        assert_eq!(req["arguments"]["threadId"], 1);
+        adapter.respond(&req, json!({ "exceptionId": "ValueError", "description": "bad value", "breakMode": "unhandled", "details": { "message": "x must be positive", "typeName": "ValueError", "stackTrace": "at f()" } })).await;
+        let e = call.await.unwrap().unwrap();
+        assert_eq!((e.id.as_str(), e.break_mode.as_str()), ("ValueError", "unhandled"));
+        assert!(e.detail.contains("message: x must be positive") && e.detail.contains("stack: at f()"), "{}", e.detail);
+
+        let s = session.clone();
+        let call = tokio::spawn(async move { s.read_memory("0x1000", 0, 1_000_000).await });
+        let req = adapter.expect("readMemory").await;
+        assert_eq!(req["arguments"]["count"], MAX_MEMORY_BYTES, "one call reads a bounded amount");
+        adapter.respond(&req, json!({ "address": "0x1000", "data": "AQID", "unreadableBytes": 1 })).await;
+        let (address, bytes, unreadable) = call.await.unwrap().unwrap();
+        assert_eq!((address.as_str(), bytes, unreadable), ("0x1000", vec![1u8, 2, 3], 1));
+
+        let too_big = "A".repeat(((MAX_MEMORY_BYTES as usize + 8) / 3 + 1) * 4);
+        assert!(session.write_memory("0x1000", 0, &too_big, false).await.unwrap_err().contains("at most"));
+        assert!(session.write_memory("0x1000", 0, "not base64!", false).await.unwrap_err().contains("base64"));
+    }
+
+    #[tokio::test]
+    async fn a_jump_asks_for_targets_then_goes_and_waits_for_the_stop() {
+        let (session, mut adapter, _) = started(rich_caps(), breakpoints_arg()).await;
+        let s = session.clone();
+        let call = tokio::spawn(async move { s.goto("/w/app.py", 5, Duration::from_secs(3)).await });
+        let req = adapter.expect("gotoTargets").await;
+        assert_eq!((req["arguments"]["source"]["path"].clone(), req["arguments"]["line"].clone()), (json!("/w/app.py"), json!(5)));
+        adapter.respond(&req, json!({ "targets": [{ "id": 7, "label": "line 5", "line": 5 }] })).await;
+        let req = adapter.expect("goto").await;
+        assert_eq!((req["arguments"]["threadId"].clone(), req["arguments"]["targetId"].clone()), (json!(1), json!(7)));
+        adapter.respond(&req, json!({})).await;
+        adapter.event("stopped", json!({ "reason": "goto", "threadId": 1 })).await;
+        let trace = adapter.expect("stackTrace").await;
+        adapter.respond(&trace, json!({ "stackFrames": [{ "id": 101, "name": "main", "source": { "path": "/w/app.py" }, "line": 5, "column": 1 }], "totalFrames": 1 })).await;
+        match call.await.unwrap().unwrap() {
+            Outcome::Stopped(stop) => assert_eq!((stop.reason.as_str(), stop.frame.map(|f| f.line)), ("goto", Some(5))),
+            other => panic!("{other:?}"),
+        }
+        // With no target the adapter offers, nothing is sent after.
+        let s = session.clone();
+        let call = tokio::spawn(async move { s.goto("/w/app.py", 99, Duration::from_millis(200)).await });
+        let req = adapter.expect("gotoTargets").await;
+        adapter.respond(&req, json!({ "targets": [] })).await;
+        assert!(call.await.unwrap().unwrap_err().contains("no place to jump"));
+    }
+
+    #[tokio::test]
+    async fn invalidated_drops_what_was_read_and_capabilities_widen_what_is_offered() {
+        let (session, mut adapter, _) = started(full_caps(), breakpoints_arg()).await;
+        assert!(session.current_stop().and_then(|s| s.frame).is_some());
+        assert!(!session.capability("supportsLogPoints"));
+        adapter.event("invalidated", json!({ "areas": ["variables"] })).await;
+        adapter.event("capabilities", json!({ "capabilities": { "supportsLogPoints": true } })).await;
+        for _ in 0..50 {
+            if session.capability("supportsLogPoints") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(session.capability("supportsLogPoints"), "the adapter said it can now");
+        assert!(session.current_stop().and_then(|s| s.frame).is_some(), "variables changed, the stack did not");
+        adapter.event("invalidated", json!({ "areas": ["stacks"] })).await;
+        for _ in 0..50 {
+            if session.current_stop().map(|s| s.frame.is_none()).unwrap_or(false) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(session.current_stop().unwrap().frame.is_none(), "the stack was invalidated: it is read again, not trusted");
+    }
+
+    #[tokio::test]
+    async fn a_step_granularity_is_checked_before_anything_is_sent() {
+        let (session, _adapter, _) = started(full_caps(), breakpoints_arg()).await;
+        let e = session.resume_with("next", Duration::from_millis(100), StepOpts { granularity: Some("instruction".into()), single_thread: false }).await.unwrap_err();
+        assert!(e.contains("step granularity"), "{e}");
+        let (session, _adapter, _) = started(rich_caps(), breakpoints_arg()).await;
+        assert!(session.resume_with("next", Duration::from_millis(100), StepOpts { granularity: Some("word".into()), single_thread: false }).await.unwrap_err().contains("statement, line or instruction"));
+        assert!(session.resume_with("continue", Duration::from_millis(100), StepOpts { granularity: Some("line".into()), single_thread: false }).await.unwrap_err().contains("applies to steps"));
+        assert_eq!(session.status(), Status::Stopped, "nothing was sent, so nothing changed");
+    }
+
+    #[test]
+    fn a_child_session_that_runs_something_else_is_put_to_the_user() {
+        let ask = |v: Value| Session::child_needs_approval(&v, "/w/app.js");
+        // Attaching to a process the launch already started needs no question, nor does running the same program.
+        assert_eq!(ask(json!({ "request": "attach", "configuration": { "type": "pwa-node", "__pendingTargetId": "x" } })), None);
+        assert_eq!(ask(json!({ "request": "launch", "configuration": { "program": "/w/app.js" } })), None);
+        assert_eq!(ask(json!({ "request": "launch", "configuration": { "type": "pwa-node" } })), None);
+        // Something else is asked about, with what it would run.
+        let q = ask(json!({ "request": "launch", "configuration": { "program": "/tmp/other.js", "args": ["--x"] } })).unwrap();
+        assert!(q.contains("/tmp/other.js --x"), "{q}");
+        let q = ask(json!({ "request": "launch", "configuration": { "runtimeExecutable": "/usr/bin/curl", "program": "/w/app.js" } })).unwrap();
+        assert!(q.contains("/usr/bin/curl"), "an executable of its own is always asked about: {q}");
+    }
+
+    /// A session whose adapter may ask for programs to be run, started against a scripted adapter; returns it with the adapter's end.
+    async fn started_with_approver(approver: Approver) -> (Arc<Session>, Adapter) {
+        let (client, events, mut adapter) = scripted();
+        let script = tokio::spawn(async move {
+            let init = adapter.expect("initialize").await;
+            assert_eq!(init["arguments"]["supportsRunInTerminalRequest"], true, "offered only when someone can be asked");
+            adapter.respond(&init, json!({ "supportsConfigurationDoneRequest": true })).await;
+            let launch = adapter.expect("launch").await;
+            adapter.event("initialized", json!({})).await;
+            let done = adapter.expect("configurationDone").await;
+            adapter.respond(&done, Value::Null).await;
+            adapter.respond(&launch, Value::Null).await;
+            adapter.event("stopped", json!({ "reason": "entry", "threadId": 1 })).await;
+            let trace = adapter.expect("stackTrace").await;
+            adapter.respond(&trace, json!({ "stackFrames": [], "totalFrames": 0 })).await;
+            adapter
+        });
+        let mut sp = spec("debug-term", "mock", false, "/w/app.py", json!({}), vec![]);
+        sp.approver = Some(approver);
+        let session = Session::start(sp, client, events).await.expect("a session");
+        (session, script.await.unwrap())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_program_the_adapter_asks_to_run_runs_only_if_allowed_and_ends_with_the_session() {
+        let asked = Arc::new(StdMutex::new(Vec::<String>::new()));
+        let seen = asked.clone();
+        let (allow, deny): (Approver, Approver) = (
+            Arc::new(move |what| {
+                seen.lock().unwrap().push(what);
+                Box::pin(async { true })
+            }),
+            Arc::new(|_| Box::pin(async { false })),
+        );
+        let (session, mut adapter) = started_with_approver(allow).await;
+        adapter.send_raw(json!({ "seq": 55, "type": "request", "command": "runInTerminal", "arguments": { "kind": "integrated", "cwd": "/tmp", "args": ["sh", "-c", "echo hello-from-terminal; echo \"[$FOO|${HOME-unset}]\""], "env": { "FOO": "1", "HOME": null } } })).await;
+        let reply = loop {
+            let m = adapter.recv().await;
+            if m["type"] == "response" && m["request_seq"] == 55 {
+                break m;
+            }
+        };
+        assert_eq!(reply["success"], true);
+        assert!(reply["body"]["processId"].as_u64().is_some(), "{reply}");
+        assert!(asked.lock().unwrap()[0].contains("sh -c") && asked.lock().unwrap()[0].contains("/tmp"), "the user is shown the command in full: {:?}", asked.lock().unwrap());
+        for _ in 0..100 {
+            if session.output().contains("[1|unset]") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        let out = session.output();
+        assert!(out.contains("hello-from-terminal"), "its output is kept with the session's: {out}");
+        assert!(out.contains("[1|unset]"), "a null variable is unset, not inherited: {out}");
+        session.terminate().await;
+        assert!(session.terminals.lock().unwrap().is_empty(), "it ends with the session");
+
+        let (session, mut adapter) = started_with_approver(deny).await;
+        adapter.send_raw(json!({ "seq": 56, "type": "request", "command": "runInTerminal", "arguments": { "args": ["sh", "-c", "echo should-not-run"] } })).await;
+        let reply = loop {
+            let m = adapter.recv().await;
+            if m["type"] == "response" && m["request_seq"] == 56 {
+                break m;
+            }
+        };
+        assert_eq!(reply["success"], false);
+        assert!(reply["message"].as_str().unwrap().contains("did not allow"), "{reply}");
+        assert!(!session.output().contains("should-not-run"));
+        session.terminate().await;
+    }
+
+    #[tokio::test]
+    async fn an_attach_does_not_wait_for_a_stop_that_may_never_come() {
+        let (client, events, mut adapter) = scripted();
+        let script = tokio::spawn(async move {
+            let init = adapter.expect("initialize").await;
+            adapter.respond(&init, json!({ "supportsConfigurationDoneRequest": true })).await;
+            let attach = adapter.expect("attach").await;
+            assert_eq!(attach["arguments"]["pid"], 42);
+            adapter.event("initialized", json!({})).await;
+            let done = adapter.expect("configurationDone").await;
+            adapter.respond(&done, Value::Null).await;
+            adapter.respond(&attach, Value::Null).await;
+            adapter
+        });
+        let mut sp = spec("debug-att", "gdb", false, "process 42", json!({ "pid": 42 }), vec![]);
+        sp.request = "attach";
+        let t = Instant::now();
+        let session = Session::start(sp, client, events).await.expect("attached");
+        assert!(t.elapsed() < Duration::from_secs(3), "it did not wait the {INITIAL_STOP_WAIT:?} a launch waits: {:?}", t.elapsed());
+        assert_eq!(session.status(), Status::Running);
+        let _ = script.await;
+    }
 }

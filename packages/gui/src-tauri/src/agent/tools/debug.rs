@@ -563,4 +563,48 @@ mod tests {
         assert_eq!(run(&json!({ "action": "terminate" }), thread, "/w", None).await.unwrap(), "There was no debug session to end.");
         assert!(run(&json!({}), thread, "/w", None).await.unwrap_err().contains("'action' is required"));
     }
+
+    #[test]
+    fn memory_is_a_hex_dump_with_an_ascii_column_and_says_what_was_unreadable() {
+        let out = render_memory("0x1000", b"Hello, world!\x00\x01ABC", 4);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "18 byte(s) at 0x1000:");
+        assert!(lines[1].starts_with("+0000  48 65 6c 6c 6f 2c 20 77 6f 72 6c 64 21 00 01 41") && lines[1].ends_with("Hello, world!..A"), "{}", lines[1]);
+        assert!(lines[2].starts_with("+0010  42 43") && lines[2].ends_with("BC"), "{}", lines[2]);
+        assert_eq!(lines[3], "[4 more byte(s) were unreadable]");
+        assert_eq!(render_memory("0x0", &[], 8), "No bytes could be read at 0x0 (8 unreadable).");
+    }
+
+    #[test]
+    fn instructions_line_up_and_name_their_symbol_and_source() {
+        let list = vec![
+            Instruction { address: "0x401000".into(), bytes: Some("55".into()), text: "push rbp".into(), symbol: Some("main".into()), location: Some("/w/a.c:3".into()) },
+            Instruction { address: "0x401001".into(), bytes: None, text: "mov rbp, rsp".into(), symbol: None, location: None },
+        ];
+        let out = render_instructions(&list);
+        assert_eq!(out.lines().next().unwrap(), "0x401000  55  push rbp  <main>  [/w/a.c:3]");
+        assert_eq!(out.lines().nth(1).unwrap(), "0x401001  mov rbp, rsp");
+    }
+
+    #[test]
+    fn the_other_breakpoint_kinds_and_modules_render_their_state() {
+        let log = Breakpoint { log_message: Some("x={x}".into()), hit_condition: Some("> 2".into()), verified: true, ..Breakpoint::new(7, None) };
+        assert_eq!(render_breakpoints("/w/a.py", &[log]), "Breakpoints in /w/a.py:\n- line 7 on hit > 2 logging \"x={x}\" [verified]");
+        let ib = InstructionBreakpoint { reference: "0x10".into(), offset: Some(4), condition: None, hit_condition: None, id: None, verified: false, message: Some("no code there".into()) };
+        assert_eq!(render_instruction_breakpoints(&[ib]), "Instruction breakpoints:\n- 0x10 + 4 [pending: no code there]");
+        let db = DataBreakpoint { data_id: "d-1".into(), access_type: Some("readWrite".into()), condition: None, hit_condition: None, id: None, verified: true, message: None };
+        assert_eq!(render_data_breakpoints(&[db]), "Data breakpoints:\n- d-1 (readWrite) [verified]");
+        assert!(render_data_info(&DataInfo { data_id: None, description: "a register".into(), access_types: vec![] }).starts_with("This cannot be watched: a register"));
+        let m = vec![Module { id: "1".into(), name: "libc".into(), path: Some("/lib/libc.so".into()) }];
+        assert!(render_modules(&m, 5, 0).contains("[1 of 5 shown"), "a partial page says so");
+        assert!(!render_modules(&m, 1, 0).contains("shown"));
+    }
+
+    #[test]
+    fn steps_carry_their_granularity() {
+        let o = step_opts(&json!({ "granularity": "instruction", "single_thread": true }));
+        assert_eq!((o.granularity.as_deref(), o.single_thread), (Some("instruction"), true));
+        let none = step_opts(&json!({}));
+        assert_eq!((none.granularity, none.single_thread), (None, false));
+    }
 }
