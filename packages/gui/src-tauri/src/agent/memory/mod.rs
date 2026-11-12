@@ -16,6 +16,7 @@
 //!   <root>/.vivianne/memory/entries.jsonl  — append-only memory entries
 
 pub mod defense;
+pub mod entities;
 pub mod evolve;
 pub mod graph;
 pub mod rerank;
@@ -693,7 +694,14 @@ pub(crate) async fn recall_in(
                 v.iter_mut().for_each(|e| e.user_wide = user_wide);
                 v
             };
-            vec![mark(fts), mark(vec)]
+            // Everything linked to an entity the query names: "what do we know about Tauri" is one lookup, not a guess at wording.
+            let ids = self::entities::recall_ids(&store_root, query).await;
+            let named = if ids.is_empty() { Vec::new() } else { self::store::get_entries_by_ids(&store_root, &ids).await.unwrap_or_default() };
+            let named = match as_of {
+                Some(t) => named.into_iter().filter(|e| e.created_at <= t).collect(),
+                None => named,
+            };
+            vec![mark(fts), mark(vec), mark(named)]
         }
     };
     let (project_lists, user_lists) = tokio::join!(search("", false), search(USER_ROOT, true));
@@ -904,7 +912,9 @@ const L1_SYSTEM_PROMPT: &str = "You distill raw conversation notes into durable 
 For each input line, decide whether it contains something durable (skip pure one-off actions with nothing worth keeping). \
 Classify each kept fact as exactly one of: \"persona\" (a stable trait or preference about the user), \"episodic\" (something time-bound that happened), or \"instruction\" (a standing directive/rule the user gave). \
 Assign each fact a short (1-3 word) scene_name describing what topic/task it relates to. \
-Respond with ONLY a JSON array, no prose, no markdown fence: [{\"text\": \"...\", \"kind\": \"persona|episodic|instruction\", \"scene_name\": \"...\"}]. \
+List the entities the fact is about (people, projects, libraries, organizations, places, key concepts; at most 6, by their usual name, not pronouns or generic words) as \"entities\": [{\"name\": \"...\", \"kind\": \"person|project|library|organization|place|concept\"}]. \
+If the note says when the thing happened, give \"occurred_at\" as YYYY-MM-DD, otherwise leave it out. Give \"perspective\": \"self\" for what the user or agent did or experienced, \"world\" for facts about anything else. \
+Respond with ONLY a JSON array, no prose, no markdown fence: [{\"text\": \"...\", \"kind\": \"persona|episodic|instruction\", \"scene_name\": \"...\", \"entities\": [], \"occurred_at\": \"...\", \"perspective\": \"self|world\"}]. \
 If nothing is durable, respond with [].";
 
 /// Batch L1 fact extraction: pull unprocessed turn-close notes, ask the
@@ -961,6 +971,7 @@ pub async fn run_l1_extraction(app: tauri::AppHandle, root: String, model: crate
                 user_wide: false,
             },
             scene,
+            extra: self::entities::parse_extracted(fact),
         });
     }
     // Reconciled against what is already known (ADD / UPDATE / DELETE /

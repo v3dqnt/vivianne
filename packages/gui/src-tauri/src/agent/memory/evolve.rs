@@ -108,6 +108,8 @@ async fn neighbours(root: &str, text: &str, embedding: Option<&[f32]>) -> Vec<(M
 pub struct Candidate {
     pub entry: MemoryEntry,
     pub scene: Option<String>,
+    /// Entities, when it happened and whose experience it is, as extraction found them.
+    pub extra: super::entities::Extracted,
 }
 
 const RECONCILE_PROMPT: &str = "You maintain an agent's long-term memory. For each NEW fact you are shown the most similar EXISTING memories (ids like m3). \
@@ -223,7 +225,7 @@ pub async fn write_facts(
                             created_at: now,
                             ..t.clone()
                         };
-                        let new = Candidate { entry: version, scene: c.scene.clone() };
+                        let new = Candidate { entry: version, scene: c.scene.clone(), extra: c.extra.clone() };
                         let emb = crate::ai::embedding::embed_text(&auth, &m).await.ok().flatten();
                         if insert(root, &new, emb.as_deref()).await {
                             let _ = super::store::invalidate_entry(root, &t.id, now).await;
@@ -276,6 +278,7 @@ async fn insert(root: &str, c: &Candidate, embedding: Option<&[f32]>) -> bool {
     if let Some(e) = embedding {
         let _ = super::store::update_embedding(root, &c.entry.id, e, crate::ai::embedding::embedding_model()).await;
     }
+    super::entities::record(root, &c.entry.id, &c.extra, super::now_ms()).await;
     true
 }
 

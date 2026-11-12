@@ -88,7 +88,7 @@ fn ensure_column(conn: &Connection, column_name: &str, columndef: &str) -> Resul
 /// Execute `f` with a cached (or freshly opened) SQLite connection for
 /// `root`. The connection is kept alive between calls, so schema init,
 /// page cache warmth, and WAL state survive across operations.
-fn with_conn<T>(root: &str, f: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
+pub(crate) fn with_conn<T>(root: &str, f: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
     let cache = DB_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = cache.lock().map_err(|_| "DB cache lock poisoned".to_string())?;
 
@@ -199,6 +199,11 @@ fn open_and_init_uncached(root: &str) -> Result<Connection, String> {
     // Archived: still true, but unused for so long that recall stops
     // offering it (sleep-time forgetting). Kept, so "as of" still finds it.
     let _ = ensure_column(&conn, "archived_at", "INTEGER");
+    // When the fact happened, as opposed to when it was learned (`created_at`), and whether it is the agent's own experience (`self`) or about
+    // the world. Both come from extraction and are optional.
+    let _ = ensure_column(&conn, "occurred_at", "INTEGER");
+    let _ = ensure_column(&conn, "perspective", "TEXT");
+    super::entities::init(&conn)?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS memory_vec_indexes (model TEXT PRIMARY KEY, dim INTEGER NOT NULL);",
     )
