@@ -406,7 +406,8 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
                     "operation": { "type": "string", "enum": ["goToDefinition", "goToTypeDefinition", "findReferences", "goToImplementation", "hover", "symbols", "diagnostics", "status", "capabilities"] },
                     "path": { "type": "string", "description": "File containing the symbol, absolute or relative to the workspace (any file of the language for a workspace symbol search; not needed for status)" },
                     "line": { "type": "number", "description": "1-based line (goTo*, findReferences, hover)" },
-                    "column": { "type": "number", "description": "1-based column (characters) (goTo*, findReferences, hover)" },
+                    "column": { "type": "number", "description": "1-based column (characters); or give symbol instead" },
+                    "symbol": { "type": "string", "description": "The name on that line, instead of a column; name#2 for its second occurrence" },
                     "query": { "type": "string", "description": "symbols: search the whole workspace for this name instead of listing the file" }
                 },
                 "required": ["operation"]
@@ -414,19 +415,21 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
         }),
         serde_json::json!({
             "name": "lsp_edit",
-            "description": "Change code through the language server, which knows every reference: rename a symbol (rename), move or rename a file and update what imports it (rename_file), list or apply a code action such as a quick fix or an import (code_actions), format a file (format), restart the workspace's servers (reload), or send a raw request (request). Edits stay inside the workspace and apply all or nothing. Prefer it to find-and-replace for renames. line and column are 1-based, as shown by read.",
+            "description": "Change code through the language server, which knows every reference: rename a symbol (rename), move or rename a file and update what imports it (rename_file), list or apply a code action such as a quick fix or an import (code_actions), format a file (format), run the project's own checker such as cargo check or tsc (check), restart the workspace's servers (reload), or send a raw request (request). Edits stay inside the workspace and apply all or nothing. Prefer it to find-and-replace for renames. line and column are 1-based, as shown by read.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["rename", "rename_file", "code_actions", "format", "reload", "request"] },
+                    "action": { "type": "string", "enum": ["rename", "rename_file", "code_actions", "format", "check", "reload", "request"] },
                     "path": { "type": "string", "description": "The file (not needed for reload)" },
                     "line": { "type": "number", "description": "rename, code_actions: 1-based line" },
-                    "column": { "type": "number", "description": "rename, code_actions: 1-based column" },
+                    "column": { "type": "number", "description": "rename, code_actions: 1-based column; or give symbol instead" },
+                    "symbol": { "type": "string", "description": "rename, code_actions: the name on that line, instead of a column; name#2 for its second occurrence" },
+                    "apply": { "type": "boolean", "description": "rename: false to preview what would change (default true)" },
                     "end_line": { "type": "number", "description": "code_actions: end of the range, when it is a selection" },
                     "end_column": { "type": "number", "description": "code_actions: end column of the range" },
                     "new_name": { "type": "string", "description": "rename: the new name" },
                     "new_path": { "type": "string", "description": "rename_file: where the file goes" },
-                    "apply": { "type": "number", "description": "code_actions: the number of the action to apply, from the listing you got without it" },
+                    "apply_action": { "type": "number", "description": "code_actions: the number of the action to apply, from the listing you got without it" },
                     "method": { "type": "string", "description": "request: the LSP method, for example textDocument/signatureHelp" },
                     "params": { "type": "object", "description": "request: its params" }
                 },

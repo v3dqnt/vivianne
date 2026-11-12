@@ -192,10 +192,11 @@ impl Tool for LspTool {
             }
             _ => {}
         }
-        let (Some(line), Some(col)) = (args["line"].as_u64().filter(|l| *l >= 1), args["column"].as_u64().filter(|c| *c >= 1)) else {
-            return fail("'line' and 'column' are required and start at 1".into());
+        let (line, col) = match position_in(args, &full) {
+            Ok(p) => p,
+            Err(e) => return fail(e),
         };
-        match crate::lsp::manager::query(op, &full, &self.cwd, line as u32, col as u32).await {
+        match crate::lsp::manager::query(op, &full, &self.cwd, line, col).await {
             Ok(result) => ok(match op {
                 "hover" => render_hover(&result),
                 "findReferences" => render_locations("references", &result, &self.cwd),
@@ -219,18 +220,53 @@ impl LspEditTool {
     }
 }
 
-fn position(args: &Value) -> Result<(u32, u32), String> {
-    match (args["line"].as_u64().filter(|l| *l >= 1), args["column"].as_u64().filter(|c| *c >= 1)) {
-        (Some(l), Some(c)) => Ok((l as u32, c as u32)),
-        _ => Err("'line' and 'column' are required and start at 1".into()),
+/// The 1-based column of the `n`th (from 1) occurrence of `symbol` on `line`, as a whole word where it can be: the model names the symbol and
+/// the line, and does not have to count characters. `name#2` is the second one.
+pub(crate) fn symbol_column(line: &str, symbol: &str) -> Option<u32> {
+    let (name, nth) = match symbol.rsplit_once('#') {
+        Some((n, k)) if !n.is_empty() && !k.is_empty() && k.chars().all(|c| c.is_ascii_digit()) => (n, k.parse::<usize>().unwrap_or(1).max(1)),
+        _ => (symbol, 1),
+    };
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let chars: Vec<char> = line.chars().collect();
+    let target: Vec<char> = name.chars().collect();
+    if target.is_empty() || chars.len() < target.len() {
+        return None;
     }
+    let (mut whole, mut any) = (Vec::new(), Vec::new());
+    for i in 0..=chars.len() - target.len() {
+        if chars[i..i + target.len()] == target[..] {
+            any.push(i);
+            let before = i == 0 || !word(chars[i - 1]);
+            let after = i + target.len() == chars.len() || !word(chars[i + target.len()]);
+            if before && after {
+                whole.push(i);
+            }
+        }
+    }
+    let pool = if whole.is_empty() { any } else { whole };
+    pool.get(nth - 1).map(|i| *i as u32 + 1)
+}
+
+/// `(line, column)` from `line` and either `column` or `symbol` (read from the file's own line).
+fn position_in(args: &Value, full_path: &str) -> Result<(u32, u32), String> {
+    let line = args["line"].as_u64().filter(|l| *l >= 1).ok_or("'line' is required and starts at 1")? as u32;
+    if let Some(c) = args["column"].as_u64().filter(|c| *c >= 1) {
+        return Ok((line, c as u32));
+    }
+    let Some(symbol) = args["symbol"].as_str().filter(|s| !s.is_empty()) else {
+        return Err("give 'column' (1-based) or 'symbol' (the name on that line, name#2 for the second)".into());
+    };
+    let text = std::fs::read_to_string(full_path).map_err(|e| format!("can't read {full_path}: {e}"))?;
+    let text_line = text.lines().nth(line as usize - 1).ok_or_else(|| format!("line {line} is past the end of the file"))?;
+    symbol_column(text_line, symbol).map(|c| (line, c)).ok_or_else(|| format!("'{symbol}' is not on line {line}: {}", text_line.trim()))
 }
 
 fn render_actions(actions: &[Value]) -> String {
     if actions.is_empty() {
         return "The server offers no code actions there.".into();
     }
-    let mut out = format!("{} code action(s); apply one with apply=<number>:\n", actions.len());
+    let mut out = format!("{} code action(s); apply one with apply_action=<number>:\n", actions.len());
     for (i, a) in actions.iter().enumerate().take(50) {
         let title = a.get("title").and_then(|t| t.as_str()).unwrap_or("(untitled)");
         let kind = a.get("kind").and_then(|k| k.as_str()).unwrap_or("");
@@ -250,6 +286,9 @@ impl Tool for LspEditTool {
         let ok = |m: String| ToolResult { content: m, is_error: false, details: None };
         let action = args["action"].as_str().unwrap_or("");
         let path = args["path"].as_str().unwrap_or("");
+        if action == "check" {
+            return crate::lsp::check::run_project_checks(&self.cwd).await.map(ok).unwrap_or_else(fail);
+        }
         if action == "reload" {
             let n = crate::lsp::manager::reload(&self.cwd).await;
             return ok(format!("Stopped {n} language server(s) for this workspace; the next use starts them afresh."));
@@ -261,12 +300,13 @@ impl Tool for LspEditTool {
         let shown = |lines: Vec<String>| ok(lines.join("\n"));
         match action {
             "rename" => {
-                let (line, col) = match position(args) {
+                let (line, col) = match position_in(args, &full) {
                     Ok(p) => p,
                     Err(e) => return fail(e),
                 };
                 let Some(new_name) = args["new_name"].as_str() else { return fail("'new_name' is required".into()) };
-                crate::lsp::manager::rename(&full, &self.cwd, line, col, new_name).await.map(shown).unwrap_or_else(fail)
+                let apply = args["apply"].as_bool().unwrap_or(true);
+                crate::lsp::manager::rename(&full, &self.cwd, line, col, new_name, apply).await.map(shown).unwrap_or_else(fail)
             }
             "rename_file" => {
                 let Some(to) = args["new_path"].as_str().filter(|t| !t.is_empty()) else { return fail("'new_path' is required".into()) };
@@ -274,13 +314,13 @@ impl Tool for LspEditTool {
                 crate::lsp::manager::rename_file(&full, &to_full, &self.cwd).await.map(shown).unwrap_or_else(fail)
             }
             "code_actions" => {
-                let (line, col) = match position(args) {
+                let (line, col) = match position_in(args, &full) {
                     Ok(p) => p,
                     Err(e) => return fail(e),
                 };
                 let end_line = args["end_line"].as_u64().map(|v| v as u32);
                 let end_col = args["end_column"].as_u64().map(|v| v as u32);
-                if let Some(n) = args["apply"].as_u64() {
+                if let Some(n) = args["apply_action"].as_u64() {
                     return crate::lsp::manager::apply_code_action(&full, &self.cwd, line, col, end_line, end_col, n as usize).await.map(shown).unwrap_or_else(fail);
                 }
                 crate::lsp::manager::code_actions(&full, &self.cwd, line, col, end_line, end_col).await.map(|a| ok(render_actions(&a))).unwrap_or_else(fail)
@@ -306,7 +346,7 @@ impl Tool for LspEditTool {
                     Err(e) => fail(e),
                 }
             }
-            other => fail(format!("unknown action '{other}' (rename, rename_file, code_actions, format, reload, request)")),
+            other => fail(format!("unknown action '{other}' (rename, rename_file, code_actions, format, check, reload, request)")),
         }
     }
 }
@@ -358,5 +398,15 @@ mod tests {
     fn code_actions_are_numbered_and_say_what_they_do() {
         let out = render_actions(&[json!({ "title": "Add import", "kind": "quickfix", "edit": {} }), json!({ "title": "Organize", "command": {} })]);
         assert!(out.contains("0. Add import [quickfix] (edits files)") && out.contains("1. Organize (runs a command)"), "{out}");
+    }
+
+    #[test]
+    fn a_symbol_is_found_by_name_not_by_counting_characters() {
+        assert_eq!(symbol_column("let total = total_count + total;", "total"), Some(5), "the whole word, first");
+        assert_eq!(symbol_column("let total = total_count + total;", "total#2"), Some(27), "the second whole word, not total_count");
+        assert_eq!(symbol_column("é😀 name", "name"), Some(4), "characters, not bytes");
+        assert_eq!(symbol_column("fn main() {}", "nothing"), None);
+        // No whole word: a part of a longer one is better than nothing.
+        assert_eq!(symbol_column("call(getUser)", "User"), Some(9));
     }
 }

@@ -8,6 +8,7 @@
 //! notifications so tools (edit/write/apply_patch) can surface fresh errors
 //! right after a change.
 
+pub mod check;
 pub mod client;
 pub mod edits;
 pub mod ledger;
@@ -60,6 +61,8 @@ pub fn language_id_for_extension(ext: &str) -> Option<&'static str> {
         ("tf", "terraform"), ("tfvars", "terraform"),
         ("ml", "ocaml"), ("mli", "ocaml"),
         ("nix", "nix"),
+        ("gleam", "gleam"),
+        ("jl", "julia"),
     ];
     map.iter().find(|(e, _)| *e == ext).map(|(_, id)| *id)
 }
@@ -104,6 +107,10 @@ pub fn server_candidates(language_id: &str) -> &'static [(&'static str, &'static
         "erlang" => &[("erlang_ls", &[])],
         "ocaml" => &[("ocamllsp", &[])],
         "nix" => &[("nil", &[]), ("nixd", &[])],
+        "sql" => &[("sqls", &[])],
+        "gleam" => &[("gleam", &["lsp"])],
+        "julia" => &[("julia", &["--startup-file=no", "--history-file=no", "-e", "using LanguageServer; runserver()"])],
+        "proto" => &[("buf", &["beta", "lsp"])],
         "php" => &[
             ("intelephense", &["--stdio"]),
         ],
@@ -158,12 +165,28 @@ pub fn format_diagnostics(file: &str, diagnostics: &[Diagnostic]) -> Option<Stri
     format_with_note(file, diagnostics, None)
 }
 
+/// A message without the lines that only send the reader elsewhere ("for further information visit ...", a bare link).
+pub fn strip_noise(message: &str) -> String {
+    let kept: Vec<&str> = message
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            let bare_url = (t.starts_with("http://") || t.starts_with("https://")) && !t.contains(' ');
+            !t.to_ascii_lowercase().contains("for further information visit") && !bare_url
+        })
+        .collect();
+    let out = kept.join("\n").trim_end().to_string();
+    if out.is_empty() { message.to_string() } else { out }
+}
+
 /// The same, with a closing line of its own (for example how many earlier errors are unchanged).
 pub fn format_with_note(file: &str, diagnostics: &[Diagnostic], note: Option<&str>) -> Option<String> {
-    let errors: Vec<&Diagnostic> = diagnostics.iter().filter(|d| d.severity.unwrap_or(1) == 1).collect();
+    let mut errors: Vec<&Diagnostic> = diagnostics.iter().filter(|d| d.severity.unwrap_or(1) == 1).collect();
     if errors.is_empty() {
         return None;
     }
+    // Top of the file first, whatever order the server sent them in.
+    errors.sort_by(|a, b| (a.range.start.line, a.range.start.character, &a.message).cmp(&(b.range.start.line, b.range.start.character, &b.message)));
     let severity_label = |s: u8| match s {
         1 => "ERROR",
         2 => "WARN",
@@ -173,7 +196,7 @@ pub fn format_with_note(file: &str, diagnostics: &[Diagnostic], note: Option<&st
     let lines: Vec<String> = errors
         .iter()
         .take(ledger::MAX_LISTED)
-        .map(|d| format!("{} [{}:{}] {}", severity_label(d.severity.unwrap_or(1)), d.range.start.line + 1, d.range.start.character + 1, d.message))
+        .map(|d| format!("{} [{}:{}] {}", severity_label(d.severity.unwrap_or(1)), d.range.start.line + 1, d.range.start.character + 1, strip_noise(&d.message)))
         .collect();
     let more = errors.len().saturating_sub(ledger::MAX_LISTED);
     let mut body = lines.join("\n");
@@ -188,3 +211,22 @@ pub fn format_with_note(file: &str, diagnostics: &[Diagnostic], note: Option<&st
 }
 
 pub type DiagnosticsByFile = HashMap<String, Vec<Diagnostic>>;
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    fn d(line: u32, col: u32, message: &str) -> Diagnostic {
+        Diagnostic { range: Range { start: Position { line, character: col }, end: Position { line, character: col + 1 } }, severity: Some(1), message: message.into(), source: None, code: None }
+    }
+
+    #[test]
+    fn errors_are_listed_top_of_file_first_without_pointer_lines() {
+        let out = format_diagnostics("a.rs", &[d(9, 0, "later"), d(1, 4, "warning: x\nfor further information visit https://example.com/e0001\nhttps://example.com/more"), d(1, 2, "earlier")]).unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[1], "ERROR [2:3] earlier");
+        assert_eq!(lines[2], "ERROR [2:5] warning: x");
+        assert_eq!(lines[3], "ERROR [10:1] later");
+        assert!(!out.contains("example.com"), "{out}");
+    }
+}

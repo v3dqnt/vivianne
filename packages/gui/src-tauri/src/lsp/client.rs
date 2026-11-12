@@ -5,9 +5,9 @@
 //! stream can't be trusted), JSON-RPC errors reach the caller as errors, and a server's own requests always get a reply so it never waits on us.
 
 use serde_json::{json, Value};
-use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{oneshot, Mutex};
@@ -27,6 +27,8 @@ const POLL: Duration = Duration::from_millis(50);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// `initialize` of a big project (rust-analyzer, tsserver) is slow: omp allows 30 seconds.
 const INIT_TIMEOUT: Duration = Duration::from_secs(30);
+/// How many lines of the server's own stderr are kept for the message when it dies.
+const STDERR_LINES: usize = 20;
 /// How many documents stay open in one server before the longest-open is closed.
 const MAX_OPEN_DOCS: usize = 40;
 
@@ -64,6 +66,12 @@ pub struct LspClient {
     docs: Mutex<OpenDocs>,
     capabilities: Mutex<Value>,
     root: String,
+    /// Requests waiting for an answer: a client with any is never idle (omp issue #8390).
+    in_flight: Arc<AtomicUsize>,
+    last_activity: StdMutex<Instant>,
+    /// `$/progress` tokens that have begun and not ended: the server is still loading or indexing while there are any.
+    progress: Arc<StdMutex<HashSet<String>>>,
+    stderr: Arc<StdMutex<VecDeque<String>>>,
     closed: Arc<AtomicBool>,
     child: Mutex<Option<tokio::process::Child>>,
     /// Ends the server and whatever it started when the client is dropped.
@@ -90,6 +98,27 @@ async fn write_frame(writer: &Writer, message: &Value) -> Result<(), String> {
     match tokio::time::timeout(WRITE_TIMEOUT, write).await {
         Ok(r) => r,
         Err(_) => Err("the language server is not reading its input".into()),
+    }
+}
+
+/// Counts a request while it waits; when it settles (any way) the client counts as active again from that moment.
+struct InFlight<'a> {
+    count: &'a AtomicUsize,
+    last: &'a StdMutex<Instant>,
+}
+
+impl<'a> InFlight<'a> {
+    fn start(count: &'a AtomicUsize, last: &'a StdMutex<Instant>) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        *last.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
+        Self { count, last }
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, Ordering::SeqCst);
+        *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
     }
 }
 
@@ -143,13 +172,28 @@ impl LspClient {
             .current_dir(root_dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| format!("failed to spawn {command}: {e}"))?;
         let stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
+        let stderr = child.stderr.take();
         let client = Self::over(Box::new(stdout), Box::new(stdin), Some(child), root_dir, settings.clone());
+        if let Some(stderr) = stderr {
+            // Read so the server never blocks on a full pipe; the last lines are what it said on the way out.
+            let tail = client.stderr.clone();
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let mut t = tail.lock().unwrap_or_else(|e| e.into_inner());
+                    if t.len() >= STDERR_LINES {
+                        t.pop_front();
+                    }
+                    t.push_back(line);
+                }
+            });
+        }
         client.handshake(root_dir, init_options, settings).await?;
         Ok(client)
     }
@@ -161,7 +205,9 @@ impl LspClient {
         let diagnostics = Arc::new(Mutex::new(HashMap::new()));
         let publishes = Arc::new(AtomicU64::new(0));
         let closed = Arc::new(AtomicBool::new(false));
-        let shared = Shared { writer: writer.clone(), pending: pending.clone(), diagnostics: diagnostics.clone(), publishes: publishes.clone(), root: root.to_string(), settings };
+        let progress: Arc<StdMutex<HashSet<String>>> = Arc::new(StdMutex::new(HashSet::new()));
+        let stderr: Arc<StdMutex<VecDeque<String>>> = Arc::new(StdMutex::new(VecDeque::new()));
+        let shared = Shared { writer: writer.clone(), pending: pending.clone(), diagnostics: diagnostics.clone(), publishes: publishes.clone(), root: root.to_string(), settings, progress: progress.clone(), stderr: stderr.clone() };
         tokio::spawn(read_loop(read, shared, closed.clone()));
         Arc::new(Self {
             writer,
@@ -173,6 +219,10 @@ impl LspClient {
             docs: Mutex::new(OpenDocs::default()),
             capabilities: Mutex::new(Value::Null),
             root: root.to_string(),
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            last_activity: StdMutex::new(Instant::now()),
+            progress,
+            stderr,
             closed,
             _tree: child.as_ref().map(|c| crate::agent::runtime::streaming::TreeKillOnDrop { pid: c.id() }),
             child: Mutex::new(child),
@@ -231,7 +281,13 @@ impl LspClient {
     }
 
     async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
-        self.request_within(method, params, REQUEST_TIMEOUT).await
+        let first = self.request_within(method, params.clone(), REQUEST_TIMEOUT).await;
+        // `ContentModified` means the server was mid-change (indexing): once more, shortly. A command is never repeated.
+        if matches!(&first, Err(e) if e.contains("-32801")) && method != "workspace/executeCommand" {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            return self.request_within(method, params, REQUEST_TIMEOUT).await;
+        }
+        first
     }
 
     async fn request_within(&self, method: &str, params: Value, limit: Duration) -> Result<Value, String> {
@@ -239,6 +295,7 @@ impl LspClient {
             return Err("the language server has exited".into());
         }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let _busy = InFlight::start(&self.in_flight, &self.last_activity);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
         if let Err(e) = write_frame(&self.writer, &json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })).await {
@@ -417,6 +474,39 @@ impl LspClient {
         self.docs.lock().await.order.iter().map(|(_, uri)| uri_to_path(uri)).collect()
     }
 
+    /// Whether the client may be shut down for being idle: nothing is waiting on it, and it has been quiet for `timeout`.
+    pub fn is_idle(&self, timeout: Duration) -> bool {
+        self.in_flight.load(Ordering::SeqCst) == 0 && self.last_activity.lock().unwrap_or_else(|e| e.into_inner()).elapsed() > timeout
+    }
+
+    /// The server's last words on stderr, joined: why it died.
+    pub fn stderr_tail(&self) -> String {
+        self.stderr.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect::<Vec<_>>().join(" | ")
+    }
+
+    /// Wait until the server reports no work in progress (project load, indexing), for at most `limit`. `true` when it is idle.
+    pub async fn wait_until_loaded(&self, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        loop {
+            if self.progress.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
+                return true;
+            }
+            if self.is_closed() || Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(POLL).await;
+        }
+    }
+
+    /// `workspace/didChangeWatchedFiles` for files changed on disk by something other than the server (type 1 created, 2 changed, 3 deleted).
+    pub async fn notify_watched(&self, changes: &[(String, u8)]) {
+        if changes.is_empty() {
+            return;
+        }
+        let events: Vec<Value> = changes.iter().map(|(p, t)| json!({ "uri": path_to_uri(p), "type": t })).collect();
+        let _ = tokio::time::timeout(Duration::from_secs(2), self.notify("workspace/didChangeWatchedFiles", json!({ "changes": events }))).await;
+    }
+
     /// Tell the server a file on disk was written by someone else (a workspace edit, a rename) so its view matches.
     pub async fn refresh(&self, path: &str) {
         if self.docs.lock().await.version.contains_key(&path_key(path)) {
@@ -500,11 +590,14 @@ struct Shared {
     root: String,
     /// What the client answers `workspace/configuration` from.
     settings: Value,
+    progress: Arc<StdMutex<HashSet<String>>>,
+    stderr: Arc<StdMutex<VecDeque<String>>>,
 }
 
 async fn read_loop(read: Box<dyn AsyncRead + Unpin + Send>, shared: Shared, closed: Arc<AtomicBool>) {
     let mut reader = BufReader::new(read);
     let pending = shared.pending.clone();
+    let stderr = shared.stderr.clone();
     loop {
         match read_frame(&mut reader).await {
             Frame::Message(m) => dispatch(m, &shared).await,
@@ -517,8 +610,11 @@ async fn read_loop(read: Box<dyn AsyncRead + Unpin + Send>, shared: Shared, clos
     }
     closed.store(true, Ordering::SeqCst);
     // Whoever is still waiting gets an answer instead of a timeout.
+    // With what it said on stderr, so a crash explains itself.
+    let said = stderr.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect::<Vec<_>>().join(" | ");
+    let why = if said.is_empty() { "the language server closed the connection".to_string() } else { format!("the language server closed the connection: {said}") };
     for (_, tx) in pending.lock().await.drain() {
-        let _ = tx.send(Err("the language server closed the connection".into()));
+        let _ = tx.send(Err(why.clone()));
     }
 }
 
@@ -564,6 +660,18 @@ async fn dispatch(message: Value, shared: &Shared) {
                     };
                     let _ = tx.send(outcome);
                 }
+            }
+        }
+        (Some("$/progress"), None) => {
+            let token = message.pointer("/params/token").map(|t| t.to_string()).unwrap_or_default();
+            match message.pointer("/params/value/kind").and_then(|k| k.as_str()) {
+                Some("begin") => {
+                    shared.progress.lock().unwrap_or_else(|e| e.into_inner()).insert(token);
+                }
+                Some("end") => {
+                    shared.progress.lock().unwrap_or_else(|e| e.into_inner()).remove(&token);
+                }
+                _ => {}
             }
         }
         (Some("textDocument/publishDiagnostics"), None) => {
@@ -885,5 +993,54 @@ mod tests {
         assert!(!is_fresh(&publish(None, 11, true, long_ago), &mark, young, now), "a young server's empty publish");
         assert!(is_fresh(&publish(None, 11, true, long_ago), &mark, old, now), "an old server's empty publish is a clean file");
         assert!(is_fresh(&publish(None, 11, false, long_ago), &mark, young, now), "a young server's non-empty publish is real");
+    }
+
+    #[tokio::test]
+    async fn a_request_that_waits_keeps_the_client_from_being_idle() {
+        let (client, mut server) = scripted();
+        assert!(!client.is_idle(Duration::from_secs(60)), "just made");
+        let c = client.clone();
+        let call = tokio::spawn(async move { c.request("textDocument/hover", json!({})).await });
+        let req = server.recv_method("textDocument/hover").await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(!client.is_idle(Duration::ZERO), "a request is waiting: never idle, however short the window");
+        server.send(json!({ "jsonrpc": "2.0", "id": req["id"], "result": null })).await;
+        call.await.unwrap().unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(client.is_idle(Duration::from_millis(10)), "quiet once it settled");
+    }
+
+    #[tokio::test]
+    async fn content_modified_is_asked_again_once() {
+        let (client, mut server) = scripted();
+        let c = client.clone();
+        let call = tokio::spawn(async move { c.request("textDocument/references", json!({})).await });
+        let first = server.recv_method("textDocument/references").await;
+        server.send(json!({ "jsonrpc": "2.0", "id": first["id"], "error": { "code": -32801, "message": "content modified" } })).await;
+        let second = server.recv_method("textDocument/references").await;
+        server.send(json!({ "jsonrpc": "2.0", "id": second["id"], "result": [1] })).await;
+        assert_eq!(call.await.unwrap().unwrap(), json!([1]));
+    }
+
+    #[tokio::test]
+    async fn progress_tokens_say_whether_the_server_is_still_loading() {
+        let (client, mut server) = scripted();
+        server.send(json!({ "jsonrpc": "2.0", "method": "$/progress", "params": { "token": "idx", "value": { "kind": "begin" } } })).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!client.wait_until_loaded(Duration::from_millis(150)).await, "still indexing");
+        server.send(json!({ "jsonrpc": "2.0", "method": "$/progress", "params": { "token": "idx", "value": { "kind": "end" } } })).await;
+        assert!(client.wait_until_loaded(Duration::from_secs(2)).await);
+    }
+
+    #[tokio::test]
+    async fn a_dying_servers_last_words_reach_the_waiting_caller() {
+        let (client, mut server) = scripted();
+        client.stderr.lock().unwrap().push_back("thread 'main' panicked: oom".into());
+        let c = client.clone();
+        let call = tokio::spawn(async move { c.request("textDocument/hover", json!({})).await });
+        let _ = server.recv_method("textDocument/hover").await;
+        drop(server);
+        let e = tokio::time::timeout(Duration::from_secs(5), call).await.expect("freed").unwrap().unwrap_err();
+        assert!(e.contains("panicked: oom"), "{e}");
     }
 }

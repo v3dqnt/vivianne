@@ -99,7 +99,8 @@ fn parse_entry(entry: &Value, source: Source) -> Option<ServerDef> {
         command: command.to_string(),
         args: strings("args"),
         root_markers: strings("rootMarkers"),
-        init_options: entry.get("initOptions").cloned().unwrap_or(Value::Null),
+        // `initializationOptions` is what the protocol calls it, and what other editors' files use.
+        init_options: entry.get("initOptions").or_else(|| entry.get("initializationOptions")).cloned().unwrap_or(Value::Null),
         settings: entry.get("settings").cloned().unwrap_or(Value::Null),
         source,
     })
@@ -108,12 +109,33 @@ fn parse_entry(entry: &Value, source: Source) -> Option<ServerDef> {
 /// The definitions a config file gives `language_id`. A file that isn't valid JSON gives none (and the caller says so).
 pub fn from_config(text: &str, language_id: &str, source: Source) -> Result<Vec<ServerDef>, String> {
     let doc: Value = serde_json::from_str(text).map_err(|e| format!("not valid JSON: {e}"))?;
-    let Some(entry) = doc.pointer(&format!("/servers/{language_id}")) else { return Ok(Vec::new()) };
+    // `{ "servers": { "python": ... } }`, or the same map at the top level.
+    let entry = if doc.get("servers").is_some() { doc.pointer(&format!("/servers/{language_id}")) } else { doc.get(language_id) };
+    let Some(entry) = entry else { return Ok(Vec::new()) };
     let entries: Vec<&Value> = match entry {
         Value::Array(a) => a.iter().collect(),
         other => vec![other],
     };
     Ok(entries.into_iter().filter_map(|e| parse_entry(e, source)).collect())
+}
+
+/// Where a project keeps programs of its own, tried before PATH — but only in a trusted project: a repository's `node_modules/.bin` is code
+/// that came with the repository.
+pub const LOCAL_BIN_DIRS: &[&str] = &["node_modules/.bin", ".venv/bin", ".venv/Scripts", "venv/bin", "venv/Scripts", ".env/bin", "vendor/bundle/bin"];
+
+/// `command` as it should be started: a project-local program when the project is trusted and has one, else what PATH finds (`on_path`).
+pub fn resolve_command_with(command: &str, root: &Path, trusted: bool, exists: &dyn Fn(&Path) -> bool, on_path: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    if trusted && !command.contains(['/', '\\']) {
+        for dir in LOCAL_BIN_DIRS {
+            for ext in ["", ".cmd", ".exe", ".bat"] {
+                let candidate = root.join(dir).join(format!("{command}{ext}"));
+                if exists(&candidate) {
+                    return Some(candidate.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    on_path(command)
 }
 
 /// What to try for a language, and what was left out.
@@ -217,5 +239,24 @@ mod tests {
         assert_eq!(find_root(&file, &ws.to_string_lossy(), &["nothing".to_string()]), ws.to_string_lossy());
         assert_eq!(find_root(Path::new("/elsewhere/x.rs"), &ws.to_string_lossy(), &markers), ws.to_string_lossy());
         std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn project_local_programs_count_only_in_a_trusted_project() {
+        let root = Path::new("/w");
+        let exists = |p: &Path| p == Path::new("/w/node_modules/.bin/pyright-langserver");
+        let path = |c: &str| Some(format!("/usr/bin/{c}"));
+        assert_eq!(resolve_command_with("pyright-langserver", root, true, &exists, &path).as_deref(), Some("/w/node_modules/.bin/pyright-langserver"));
+        assert_eq!(resolve_command_with("pyright-langserver", root, false, &exists, &path).as_deref(), Some("/usr/bin/pyright-langserver"), "untrusted: PATH only");
+        assert_eq!(resolve_command_with("./x/ls", root, true, &exists, &path).as_deref(), Some("/usr/bin/./x/ls"), "a path is never looked up in the project's bin dirs");
+        assert_eq!(resolve_command_with("gopls", root, true, &|_| false, &|_| None), None);
+    }
+
+    #[test]
+    fn a_flat_map_and_the_protocols_option_name_are_accepted() {
+        let flat = r#"{ "python": { "command": "x", "initializationOptions": { "a": 1 } } }"#;
+        let d = from_config(flat, "python", Source::User).unwrap();
+        assert_eq!((d[0].command.as_str(), d[0].init_options.clone()), ("x", json!({ "a": 1 })));
+        assert!(from_config(flat, "rust", Source::User).unwrap().is_empty());
     }
 }

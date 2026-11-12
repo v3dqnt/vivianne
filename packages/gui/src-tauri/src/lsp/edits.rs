@@ -68,6 +68,10 @@ pub fn apply_text_edits(text: &str, edits: &[Value]) -> Result<String, String> {
         let (Some(sl), Some(sc), Some(el), Some(ec)) = (pos("start", "line"), pos("start", "character"), pos("end", "line"), pos("end", "character")) else {
             return Err("an edit has no range".into());
         };
+        // A snippet (`$1`, `${2:name}`) is for an editor that can place the cursor; written to a file it would be literal garbage.
+        if e.get("insertTextFormat").and_then(|f| f.as_u64()) == Some(2) {
+            return Err("the server sent a snippet edit, which can't be written to a file as is".into());
+        }
         let new_text = e.get("newText").and_then(|t| t.as_str()).ok_or("an edit has no newText")?;
         let (a, b) = (offset_of(text, sl, sc), offset_of(text, el, ec));
         if b < a {
@@ -77,6 +81,8 @@ pub fn apply_text_edits(text: &str, edits: &[Value]) -> Result<String, String> {
     }
     // Stable: edits at one point keep the server's order.
     spans.sort_by_key(|s| (s.0, s.1));
+    // The same replacement sent twice is one replacement (servers do this); it must not read as an overlap.
+    spans.dedup_by(|b, a| a == b && a.1 > a.0);
     for w in spans.windows(2) {
         if w[0].1 > w[1].0 {
             return Err("the server sent edits that overlap".into());
@@ -198,6 +204,40 @@ pub async fn apply_workspace_edit(root: &str, edit: &Value) -> Result<Vec<String
         }
     }
     Ok(done)
+}
+
+/// What applying `edit` would do, one line per file or operation, without doing it.
+pub fn describe(root: &str, edit: &Value) -> Result<Vec<String>, String> {
+    let steps = plan(root, edit)?;
+    Ok(steps
+        .into_iter()
+        .map(|s| match s {
+            Step::Write(p, _) => format!("would edit {}", p.display()),
+            Step::Create(p) => format!("would create {}", p.display()),
+            Step::Rename(a, b) => format!("would rename {} to {}", a.display(), b.display()),
+            Step::Delete(p) => format!("would delete {}", p.display()),
+        })
+        .collect())
+}
+
+/// `(path, type)` for `workspace/didChangeWatchedFiles`: 1 created, 2 changed, 3 deleted. Call after the edit was applied.
+pub fn watched_changes(edit: &Value) -> Vec<(String, u8)> {
+    let mut out: Vec<(String, u8)> = Vec::new();
+    if let Some(c) = edit.get("changes").and_then(|c| c.as_object()) {
+        out.extend(c.keys().map(|u| (uri_to_path(u), 2)));
+    }
+    for ch in edit.get("documentChanges").and_then(|c| c.as_array()).into_iter().flatten() {
+        match ch.get("kind").and_then(|k| k.as_str()) {
+            Some("create") => out.extend(ch.get("uri").and_then(|u| u.as_str()).map(|u| (uri_to_path(u), 1))),
+            Some("delete") => out.extend(ch.get("uri").and_then(|u| u.as_str()).map(|u| (uri_to_path(u), 3))),
+            Some("rename") => {
+                out.extend(ch.get("oldUri").and_then(|u| u.as_str()).map(|u| (uri_to_path(u), 3)));
+                out.extend(ch.get("newUri").and_then(|u| u.as_str()).map(|u| (uri_to_path(u), 1)));
+            }
+            _ => out.extend(ch.pointer("/textDocument/uri").and_then(|u| u.as_str()).map(|u| (uri_to_path(u), 2))),
+        }
+    }
+    out
 }
 
 /// The paths a `WorkspaceEdit` touches, for telling the server and for the result.
@@ -420,6 +460,29 @@ mod tests {
         assert_eq!(o, json!({ "tabSize": 4, "insertSpaces": true }));
         let o = formatting_options(&bare.join("c.c"), "int f() {\n\treturn 1;\n}\n", &bare.to_string_lossy());
         assert_eq!(o["insertSpaces"], false);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_snippet_edit_is_refused_and_a_repeated_edit_is_one() {
+        let snippet = vec![json!({ "range": range(0, 0, 0, 0), "newText": "fn ${1:name}() {}", "insertTextFormat": 2 })];
+        assert!(apply_text_edits("", &snippet).unwrap_err().contains("snippet"));
+        let twice = vec![json!({ "range": range(0, 0, 0, 3), "newText": "X" }), json!({ "range": range(0, 0, 0, 3), "newText": "X" })];
+        assert_eq!(apply_text_edits("abcdef", &twice).unwrap(), "Xdef");
+    }
+
+    #[test]
+    fn a_preview_lists_what_would_change_and_changes_nothing() {
+        let root = tmp();
+        let a = root.join("a.txt");
+        std::fs::write(&a, "hello").unwrap();
+        let edit = json!({ "changes": { super::super::uri::path_to_uri(&a.to_string_lossy()): [{ "range": range(0, 0, 0, 5), "newText": "bye" }] } });
+        let lines = describe(&root.to_string_lossy(), &edit).unwrap();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].starts_with("would edit"), "{lines:?}");
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "hello");
+        let w = watched_changes(&json!({ "documentChanges": [{ "kind": "rename", "oldUri": "file:///a", "newUri": "file:///b" }, { "kind": "delete", "uri": "file:///c" }] }));
+        assert_eq!(w, vec![("/a".to_string(), 3), ("/b".to_string(), 1), ("/c".to_string(), 3)]);
         std::fs::remove_dir_all(&root).ok();
     }
 }

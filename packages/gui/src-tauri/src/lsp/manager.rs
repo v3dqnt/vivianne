@@ -31,6 +31,11 @@ const INLINE_WAIT: Duration = Duration::from_millis(500);
 const DEFERRED_WAIT: Duration = Duration::from_secs(12);
 /// What a cold server start may add to an edit's wait before the edit's result goes back without it (the start carries on in the background).
 const START_GRACE: Duration = Duration::from_secs(5);
+const REFERENCES_RETRIES: usize = 2;
+const MAX_RENAME_PAIRS: usize = 1000;
+const REFERENCES_RETRY_DELAY: Duration = Duration::from_millis(250);
+/// How long to wait for a server's project load before answering anyway.
+const PROJECT_LOAD_WAIT: Duration = Duration::from_secs(15);
 
 enum State {
     Empty,
@@ -80,7 +85,11 @@ fn config_digest(def: &ServerDef) -> u64 {
 /// The first server for `language_id` that is installed, with every definition tried and what was left out.
 fn resolve_server(language_id: &str, workspace: &str) -> (Option<ServerDef>, servers::Candidates) {
     let c = servers::candidates(language_id, workspace);
-    let found = c.defs.iter().find(|d| which::which(&d.command).is_ok()).cloned();
+    // A project's own programs (node_modules/.bin, .venv) count only once the user has trusted the project.
+    let trusted = crate::mods::project_trusted(workspace);
+    let found = c.defs.iter().find_map(|d| {
+        servers::resolve_command_with(&d.command, Path::new(workspace), trusted, &|p| p.is_file(), &|c| which::which(c).ok().map(|p| p.to_string_lossy().into_owned())).map(|command| ServerDef { command, ..d.clone() })
+    });
     (found, c)
 }
 
@@ -191,7 +200,22 @@ fn ensure_reaper() {
                 tokio::time::sleep(Duration::from_secs(60)).await;
                 let stale: Vec<Arc<Slot>> = {
                     let mut map = CLIENTS.lock().unwrap_or_else(|e| e.into_inner());
-                    let keys: Vec<String> = map.iter().filter(|(_, s)| s.last_used.lock().unwrap_or_else(|e| e.into_inner()).elapsed() >= IDLE_TIMEOUT).map(|(k, _)| k.clone()).collect();
+                    // Quiet for the window AND nothing waiting on it: a long request must never look idle. A slot being started is busy.
+                    let keys: Vec<String> = map
+                        .iter()
+                        .filter(|(_, s)| {
+                            let quiet = s.last_used.lock().unwrap_or_else(|e| e.into_inner()).elapsed() >= IDLE_TIMEOUT;
+                            quiet
+                                && match s.state.try_lock() {
+                                    Ok(state) => match &*state {
+                                        State::Up(c) => c.is_idle(IDLE_TIMEOUT),
+                                        _ => true,
+                                    },
+                                    Err(_) => false,
+                                }
+                        })
+                        .map(|(k, _)| k.clone())
+                        .collect();
                     keys.into_iter().filter_map(|k| map.remove(&k)).collect()
                 };
                 for s in stale {
@@ -301,8 +325,14 @@ pub async fn post_edit_block(path: &str, root_dir: &str) -> Option<String> {
         }
     }
     let outcome = check(path, root_dir, INLINE_WAIT).await;
+    // A CLI linter (biome, swiftlint) adds to the server's report, or stands in for it when there is no server.
+    let lint = super::check::lint_file(path, root_dir).await.unwrap_or_default();
     match outcome.report {
-        Report::Published(items) => block_for(path, &items),
+        Report::Published(mut items) => {
+            items.extend(lint);
+            block_for(path, &items)
+        }
+        Report::NoServer if !lint.is_empty() => block_for(path, &lint),
         Report::NoServer => None,
         Report::NotReported => {
             let thread = crate::agent::orchestration::turn_thread();
@@ -346,7 +376,20 @@ fn spawn_deferred(path: String, client: Arc<LspClient>, mark: SyncMark, counter:
 
 /// A navigation query (`goToDefinition`, `findReferences`, `goToImplementation`, `goToTypeDefinition`, `hover`) at a 1-based `line` and character `col`.
 pub async fn query(op: &str, path: &str, root_dir: &str, line: u32, col: u32) -> Result<Value, String> {
-    client(path, root_dir).await?.query(op, path, line, col).await
+    let c = client(path, root_dir).await?;
+    let mut result = c.query(op, path, line, col).await?;
+    if op == "findReferences" {
+        // A server still loading its project answers with nothing, or only the declaration it was asked about: wait for it to finish, ask again.
+        for _ in 0..REFERENCES_RETRIES {
+            if result.as_array().map(|a| a.len()).unwrap_or(0) > 1 {
+                break;
+            }
+            c.wait_until_loaded(PROJECT_LOAD_WAIT).await;
+            tokio::time::sleep(REFERENCES_RETRY_DELAY).await;
+            result = c.query(op, path, line, col).await?;
+        }
+    }
+    Ok(result)
 }
 
 /// The symbols of one file (a tree or a flat list, as the server sends them), or, with `query` and no path, the workspace's.
@@ -370,7 +413,7 @@ pub async fn symbols(path: &str, root_dir: &str, query: Option<&str>) -> Result<
 }
 
 /// Rename the symbol at a 1-based position everywhere the server finds it, applying the edit inside the workspace. Returns one line per change.
-pub async fn rename(path: &str, root_dir: &str, line: u32, col: u32, new_name: &str) -> Result<Vec<String>, String> {
+pub async fn rename(path: &str, root_dir: &str, line: u32, col: u32, new_name: &str, apply: bool) -> Result<Vec<String>, String> {
     if new_name.trim().is_empty() {
         return Err("the new name is empty".into());
     }
@@ -384,6 +427,12 @@ pub async fn rename(path: &str, root_dir: &str, line: u32, col: u32, new_name: &
     if edit.is_null() {
         return Err("the server found nothing to rename at that position".into());
     }
+    if !apply {
+        return super::edits::describe(root_dir, &edit).map(|mut lines| {
+            lines.insert(0, "Preview (nothing was changed):".into());
+            lines
+        });
+    }
     apply_and_refresh(&c, root_dir, &edit).await
 }
 
@@ -392,6 +441,8 @@ async fn apply_and_refresh(c: &LspClient, root_dir: &str, edit: &Value) -> Resul
     for p in super::edits::touched(edit) {
         c.refresh(&p).await;
     }
+    // Files the server did not write itself: it is told, as an editor's file watcher would.
+    c.notify_watched(&super::edits::watched_changes(edit)).await;
     Ok(done)
 }
 
@@ -408,8 +459,25 @@ pub async fn code_actions(path: &str, root_dir: &str, line: u32, col: u32, end_l
         _ => pos.clone(),
     };
     let diagnostics: Vec<Value> = c.diagnostics.lock().await.get(&path_key(path)).map(|p| p.items.iter().filter(|d| d.range.start.line == pos["line"].as_u64().unwrap_or(0) as u32).filter_map(|d| serde_json::to_value(d).ok()).collect()).unwrap_or_default();
-    let result = c.call("textDocument/codeAction", json!({ "textDocument": { "uri": path_to_uri(path) }, "range": { "start": pos, "end": end }, "context": { "diagnostics": diagnostics } })).await?;
-    Ok(result.as_array().cloned().unwrap_or_default())
+    let ask = |only: Option<Value>| {
+        let mut context = json!({ "diagnostics": diagnostics, "triggerKind": 1 });
+        if let Some(o) = only {
+            context["only"] = o;
+        }
+        c.call("textDocument/codeAction", json!({ "textDocument": { "uri": path_to_uri(path) }, "range": { "start": pos, "end": end }, "context": context }))
+    };
+    // Some servers (typescript-language-server) return source actions only when asked for them by kind: ask both ways and merge.
+    let plain = ask(None).await?;
+    let source = ask(Some(json!(["source"]))).await.unwrap_or(Value::Null);
+    Ok(merge_actions(plain.as_array().cloned().unwrap_or_default(), source.as_array().cloned().unwrap_or_default()))
+}
+
+/// Two lists of code actions as one, without the same title and kind twice.
+pub(crate) fn merge_actions(mut first: Vec<Value>, second: Vec<Value>) -> Vec<Value> {
+    let id = |a: &Value| format!("{}|{}", a.get("kind").and_then(|k| k.as_str()).unwrap_or(""), a.get("title").and_then(|t| t.as_str()).unwrap_or(""));
+    let seen: std::collections::HashSet<String> = first.iter().map(&id).collect();
+    first.extend(second.into_iter().filter(|a| !seen.contains(&id(a))));
+    first
 }
 
 /// Run the `index`th action `code_actions` listed for the same position: its edit is applied inside the workspace, and a command is sent to the
@@ -459,7 +527,8 @@ pub async fn rename_file(from: &str, to: &str, root_dir: &str) -> Result<Vec<Str
     }
     let mut done = Vec::new();
     let c = client_for(from, root_dir).await.ok().flatten();
-    let files = json!({ "files": [{ "oldUri": path_to_uri(from), "newUri": path_to_uri(to) }] });
+    let pairs = file_pairs(from, to)?;
+    let files = json!({ "files": pairs.iter().map(|(o, n)| json!({ "oldUri": path_to_uri(o), "newUri": path_to_uri(n) })).collect::<Vec<_>>() });
     // If the server can say what the move breaks and fails to, nothing is moved: a half-done move leaves imports pointing nowhere.
     let edit = match &c {
         Some(c) if c.capabilities().await.pointer("/workspace/fileOperations/willRename").is_some() => match c.call("workspace/willRenameFiles", files.clone()).await {
@@ -502,6 +571,34 @@ pub async fn rename_file(from: &str, to: &str, root_dir: &str) -> Result<Vec<Str
         done.push("the server did not update references to the file; check the imports".into());
     }
     Ok(done)
+}
+
+/// The `(old, new)` path of every file a move touches: the file itself, or every file under a directory (at most `MAX_RENAME_PAIRS`).
+pub(crate) fn file_pairs(from: &str, to: &str) -> Result<Vec<(String, String)>, String> {
+    let src = Path::new(from);
+    if !src.is_dir() {
+        return Ok(vec![(from.to_string(), to.to_string())]);
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![src.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).map_err(|e| format!("can't read {}: {e}", dir.display()))?.flatten() {
+            let p = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if p.is_dir() {
+                if !crate::agent::tools::builtin::ALWAYS_SKIP_DIRS.contains(&name.as_str()) {
+                    stack.push(p);
+                }
+            } else if let Ok(rel) = p.strip_prefix(src) {
+                out.push((p.to_string_lossy().into_owned(), Path::new(to).join(rel).to_string_lossy().into_owned()));
+                if out.len() > MAX_RENAME_PAIRS {
+                    return Err(format!("that folder holds more than {MAX_RENAME_PAIRS} files; move it with a shell command instead"));
+                }
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
 }
 
 /// Format a file with its server, using the file's `.editorconfig` or its own indentation. `Ok(false)`: it was already formatted.
@@ -596,5 +693,31 @@ mod tests {
         assert!(third.contains("2 errors already reported, nothing new"), "{third}");
         assert!(block_for(f, &[]).is_none(), "clean");
         assert!(block_for(f, &[d("one")]).unwrap().contains("one"), "an error that comes back is told again");
+    }
+
+    #[test]
+    fn code_actions_from_two_requests_are_one_list() {
+        let a = |t: &str, k: &str| json!({ "title": t, "kind": k });
+        let merged = merge_actions(vec![a("Add import", "quickfix"), a("Organize", "source.organizeImports")], vec![a("Organize", "source.organizeImports"), a("Fix all", "source.fixAll")]);
+        let titles: Vec<&str> = merged.iter().map(|m| m["title"].as_str().unwrap()).collect();
+        assert_eq!(titles, vec!["Add import", "Organize", "Fix all"]);
+    }
+
+    #[test]
+    fn a_folder_move_lists_every_file_and_a_huge_one_is_refused() {
+        let d = std::env::temp_dir().join(format!("viv-pairs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(d.join("src/sub")).unwrap();
+        std::fs::create_dir_all(d.join("node_modules/x")).unwrap();
+        std::fs::write(d.join("src/a.ts"), "").unwrap();
+        std::fs::write(d.join("src/sub/b.ts"), "").unwrap();
+        std::fs::write(d.join("node_modules/x/skip.js"), "").unwrap();
+        let (from, to) = (d.join("src").to_string_lossy().into_owned(), d.join("lib").to_string_lossy().into_owned());
+        let pairs = file_pairs(&from, &to).unwrap();
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs[0].1.ends_with("lib/a.ts") && pairs[1].1.ends_with("lib/sub/b.ts"), "{pairs:?}");
+        // A single file is one pair.
+        let one = file_pairs(&d.join("src/a.ts").to_string_lossy(), "/x/y.ts").unwrap();
+        assert_eq!(one.len(), 1);
+        std::fs::remove_dir_all(&d).ok();
     }
 }
