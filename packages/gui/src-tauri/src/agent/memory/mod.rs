@@ -15,6 +15,7 @@
 //!   <root>/.vivianne/memory/state.json     — enabled flag, settings, stats
 //!   <root>/.vivianne/memory/entries.jsonl  — append-only memory entries
 
+pub mod defense;
 pub mod evolve;
 pub mod graph;
 pub mod rerank;
@@ -372,28 +373,10 @@ async fn write_entries(root: &str, entries: &[MemoryEntry]) -> Result<(), String
 /// capture. Pattern-based, not a secret-scanner: catches common shapes
 /// (OpenAI/Anthropic/GitHub-style prefixed tokens, AWS access keys, long
 /// hex/base64 blobs that read as a key) without needing a provider list.
-/// ponytail: heuristic, not exhaustive — a secret with no recognizable shape
-/// (e.g. a plain password typed in prose) slips through. Upgrade path: a real
-/// entropy-based secret scanner if leaks show up in practice.
+/// The patterns are in `defense.rs`. A secret with no recognizable shape (a plain
+/// password typed in prose) slips through.
 pub(crate) fn redact_secrets(text: &str) -> String {
-    use std::sync::OnceLock;
-    static PATTERNS: OnceLock<Vec<regex::Regex>> = OnceLock::new();
-    let patterns = PATTERNS.get_or_init(|| {
-        let raw = [
-            r"\bsk-[A-Za-z0-9_-]{16,}\b",       // OpenAI/Anthropic-style
-            r"\bgh[pousr]_[A-Za-z0-9]{20,}\b",   // GitHub tokens
-            r"\bAKIA[0-9A-Z]{12,}\b",            // AWS access key id
-            r"\bAIza[A-Za-z0-9_-]{20,}\b",       // Google API key
-            r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b", // Slack tokens
-            r"(?i)\b(api[_-]?key|secret|token|password)\s*[:=]\s*['\x22]?[A-Za-z0-9_\-./+]{12,}['\x22]?",
-        ];
-        raw.iter().map(|p| regex::Regex::new(p).expect("static redact pattern must compile")).collect()
-    });
-    let mut out = text.to_string();
-    for re in patterns {
-        out = re.replace_all(&out, "[redacted]").into_owned();
-    }
-    out
+    defense::apply_redaction(text).text
 }
 
 fn slug(text: &str) -> String {
