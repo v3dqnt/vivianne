@@ -526,7 +526,17 @@ pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
     tool!("debug_run" => |cx| {
         let thread = crate::agent::orchestration::turn_thread().unwrap_or_default();
         let cwd = cx.state.primary_workspace_folder().await.unwrap_or_else(|| ".".to_string());
-        match crate::agent::tools::debug::run(cx.args, &thread, &cwd).await {
+        // What the adapter asks the client to run on its own is put to the user as a card in this thread, with the command in full.
+        let emit = cx.emit.clone();
+        let call_id = cx.call_id.to_string();
+        let approver: crate::dap::session::Approver = std::sync::Arc::new(move |what: String| {
+            let (emit, call_id) = (emit.clone(), call_id.clone());
+            Box::pin(async move {
+                let tc = AgentToolCall { id: call_id, name: "debug_run".to_string(), arguments: serde_json::json!({ "action": "adapter_request", "what": what.clone() }) };
+                ask_permission(&emit, &tc, Some(what)).await
+            })
+        });
+        match crate::agent::tools::debug::run(cx.args, &thread, &cwd, Some(approver)).await {
             Ok(text) => text_result(text),
             Err(e) => text_result(format!("Error: {e}")),
         }
@@ -792,21 +802,21 @@ fn always_asks(tc: &AgentToolCall) -> bool {
         "vault" => action == Some("fill"),
         "nebius_job" => matches!(action, Some("submit" | "cancel")),
         // A launch starts a program under a debug adapter: it asks every time, and says which command it will start.
-        "debug_run" => action == Some("launch"),
+        "debug_run" => matches!(action, Some("launch" | "attach")),
         _ => false,
     }
 }
 
 /// What the approval prompt says for an `always_asks` call: the secret's site,
 /// or the machine, time limit and cost.
-async fn describe_sensitive(tc: &AgentToolCall) -> Option<String> {
+async fn describe_sensitive(tc: &AgentToolCall, cwd: &str) -> Option<String> {
     if !always_asks(tc) {
         return None;
     }
     match tc.name.as_str() {
         "vault" => Some(crate::vault::describe_fill(&tc.arguments).await),
         "nebius_job" => Some(crate::nebius::describe(&tc.arguments).await),
-        "debug_run" => Some(crate::dap::config::describe_call(&tc.arguments)),
+        "debug_run" => Some(crate::dap::config::describe_call(&tc.arguments, cwd)),
         _ => None,
     }
 }
@@ -1227,7 +1237,8 @@ pub async fn execute_tool_calls(
                 continue;
             }
             Verdict::Ask { why, .. } => {
-                let why = describe_sensitive(&tool_call).await.or(why);
+                let cwd = state.primary_workspace_folder().await.unwrap_or_else(|| ".".to_string());
+                let why = describe_sensitive(&tool_call, &cwd).await.or(why);
                 if !ask_permission(emit, &tool_call, why).await {
                     let text = format!("Error: Permission denied by user for tool '{}'.", tool_call.name);
                     slots[slot_idx] = Some(finish_call(emit, tool_call, text_result(text), true));

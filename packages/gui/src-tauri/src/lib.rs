@@ -1,3 +1,6 @@
+// The tool schemas are big `json!` literals; the macro needs room to expand them.
+#![recursion_limit = "256"]
+
 use std::sync::Arc;
 
 use tauri::Manager;

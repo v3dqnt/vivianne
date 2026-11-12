@@ -23,6 +23,23 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// What an adapter wrote on stderr is kept this many lines, to explain a failed start.
 const STDERR_LINES: usize = 30;
 
+/// Variables an adapter definition sets (`Some`) or unsets (`None`), on top of the filtered environment.
+pub type Env = std::collections::BTreeMap<String, Option<String>>;
+
+/// Apply `env` to a command: a value sets the variable, and `null` removes it (as the protocol says, which oh-my-pi gets wrong).
+pub fn apply_env(cmd: &mut tokio::process::Command, env: &Env) {
+    for (k, v) in env {
+        match v {
+            Some(v) => {
+                cmd.env(k, v);
+            }
+            None => {
+                cmd.env_remove(k);
+            }
+        }
+    }
+}
+
 type Writer = Arc<Mutex<Box<dyn AsyncWrite + Unpin + Send>>>;
 type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, DapError>>>>>;
 
@@ -59,6 +76,9 @@ pub enum AdapterEvent {
     /// The adapter asks for a second debug session on the same server (js-debug does, once per child process it starts). Answer it with
     /// `DapClient::answer_reverse`.
     StartDebugging { seq: i64, arguments: Value },
+    /// The adapter asks for a command to be run in a terminal (its way of starting the program with the user's console). Answer it with
+    /// `DapClient::reply_reverse`, and only if the user allowed it.
+    RunInTerminal { seq: i64, arguments: Value },
 }
 
 pub struct DapClient {
@@ -72,24 +92,37 @@ pub struct DapClient {
     port: AtomicU16,
     /// Whether the adapter's own `startDebugging` requests are passed on instead of refused.
     reverse: Arc<AtomicBool>,
+    /// Whether the adapter's `runInTerminal` requests are passed on instead of refused.
+    terminal: Arc<AtomicBool>,
     /// Ends the adapter and whatever it started when the client is dropped.
     _tree: Option<crate::agent::runtime::streaming::TreeKillOnDrop>,
 }
 
+/// One message, written whole. An adapter that stops reading its input (its pipe full) costs the caller a failure after this long, and does not
+/// hold the writer against the messages queued behind.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
 async fn write_message(writer: &Writer, message: &Value) -> Result<(), String> {
     let body = serde_json::to_string(message).map_err(|e| e.to_string())?;
-    let mut w = writer.lock().await;
-    w.write_all(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes()).await.map_err(|e| e.to_string())?;
-    w.write_all(body.as_bytes()).await.map_err(|e| e.to_string())?;
-    w.flush().await.map_err(|e| e.to_string())
+    let frame = format!("Content-Length: {}\r\n\r\n{body}", body.len());
+    let write = async {
+        let mut w = writer.lock().await;
+        w.write_all(frame.as_bytes()).await.map_err(|e| e.to_string())?;
+        w.flush().await.map_err(|e| e.to_string())
+    };
+    match tokio::time::timeout(WRITE_TIMEOUT, write).await {
+        Ok(r) => r,
+        Err(_) => Err("the debug adapter is not reading its input".into()),
+    }
 }
 
 impl DapClient {
     /// Start `command args...` in `cwd` and connect to it. The adapter gets the filtered environment, not everything the app holds, and
     /// the whole tree it starts is ended when the client goes.
-    pub async fn spawn(command: &str, args: &[String], cwd: &str) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<AdapterEvent>), String> {
+    pub async fn spawn(command: &str, args: &[String], cwd: &str, env: &Env) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<AdapterEvent>), String> {
         let mut cmd = crate::proc::quiet(command);
         crate::agent::tools::code::sandbox::scrub_env(&mut cmd);
+        apply_env(&mut cmd, env);
         crate::agent::runtime::streaming::own_group(&mut cmd);
         let mut child = cmd
             .args(args)
@@ -122,7 +155,7 @@ impl DapClient {
 
     /// Start an adapter that listens on a TCP port (delve) and connect to it. `{port}` in `args` becomes a free port on the loopback interface. The
     /// adapter's own output is kept as its stderr tail. Gives up when the adapter exits or does not accept a connection in 15 seconds.
-    pub async fn spawn_listening(command: &str, args: &[String], cwd: &str) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<AdapterEvent>), String> {
+    pub async fn spawn_listening(command: &str, args: &[String], cwd: &str, env: &Env) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<AdapterEvent>), String> {
         let port = {
             let probe = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| format!("no free port: {e}"))?;
             probe.local_addr().map_err(|e| e.to_string())?.port()
@@ -130,6 +163,7 @@ impl DapClient {
         let args: Vec<String> = args.iter().map(|a| a.replace("{port}", &port.to_string())).collect();
         let mut cmd = crate::proc::quiet(command);
         crate::agent::tools::code::sandbox::scrub_env(&mut cmd);
+        apply_env(&mut cmd, env);
         crate::agent::runtime::streaming::own_group(&mut cmd);
         let mut child = cmd
             .args(&args)
@@ -188,7 +222,8 @@ impl DapClient {
         let closed = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::unbounded_channel();
         let reverse = Arc::new(AtomicBool::new(false));
-        tokio::spawn(read_loop(read, writer.clone(), pending.clone(), tx, closed.clone(), reverse.clone()));
+        let terminal = Arc::new(AtomicBool::new(false));
+        tokio::spawn(read_loop(read, writer.clone(), pending.clone(), tx, closed.clone(), (reverse.clone(), terminal.clone())));
         let client = Arc::new(Self {
             writer,
             seq: AtomicI64::new(1),
@@ -197,6 +232,7 @@ impl DapClient {
             stderr: Arc::new(StdMutex::new(VecDeque::new())),
             port: AtomicU16::new(0),
             reverse,
+            terminal,
             _tree: child.as_ref().map(|c| crate::agent::runtime::streaming::TreeKillOnDrop { pid: c.id() }),
             child: Mutex::new(child),
         });
@@ -210,6 +246,20 @@ impl DapClient {
     /// Pass the adapter's `startDebugging` requests on as events (they are refused otherwise).
     pub fn accept_start_debugging(&self) {
         self.reverse.store(true, Ordering::SeqCst);
+    }
+
+    /// Pass the adapter's `runInTerminal` requests on as events (they are refused otherwise).
+    pub fn accept_run_in_terminal(&self) {
+        self.terminal.store(true, Ordering::SeqCst);
+    }
+
+    /// Answer a request the adapter made, with a body when it succeeded or the reason when it did not.
+    pub async fn reply_reverse(&self, seq: i64, command: &str, outcome: Result<Value, String>) {
+        let reply = match outcome {
+            Ok(body) => json!({ "seq": 0, "type": "response", "request_seq": seq, "success": true, "command": command, "body": body }),
+            Err(why) => json!({ "seq": 0, "type": "response", "request_seq": seq, "success": false, "command": command, "message": why }),
+        };
+        let _ = write_message(&self.writer, &reply).await;
     }
 
     /// The loopback port the adapter listens on, if it is reached over TCP.
@@ -297,11 +347,11 @@ impl DapClient {
     }
 }
 
-async fn read_loop(read: Box<dyn AsyncRead + Unpin + Send>, writer: Writer, pending: Pending, events: mpsc::UnboundedSender<AdapterEvent>, closed: Arc<AtomicBool>, reverse: Arc<AtomicBool>) {
+async fn read_loop(read: Box<dyn AsyncRead + Unpin + Send>, writer: Writer, pending: Pending, events: mpsc::UnboundedSender<AdapterEvent>, closed: Arc<AtomicBool>, reverse: (Arc<AtomicBool>, Arc<AtomicBool>)) {
     let mut reader = BufReader::new(read);
     let why = loop {
         match read_frame(&mut reader).await {
-            Frame::Message(m) => dispatch(m, &writer, &pending, &events, &reverse).await,
+            Frame::Message(m) => dispatch(m, &writer, &pending, &events, (&reverse.0, &reverse.1)).await,
             Frame::Eof => break "the debug adapter exited".to_string(),
             Frame::Fault(why) => break format!("the debug adapter's stream could not be trusted: {why}"),
         }
@@ -314,7 +364,7 @@ async fn read_loop(read: Box<dyn AsyncRead + Unpin + Send>, writer: Writer, pend
     let _ = events.send(AdapterEvent::Closed(why));
 }
 
-async fn dispatch(message: Value, writer: &Writer, pending: &Pending, events: &mpsc::UnboundedSender<AdapterEvent>, reverse: &AtomicBool) {
+async fn dispatch(message: Value, writer: &Writer, pending: &Pending, events: &mpsc::UnboundedSender<AdapterEvent>, reverse: (&AtomicBool, &AtomicBool)) {
     match message.get("type").and_then(|t| t.as_str()) {
         Some("response") => {
             let Some(request_seq) = message.get("request_seq").and_then(|s| s.as_i64()) else { return };
@@ -339,7 +389,11 @@ async fn dispatch(message: Value, writer: &Writer, pending: &Pending, events: &m
             let seq = message.get("seq").and_then(|s| s.as_i64()).unwrap_or(0);
             let command = message.get("command").and_then(|c| c.as_str()).unwrap_or("");
             // A second session is offered to whoever asked to be told; the answer goes out when it is up (or has failed).
-            if command == "startDebugging" && reverse.load(Ordering::SeqCst) {
+            if command == "runInTerminal" && reverse.1.load(Ordering::SeqCst) {
+                let _ = events.send(AdapterEvent::RunInTerminal { seq, arguments: message.get("arguments").cloned().unwrap_or(Value::Null) });
+                return;
+            }
+            if command == "startDebugging" && reverse.0.load(Ordering::SeqCst) {
                 let _ = events.send(AdapterEvent::StartDebugging { seq, arguments: message.get("arguments").cloned().unwrap_or(Value::Null) });
                 return;
             }
@@ -496,7 +550,7 @@ mod tests {
     async fn an_adapter_that_listens_on_a_port_is_started_and_connected_to() {
         let Ok(python) = which::which("python3").or_else(|_| which::which("python")) else { return };
         let script = "import socket,sys,json\ns=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('127.0.0.1',int(sys.argv[1])));s.listen(1);c,_=s.accept();f=c.makefile('rb')\nn=0\nwhile True:\n  l=f.readline()\n  if l.lower().startswith(b'content-length:'): n=int(l.split(b':')[1])\n  if l in (b'\\r\\n',b'\\n'):\n    m=json.loads(f.read(n));b=json.dumps({'seq':1,'type':'response','request_seq':m['seq'],'success':True,'command':m['command'],'body':{'threads':[]}}).encode();c.sendall(b'Content-Length: %d\\r\\n\\r\\n'%len(b)+b);break\n";
-        let (client, _events) = DapClient::spawn_listening(&python.to_string_lossy(), &["-c".into(), script.into(), "{port}".into()], &std::env::temp_dir().to_string_lossy()).await.expect("connected");
+        let (client, _events) = DapClient::spawn_listening(&python.to_string_lossy(), &["-c".into(), script.into(), "{port}".into()], &std::env::temp_dir().to_string_lossy(), &Env::new()).await.expect("connected");
         let reply = client.request("threads", Value::Null, Duration::from_secs(5)).await.expect("answered");
         assert_eq!(reply["threads"], json!([]));
     }
@@ -504,7 +558,7 @@ mod tests {
     #[tokio::test]
     async fn an_adapter_that_exits_before_listening_says_what_it_said() {
         let Ok(python) = which::which("python3").or_else(|_| which::which("python")) else { return };
-        let e = DapClient::spawn_listening(&python.to_string_lossy(), &["-c".into(), "import sys; print('no such flag'); sys.exit(3)".into()], &std::env::temp_dir().to_string_lossy()).await.err().expect("failed");
+        let e = DapClient::spawn_listening(&python.to_string_lossy(), &["-c".into(), "import sys; print('no such flag'); sys.exit(3)".into()], &std::env::temp_dir().to_string_lossy(), &Env::new()).await.err().expect("failed");
         assert!(e.contains("exited") && e.contains("no such flag"), "{e}");
     }
 }

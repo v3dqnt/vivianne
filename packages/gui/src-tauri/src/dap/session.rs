@@ -43,6 +43,8 @@ pub struct Frame {
     pub path: Option<String>,
     pub line: i64,
     pub column: i64,
+    /// The instruction the frame is at, for disassembly and instruction breakpoints (adapters that have one).
+    pub ip: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,11 +61,107 @@ pub struct Breakpoint {
     /// The line it was asked for.
     pub line: u32,
     pub condition: Option<String>,
+    /// Stop only on this many hits (`> 5`, `== 3`, `5`), as the adapter reads it.
+    pub hit_condition: Option<String>,
+    /// A log point: print this (with `{expression}` parts) instead of stopping.
+    pub log_message: Option<String>,
     pub id: Option<i64>,
     pub verified: bool,
     pub message: Option<String>,
     /// Where the adapter put it, when that is not where it was asked.
     pub actual_line: Option<u32>,
+}
+
+impl Breakpoint {
+    pub fn new(line: u32, condition: Option<String>) -> Self {
+        Breakpoint { line, condition, hit_condition: None, log_message: None, id: None, verified: false, message: None, actual_line: None }
+    }
+
+    /// The `SourceBreakpoint` the adapter is sent.
+    fn item(&self) -> Value {
+        let mut v = json!({ "line": self.line });
+        if let Some(c) = &self.condition {
+            v["condition"] = json!(c);
+        }
+        if let Some(h) = &self.hit_condition {
+            v["hitCondition"] = json!(h);
+        }
+        if let Some(l) = &self.log_message {
+            v["logMessage"] = json!(l);
+        }
+        v
+    }
+}
+
+/// What a source breakpoint may carry beyond its line.
+#[derive(Debug, Clone, Default)]
+pub struct BpOpts {
+    pub condition: Option<String>,
+    pub hit_condition: Option<String>,
+    pub log_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstructionBreakpoint {
+    pub reference: String,
+    pub offset: Option<i64>,
+    pub condition: Option<String>,
+    pub hit_condition: Option<String>,
+    pub id: Option<i64>,
+    pub verified: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataBreakpoint {
+    pub data_id: String,
+    pub access_type: Option<String>,
+    pub condition: Option<String>,
+    pub hit_condition: Option<String>,
+    pub id: Option<i64>,
+    pub verified: bool,
+    pub message: Option<String>,
+}
+
+/// What the adapter says about watching one variable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataInfo {
+    pub data_id: Option<String>,
+    pub description: String,
+    pub access_types: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExceptionInfo {
+    pub id: String,
+    pub description: Option<String>,
+    pub break_mode: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Module {
+    pub id: String,
+    pub name: String,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Instruction {
+    pub address: String,
+    pub bytes: Option<String>,
+    pub text: String,
+    pub symbol: Option<String>,
+    pub location: Option<String>,
+}
+
+/// What stepping may be told beyond which way.
+#[derive(Debug, Clone, Default)]
+pub struct StepOpts {
+    /// `statement`, `line` or `instruction`.
+    pub granularity: Option<String>,
+    /// Run or step only the thread that stopped.
+    pub single_thread: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -149,6 +247,8 @@ struct State {
     threads: Vec<(i64, String)>,
     breakpoints: BTreeMap<String, Vec<Breakpoint>>,
     functions: Vec<FunctionBreakpoint>,
+    instructions: Vec<InstructionBreakpoint>,
+    data: Vec<DataBreakpoint>,
     /// The exception filters last asked for, so a child session starts with them too.
     exception_filters: Vec<String>,
     output: Output,
@@ -158,6 +258,32 @@ struct State {
     end_note: Option<String>,
 }
 
+/// What a session is started with.
+pub struct StartSpec {
+    pub id: String,
+    pub adapter: String,
+    /// Whether the adapter asks for child sessions (js-debug).
+    pub children: bool,
+    /// What is debugged: the program, or what it is attached to.
+    pub program: String,
+    pub cwd: String,
+    /// `launch` or `attach`.
+    pub request: &'static str,
+    pub request_arguments: Value,
+    pub breakpoints: Vec<(String, u32, Option<String>)>,
+    /// Asks the user before anything the adapter requests of the client runs. `None`: such requests are refused.
+    pub approver: Option<Approver>,
+}
+
+/// Asks the user whether something the adapter wants run on its own say-so may be; answers `true` when allowed.
+pub type Approver = Arc<dyn Fn(String) -> futures::future::BoxFuture<'static, bool> + Send + Sync>;
+
+/// A program the adapter had Vivianne run: its process tree ends when this is dropped.
+struct Terminal {
+    _tree: crate::agent::runtime::streaming::TreeKillOnDrop,
+    _child: tokio::process::Child,
+}
+
 pub struct Session {
     pub id: String,
     pub adapter: String,
@@ -165,10 +291,16 @@ pub struct Session {
     pub cwd: String,
     /// The connection the adapter was started with; the session lives as long as it does.
     root: Arc<DapClient>,
+    /// Asks the user before anything the adapter requests of the client runs.
+    approver: Option<Approver>,
+    /// Programs the adapter had Vivianne run for it (`runInTerminal`): kept, so they end with the session. Dropping one ends its process tree.
+    terminals: StdMutex<Vec<Terminal>>,
+    /// The program this session was started for, to tell a child session that runs the same thing from one that runs something else.
+    root_program: String,
     /// The connection run control and inspection go to: the root, until a child session (js-debug starts one per process) takes over.
     focus: StdMutex<Arc<DapClient>>,
     children: StdMutex<Vec<Arc<DapClient>>>,
-    caps: Value,
+    caps: StdMutex<Value>,
     state: StdMutex<State>,
     tick: watch::Sender<u64>,
 }
@@ -210,7 +342,7 @@ impl Session {
     }
 
     pub fn capability(&self, name: &str) -> bool {
-        self.caps.get(name).and_then(|v| v.as_bool()) == Some(true)
+        self.caps.lock().unwrap_or_else(|e| e.into_inner()).get(name).and_then(|v| v.as_bool()) == Some(true)
     }
 
     pub fn exit_code(&self) -> Option<i64> {
@@ -249,6 +381,26 @@ impl Session {
                             let thread_id = body.get("threadId").and_then(|t| t.as_i64()).unwrap_or_else(|| st.threads.first().map(|t| t.0).unwrap_or(1));
                             st.status = Status::Stopped;
                             st.stop = Some(Stop { thread_id, reason: s(&body, "reason").unwrap_or_else(|| "stopped".into()), text: s(&body, "text").or_else(|| s(&body, "description")), frame: None });
+                        }
+                        // The adapter says what it has now learned it can do.
+                        "capabilities" => {
+                            if let Some(new) = body.get("capabilities").and_then(|c| c.as_object()) {
+                                let mut caps = self.caps.lock().unwrap_or_else(|e| e.into_inner());
+                                if let Some(c) = caps.as_object_mut() {
+                                    for (k, v) in new {
+                                        c.insert(k.clone(), v.clone());
+                                    }
+                                }
+                            }
+                        }
+                        // What was read about the stack or the variables is out of date (the program changed something): read it again.
+                        "invalidated" => {
+                            let areas: Vec<&str> = body.get("areas").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).collect()).unwrap_or_default();
+                            if areas.is_empty() || areas.iter().any(|a| matches!(*a, "all" | "stacks")) {
+                                if let Some(stop) = st.stop.as_mut() {
+                                    stop.frame = None;
+                                }
+                            }
                         }
                         "continued" => {
                             st.status = Status::Running;
@@ -299,8 +451,8 @@ impl Session {
                 }
                 self.bump();
             }
-            // Handled by the pump, which can start the second session; nothing to record here.
-            AdapterEvent::StartDebugging { .. } => {}
+            // Handled by the pump, which can start the second session or the program; nothing to record here.
+            AdapterEvent::StartDebugging { .. } | AdapterEvent::RunInTerminal { .. } => {}
             AdapterEvent::Closed(why) => {
                 {
                     let mut st = self.st();
@@ -329,24 +481,20 @@ impl Session {
     }
 
     /// Start a session over a connected client. See the module doc for the order.
-    pub async fn start(
-        id: String,
-        adapter: &str,
-        program: &str,
-        cwd: &str,
-        client: Arc<DapClient>,
-        events: mpsc::UnboundedReceiver<AdapterEvent>,
-        launch_arguments: Value,
-        breakpoints: Vec<(String, u32, Option<String>)>,
-    ) -> Result<Arc<Session>, String> {
+    pub async fn start(spec: StartSpec, client: Arc<DapClient>, events: mpsc::UnboundedReceiver<AdapterEvent>) -> Result<Arc<Session>, String> {
+        let StartSpec { id, adapter, children, program, cwd, request, request_arguments, breakpoints, approver } = spec;
+        let (adapter, program, cwd) = (adapter.as_str(), program.as_str(), cwd.as_str());
         let fail = |client: Arc<DapClient>, why: String| async move {
             let tail = client.stderr_tail();
             client.dispose().await;
             Err::<Arc<Session>, String>(explain_failure(adapter, &why, &tail))
         };
-        let wants_children = super::config::ADAPTERS.iter().any(|a| a.name == adapter && a.children) && client.port().is_some();
+        let wants_children = children && client.port().is_some();
         if wants_children {
             client.accept_start_debugging();
+        }
+        if approver.is_some() {
+            client.accept_run_in_terminal();
         }
         let caps = match client
             .request(
@@ -361,7 +509,7 @@ impl Session {
                     "supportsVariableType": true,
                     "supportsInvalidatedEvent": true,
                     // Nothing the adapter asks of the client is offered: it starts the program itself.
-                    "supportsRunInTerminalRequest": false,
+                    "supportsRunInTerminalRequest": approver.is_some(),
                     "supportsStartDebuggingRequest": wants_children,
                     "supportsMemoryReferences": false,
                     "supportsProgressReporting": false,
@@ -380,15 +528,20 @@ impl Session {
             program: program.to_string(),
             cwd: cwd.to_string(),
             root: client.clone(),
+            approver: approver.clone(),
+            terminals: StdMutex::new(Vec::new()),
+            root_program: program.to_string(),
             focus: StdMutex::new(client.clone()),
             children: StdMutex::new(Vec::new()),
-            caps: if caps.is_object() { caps } else { json!({}) },
+            caps: StdMutex::new(if caps.is_object() { caps } else { json!({}) }),
             state: StdMutex::new(State {
                 status: Status::Launching,
                 stop: None,
                 threads: Vec::new(),
                 breakpoints: BTreeMap::new(),
                 functions: Vec::new(),
+                instructions: Vec::new(),
+                data: Vec::new(),
                 exception_filters: Vec::new(),
                 output: Output::default(),
                 exit_code: None,
@@ -400,7 +553,7 @@ impl Session {
         tokio::spawn(pump(Arc::downgrade(&session), client.clone(), events));
 
         // `launch` goes out now and is answered after `configurationDone`.
-        let launch = match client.send("launch", launch_arguments).await {
+        let launch = match client.send(request, request_arguments).await {
             Ok(rx) => rx,
             Err(e) => return fail(client, e.message).await,
         };
@@ -411,7 +564,7 @@ impl Session {
         }
         // The breakpoints the agent asked for, before anything runs.
         for (path, line, condition) in breakpoints {
-            session.st().breakpoints.entry(path).or_default().push(Breakpoint { line, condition, id: None, verified: false, message: None, actual_line: None });
+            session.st().breakpoints.entry(path).or_default().push(Breakpoint::new(line, condition));
         }
         let files: Vec<String> = session.st().breakpoints.keys().cloned().collect();
         for path in files {
@@ -424,7 +577,7 @@ impl Session {
                 return fail(client, e.message).await;
             }
         }
-        if let Err(e) = client.answer("launch", launch, REQUEST_TIMEOUT).await {
+        if let Err(e) = client.answer(request, launch, REQUEST_TIMEOUT).await {
             return fail(client, e.message).await;
         }
         {
@@ -433,8 +586,11 @@ impl Session {
                 st.status = Status::Running;
             }
         }
-        // A program stopped at its start is the usual end of a launch: wait for it, then say where.
-        session.wait_until(INITIAL_STOP_WAIT, |st| matches!(st.status, Status::Stopped | Status::Terminated)).await;
+        // A program stopped at its start is the usual end of a launch: wait for it, then say where. An attach finds a program that is already
+        // running, and does not wait for a stop that may never come.
+        if request == "launch" {
+            session.wait_until(INITIAL_STOP_WAIT, |st| matches!(st.status, Status::Stopped | Status::Terminated)).await;
+        }
         if session.status() == Status::Stopped {
             session.fetch_top_frame().await;
         }
@@ -444,7 +600,7 @@ impl Session {
     /// Send the whole breakpoint list for one file (DAP replaces a file's list each time) and take the verdicts from the answer.
     async fn sync_file(&self, path: &str) -> Result<Vec<Breakpoint>, String> {
         let wanted = self.st().breakpoints.get(path).cloned().unwrap_or_default();
-        let items: Vec<Value> = wanted.iter().map(|b| if let Some(c) = &b.condition { json!({ "line": b.line, "condition": c }) } else { json!({ "line": b.line }) }).collect();
+        let items: Vec<Value> = wanted.iter().map(|b| b.item()).collect();
         let body = self.send_all("setBreakpoints", json!({ "source": { "path": path }, "breakpoints": items }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
         let answered = body.get("breakpoints").and_then(|b| b.as_array()).cloned().unwrap_or_default();
         let mut st = self.st();
@@ -467,11 +623,25 @@ impl Session {
 
     /// Add (or change the condition of) a breakpoint in a file. Returns the file's breakpoints.
     pub async fn set_breakpoint(&self, path: &str, line: u32, condition: Option<String>) -> Result<Vec<Breakpoint>, String> {
+        self.set_breakpoint_with(path, line, BpOpts { condition, ..Default::default() }).await
+    }
+
+    /// A breakpoint with a hit count or a log message as well, for adapters that offer them.
+    pub async fn set_breakpoint_with(&self, path: &str, line: u32, opts: BpOpts) -> Result<Vec<Breakpoint>, String> {
+        if opts.hit_condition.is_some() {
+            self.need("supportsHitConditionalBreakpoints", "hit conditions on breakpoints")?;
+        }
+        if opts.log_message.is_some() {
+            self.need("supportsLogPoints", "log points")?;
+        }
         {
             let mut st = self.st();
             let list = st.breakpoints.entry(path.to_string()).or_default();
             list.retain(|b| b.line != line);
-            list.push(Breakpoint { line, condition, id: None, verified: false, message: None, actual_line: None });
+            let mut bp = Breakpoint::new(line, opts.condition);
+            bp.hit_condition = opts.hit_condition;
+            bp.log_message = opts.log_message;
+            list.push(bp);
             list.sort_by_key(|b| b.line);
         }
         self.sync_file(path).await
@@ -531,7 +701,7 @@ impl Session {
     /// Break on exceptions: `filters` are the adapter's own ids (`raised`, `uncaught`, ...), listed in its capabilities.
     pub async fn set_exception_breakpoints(&self, filters: Vec<String>) -> Result<(), String> {
         self.st().exception_filters = filters.clone();
-        let offered: Vec<String> = self.caps.get("exceptionBreakpointFilters").and_then(|f| f.as_array()).map(|a| a.iter().filter_map(|f| s(f, "filter")).collect()).unwrap_or_default();
+        let offered: Vec<String> = self.caps.lock().unwrap_or_else(|e| e.into_inner()).get("exceptionBreakpointFilters").and_then(|f| f.as_array()).map(|a| a.iter().filter_map(|f| s(f, "filter")).collect()).unwrap_or_default();
         if offered.is_empty() {
             return Err("this debug adapter offers no exception breakpoints".into());
         }
@@ -542,7 +712,7 @@ impl Session {
     }
 
     pub fn exception_filters(&self) -> Vec<(String, String)> {
-        self.caps.get("exceptionBreakpointFilters").and_then(|f| f.as_array()).map(|a| a.iter().filter_map(|f| Some((s(f, "filter")?, s(f, "label").unwrap_or_default()))).collect()).unwrap_or_default()
+        self.caps.lock().unwrap_or_else(|e| e.into_inner()).get("exceptionBreakpointFilters").and_then(|f| f.as_array()).map(|a| a.iter().filter_map(|f| Some((s(f, "filter")?, s(f, "label").unwrap_or_default()))).collect()).unwrap_or_default()
     }
 
     // ── Running ──────────────────────────────────────────────────────────────
@@ -558,14 +728,34 @@ impl Session {
     /// `continue`, `next`, `stepIn` or `stepOut`, then wait for the program to stop or end. When `wait` runs out first the program is
     /// still running and that is said, not failed: a later call sees the stop when it comes.
     pub async fn resume(&self, command: &str, wait: Duration) -> Result<Outcome, String> {
+        self.resume_with(command, wait, StepOpts::default()).await
+    }
+
+    /// The same, with the step's granularity (`statement`, `line`, `instruction`) or `singleThread` where the adapter offers them.
+    pub async fn resume_with(&self, command: &str, wait: Duration, opts: StepOpts) -> Result<Outcome, String> {
         self.require_live()?;
         let thread = self.thread_for_run().await?;
+        let mut args = json!({ "threadId": thread });
+        if let Some(g) = &opts.granularity {
+            if command == "continue" {
+                return Err("granularity applies to steps, not to continue".into());
+            }
+            if !matches!(g.as_str(), "statement" | "line" | "instruction") {
+                return Err(format!("granularity is statement, line or instruction, not '{g}'"));
+            }
+            self.need("supportsSteppingGranularity", "a step granularity")?;
+            args["granularity"] = json!(g);
+        }
+        if opts.single_thread {
+            self.need("supportsSingleThreadExecutionRequests", "running a single thread")?;
+            args["singleThread"] = json!(true);
+        }
         {
             let mut st = self.st();
             st.stop = None;
             st.status = Status::Running;
         }
-        self.client().request(command, json!({ "threadId": thread }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        self.client().request(command, args, REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
         Ok(self.outcome(wait).await)
     }
 
@@ -638,6 +828,7 @@ impl Session {
                 a.iter()
                     .filter_map(|f| {
                         Some(Frame {
+                            ip: f.get("instructionPointerReference").and_then(|i| i.as_str()).map(String::from),
                             id: f.get("id")?.as_i64()?,
                             name: s(f, "name").unwrap_or_default(),
                             path: f.pointer("/source/path").and_then(|p| p.as_str()).map(String::from),
@@ -723,6 +914,74 @@ impl Session {
         self.bump();
     }
 
+    /// A child session starts without asking when it only attaches to a process the user's launch already started, or runs the same program;
+    /// anything else it wants to run is put to the user first. Returns what to ask, or `None`.
+    pub(crate) fn child_needs_approval(request: &Value, parent_program: &str) -> Option<String> {
+        if request.get("request").and_then(|r| r.as_str()) == Some("attach") {
+            return None;
+        }
+        let configuration = request.get("configuration").unwrap_or(&Value::Null);
+        let runs = configuration.get("runtimeExecutable").or_else(|| configuration.get("command")).and_then(|v| v.as_str());
+        let program = configuration.get("program").and_then(|v| v.as_str());
+        if runs.is_none() && program.map(|p| p == parent_program).unwrap_or(program.is_none()) {
+            return None;
+        }
+        let args = configuration.get("args").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+        Some(format!("the debug adapter wants to start another program in this session: {} {}", runs.or(program).unwrap_or("?"), args).trim_end().to_string())
+    }
+
+    async fn allow_and_open_child(self: &Arc<Self>, request: &Value) -> Result<(), String> {
+        if let Some(what) = Self::child_needs_approval(request, &self.root_program) {
+            let allowed = match &self.approver {
+                Some(ask) => ask(what).await,
+                None => false,
+            };
+            if !allowed {
+                return Err("the user did not allow it".into());
+            }
+        }
+        self.open_child(request).await
+    }
+
+    /// The adapter asks for a command to be run in a terminal. The user is asked, with the command in full; if they allow it, it runs with
+    /// the filtered environment (plus what the adapter asked for, where `null` unsets), its output is kept with the session's, and it is
+    /// ended with the session.
+    async fn run_in_terminal(self: &Arc<Self>, request: &Value) -> Result<Value, String> {
+        let args: Vec<String> = request.get("args").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        let Some((program, rest)) = args.split_first() else { return Err("no command was given".into()) };
+        let cwd = request.get("cwd").and_then(|c| c.as_str()).filter(|c| !c.is_empty()).unwrap_or(&self.cwd).to_string();
+        let env: super::client::Env = request.get("env").and_then(|e| e.as_object()).map(|o| o.iter().map(|(k, v)| (k.clone(), v.as_str().map(String::from))).collect()).unwrap_or_default();
+        let allowed = match &self.approver {
+            Some(ask) => ask(format!("the debug adapter wants to run `{}` in {cwd}", args.join(" "))).await,
+            None => false,
+        };
+        if !allowed {
+            return Err("the user did not allow it".into());
+        }
+        let mut cmd = crate::proc::quiet(program);
+        crate::agent::tools::code::sandbox::scrub_env(&mut cmd);
+        super::client::apply_env(&mut cmd, &env);
+        crate::agent::runtime::streaming::own_group(&mut cmd);
+        let mut child = cmd.args(rest).current_dir(&cwd).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true).spawn().map_err(|e| format!("couldn't start {program}: {e}"))?;
+        let pid = child.id();
+        for (stream, label) in [(child.stdout.take().map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>), ""), (child.stderr.take().map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>), "[stderr] ")] {
+            if let Some(stream) = stream {
+                let weak = Arc::downgrade(self);
+                tokio::spawn(async move {
+                    use tokio::io::AsyncBufReadExt;
+                    let mut lines = tokio::io::BufReader::new(stream).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let Some(me) = weak.upgrade() else { break };
+                        me.st().output.push(&format!("{label}{line}\n"));
+                        me.bump();
+                    }
+                });
+            }
+        }
+        self.terminals.lock().unwrap_or_else(|e| e.into_inner()).push(Terminal { _tree: crate::agent::runtime::streaming::TreeKillOnDrop { pid }, _child: child });
+        Ok(json!({ "processId": pid }))
+    }
+
     /// The adapter asked for another session on its server (`startDebugging`): connect, run the handshake with the configuration it chose,
     /// give it the breakpoints, and make it the one run control talks to.
     fn open_child(self: &Arc<Self>, request: &Value) -> futures::future::BoxFuture<'static, Result<(), String>> {
@@ -735,6 +994,9 @@ impl Session {
         let port = self.root.port().ok_or("this adapter has no port a second session could connect to")?;
         let (child, events) = DapClient::connect(port).await?;
         child.accept_start_debugging();
+        if self.approver.is_some() {
+            child.accept_run_in_terminal();
+        }
         let initialized = Arc::new(tokio::sync::Notify::new());
         tokio::spawn(child_pump(Arc::downgrade(self), child.clone(), events, initialized.clone()));
         let fail = |child: Arc<DapClient>, why: String| async move {
@@ -745,7 +1007,7 @@ impl Session {
             .request(
                 "initialize",
                 json!({ "clientID": "vivianne", "clientName": "Vivianne", "adapterID": self.adapter, "linesStartAt1": true, "columnsStartAt1": true, "pathFormat": "path", "supportsVariableType": true, "supportsInvalidatedEvent": true,
-                        "supportsRunInTerminalRequest": false, "supportsStartDebuggingRequest": true, "supportsMemoryReferences": false, "supportsProgressReporting": false }),
+                        "supportsRunInTerminalRequest": self.approver.is_some(), "supportsStartDebuggingRequest": true, "supportsMemoryReferences": false, "supportsProgressReporting": false }),
                 REQUEST_TIMEOUT,
             )
             .await
@@ -772,12 +1034,22 @@ impl Session {
         };
         for path in files {
             let wanted = self.st().breakpoints.get(&path).cloned().unwrap_or_default();
-            let items: Vec<Value> = wanted.iter().map(|b| if let Some(c) = &b.condition { json!({ "line": b.line, "condition": c }) } else { json!({ "line": b.line }) }).collect();
+            let items: Vec<Value> = wanted.iter().map(|b| b.item()).collect();
             let _ = child.request("setBreakpoints", json!({ "source": { "path": path }, "breakpoints": items }), REQUEST_TIMEOUT).await;
         }
         if !functions.is_empty() {
             let items: Vec<Value> = functions.iter().map(|f| if let Some(c) = &f.condition { json!({ "name": f.name, "condition": c }) } else { json!({ "name": f.name }) }).collect();
             let _ = child.request("setFunctionBreakpoints", json!({ "breakpoints": items }), REQUEST_TIMEOUT).await;
+        }
+        let (instructions, data) = {
+            let st = self.st();
+            (st.instructions.clone(), st.data.clone())
+        };
+        if !instructions.is_empty() {
+            let _ = child.request("setInstructionBreakpoints", json!({ "breakpoints": instructions.iter().map(instruction_item).collect::<Vec<_>>() }), REQUEST_TIMEOUT).await;
+        }
+        if !data.is_empty() {
+            let _ = child.request("setDataBreakpoints", json!({ "breakpoints": data.iter().map(data_item).collect::<Vec<_>>() }), REQUEST_TIMEOUT).await;
         }
         if !filters.is_empty() {
             let _ = child.request("setExceptionBreakpoints", json!({ "filters": filters }), REQUEST_TIMEOUT).await;
@@ -815,6 +1087,7 @@ impl Session {
             kid.dispose().await;
         }
         *self.focus.lock().unwrap_or_else(|e| e.into_inner()) = self.root.clone();
+        self.terminals.lock().unwrap_or_else(|e| e.into_inner()).clear();
         if self.is_live() {
             if self.capability("supportsTerminateRequest") {
                 let _ = self.root.request("terminate", Value::Null, Duration::from_secs(3)).await;
@@ -827,6 +1100,310 @@ impl Session {
             st.status = Status::Terminated;
         }
         self.bump();
+    }
+}
+
+fn instruction_item(b: &InstructionBreakpoint) -> Value {
+    let mut v = json!({ "instructionReference": b.reference });
+    if let Some(o) = b.offset {
+        v["offset"] = json!(o);
+    }
+    if let Some(c) = &b.condition {
+        v["condition"] = json!(c);
+    }
+    if let Some(h) = &b.hit_condition {
+        v["hitCondition"] = json!(h);
+    }
+    v
+}
+
+fn data_item(b: &DataBreakpoint) -> Value {
+    let mut v = json!({ "dataId": b.data_id });
+    if let Some(a) = &b.access_type {
+        v["accessType"] = json!(a);
+    }
+    if let Some(c) = &b.condition {
+        v["condition"] = json!(c);
+    }
+    if let Some(h) = &b.hit_condition {
+        v["hitCondition"] = json!(h);
+    }
+    v
+}
+
+/// The most modules, sources, instructions, completions and bytes one call returns.
+pub const MAX_MODULES: i64 = 100;
+pub const MAX_SOURCES: usize = 200;
+pub const MAX_INSTRUCTIONS: i64 = 200;
+pub const MAX_COMPLETIONS: usize = 50;
+pub const MAX_MEMORY_BYTES: i64 = 4096;
+
+impl Session {
+    /// An error naming what the adapter lacks, unless it advertises `capability`.
+    fn need(&self, capability: &str, what: &str) -> Result<(), String> {
+        if self.capability(capability) {
+            Ok(())
+        } else {
+            Err(format!("this debug adapter does not support {what}"))
+        }
+    }
+
+    /// Read the top frame of the current stop again if it was dropped (an `invalidated` event) or never fetched.
+    pub async fn refresh_stop(&self) {
+        self.fetch_top_frame().await;
+    }
+
+    // ── instruction and data breakpoints ──
+
+    async fn sync_instructions(&self) -> Result<Vec<InstructionBreakpoint>, String> {
+        self.need("supportsInstructionBreakpoints", "instruction breakpoints")?;
+        let wanted = self.st().instructions.clone();
+        let body = self.send_all("setInstructionBreakpoints", json!({ "breakpoints": wanted.iter().map(instruction_item).collect::<Vec<_>>() }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        let answered = body.get("breakpoints").and_then(|b| b.as_array()).cloned().unwrap_or_default();
+        let mut st = self.st();
+        for (b, said) in st.instructions.iter_mut().zip(answered.iter()) {
+            b.id = said.get("id").and_then(|i| i.as_i64());
+            b.verified = said.get("verified").and_then(|v| v.as_bool()).unwrap_or(false);
+            b.message = s(said, "message");
+        }
+        Ok(st.instructions.clone())
+    }
+
+    pub async fn set_instruction_breakpoint(&self, reference: &str, offset: Option<i64>, condition: Option<String>, hit_condition: Option<String>) -> Result<Vec<InstructionBreakpoint>, String> {
+        self.require_live()?;
+        self.need("supportsInstructionBreakpoints", "instruction breakpoints")?;
+        {
+            let mut st = self.st();
+            st.instructions.retain(|b| !(b.reference == reference && b.offset == offset));
+            st.instructions.push(InstructionBreakpoint { reference: reference.to_string(), offset, condition, hit_condition, id: None, verified: false, message: None });
+        }
+        self.sync_instructions().await
+    }
+
+    pub async fn remove_instruction_breakpoint(&self, reference: &str, offset: Option<i64>) -> Result<Vec<InstructionBreakpoint>, String> {
+        self.require_live()?;
+        {
+            let mut st = self.st();
+            let before = st.instructions.len();
+            st.instructions.retain(|b| !(b.reference == reference && b.offset == offset));
+            if st.instructions.len() == before {
+                return Err(format!("no instruction breakpoint is set at {reference}"));
+            }
+        }
+        self.sync_instructions().await
+    }
+
+    pub fn instruction_breakpoints(&self) -> Vec<InstructionBreakpoint> {
+        self.st().instructions.clone()
+    }
+
+    /// Whether a variable can be watched, and what the adapter calls it (`dataId`).
+    pub async fn data_breakpoint_info(&self, name: &str, variables_reference: Option<i64>, frame_id: Option<i64>) -> Result<DataInfo, String> {
+        self.require_live()?;
+        self.need("supportsDataBreakpoints", "data breakpoints")?;
+        let mut args = json!({ "name": name });
+        if let Some(r) = variables_reference {
+            args["variablesReference"] = json!(r);
+        }
+        if let Some(f) = frame_id.or_else(|| self.frame_or_top(None).ok()) {
+            args["frameId"] = json!(f);
+        }
+        let body = self.client().request("dataBreakpointInfo", args, REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        Ok(DataInfo {
+            data_id: body.get("dataId").and_then(|d| d.as_str()).map(String::from),
+            description: s(&body, "description").unwrap_or_default(),
+            access_types: body.get("accessTypes").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+        })
+    }
+
+    async fn sync_data(&self) -> Result<Vec<DataBreakpoint>, String> {
+        let wanted = self.st().data.clone();
+        let body = self.send_all("setDataBreakpoints", json!({ "breakpoints": wanted.iter().map(data_item).collect::<Vec<_>>() }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        let answered = body.get("breakpoints").and_then(|b| b.as_array()).cloned().unwrap_or_default();
+        let mut st = self.st();
+        for (b, said) in st.data.iter_mut().zip(answered.iter()) {
+            b.id = said.get("id").and_then(|i| i.as_i64());
+            b.verified = said.get("verified").and_then(|v| v.as_bool()).unwrap_or(false);
+            b.message = s(said, "message");
+        }
+        Ok(st.data.clone())
+    }
+
+    pub async fn set_data_breakpoint(&self, data_id: &str, access_type: Option<String>, condition: Option<String>, hit_condition: Option<String>) -> Result<Vec<DataBreakpoint>, String> {
+        self.require_live()?;
+        self.need("supportsDataBreakpoints", "data breakpoints")?;
+        {
+            let mut st = self.st();
+            st.data.retain(|b| b.data_id != data_id);
+            st.data.push(DataBreakpoint { data_id: data_id.to_string(), access_type, condition, hit_condition, id: None, verified: false, message: None });
+        }
+        self.sync_data().await
+    }
+
+    pub async fn remove_data_breakpoint(&self, data_id: &str) -> Result<Vec<DataBreakpoint>, String> {
+        self.require_live()?;
+        {
+            let mut st = self.st();
+            let before = st.data.len();
+            st.data.retain(|b| b.data_id != data_id);
+            if st.data.len() == before {
+                return Err("no data breakpoint has that data_id".into());
+            }
+        }
+        self.sync_data().await
+    }
+
+    pub fn data_breakpoints(&self) -> Vec<DataBreakpoint> {
+        self.st().data.clone()
+    }
+
+    // ── what stopped it, and moving the program ──
+
+    /// Why the program stopped, when it stopped on an exception.
+    pub async fn exception_info(&self) -> Result<ExceptionInfo, String> {
+        self.require_live()?;
+        self.need("supportsExceptionInfoRequest", "exception details")?;
+        let thread = self.current_stop().map(|s| s.thread_id).ok_or("the program is not stopped")?;
+        let body = self.client().request("exceptionInfo", json!({ "threadId": thread }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        let mut detail = Vec::new();
+        for (label, pointer) in [("message", "/details/message"), ("type", "/details/typeName"), ("stack", "/details/stackTrace")] {
+            if let Some(t) = body.pointer(pointer).and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+                detail.push(format!("{label}: {t}"));
+            }
+        }
+        Ok(ExceptionInfo { id: s(&body, "exceptionId").unwrap_or_default(), description: s(&body, "description"), break_mode: s(&body, "breakMode").unwrap_or_default(), detail: detail.join("\n") })
+    }
+
+    /// Start the program again under the same session, when the adapter can. Waits for it to stop or end like a step does.
+    pub async fn restart(&self, wait: Duration) -> Result<Outcome, String> {
+        self.require_live()?;
+        self.need("supportsRestartRequest", "restarting (end the session and launch again)")?;
+        {
+            let mut st = self.st();
+            st.stop = None;
+            st.status = Status::Running;
+            st.exit_code = None;
+        }
+        self.client().request("restart", json!({}), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        Ok(self.outcome(wait).await)
+    }
+
+    /// Continue from another line of the same file, skipping what is between (the program's state is not undone).
+    pub async fn goto(&self, path: &str, line: u32, wait: Duration) -> Result<Outcome, String> {
+        self.require_live()?;
+        self.need("supportsGotoTargetsRequest", "jumping to a line")?;
+        let thread = self.current_stop().map(|s| s.thread_id).ok_or("the program is not stopped")?;
+        let targets = self.client().request("gotoTargets", json!({ "source": { "path": path }, "line": line }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        let id = targets.get("targets").and_then(|t| t.as_array()).and_then(|t| t.first()).and_then(|t| t.get("id")).and_then(|i| i.as_i64()).ok_or_else(|| format!("the adapter offers no place to jump to at {path}:{line}"))?;
+        {
+            let mut st = self.st();
+            st.stop = None;
+            st.status = Status::Running;
+        }
+        self.client().request("goto", json!({ "threadId": thread, "targetId": id }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        Ok(self.outcome(wait).await)
+    }
+
+    /// What could be typed at `column` (1-based) of `text` in the frame, for the adapter's expression language.
+    pub async fn completions(&self, text: &str, column: i64, frame_id: Option<i64>) -> Result<Vec<String>, String> {
+        self.require_live()?;
+        self.need("supportsCompletionsRequest", "completions")?;
+        let mut args = json!({ "text": text, "column": column });
+        if let Ok(f) = self.frame_or_top(frame_id) {
+            args["frameId"] = json!(f);
+        }
+        let body = self.client().request("completions", args, REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        Ok(body.get("targets").and_then(|t| t.as_array()).map(|a| a.iter().filter_map(|t| s(t, "text").or_else(|| s(t, "label"))).take(MAX_COMPLETIONS).collect()).unwrap_or_default())
+    }
+
+    // ── the program's modules, sources, instructions and memory ──
+
+    pub async fn modules(&self, start: i64, count: i64) -> Result<(Vec<Module>, i64), String> {
+        self.require_live()?;
+        self.need("supportsModulesRequest", "listing modules")?;
+        let body = self.client().request("modules", json!({ "startModule": start.max(0), "moduleCount": count.clamp(1, MAX_MODULES) }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        let list: Vec<Module> = body
+            .get("modules")
+            .and_then(|m| m.as_array())
+            .map(|a| a.iter().map(|m| Module { id: m.get("id").map(|i| i.as_str().map(String::from).unwrap_or_else(|| i.to_string())).unwrap_or_default(), name: s(m, "name").unwrap_or_default(), path: s(m, "path") }).collect())
+            .unwrap_or_default();
+        let total = body.get("totalModules").and_then(|t| t.as_i64()).unwrap_or(list.len() as i64);
+        Ok((list, total))
+    }
+
+    pub async fn loaded_sources(&self) -> Result<(Vec<String>, usize), String> {
+        self.require_live()?;
+        self.need("supportsLoadedSourcesRequest", "listing loaded sources")?;
+        let body = self.client().request("loadedSources", json!({}), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        let all: Vec<String> = body.get("sources").and_then(|m| m.as_array()).map(|a| a.iter().filter_map(|x| s(x, "path").or_else(|| s(x, "name"))).collect()).unwrap_or_default();
+        let total = all.len();
+        Ok((all.into_iter().take(MAX_SOURCES).collect(), total))
+    }
+
+    /// Disassemble `count` instructions from `reference` (else the top frame's instruction).
+    pub async fn disassemble(&self, reference: Option<&str>, offset: i64, instruction_offset: i64, count: i64, resolve_symbols: bool) -> Result<Vec<Instruction>, String> {
+        self.require_live()?;
+        self.need("supportsDisassembleRequest", "disassembly")?;
+        let reference = match reference {
+            Some(r) => r.to_string(),
+            None => {
+                self.fetch_top_frame().await;
+                self.current_stop().and_then(|s| s.frame).and_then(|f| f.ip).ok_or("give a 'memory_reference': the program is not stopped, or the adapter does not say where")?
+            }
+        };
+        let body = self
+            .client()
+            .request("disassemble", json!({ "memoryReference": reference, "offset": offset, "instructionOffset": instruction_offset, "instructionCount": count.clamp(1, MAX_INSTRUCTIONS), "resolveSymbols": resolve_symbols }), REQUEST_TIMEOUT)
+            .await
+            .map_err(|e| e.message)?;
+        Ok(body
+            .get("instructions")
+            .and_then(|i| i.as_array())
+            .map(|a| {
+                a.iter()
+                    .map(|i| Instruction {
+                        address: s(i, "address").unwrap_or_default(),
+                        bytes: s(i, "instructionBytes"),
+                        text: s(i, "instruction").unwrap_or_default(),
+                        symbol: s(i, "symbol"),
+                        location: i.pointer("/location/path").and_then(|p| p.as_str()).map(|p| format!("{p}{}", i.get("line").and_then(|l| l.as_i64()).map(|l| format!(":{l}")).unwrap_or_default())),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Read `count` bytes (at most `MAX_MEMORY_BYTES`) at `reference` + `offset`. Returns the address, the bytes, and how many could not be read.
+    pub async fn read_memory(&self, reference: &str, offset: i64, count: i64) -> Result<(String, Vec<u8>, i64), String> {
+        use base64::Engine;
+        self.require_live()?;
+        self.need("supportsReadMemoryRequest", "reading memory")?;
+        let body = self.client().request("readMemory", json!({ "memoryReference": reference, "offset": offset, "count": count.clamp(1, MAX_MEMORY_BYTES) }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        let bytes = match body.get("data").and_then(|d| d.as_str()) {
+            Some(d) => base64::engine::general_purpose::STANDARD.decode(d).map_err(|e| format!("the adapter's memory data was not base64: {e}"))?,
+            None => Vec::new(),
+        };
+        Ok((s(&body, "address").unwrap_or_else(|| reference.to_string()), bytes, body.get("unreadableBytes").and_then(|u| u.as_i64()).unwrap_or(0)))
+    }
+
+    /// Write `data` (base64) at `reference` + `offset`. Returns how many bytes were written.
+    pub async fn write_memory(&self, reference: &str, offset: i64, data_base64: &str, allow_partial: bool) -> Result<i64, String> {
+        use base64::Engine;
+        self.require_live()?;
+        self.need("supportsWriteMemoryRequest", "writing memory")?;
+        let n = base64::engine::general_purpose::STANDARD.decode(data_base64).map_err(|e| format!("'data' is not base64: {e}"))?.len();
+        if n as i64 > MAX_MEMORY_BYTES {
+            return Err(format!("at most {MAX_MEMORY_BYTES} bytes at a time"));
+        }
+        let body = self.client().request("writeMemory", json!({ "memoryReference": reference, "offset": offset, "data": data_base64, "allowPartial": allow_partial }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        Ok(body.get("bytesWritten").and_then(|b| b.as_i64()).unwrap_or(n as i64))
+    }
+
+    /// Any request the adapter understands, for what has no action of its own. The reply is returned as JSON text, capped.
+    pub async fn custom_request(&self, command: &str, arguments: Value) -> Result<String, String> {
+        self.require_live()?;
+        let body = self.client().request(command, arguments, REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        Ok(serde_json::to_string_pretty(&body).unwrap_or_default())
     }
 }
 
@@ -852,13 +1429,15 @@ async fn pump(session: Weak<Session>, via: Arc<DapClient>, mut events: mpsc::Unb
             AdapterEvent::StartDebugging { seq, arguments } => {
                 let via = via.clone();
                 tokio::spawn(async move {
-                    match session.open_child(&arguments).await {
-                        Ok(()) => via.answer_reverse(seq, "startDebugging", true, "").await,
-                        Err(why) => {
-                            log::warn!("dap: child session failed: {why}");
-                            via.answer_reverse(seq, "startDebugging", false, &why).await;
-                        }
-                    }
+                    let outcome = session.allow_and_open_child(&arguments).await;
+                    via.reply_reverse(seq, "startDebugging", outcome.map(|_| json!({}))).await;
+                });
+            }
+            AdapterEvent::RunInTerminal { seq, arguments } => {
+                let via = via.clone();
+                tokio::spawn(async move {
+                    let outcome = session.run_in_terminal(&arguments).await;
+                    via.reply_reverse(seq, "runInTerminal", outcome).await;
                 });
             }
             other => session.apply(other),
@@ -880,10 +1459,15 @@ async fn child_pump(session: Weak<Session>, child: Arc<DapClient>, mut events: m
             AdapterEvent::StartDebugging { seq, arguments } => {
                 let (via, sess2) = (child.clone(), sess.clone());
                 tokio::spawn(async move {
-                    match sess2.open_child(&arguments).await {
-                        Ok(()) => via.answer_reverse(seq, "startDebugging", true, "").await,
-                        Err(why) => via.answer_reverse(seq, "startDebugging", false, &why).await,
-                    }
+                    let outcome = sess2.allow_and_open_child(&arguments).await;
+                    via.reply_reverse(seq, "startDebugging", outcome.map(|_| json!({}))).await;
+                });
+            }
+            AdapterEvent::RunInTerminal { seq, arguments } => {
+                let (via, sess2) = (child.clone(), sess.clone());
+                tokio::spawn(async move {
+                    let outcome = sess2.run_in_terminal(&arguments).await;
+                    via.reply_reverse(seq, "runInTerminal", outcome).await;
                 });
             }
             event => {
@@ -918,19 +1502,82 @@ fn register(thread: &str, session: Arc<Session>) {
     SESSIONS.lock().unwrap_or_else(|e| e.into_inner()).insert(thread.to_string(), session);
 }
 
+/// What a launch or attach asks for beyond the program.
+#[derive(Default)]
+pub struct Target {
+    pub adapter: Option<String>,
+    pub breakpoints: Vec<(String, u32, Option<String>)>,
+    pub approver: Option<Approver>,
+}
+
+fn replace_old(thread: &str) -> Result<Option<Arc<Session>>, String> {
+    match get(thread) {
+        Some(old) if old.is_live() => Err(format!("the debug session {} is still running {}: terminate it before starting another", old.id, old.program)),
+        other => Ok(other),
+    }
+}
+
+async fn connect(resolved: &super::config::Resolved, cwd: &str) -> Result<(Arc<DapClient>, mpsc::UnboundedReceiver<AdapterEvent>), String> {
+    if resolved.adapter.listen {
+        DapClient::spawn_listening(&resolved.command, &resolved.args, cwd, &resolved.adapter.env).await
+    } else {
+        DapClient::spawn(&resolved.command, &resolved.args, cwd, &resolved.adapter.env).await
+    }
+}
+
 /// Start debugging `program` for `thread`. A thread has one session at a time: a finished one is replaced, a live one must be ended first.
-pub async fn launch(thread: &str, program: &str, cwd: &str, args: &[String], adapter: Option<&str>, breakpoints: Vec<(String, u32, Option<String>)>) -> Result<Arc<Session>, String> {
-    if let Some(old) = get(thread) {
-        if old.is_live() {
-            return Err(format!("the debug session {} is still running {}: terminate it before starting another", old.id, old.program));
-        }
+pub async fn launch(thread: &str, program: &str, cwd: &str, args: &[String], target: Target) -> Result<Arc<Session>, String> {
+    if let Some(old) = replace_old(thread)? {
         old.terminate().await;
     }
-    let resolved = super::config::select(program, adapter)?;
-    let (client, events) = if resolved.adapter.listen { DapClient::spawn_listening(&resolved.command, &resolved.args, cwd).await? } else { DapClient::spawn(&resolved.command, &resolved.args, cwd).await? };
+    let resolved = super::config::select(program, target.adapter.as_deref(), cwd)?;
+    let (client, events) = connect(&resolved, cwd).await?;
     let id = format!("debug-{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
-    let launch_args = super::config::launch_arguments(resolved.adapter, program, cwd, args);
-    let session = Session::start(id, resolved.adapter.name, program, cwd, client, events, launch_args, breakpoints).await?;
+    let is_dir = std::path::Path::new(program).is_dir();
+    let spec = StartSpec {
+        id,
+        adapter: resolved.adapter.name.clone(),
+        children: resolved.adapter.children,
+        program: program.to_string(),
+        cwd: cwd.to_string(),
+        request: "launch",
+        request_arguments: super::config::launch_arguments(&resolved.adapter, program, cwd, args, is_dir),
+        breakpoints: target.breakpoints,
+        approver: target.approver,
+    };
+    let session = Session::start(spec, client, events).await?;
+    register(thread, session.clone());
+    Ok(session)
+}
+
+/// Attach to a running process (`pid`) or to a program listening for a debugger (`port`, on `host`).
+pub async fn attach(thread: &str, pid: Option<i64>, port: Option<u16>, host: &str, cwd: &str, target: Target) -> Result<Arc<Session>, String> {
+    if pid.is_none() && port.is_none() {
+        return Err("give a 'pid' or a 'port' to attach to".into());
+    }
+    if let Some(old) = replace_old(thread)? {
+        old.terminate().await;
+    }
+    let resolved = super::config::select_attach(target.adapter.as_deref(), port, cwd)?;
+    let (client, events) = connect(&resolved, cwd).await?;
+    let id = format!("debug-{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+    let what = match (pid, port) {
+        (Some(p), _) => format!("process {p}"),
+        (None, Some(p)) => format!("{host}:{p}"),
+        _ => String::new(),
+    };
+    let spec = StartSpec {
+        id,
+        adapter: resolved.adapter.name.clone(),
+        children: resolved.adapter.children,
+        program: what,
+        cwd: cwd.to_string(),
+        request: "attach",
+        request_arguments: super::config::attach_arguments(&resolved.adapter, pid, port, host, cwd),
+        breakpoints: target.breakpoints,
+        approver: target.approver,
+    };
+    let session = Session::start(spec, client, events).await?;
     register(thread, session.clone());
     Ok(session)
 }
@@ -989,9 +1636,13 @@ mod tests {
             adapter.respond(&trace, json!({ "stackFrames": [{ "id": 100, "name": "main", "source": { "path": "/w/app.py" }, "line": 1, "column": 1 }], "totalFrames": 1 })).await;
             (adapter, seen)
         });
-        let session = Session::start("debug-t".into(), "mock", "/w/app.py", "/w", client, events, json!({ "program": "/w/app.py" }), breakpoints_arg()).await.expect("a session");
+        let session = Session::start(spec("debug-t", "mock", false, "/w/app.py", json!({ "program": "/w/app.py" }), breakpoints_arg()), client, events).await.expect("a session");
         let (adapter, seen) = script.await.unwrap();
         (session, adapter, seen)
+    }
+
+    fn spec(id: &str, adapter: &str, children: bool, program: &str, request_arguments: Value, breakpoints: Vec<(String, u32, Option<String>)>) -> StartSpec {
+        StartSpec { id: id.into(), adapter: adapter.into(), children, program: program.into(), cwd: "/w".into(), request: "launch", request_arguments, breakpoints, approver: None }
     }
 
     fn breakpoints_arg() -> Vec<(String, u32, Option<String>)> {
@@ -1208,7 +1859,7 @@ mod tests {
             adapter
         });
         let c = client.clone();
-        let e = Session::start("d".into(), "mock", "/w/nope.py", "/w", client, events, json!({}), vec![]).await.err().expect("a failure");
+        let e = Session::start(spec("d", "mock", false, "/w/nope.py", json!({}), vec![]), client, events).await.err().expect("a failure");
         assert!(e.contains("does not exist") && e.contains("mock debug adapter"), "{e}");
         assert!(c.is_closed(), "the adapter is ended, not left running");
         let _ = script.await;
@@ -1353,7 +2004,7 @@ mod tests {
             (r, w, r2, w2)
         });
         let (client, events) = DapClient::connect(port).await.unwrap();
-        let session = Session::start("debug-js".into(), "js-debug", "/w/app.js", "/w", client, events, json!({ "program": "/w/app.js" }), breakpoints_arg()).await.expect("a session");
+        let session = Session::start(spec("debug-js", "js-debug", true, "/w/app.js", json!({ "program": "/w/app.js" }), breakpoints_arg()), client, events).await.expect("a session");
         assert_eq!(session.status(), Status::Stopped, "the child's stop is the session's");
         assert_eq!(session.current_stop().map(|s| (s.reason, s.thread_id)), Some(("breakpoint".to_string(), 5)));
         session.resume("continue", Duration::from_millis(300)).await.expect("the continue reached the child");
