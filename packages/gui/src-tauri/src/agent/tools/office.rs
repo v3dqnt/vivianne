@@ -50,6 +50,96 @@ pub async fn cmd_read_document_bytes(path: String) -> Result<String, String> {
     .map_err(|e| format!("read task failed: {e}"))?
 }
 
+/// Characters of a document's text inlined into the prompt; the rest stays
+/// readable through `read` on the saved copy.
+const ATTACH_MAX_CHARS: usize = 120_000;
+/// Pages without a text layer rendered for an attached PDF.
+const ATTACH_MAX_PAGES: usize = 6;
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachedImage {
+    pub base64: String,
+    pub media_type: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentReading {
+    /// What goes into the prompt in place of the file's bytes.
+    pub content: String,
+    pub truncated: bool,
+    /// Where the copy was saved, so the agent can `read` more of it.
+    pub path: String,
+    /// Page images for pages with no readable text (scans, unmapped fonts).
+    pub images: Vec<AttachedImage>,
+}
+
+/// A document attached in chat (PDF, Word, PowerPoint, spreadsheet): parse
+/// it here, where real parsers live, instead of letting the webview read the
+/// zip or PDF bytes as text. The file is saved to a temp folder so the agent
+/// can come back to pages that weren't inlined.
+#[tauri::command]
+pub async fn cmd_extract_attachment(name: String, base64: String) -> Result<AttachmentReading, String> {
+    use crate::agent::tools::files::extract;
+    tokio::task::spawn_blocking(move || {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(base64.as_bytes()).map_err(|e| format!("bad attachment data: {e}"))?;
+        if bytes.len() as u64 > MAX_BYTES {
+            return Err(format!("{name} is larger than {} MB", MAX_BYTES / 1024 / 1024));
+        }
+        // Only the file name, never a path the webview made up.
+        let safe: String = Path::new(&name)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("attachment")
+            .chars()
+            .map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c })
+            .collect();
+        let dir = std::env::temp_dir().join("vivianne-attachments").join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).map_err(|e| format!("couldn't save the attachment: {e}"))?;
+        let path = dir.join(&safe);
+        std::fs::write(&path, &bytes).map_err(|e| format!("couldn't save the attachment: {e}"))?;
+        let shown = path.to_string_lossy().to_string();
+
+        let reading = extract::read(&path, &extract::Want::default())?;
+        let what = match reading.kind {
+            "pdf" => format!("PDF, {} page{}", reading.total, if reading.total == 1 { "" } else { "s" }),
+            "pptx" => format!("PowerPoint, {} slide{}", reading.total, if reading.total == 1 { "" } else { "s" }),
+            "docx" => "Word document".to_string(),
+            _ => "spreadsheet".to_string(),
+        };
+        let mut images = Vec::new();
+        let mut rendered = Vec::new();
+        if reading.kind == "pdf" && !reading.visual_pages.is_empty() {
+            let take: Vec<usize> = reading.visual_pages.iter().copied().take(ATTACH_MAX_PAGES).collect();
+            for (n, png) in extract::pdf_render(&bytes, &take).unwrap_or_default() {
+                rendered.push(n);
+                images.push(AttachedImage { base64: base64::engine::general_purpose::STANDARD.encode(png), media_type: "image/png".into() });
+            }
+        }
+        let truncated = reading.text.chars().count() > ATTACH_MAX_CHARS;
+        let text: String = if truncated { reading.text.chars().take(ATTACH_MAX_CHARS).collect() } else { reading.text.clone() };
+        let mut content = format!("[{safe}: {what}, parsed from the original file]\nSaved copy: {shown}\n\n{text}");
+        if truncated {
+            content.push_str("\n\n[Only the start is shown. Read the rest from the saved copy with the read tool and its pages (or sheet) argument.]");
+        }
+        if !rendered.is_empty() {
+            let list = rendered.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
+            content.push_str(&format!("\n\n[Pages {list} have no text layer; their images are attached to this message, in that order. Read them from the images.]"));
+        }
+        let left = reading.visual_pages.len() - rendered.len();
+        if left > 0 {
+            content.push_str(&format!("\n[{left} more page(s) without a text layer: read them from the saved copy with read, pages and render: true.]"));
+        }
+        if reading.kind == "pdf" {
+            content.push_str("\n[If a figure, an equation or the layout matters, read that page from the saved copy with read, pages and render: true.]");
+        }
+        Ok(AttachmentReading { content, truncated, path: shown, images })
+    })
+    .await
+    .map_err(|e| format!("attachment task failed: {e}"))?
+}
+
 /// Replace one part — a paragraph (`p:3`), a cell (`Sheet1!B4`) or a text
 /// box (`slide:2:1`) — leaving the rest of the file byte-identical.
 #[tauri::command]

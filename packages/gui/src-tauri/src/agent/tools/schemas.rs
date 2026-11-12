@@ -126,15 +126,17 @@ pub(crate) fn static_tool_definitions() -> Vec<serde_json::Value> {
     let mut defs = vec![
         serde_json::json!({
             "name": "read",
-            "description": "Read the contents of a file. Text files are returned line-numbered (like `cat -n`), with the total line count stated so you know whether you saw the whole file or need offset/limit to continue. Handles PDFs (page count + extracted text via 'pages' param) and Jupyter notebooks (.ipynb, cell-by-cell) the same way. Images are shown to you directly (downscaled if oversized) alongside a text summary (format/dimensions) — set ocr=true to also extract any text in the image instead of just seeing it. If the current model can't take image input, an image is OCR'd automatically instead of shown, so you still get any text it contains.",
+            "description": "Read the contents of a file. Text files are returned line-numbered (like `cat -n`), with the total line count stated so you know whether you saw the whole file or need offset/limit to continue. Documents are parsed properly: PDF text page by page (pages without a usable text layer, such as scans, are attached as page images, or OCR'd for models without vision; pass render=true to see any page's layout, figures or equations), Word (.docx: headings, lists, tables, footnotes), PowerPoint (.pptx: each slide's text, tables and speaker notes) and spreadsheets (.xlsx/.xlsm/.xlsb/.xls/.ods: every sheet as rows with A1 coordinates and the values Excel shows). Jupyter notebooks (.ipynb) are read cell by cell. Images are shown to you directly (downscaled if oversized) alongside a text summary (format/dimensions) — set ocr=true to also extract any text in the image instead of just seeing it. If the current model can't take image input, an image is OCR'd automatically instead of shown, so you still get any text it contains.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Relative path of the file" },
                     "offset": { "type": "number", "description": "Start reading at this line (1-indexed) — text files only" },
                     "limit": { "type": "number", "description": "Maximum lines to read — text files only" },
-                    "pages": { "type": "string", "description": "PDF page range, e.g. \"1-5\" or \"3\" — PDF files only" },
-                    "ocr": { "type": "boolean", "description": "If true, also run OCR on image files to extract literal text (requires HUGGINGFACE_TOKEN, with a local RapidOCR fallback)." }
+                    "pages": { "type": "string", "description": "PDF pages or PowerPoint slides to read, e.g. \"1-5\", \"3\" or \"2,7-9\". Use it to continue a long document." },
+                    "render": { "type": "boolean", "description": "PDF only: attach images of the requested pages (up to 6) so you can see figures, equations, tables and layout. Use with pages." },
+                    "sheet": { "type": "string", "description": "Spreadsheets only: read just this sheet (all of its rows, up to the cap)." },
+                    "ocr": { "type": "boolean", "description": "If true, also run OCR on image files (and on PDF pages without a text layer) to extract literal text (requires HUGGINGFACE_TOKEN, with a local RapidOCR fallback)." }
                 },
                 "required": ["path"]
             }

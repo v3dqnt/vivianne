@@ -405,6 +405,19 @@ fn tool_result_to_agent_result(res: crate::agent::tools::builtin::ToolResult, vi
             }
         }
     }
+    // Several images (a document's rendered pages): `images: [{base64, media_type}]`.
+    // Taken out of `details` either way, so a text-only model's result doesn't
+    // carry megabytes of base64 it will never use.
+    if let Some(serde_json::Value::Array(list)) = details.as_object_mut().and_then(|o| o.remove("images")) {
+        if vision_capable {
+            for img in list {
+                if let Some(b64) = img.get("base64").and_then(|v| v.as_str()) {
+                    let media_type = img.get("media_type").and_then(|v| v.as_str()).unwrap_or("image/png").to_string();
+                    content.push(MessageContent::Image { url: None, base64: Some(b64.to_string()), media_type: Some(media_type) });
+                }
+            }
+        }
+    }
     AgentToolResult { content, details, terminate: None }
 }
 
@@ -1045,7 +1058,9 @@ pub async fn execute_tool_calls(
                     .and_then(|e| e.to_str())
                     .map(|e| crate::agent::tools::builtin::is_image_ext(&e.to_ascii_lowercase()))
                     .unwrap_or(false);
-                if is_image {
+                // A PDF's scanned pages are images too: OCR them instead of attaching them.
+                let is_pdf = tc.arguments.get("path").and_then(|v| v.as_str()).is_some_and(|p| p.to_ascii_lowercase().ends_with(".pdf"));
+                if is_image || is_pdf {
                     tc.arguments["ocr"] = serde_json::json!(true);
                 }
             }

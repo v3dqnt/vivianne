@@ -258,6 +258,7 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::team::runs::cmd_read_run_messages,
       crate::agent::team::runs::cmd_comment_on_run,
       crate::agent::tools::office::cmd_read_document_bytes,
+      crate::agent::tools::office::cmd_extract_attachment,
       crate::agent::runtime::commands::cmd_system_roots,
       crate::multiplayer::commands::cmd_multiplayer_launch_test_partner,
       crate::multiplayer::commands::cmd_multiplayer_test_partner_id,

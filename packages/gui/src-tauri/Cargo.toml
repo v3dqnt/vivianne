@@ -159,6 +159,9 @@ lopdf = "0.34"
 # real elements instead of regexing markup, which is what keeps a rewritten
 # file openable by Word/PowerPoint.
 quick-xml = "0.37"
+pdf-extract = "0.12"
+hayro = "0.9"
+calamine = { version = "0.38", features = ["dates"] }
 
 # Parakeet TDT speech-to-text, via sherpa-onnx.
 #
