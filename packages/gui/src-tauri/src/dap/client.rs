@@ -8,7 +8,7 @@
 //! run on the adapter's say-so) and no `startDebugging`. A request of the adapter's own gets a refusal, never silence.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -56,6 +56,9 @@ pub enum AdapterEvent {
     Event { name: String, body: Value },
     /// The connection ended: the adapter exited, or its stream could not be trusted any more.
     Closed(String),
+    /// The adapter asks for a second debug session on the same server (js-debug does, once per child process it starts). Answer it with
+    /// `DapClient::answer_reverse`.
+    StartDebugging { seq: i64, arguments: Value },
 }
 
 pub struct DapClient {
@@ -65,6 +68,10 @@ pub struct DapClient {
     closed: Arc<AtomicBool>,
     stderr: Arc<StdMutex<VecDeque<String>>>,
     child: Mutex<Option<tokio::process::Child>>,
+    /// The loopback port the adapter listens on, when it is reached over TCP (0 when it is not): a child session connects to the same one.
+    port: AtomicU16,
+    /// Whether the adapter's own `startDebugging` requests are passed on instead of refused.
+    reverse: Arc<AtomicBool>,
     /// Ends the adapter and whatever it started when the client is dropped.
     _tree: Option<crate::agent::runtime::streaming::TreeKillOnDrop>,
 }
@@ -169,6 +176,7 @@ impl DapClient {
         };
         let (r, w) = tokio::io::split(stream);
         let (client, events) = Self::over(Box::new(r), Box::new(w), Some(child));
+        client.port.store(port, Ordering::SeqCst);
         *client.stderr.lock().unwrap_or_else(|e| e.into_inner()) = tail.lock().unwrap_or_else(|e| e.into_inner()).clone();
         Ok((client, events))
     }
@@ -179,13 +187,16 @@ impl DapClient {
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let closed = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(read_loop(read, writer.clone(), pending.clone(), tx, closed.clone()));
+        let reverse = Arc::new(AtomicBool::new(false));
+        tokio::spawn(read_loop(read, writer.clone(), pending.clone(), tx, closed.clone(), reverse.clone()));
         let client = Arc::new(Self {
             writer,
             seq: AtomicI64::new(1),
             pending,
             closed,
             stderr: Arc::new(StdMutex::new(VecDeque::new())),
+            port: AtomicU16::new(0),
+            reverse,
             _tree: child.as_ref().map(|c| crate::agent::runtime::streaming::TreeKillOnDrop { pid: c.id() }),
             child: Mutex::new(child),
         });
@@ -194,6 +205,41 @@ impl DapClient {
 
     pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
+    }
+
+    /// Pass the adapter's `startDebugging` requests on as events (they are refused otherwise).
+    pub fn accept_start_debugging(&self) {
+        self.reverse.store(true, Ordering::SeqCst);
+    }
+
+    /// The loopback port the adapter listens on, if it is reached over TCP.
+    pub fn port(&self) -> Option<u16> {
+        Some(self.port.load(Ordering::SeqCst)).filter(|p| *p != 0)
+    }
+
+    /// Answer a request the adapter made (`AdapterEvent::StartDebugging`).
+    pub async fn answer_reverse(&self, seq: i64, command: &str, success: bool, message: &str) {
+        let mut reply = json!({ "seq": 0, "type": "response", "request_seq": seq, "success": success, "command": command });
+        if !success {
+            reply["message"] = json!(message);
+        }
+        let _ = write_message(&self.writer, &reply).await;
+    }
+
+    /// Connect to an adapter that is already listening on a loopback port (a second session on the same server). Retries for a few seconds.
+    pub async fn connect(port: u16) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<AdapterEvent>), String> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let stream = loop {
+            match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+                Ok(s) => break s,
+                Err(e) if std::time::Instant::now() >= deadline => return Err(format!("couldn't connect to the debug adapter on port {port}: {e}")),
+                Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        };
+        let (r, w) = tokio::io::split(stream);
+        let (client, events) = Self::over(Box::new(r), Box::new(w), None);
+        client.port.store(port, Ordering::SeqCst);
+        Ok((client, events))
     }
 
     /// The last lines the adapter wrote on stderr, joined: what it said on the way out.
@@ -251,11 +297,11 @@ impl DapClient {
     }
 }
 
-async fn read_loop(read: Box<dyn AsyncRead + Unpin + Send>, writer: Writer, pending: Pending, events: mpsc::UnboundedSender<AdapterEvent>, closed: Arc<AtomicBool>) {
+async fn read_loop(read: Box<dyn AsyncRead + Unpin + Send>, writer: Writer, pending: Pending, events: mpsc::UnboundedSender<AdapterEvent>, closed: Arc<AtomicBool>, reverse: Arc<AtomicBool>) {
     let mut reader = BufReader::new(read);
     let why = loop {
         match read_frame(&mut reader).await {
-            Frame::Message(m) => dispatch(m, &writer, &pending, &events).await,
+            Frame::Message(m) => dispatch(m, &writer, &pending, &events, &reverse).await,
             Frame::Eof => break "the debug adapter exited".to_string(),
             Frame::Fault(why) => break format!("the debug adapter's stream could not be trusted: {why}"),
         }
@@ -268,7 +314,7 @@ async fn read_loop(read: Box<dyn AsyncRead + Unpin + Send>, writer: Writer, pend
     let _ = events.send(AdapterEvent::Closed(why));
 }
 
-async fn dispatch(message: Value, writer: &Writer, pending: &Pending, events: &mpsc::UnboundedSender<AdapterEvent>) {
+async fn dispatch(message: Value, writer: &Writer, pending: &Pending, events: &mpsc::UnboundedSender<AdapterEvent>, reverse: &AtomicBool) {
     match message.get("type").and_then(|t| t.as_str()) {
         Some("response") => {
             let Some(request_seq) = message.get("request_seq").and_then(|s| s.as_i64()) else { return };
@@ -292,6 +338,11 @@ async fn dispatch(message: Value, writer: &Writer, pending: &Pending, events: &m
         Some("request") => {
             let seq = message.get("seq").and_then(|s| s.as_i64()).unwrap_or(0);
             let command = message.get("command").and_then(|c| c.as_str()).unwrap_or("");
+            // A second session is offered to whoever asked to be told; the answer goes out when it is up (or has failed).
+            if command == "startDebugging" && reverse.load(Ordering::SeqCst) {
+                let _ = events.send(AdapterEvent::StartDebugging { seq, arguments: message.get("arguments").cloned().unwrap_or(Value::Null) });
+                return;
+            }
             let reply = json!({ "seq": 0, "type": "response", "request_seq": seq, "success": false, "command": command, "message": format!("{command} is not supported by this client") });
             let _ = write_message(writer, &reply).await;
         }

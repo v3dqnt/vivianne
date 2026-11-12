@@ -22,15 +22,32 @@ pub struct Adapter {
     pub hint: &'static str,
     /// It listens on a TCP port instead of speaking on stdio (delve). `{port}` in `args` is replaced by a free port chosen at start.
     pub listen: bool,
+    /// It asks for a second connection (a child session) for each process it starts (js-debug).
+    pub children: bool,
 }
 
 pub const ADAPTERS: &[Adapter] = &[
-    Adapter { name: "debugpy", commands: &["python", "python3"], args: &["-m", "debugpy.adapter"], extensions: &["py", "pyw"], hint: "install it with `pip install debugpy`", listen: false },
-    Adapter { name: "lldb-dap", commands: &["lldb-dap"], args: &[], extensions: &["rs", "c", "cc", "cpp", "cxx", "h", "hpp", "m", "mm", "swift", "zig", ""], hint: "it comes with LLVM", listen: false },
-    Adapter { name: "gdb", commands: &["gdb"], args: &["-i", "dap"], extensions: &["rs", "c", "cc", "cpp", "cxx", ""], hint: "it needs GDB 14 or newer", listen: false },
-    Adapter { name: "netcoredbg", commands: &["netcoredbg"], args: &["--interpreter=vscode"], extensions: &["cs", "fs", "dll"], hint: "install netcoredbg from Samsung/netcoredbg", listen: false },
-    Adapter { name: "delve", commands: &["dlv"], args: &["dap", "--listen=127.0.0.1:{port}"], extensions: &["go"], hint: "install it with `go install github.com/go-delve/delve/cmd/dlv@latest`", listen: true },
+    Adapter { name: "debugpy", commands: &["python", "python3"], args: &["-m", "debugpy.adapter"], extensions: &["py", "pyw"], hint: "install it with `pip install debugpy`", listen: false, children: false },
+    Adapter { name: "lldb-dap", commands: &["lldb-dap"], args: &[], extensions: &["rs", "c", "cc", "cpp", "cxx", "h", "hpp", "m", "mm", "swift", "zig", ""], hint: "it comes with LLVM", listen: false, children: false },
+    Adapter { name: "gdb", commands: &["gdb"], args: &["-i", "dap"], extensions: &["rs", "c", "cc", "cpp", "cxx", ""], hint: "it needs GDB 14 or newer", listen: false, children: false },
+    Adapter { name: "netcoredbg", commands: &["netcoredbg"], args: &["--interpreter=vscode"], extensions: &["cs", "fs", "dll"], hint: "install netcoredbg from Samsung/netcoredbg", listen: false, children: false },
+    Adapter { name: "js-debug", commands: &["node"], args: &["{js_debug_server}", "{port}", "127.0.0.1"], extensions: &["js", "mjs", "cjs"], hint: "install js-debug and set JS_DEBUG_DAP_SERVER to its dapDebugServer.js (or put it in ~/.local/opt/js-debug/src)", listen: true, children: true },
+    Adapter { name: "delve", commands: &["dlv"], args: &["dap", "--listen=127.0.0.1:{port}"], extensions: &["go"], hint: "install it with `go install github.com/go-delve/delve/cmd/dlv@latest`", listen: true, children: false },
 ];
+
+/// Where js-debug's `dapDebugServer.js` is: `JS_DEBUG_DAP_SERVER`, then the places an editor plugin or a manual install puts it.
+pub fn js_debug_server() -> Option<String> {
+    let home = dirs::home_dir();
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(p) = std::env::var("JS_DEBUG_DAP_SERVER") {
+        candidates.push(p.into());
+    }
+    if let Some(h) = &home {
+        candidates.push(h.join(".local/opt/js-debug/src/dapDebugServer.js"));
+        candidates.push(h.join(".local/share/nvim/mason/packages/js-debug-adapter/js-debug/src/dapDebugServer.js"));
+    }
+    candidates.into_iter().find(|p| p.is_file()).map(|p| p.to_string_lossy().into_owned())
+}
 
 /// An adapter and the command that starts it here.
 #[derive(Debug)]
@@ -54,7 +71,15 @@ fn on_path(command: &str) -> Option<String> {
 
 /// The adapter for `program`, or the one named, with the command that starts it found through `lookup`.
 pub fn select_with(program: &str, explicit: Option<&str>, lookup: &dyn Fn(&str) -> Option<String>) -> Result<Resolved, String> {
-    let resolve = |a: &'static Adapter| a.commands.iter().find_map(|c| lookup(c)).map(|command| Resolved { adapter: a, command, args: a.args.iter().map(|s| s.to_string()).collect() });
+    let resolve = |a: &'static Adapter| {
+        let command = a.commands.iter().find_map(|c| lookup(c))?;
+        let mut args: Vec<String> = a.args.iter().map(|s| s.to_string()).collect();
+        // js-debug is a script run by node: without the script there is no adapter.
+        if let Some(slot) = args.iter_mut().find(|a| a.as_str() == "{js_debug_server}") {
+            *slot = js_debug_server()?;
+        }
+        Some(Resolved { adapter: a, command, args })
+    };
     if let Some(name) = explicit.map(str::trim).filter(|n| !n.is_empty()) {
         let adapter = ADAPTERS.iter().find(|a| a.name == name).ok_or_else(|| format!("no debug adapter called '{name}' (there is {})", ADAPTERS.iter().map(|a| a.name).collect::<Vec<_>>().join(", ")))?;
         return resolve(adapter).ok_or_else(|| format!("{name} isn't installed: {}", adapter.hint));
@@ -81,6 +106,7 @@ pub fn launch_arguments(adapter: &Adapter, program: &str, cwd: &str, args: &[Str
         "debugpy" => json!({ "request": "launch", "type": "python", "program": program, "cwd": cwd, "args": args, "stopOnEntry": true, "justMyCode": false, "console": "internalConsole" }),
         "gdb" => json!({ "program": program, "cwd": cwd, "args": args, "stopAtBeginningOfMainSubprogram": true }),
         "netcoredbg" => json!({ "program": program, "cwd": cwd, "args": args, "stopAtEntry": true }),
+        "js-debug" => json!({ "type": "pwa-node", "request": "launch", "program": program, "cwd": cwd, "args": args, "stopOnEntry": true, "console": "internalConsole" }),
         "delve" => json!({ "request": "launch", "mode": "debug", "program": program, "cwd": cwd, "args": args, "stopOnEntry": true }),
         _ => json!({ "program": program, "cwd": cwd, "args": args, "stopOnEntry": true }),
     }

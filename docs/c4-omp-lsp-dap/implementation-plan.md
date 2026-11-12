@@ -68,3 +68,24 @@ A0, A1, A2, A3 (the diagnostics story), then B0 to B5 in parallel with A4 to A6,
 - **Deferred notices** need a delivery route into a thread; decide it before A3.
 - **Debugging is exec-tier.** Launching, `evaluate` and memory writes run code. They are never allowed in plan mode, never auto-approved by bypass for the first launch of a new adapter command, and always show the exact command.
 - **Out of scope:** the mux and lspmux, omp's self-diagnostics (`debug/`, the TUI debug app), and a visual debugger UI beyond B7.
+
+## Status (end of this pass)
+
+Built, with tests (`cargo test --lib`: 926 pass; the one failure, `mods::manifest::paths_must_stay_inside_the_mod`, is a Windows path check and is not about this work):
+
+- **A0–A2** mock servers, client robustness (bounded writes, cancel on drop or timeout, `workspace/configuration` by dotted section, `applyEdit` inside the workspace, 30 s `initialize`, 3 minute failed-start cache that skips timeouts, idle guard, `ContentModified` retry, stderr in crash messages, `$/progress` tracking), version-aware diagnostics.
+- **A3** error ledger, 500 ms inline then 12 s deferred report, delivered into a running thread only (an idle thread is not woken for a diagnostic).
+- **A4** workspace edits with path checks, atomic writes, rollback on a failed move, snippet and overlap refusal; `.editorconfig` then content sniffing; format-on-write (`lspFormatOnWrite`, off).
+- **A5** `lsp` (definition, type definition, references, implementation, hover, symbols, diagnostics, status, capabilities; a symbol by name instead of a column) and `lsp_edit` (rename with preview, rename_file including folders, code actions from two requests, format, check, reload, request).
+- **A6** server table, root markers, user and project `lsp.json` (the project's only once the project is trusted; shown in `status` while ignored), project-local binaries for trusted projects.
+- **A7** project checkers (`cargo check`, `tsc`, `go build`, `pyright`), biome and swiftlint.
+- **B0–B6** mock adapter, config, client, session manager, tools, safety (no `runInTerminal`, scrubbed environment, exit hook), delve over TCP, js-debug and child sessions over TCP.
+- **B8** `lsp` offered to harness agents (read-only). `debug` is not: a harness agent cannot start a session.
+
+Not built, and why:
+
+- **B7 debug panel** (a UI task, separate by the plan).
+- **omp's full server list**: `defaults.json` is not in this repository; the table is partial.
+- **Project-defined server approval card**: gated by project trust and listed by `lsp status`, not asked at launch.
+- **Glob targets for diagnostics, orphan-TypeScript error filter, push/pull merge, idle close of open documents, batch flush per response, YAML config**: omp has them; none was judged worth the risk here (the merge, for one, can show errors that are already fixed).
+- **No real server or adapter was run.** Every test uses a scripted peer; each adapter and server needs one real run before it ships (`js-debug` and `delve` especially, and biome's JSON shape is from omp's map, not from a run).

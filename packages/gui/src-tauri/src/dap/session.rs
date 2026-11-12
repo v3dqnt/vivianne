@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch};
 
-use super::client::{AdapterEvent, DapClient, REQUEST_TIMEOUT};
+use super::client::{AdapterEvent, DapClient, DapError, REQUEST_TIMEOUT};
 
 /// What the output buffer holds at most; the oldest is dropped.
 const OUTPUT_CAP: usize = 128 * 1024;
@@ -149,6 +149,8 @@ struct State {
     threads: Vec<(i64, String)>,
     breakpoints: BTreeMap<String, Vec<Breakpoint>>,
     functions: Vec<FunctionBreakpoint>,
+    /// The exception filters last asked for, so a child session starts with them too.
+    exception_filters: Vec<String>,
     output: Output,
     exit_code: Option<i64>,
     initialized: bool,
@@ -161,7 +163,11 @@ pub struct Session {
     pub adapter: String,
     pub program: String,
     pub cwd: String,
-    client: Arc<DapClient>,
+    /// The connection the adapter was started with; the session lives as long as it does.
+    root: Arc<DapClient>,
+    /// The connection run control and inspection go to: the root, until a child session (js-debug starts one per process) takes over.
+    focus: StdMutex<Arc<DapClient>>,
+    children: StdMutex<Vec<Arc<DapClient>>>,
     caps: Value,
     state: StdMutex<State>,
     tick: watch::Sender<u64>,
@@ -172,6 +178,21 @@ fn s(v: &Value, key: &str) -> Option<String> {
 }
 
 impl Session {
+    /// The connection to talk to now.
+    fn client(&self) -> Arc<DapClient> {
+        self.focus.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Send to every connection (the root and each child session, which each need the breakpoints), and answer with the focused one's reply.
+    async fn send_all(&self, command: &str, arguments: Value, limit: Duration) -> Result<Value, DapError> {
+        let focus = self.client();
+        let others: Vec<Arc<DapClient>> = std::iter::once(self.root.clone()).chain(self.children.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned()).filter(|c| !Arc::ptr_eq(c, &focus) && !c.is_closed()).collect();
+        for c in others {
+            let _ = c.request(command, arguments.clone(), limit).await;
+        }
+        focus.request(command, arguments, limit).await
+    }
+
     fn bump(&self) {
         self.tick.send_modify(|v| *v += 1);
     }
@@ -185,7 +206,7 @@ impl Session {
     }
 
     pub fn is_live(&self) -> bool {
-        self.status() != Status::Terminated && !self.client.is_closed()
+        self.status() != Status::Terminated && !self.root.is_closed()
     }
 
     pub fn capability(&self, name: &str) -> bool {
@@ -278,11 +299,13 @@ impl Session {
                 }
                 self.bump();
             }
+            // Handled by the pump, which can start the second session; nothing to record here.
+            AdapterEvent::StartDebugging { .. } => {}
             AdapterEvent::Closed(why) => {
                 {
                     let mut st = self.st();
                     st.status = Status::Terminated;
-                    let tail = self.client.stderr_tail();
+                    let tail = self.root.stderr_tail();
                     st.end_note = Some(if tail.is_empty() { why } else { format!("{why}\n{tail}") });
                 }
                 self.bump();
@@ -321,6 +344,10 @@ impl Session {
             client.dispose().await;
             Err::<Arc<Session>, String>(explain_failure(adapter, &why, &tail))
         };
+        let wants_children = super::config::ADAPTERS.iter().any(|a| a.name == adapter && a.children) && client.port().is_some();
+        if wants_children {
+            client.accept_start_debugging();
+        }
         let caps = match client
             .request(
                 "initialize",
@@ -335,7 +362,7 @@ impl Session {
                     "supportsInvalidatedEvent": true,
                     // Nothing the adapter asks of the client is offered: it starts the program itself.
                     "supportsRunInTerminalRequest": false,
-                    "supportsStartDebuggingRequest": false,
+                    "supportsStartDebuggingRequest": wants_children,
                     "supportsMemoryReferences": false,
                     "supportsProgressReporting": false,
                 }),
@@ -352,7 +379,9 @@ impl Session {
             adapter: adapter.to_string(),
             program: program.to_string(),
             cwd: cwd.to_string(),
-            client: client.clone(),
+            root: client.clone(),
+            focus: StdMutex::new(client.clone()),
+            children: StdMutex::new(Vec::new()),
             caps: if caps.is_object() { caps } else { json!({}) },
             state: StdMutex::new(State {
                 status: Status::Launching,
@@ -360,6 +389,7 @@ impl Session {
                 threads: Vec::new(),
                 breakpoints: BTreeMap::new(),
                 functions: Vec::new(),
+                exception_filters: Vec::new(),
                 output: Output::default(),
                 exit_code: None,
                 initialized: false,
@@ -367,7 +397,7 @@ impl Session {
             }),
             tick,
         });
-        tokio::spawn(pump(Arc::downgrade(&session), events));
+        tokio::spawn(pump(Arc::downgrade(&session), client.clone(), events));
 
         // `launch` goes out now and is answered after `configurationDone`.
         let launch = match client.send("launch", launch_arguments).await {
@@ -415,7 +445,7 @@ impl Session {
     async fn sync_file(&self, path: &str) -> Result<Vec<Breakpoint>, String> {
         let wanted = self.st().breakpoints.get(path).cloned().unwrap_or_default();
         let items: Vec<Value> = wanted.iter().map(|b| if let Some(c) = &b.condition { json!({ "line": b.line, "condition": c }) } else { json!({ "line": b.line }) }).collect();
-        let body = self.client.request("setBreakpoints", json!({ "source": { "path": path }, "breakpoints": items }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        let body = self.send_all("setBreakpoints", json!({ "source": { "path": path }, "breakpoints": items }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
         let answered = body.get("breakpoints").and_then(|b| b.as_array()).cloned().unwrap_or_default();
         let mut st = self.st();
         if let Some(list) = st.breakpoints.get_mut(path) {
@@ -466,7 +496,7 @@ impl Session {
         }
         let wanted = self.st().functions.clone();
         let items: Vec<Value> = wanted.iter().map(|f| if let Some(c) = &f.condition { json!({ "name": f.name, "condition": c }) } else { json!({ "name": f.name }) }).collect();
-        let body = self.client.request("setFunctionBreakpoints", json!({ "breakpoints": items }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        let body = self.send_all("setFunctionBreakpoints", json!({ "breakpoints": items }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
         let answered = body.get("breakpoints").and_then(|b| b.as_array()).cloned().unwrap_or_default();
         let mut st = self.st();
         for (f, said) in st.functions.iter_mut().zip(answered.iter()) {
@@ -500,6 +530,7 @@ impl Session {
 
     /// Break on exceptions: `filters` are the adapter's own ids (`raised`, `uncaught`, ...), listed in its capabilities.
     pub async fn set_exception_breakpoints(&self, filters: Vec<String>) -> Result<(), String> {
+        self.st().exception_filters = filters.clone();
         let offered: Vec<String> = self.caps.get("exceptionBreakpointFilters").and_then(|f| f.as_array()).map(|a| a.iter().filter_map(|f| s(f, "filter")).collect()).unwrap_or_default();
         if offered.is_empty() {
             return Err("this debug adapter offers no exception breakpoints".into());
@@ -507,7 +538,7 @@ impl Session {
         if let Some(bad) = filters.iter().find(|f| !offered.contains(f)) {
             return Err(format!("'{bad}' is not one of this adapter's exception filters: {}", offered.join(", ")));
         }
-        self.client.request("setExceptionBreakpoints", json!({ "filters": filters }), REQUEST_TIMEOUT).await.map(|_| ()).map_err(|e| e.message)
+        self.send_all("setExceptionBreakpoints", json!({ "filters": filters }), REQUEST_TIMEOUT).await.map(|_| ()).map_err(|e| e.message)
     }
 
     pub fn exception_filters(&self) -> Vec<(String, String)> {
@@ -534,7 +565,7 @@ impl Session {
             st.stop = None;
             st.status = Status::Running;
         }
-        self.client.request(command, json!({ "threadId": thread }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        self.client().request(command, json!({ "threadId": thread }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
         Ok(self.outcome(wait).await)
     }
 
@@ -557,7 +588,7 @@ impl Session {
             return Ok(self.current_stop().map(Outcome::Stopped).unwrap_or(Outcome::StillRunning));
         }
         let thread = self.thread_for_run().await?;
-        self.client.request("pause", json!({ "threadId": thread }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        self.client().request("pause", json!({ "threadId": thread }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
         Ok(self.outcome(wait).await)
     }
 
@@ -592,14 +623,14 @@ impl Session {
     // ── Looking ──────────────────────────────────────────────────────────────
 
     pub async fn threads(&self) -> Result<Vec<(i64, String)>, String> {
-        let body = self.client.request("threads", Value::Null, REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        let body = self.client().request("threads", Value::Null, REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
         let list: Vec<(i64, String)> = body.get("threads").and_then(|t| t.as_array()).map(|a| a.iter().filter_map(|t| Some((t.get("id")?.as_i64()?, s(t, "name").unwrap_or_default()))).collect()).unwrap_or_default();
         self.st().threads = list.clone();
         Ok(list)
     }
 
     async fn stack_frames(&self, thread_id: i64, levels: i64) -> Result<Vec<Frame>, String> {
-        let body = self.client.request("stackTrace", json!({ "threadId": thread_id, "startFrame": 0, "levels": levels }), FRAME_WAIT).await.map_err(|e| e.message)?;
+        let body = self.client().request("stackTrace", json!({ "threadId": thread_id, "startFrame": 0, "levels": levels }), FRAME_WAIT).await.map_err(|e| e.message)?;
         Ok(body
             .get("stackFrames")
             .and_then(|f| f.as_array())
@@ -634,7 +665,7 @@ impl Session {
     pub async fn scopes(&self, frame_id: Option<i64>) -> Result<Vec<Scope>, String> {
         self.require_live()?;
         let frame = self.frame_or_top(frame_id)?;
-        let body = self.client.request("scopes", json!({ "frameId": frame }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        let body = self.client().request("scopes", json!({ "frameId": frame }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
         Ok(body
             .get("scopes")
             .and_then(|a| a.as_array())
@@ -649,7 +680,7 @@ impl Session {
         if let Some(st) = start.filter(|s| *s > 0) {
             args["start"] = json!(st);
         }
-        let body = self.client.request("variables", args, REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        let body = self.client().request("variables", args, REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
         Ok(body
             .get("variables")
             .and_then(|v| v.as_array())
@@ -667,7 +698,7 @@ impl Session {
         } else if frame_id.is_some() {
             return Err("that frame is not available".into());
         }
-        let body = self.client.request("evaluate", args, REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        let body = self.client().request("evaluate", args, REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
         Ok(Evaluated { result: s(&body, "result").unwrap_or_default(), kind: s(&body, "type"), reference: body.get("variablesReference").and_then(|r| r.as_i64()).unwrap_or(0) })
     }
 
@@ -676,19 +707,121 @@ impl Session {
         if !self.capability("supportsSetVariable") {
             return Err("this debug adapter can't set variables".into());
         }
-        let body = self.client.request("setVariable", json!({ "variablesReference": reference, "name": name, "value": value }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
+        let body = self.client().request("setVariable", json!({ "variablesReference": reference, "name": name, "value": value }), REQUEST_TIMEOUT).await.map_err(|e| e.message)?;
         Ok(s(&body, "value").unwrap_or_else(|| value.to_string()))
     }
 
     /// End the session: ask the adapter to stop the program, then end the adapter and its whole tree.
+    /// A child session ended: forget its connection, and look at the root again if it was the one in focus.
+    fn drop_child(&self, child: &Arc<DapClient>) {
+        self.children.lock().unwrap_or_else(|e| e.into_inner()).retain(|c| !Arc::ptr_eq(c, child));
+        let mut focus = self.focus.lock().unwrap_or_else(|e| e.into_inner());
+        if Arc::ptr_eq(&focus, child) {
+            *focus = self.root.clone();
+        }
+        drop(focus);
+        self.bump();
+    }
+
+    /// The adapter asked for another session on its server (`startDebugging`): connect, run the handshake with the configuration it chose,
+    /// give it the breakpoints, and make it the one run control talks to.
+    fn open_child(self: &Arc<Self>, request: &Value) -> futures::future::BoxFuture<'static, Result<(), String>> {
+        // Boxed: a child's events can ask for a grandchild, so the future type would otherwise contain itself.
+        let (me, request) = (self.clone(), request.clone());
+        Box::pin(async move { me.open_child_inner(&request).await })
+    }
+
+    async fn open_child_inner(self: &Arc<Self>, request: &Value) -> Result<(), String> {
+        let port = self.root.port().ok_or("this adapter has no port a second session could connect to")?;
+        let (child, events) = DapClient::connect(port).await?;
+        child.accept_start_debugging();
+        let initialized = Arc::new(tokio::sync::Notify::new());
+        tokio::spawn(child_pump(Arc::downgrade(self), child.clone(), events, initialized.clone()));
+        let fail = |child: Arc<DapClient>, why: String| async move {
+            child.dispose().await;
+            Err::<(), String>(why)
+        };
+        let caps = match child
+            .request(
+                "initialize",
+                json!({ "clientID": "vivianne", "clientName": "Vivianne", "adapterID": self.adapter, "linesStartAt1": true, "columnsStartAt1": true, "pathFormat": "path", "supportsVariableType": true, "supportsInvalidatedEvent": true,
+                        "supportsRunInTerminalRequest": false, "supportsStartDebuggingRequest": true, "supportsMemoryReferences": false, "supportsProgressReporting": false }),
+                REQUEST_TIMEOUT,
+            )
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => return fail(child, e.message).await,
+        };
+        let kind = request.get("request").and_then(|r| r.as_str()).filter(|r| *r == "attach").unwrap_or("launch");
+        let mut configuration = request.get("configuration").cloned().filter(|c| c.is_object()).unwrap_or_else(|| json!({}));
+        if configuration.get("cwd").is_none() {
+            configuration["cwd"] = json!(self.cwd);
+        }
+        let launched = match child.send(kind, configuration).await {
+            Ok(rx) => rx,
+            Err(e) => return fail(child, e.message).await,
+        };
+        if tokio::time::timeout(INITIALIZED_WAIT, initialized.notified()).await.is_err() {
+            return fail(child, "the child session never said it was ready".into()).await;
+        }
+        self.children.lock().unwrap_or_else(|e| e.into_inner()).push(child.clone());
+        let (files, functions, filters) = {
+            let st = self.st();
+            (st.breakpoints.keys().cloned().collect::<Vec<_>>(), st.functions.clone(), st.exception_filters.clone())
+        };
+        for path in files {
+            let wanted = self.st().breakpoints.get(&path).cloned().unwrap_or_default();
+            let items: Vec<Value> = wanted.iter().map(|b| if let Some(c) = &b.condition { json!({ "line": b.line, "condition": c }) } else { json!({ "line": b.line }) }).collect();
+            let _ = child.request("setBreakpoints", json!({ "source": { "path": path }, "breakpoints": items }), REQUEST_TIMEOUT).await;
+        }
+        if !functions.is_empty() {
+            let items: Vec<Value> = functions.iter().map(|f| if let Some(c) = &f.condition { json!({ "name": f.name, "condition": c }) } else { json!({ "name": f.name }) }).collect();
+            let _ = child.request("setFunctionBreakpoints", json!({ "breakpoints": items }), REQUEST_TIMEOUT).await;
+        }
+        if !filters.is_empty() {
+            let _ = child.request("setExceptionBreakpoints", json!({ "filters": filters }), REQUEST_TIMEOUT).await;
+        }
+        if caps.get("supportsConfigurationDoneRequest").and_then(|v| v.as_bool()) == Some(true) {
+            if let Err(e) = child.request("configurationDone", Value::Null, REQUEST_TIMEOUT).await {
+                self.drop_child(&child);
+                return fail(child, e.message).await;
+            }
+        }
+        if let Err(e) = child.answer(kind, launched, REQUEST_TIMEOUT).await {
+            self.drop_child(&child);
+            return fail(child, e.message).await;
+        }
+        // The program runs in the child: it is what the agent steers from here on.
+        *self.focus.lock().unwrap_or_else(|e| e.into_inner()) = child;
+        {
+            let mut st = self.st();
+            // A stop the child already reported stays: only a session still starting becomes "running".
+            if st.status == Status::Launching {
+                st.status = Status::Running;
+            }
+        }
+        self.bump();
+        Ok(())
+    }
+
     pub async fn terminate(&self) {
+        // Children first: each is asked to end its program, then closed.
+        let kids: Vec<Arc<DapClient>> = std::mem::take(&mut *self.children.lock().unwrap_or_else(|e| e.into_inner()));
+        for kid in kids {
+            if !kid.is_closed() {
+                let _ = kid.request("disconnect", json!({ "terminateDebuggee": true }), Duration::from_secs(3)).await;
+            }
+            kid.dispose().await;
+        }
+        *self.focus.lock().unwrap_or_else(|e| e.into_inner()) = self.root.clone();
         if self.is_live() {
             if self.capability("supportsTerminateRequest") {
-                let _ = self.client.request("terminate", Value::Null, Duration::from_secs(3)).await;
+                let _ = self.root.request("terminate", Value::Null, Duration::from_secs(3)).await;
             }
-            let _ = self.client.request("disconnect", json!({ "terminateDebuggee": true }), Duration::from_secs(3)).await;
+            let _ = self.root.request("disconnect", json!({ "terminateDebuggee": true }), Duration::from_secs(3)).await;
         }
-        self.client.dispose().await;
+        self.root.dispose().await;
         {
             let mut st = self.st();
             st.status = Status::Terminated;
@@ -711,10 +844,56 @@ fn explain_failure(adapter: &str, why: &str, stderr_tail: &str) -> String {
     }
 }
 
-async fn pump(session: Weak<Session>, mut events: mpsc::UnboundedReceiver<AdapterEvent>) {
+async fn pump(session: Weak<Session>, via: Arc<DapClient>, mut events: mpsc::UnboundedReceiver<AdapterEvent>) {
     while let Some(event) = events.recv().await {
         let Some(session) = session.upgrade() else { break };
-        session.apply(event);
+        match event {
+            // A second session is started on its own task: it handshakes, and the adapter waits for the answer meanwhile.
+            AdapterEvent::StartDebugging { seq, arguments } => {
+                let via = via.clone();
+                tokio::spawn(async move {
+                    match session.open_child(&arguments).await {
+                        Ok(()) => via.answer_reverse(seq, "startDebugging", true, "").await,
+                        Err(why) => {
+                            log::warn!("dap: child session failed: {why}");
+                            via.answer_reverse(seq, "startDebugging", false, &why).await;
+                        }
+                    }
+                });
+            }
+            other => session.apply(other),
+        }
+    }
+}
+
+/// Events of a child session: the program's output and stops count for the whole session, but its own end does not end the session.
+async fn child_pump(session: Weak<Session>, child: Arc<DapClient>, mut events: mpsc::UnboundedReceiver<AdapterEvent>, initialized: Arc<tokio::sync::Notify>) {
+    while let Some(event) = events.recv().await {
+        let Some(sess) = session.upgrade() else { break };
+        match event {
+            AdapterEvent::Event { name, .. } if name == "initialized" => initialized.notify_one(),
+            AdapterEvent::Event { name, .. } if name == "terminated" || name == "exited" => sess.drop_child(&child),
+            AdapterEvent::Closed(_) => {
+                sess.drop_child(&child);
+                break;
+            }
+            AdapterEvent::StartDebugging { seq, arguments } => {
+                let (via, sess2) = (child.clone(), sess.clone());
+                tokio::spawn(async move {
+                    match sess2.open_child(&arguments).await {
+                        Ok(()) => via.answer_reverse(seq, "startDebugging", true, "").await,
+                        Err(why) => via.answer_reverse(seq, "startDebugging", false, &why).await,
+                    }
+                });
+            }
+            event => {
+                // Whoever stops is who the agent is looking at.
+                if matches!(&event, AdapterEvent::Event { name, .. } if name == "stopped") {
+                    *sess.focus.lock().unwrap_or_else(|e| e.into_inner()) = child.clone();
+                }
+                sess.apply(event);
+            }
+        }
     }
 }
 
@@ -1095,5 +1274,90 @@ mod tests {
         let mut one = Output::default();
         one.push(&format!("{}END", "y".repeat(OUTPUT_CAP * 2)));
         assert!(one.text().ends_with("END") && one.text().len() <= OUTPUT_CAP + 40, "one huge chunk keeps its end");
+    }
+
+    // ── a child session, over TCP the way js-debug does it ──
+
+    async fn put(w: &mut tokio::net::tcp::OwnedWriteHalf, v: Value) {
+        use tokio::io::AsyncWriteExt;
+        let body = v.to_string();
+        w.write_all(format!("Content-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+    }
+
+    async fn take(r: &mut tokio::io::BufReader<tokio::net::tcp::OwnedReadHalf>, command: &str) -> Value {
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), crate::lsp::client::read_frame(r)).await.expect("the client sent nothing") {
+                crate::lsp::client::Frame::Message(m) if m["type"] == "request" && m["command"] == command => return m,
+                crate::lsp::client::Frame::Message(_) => continue,
+                _ => panic!("the connection ended while waiting for {command}"),
+            }
+        }
+    }
+
+    fn reply(req: &Value, body: Value) -> Value {
+        json!({ "seq": 0, "type": "response", "request_seq": req["seq"], "success": true, "command": req["command"], "body": body })
+    }
+
+    #[tokio::test]
+    async fn a_start_debugging_request_opens_a_child_session_that_takes_over() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            // The root connection: the usual handshake, then the adapter asks for a second session.
+            let (sock, _) = listener.accept().await.unwrap();
+            let (r, mut w) = sock.into_split();
+            let mut r = tokio::io::BufReader::new(r);
+            let init = take(&mut r, "initialize").await;
+            assert_eq!(init["arguments"]["supportsStartDebuggingRequest"], true, "a child session is offered only to adapters that make them");
+            put(&mut w, reply(&init, json!({ "supportsConfigurationDoneRequest": true }))).await;
+            let launch = take(&mut r, "launch").await;
+            put(&mut w, json!({ "seq": 0, "type": "event", "event": "initialized" })).await;
+            let set = take(&mut r, "setBreakpoints").await;
+            put(&mut w, reply(&set, json!({ "breakpoints": [{ "id": 1, "verified": true, "line": 3 }] }))).await;
+            let done = take(&mut r, "configurationDone").await;
+            put(&mut w, reply(&done, Value::Null)).await;
+            put(&mut w, reply(&launch, Value::Null)).await;
+            put(&mut w, json!({ "seq": 77, "type": "request", "command": "startDebugging", "arguments": { "request": "launch", "configuration": { "type": "pwa-node", "program": "/w/app.js" } } })).await;
+
+            // The child connection.
+            let (sock2, _) = listener.accept().await.unwrap();
+            let (r2, mut w2) = sock2.into_split();
+            let mut r2 = tokio::io::BufReader::new(r2);
+            let init2 = take(&mut r2, "initialize").await;
+            put(&mut w2, reply(&init2, json!({ "supportsConfigurationDoneRequest": true }))).await;
+            let launch2 = take(&mut r2, "launch").await;
+            assert_eq!(launch2["arguments"]["program"], "/w/app.js", "the configuration the adapter chose");
+            assert_eq!(launch2["arguments"]["cwd"], "/w", "in the session's directory unless it said otherwise");
+            put(&mut w2, json!({ "seq": 0, "type": "event", "event": "initialized" })).await;
+            let set2 = take(&mut r2, "setBreakpoints").await;
+            assert_eq!(set2["arguments"]["breakpoints"][0]["line"], 3, "the child gets the breakpoints too");
+            put(&mut w2, reply(&set2, json!({ "breakpoints": [{ "id": 2, "verified": true, "line": 3 }] }))).await;
+            let done2 = take(&mut r2, "configurationDone").await;
+            put(&mut w2, reply(&done2, Value::Null)).await;
+            put(&mut w2, reply(&launch2, Value::Null)).await;
+            put(&mut w2, json!({ "seq": 0, "type": "event", "event": "stopped", "body": { "reason": "breakpoint", "threadId": 5 } })).await;
+            let trace = take(&mut r2, "stackTrace").await;
+            put(&mut w2, reply(&trace, json!({ "stackFrames": [{ "id": 9, "name": "run", "source": { "path": "/w/app.js" }, "line": 3, "column": 1 }], "totalFrames": 1 }))).await;
+            // The root is told the second session is up.
+            let answered = loop {
+                match crate::lsp::client::read_frame(&mut r).await {
+                    crate::lsp::client::Frame::Message(m) if m["type"] == "response" && m["request_seq"] == 77 => break m,
+                    crate::lsp::client::Frame::Message(_) => continue,
+                    _ => panic!("the root ended before it was answered"),
+                }
+            };
+            assert_eq!(answered["success"], true);
+            // Run control goes to the child, not the root.
+            let resumed = take(&mut r2, "continue").await;
+            put(&mut w2, reply(&resumed, json!({}))).await;
+            (r, w, r2, w2)
+        });
+        let (client, events) = DapClient::connect(port).await.unwrap();
+        let session = Session::start("debug-js".into(), "js-debug", "/w/app.js", "/w", client, events, json!({ "program": "/w/app.js" }), breakpoints_arg()).await.expect("a session");
+        assert_eq!(session.status(), Status::Stopped, "the child's stop is the session's");
+        assert_eq!(session.current_stop().map(|s| (s.reason, s.thread_id)), Some(("breakpoint".to_string(), 5)));
+        session.resume("continue", Duration::from_millis(300)).await.expect("the continue reached the child");
+        let _keep_open = server.await.unwrap();
+        session.terminate().await;
     }
 }

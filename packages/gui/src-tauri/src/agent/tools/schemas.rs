@@ -464,7 +464,7 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
         }),
         serde_json::json!({
             "name": "debug_run",
-            "description": "Debug a program: launch it under a debug adapter (debugpy for Python, lldb-dap or gdb for Rust and C/C++, netcoredbg for .NET), set breakpoints, run and step, evaluate expressions, end it. The program stops at its start, so set breakpoints, then continue. A wait that runs out says the program is still running. Use it when reading the code does not explain a failure; read the result with debug. A launch asks the user first and shows the command it starts.",
+            "description": "Debug a program: launch it under a debug adapter (debugpy for Python, lldb-dap or gdb for Rust and C/C++, netcoredbg for .NET, delve for Go, js-debug for JavaScript), set breakpoints, run and step, evaluate expressions, end it. The program stops at its start, so set breakpoints, then continue. A wait that runs out says the program is still running. Use it when reading the code does not explain a failure; read the result with debug. A launch asks the user first and shows the command it starts.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -472,7 +472,7 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
                     "program": { "type": "string", "description": "launch: the file to run (a script, or a built binary)" },
                     "args": { "type": "array", "items": { "type": "string" }, "description": "launch: the program's arguments" },
                     "cwd": { "type": "string", "description": "launch: the working directory (default: the workspace)" },
-                    "adapter": { "type": "string", "enum": ["debugpy", "lldb-dap", "gdb", "netcoredbg"], "description": "launch: only to override the choice made from the file type" },
+                    "adapter": { "type": "string", "enum": ["debugpy", "lldb-dap", "gdb", "netcoredbg", "delve", "js-debug"], "description": "launch: only to override the choice made from the file type" },
                     "breakpoints": { "type": "array", "items": { "type": "object", "properties": { "file": { "type": "string" }, "line": { "type": "number" }, "condition": { "type": "string" } }, "required": ["file", "line"] }, "description": "launch: breakpoints set before the program runs" },
                     "file": { "type": "string", "description": "set_breakpoint / remove_breakpoint: the file" },
                     "line": { "type": "number", "description": "set_breakpoint / remove_breakpoint: 1-based line" },
