@@ -162,19 +162,17 @@ pub enum Report {
 /// Like `diagnostics_for`, but tells "no server", "no answer yet" and "no problems" apart, and waits up to `wait` for the first report.
 pub async fn report(path: &str, root_dir: &str, wait: Duration) -> Report {
     let Some(client) = client_for(path, root_dir).await else { return Report::NoServer };
-    if let Err(e) = client.touch_file(path).await {
-        log::warn!("lsp: touch_file failed for {path}: {e}");
-    }
-    let key = path_key(path);
-    let started = Instant::now();
-    loop {
-        if let Some(items) = client.diagnostics.lock().await.get(&key) {
-            return Report::Published(items.clone());
-        }
-        if client.is_closed() || started.elapsed() >= wait {
+    // What the server said before this edit is not an answer about it: only a report for the text just sent counts.
+    let mark = match client.touch_file(path).await {
+        Ok(mark) => mark,
+        Err(e) => {
+            log::warn!("lsp: touch_file failed for {path}: {e}");
             return Report::NotReported;
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    match client.fresh_report(path, &mark, wait).await {
+        Some(items) => Report::Published(items),
+        None => Report::NotReported,
     }
 }
 

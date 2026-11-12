@@ -6,28 +6,58 @@
 
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{oneshot, Mutex};
 
 use super::uri::{path_key, path_to_uri, utf16_col};
-use super::DiagnosticsByFile;
+use super::Diagnostic;
 
 const MAX_HEADER_BYTES: u64 = 1 << 16;
 const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
-const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// A publish with no document version counts only once nothing newer has followed it for this long: a server often publishes twice in a row
+/// as it works (syntax errors first, then the type errors).
+const SETTLE: Duration = Duration::from_millis(250);
+/// An empty publish without a version from a server this young is the server saying "nothing yet", not "no problems".
+const COLD_PUBLISH: Duration = Duration::from_secs(3);
+const POLL: Duration = Duration::from_millis(50);
 /// How many documents stay open in one server before the longest-open is closed.
 const MAX_OPEN_DOCS: usize = 40;
 
 type Writer = Arc<Mutex<Box<dyn AsyncWrite + Unpin + Send>>>;
 type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>;
 
+/// What a server last published for one file, and when.
+pub struct Published {
+    pub items: Vec<Diagnostic>,
+    /// The document version the server says it checked, when it says.
+    pub version: Option<i64>,
+    /// Which publish this was, counting from 1 across the whole connection.
+    pub seq: u64,
+    pub at: Instant,
+}
+
+pub type PublishedByFile = HashMap<String, Published>;
+
+/// What was sent to the server for a file, to tell its answer from an older one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SyncMark {
+    /// The document version sent.
+    pub version: i64,
+    /// How many publishes had arrived by then: an unversioned one counts only if it is later.
+    pub seq: u64,
+}
+
 pub struct LspClient {
     writer: Writer,
     next_id: AtomicI64,
     pending: Pending,
-    pub diagnostics: Arc<Mutex<DiagnosticsByFile>>,
+    pub diagnostics: Arc<Mutex<PublishedByFile>>,
+    publishes: Arc<AtomicU64>,
+    started: Instant,
     docs: Mutex<OpenDocs>,
     capabilities: Mutex<Value>,
     closed: Arc<AtomicBool>,
@@ -78,13 +108,16 @@ impl LspClient {
         let writer: Writer = Arc::new(Mutex::new(write));
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let diagnostics = Arc::new(Mutex::new(HashMap::new()));
+        let publishes = Arc::new(AtomicU64::new(0));
         let closed = Arc::new(AtomicBool::new(false));
-        tokio::spawn(read_loop(read, writer.clone(), pending.clone(), diagnostics.clone(), closed.clone()));
+        tokio::spawn(read_loop(read, writer.clone(), pending.clone(), diagnostics.clone(), publishes.clone(), closed.clone()));
         Arc::new(Self {
             writer,
             next_id: AtomicI64::new(1),
             pending,
             diagnostics,
+            publishes,
+            started: Instant::now(),
             docs: Mutex::new(OpenDocs::default()),
             capabilities: Mutex::new(Value::Null),
             closed,
@@ -103,7 +136,8 @@ impl LspClient {
                     "capabilities": {
                         "general": { "positionEncodings": ["utf-16"] },
                         "textDocument": {
-                            "publishDiagnostics": { "relatedInformation": true },
+                            "publishDiagnostics": { "relatedInformation": true, "versionSupport": true },
+                            "diagnostic": { "dynamicRegistration": false, "relatedDocumentSupport": false },
                             "synchronization": { "didSave": true },
                             "definition": { "linkSupport": false },
                             "references": {},
@@ -123,6 +157,10 @@ impl LspClient {
     }
 
     async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.request_within(method, params, REQUEST_TIMEOUT).await
+    }
+
+    async fn request_within(&self, method: &str, params: Value, limit: Duration) -> Result<Value, String> {
         if self.is_closed() {
             return Err("the language server has exited".into());
         }
@@ -133,7 +171,7 @@ impl LspClient {
             self.pending.lock().await.remove(&id);
             return Err(e);
         }
-        match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+        match tokio::time::timeout(limit, rx).await {
             Ok(Ok(r)) => r,
             Ok(Err(_)) => Err(format!("{method}: the language server closed the connection")),
             Err(_) => {
@@ -150,13 +188,13 @@ impl LspClient {
 
     /// Tell the server about a file so it publishes diagnostics for it, re-sending the content if it is already open. Fails (rather than
     /// sending an empty document) when the file can't be read.
-    pub async fn touch_file(&self, path: &str) -> Result<(), String> {
+    pub async fn touch_file(&self, path: &str) -> Result<SyncMark, String> {
         let text = tokio::fs::read_to_string(path).await.map_err(|e| format!("can't read {path}: {e}"))?;
         self.sync(path, text).await
     }
 
     /// Send `text` as the current content of `path`.
-    async fn sync(&self, path: &str, text: String) -> Result<(), String> {
+    async fn sync(&self, path: &str, text: String) -> Result<SyncMark, String> {
         let uri = path_to_uri(path);
         let key = path_key(path);
         let language_id = std::path::Path::new(path).extension().and_then(|e| e.to_str()).and_then(super::language_id_for_extension).unwrap_or("plaintext");
@@ -180,10 +218,66 @@ impl LspClient {
             self.diagnostics.lock().await.remove(&old);
             let _ = self.notify("textDocument/didClose", json!({ "textDocument": { "uri": old_uri } })).await;
         }
+        // Taken before the notice leaves: whatever is published after this answers the text just sent.
+        let mark = SyncMark { version, seq: self.publishes.load(Ordering::SeqCst) };
         if is_new {
-            self.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri, "languageId": language_id, "version": version, "text": text } })).await
+            self.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri, "languageId": language_id, "version": version, "text": text } })).await?;
         } else {
-            self.notify("textDocument/didChange", json!({ "textDocument": { "uri": uri, "version": version }, "contentChanges": [{ "text": text }] })).await
+            self.notify("textDocument/didChange", json!({ "textDocument": { "uri": uri, "version": version }, "contentChanges": [{ "text": text }] })).await?;
+        }
+        Ok(mark)
+    }
+
+    /// The diagnostics for the text last sent for `path` (`mark`), or `None` when the server has not said within `wait`. Never an older
+    /// report: after an edit the server's previous publish is stale, and taking it would show errors already fixed (or none just introduced).
+    /// A server that can be asked is asked (pull diagnostics); otherwise a publish is accepted when it names this document version, or, with no
+    /// version, when it came after the edit and has settled.
+    pub async fn fresh_report(&self, path: &str, mark: &SyncMark, wait: Duration) -> Option<Vec<Diagnostic>> {
+        let key = path_key(path);
+        let deadline = Instant::now() + wait;
+        if self.supports("diagnosticProvider").await {
+            if let Some(items) = self.pull(path, &key, mark, deadline).await {
+                return Some(items);
+            }
+        }
+        loop {
+            if let Some(p) = self.diagnostics.lock().await.get(&key) {
+                if is_fresh(p, mark, self.started.elapsed(), Instant::now()) {
+                    return Some(p.items.clone());
+                }
+            }
+            if self.is_closed() || Instant::now() >= deadline {
+                return None;
+            }
+            tokio::time::sleep(POLL).await;
+        }
+    }
+
+    /// Ask the server for this document's diagnostics (`textDocument/diagnostic`). `None` when it declines, can't answer, or time runs out:
+    /// the caller then waits for a publish instead.
+    async fn pull(&self, path: &str, key: &str, mark: &SyncMark, deadline: Instant) -> Option<Vec<Diagnostic>> {
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return None;
+            }
+            match self.request_within("textDocument/diagnostic", json!({ "textDocument": { "uri": path_to_uri(path) } }), left).await {
+                Ok(report) => {
+                    let items: Vec<Diagnostic> = match report.get("kind").and_then(|k| k.as_str()) {
+                        Some("full") => report.get("items").and_then(|i| serde_json::from_value(i.clone()).ok()).unwrap_or_default(),
+                        // Nothing changed since the last report: that report still stands.
+                        Some("unchanged") => return self.diagnostics.lock().await.get(key).map(|p| p.items.clone()),
+                        // `null` is the server declining this document.
+                        _ => return None,
+                    };
+                    let seq = self.publishes.fetch_add(1, Ordering::SeqCst) + 1;
+                    self.diagnostics.lock().await.insert(key.to_string(), Published { items: items.clone(), version: Some(mark.version), seq, at: Instant::now() });
+                    return Some(items);
+                }
+                // The server was busy with a change (-32801) or cancelled the request (-32802): ask again shortly.
+                Err(e) if e.contains("-32801") || e.contains("-32802") => tokio::time::sleep(Duration::from_millis(100)).await,
+                Err(_) => return None,
+            }
         }
     }
 
@@ -228,13 +322,13 @@ impl LspClient {
     }
 }
 
-enum Frame {
+pub(crate) enum Frame {
     Message(Value),
     Eof,
     Fault(String),
 }
 
-async fn read_frame<R: AsyncRead + Unpin>(reader: &mut BufReader<R>) -> Frame {
+pub(crate) async fn read_frame<R: AsyncRead + Unpin>(reader: &mut BufReader<R>) -> Frame {
     let mut content_length: Option<usize> = None;
     let mut header_bytes = 0u64;
     loop {
@@ -273,11 +367,20 @@ async fn read_frame<R: AsyncRead + Unpin>(reader: &mut BufReader<R>) -> Frame {
     }
 }
 
-async fn read_loop(read: Box<dyn AsyncRead + Unpin + Send>, writer: Writer, pending: Pending, diagnostics: Arc<Mutex<DiagnosticsByFile>>, closed: Arc<AtomicBool>) {
+/// Whether a publish answers the text sent at `mark`. A versioned one must name that version (or a later one); an unversioned one must have
+/// come after the edit, have settled, and not be a cold server's empty "nothing yet".
+fn is_fresh(p: &Published, mark: &SyncMark, server_age: Duration, now: Instant) -> bool {
+    match p.version {
+        Some(v) => v >= mark.version,
+        None => p.seq > mark.seq && now.saturating_duration_since(p.at) >= SETTLE && !(p.items.is_empty() && server_age < COLD_PUBLISH),
+    }
+}
+
+async fn read_loop(read: Box<dyn AsyncRead + Unpin + Send>, writer: Writer, pending: Pending, diagnostics: Arc<Mutex<PublishedByFile>>, publishes: Arc<AtomicU64>, closed: Arc<AtomicBool>) {
     let mut reader = BufReader::new(read);
     loop {
         match read_frame(&mut reader).await {
-            Frame::Message(m) => dispatch(m, &writer, &pending, &diagnostics).await,
+            Frame::Message(m) => dispatch(m, &writer, &pending, &diagnostics, &publishes).await,
             Frame::Eof => break,
             Frame::Fault(why) => {
                 log::warn!("lsp: closing the connection: {why}");
@@ -292,7 +395,7 @@ async fn read_loop(read: Box<dyn AsyncRead + Unpin + Send>, writer: Writer, pend
     }
 }
 
-async fn dispatch(message: Value, writer: &Writer, pending: &Pending, diagnostics: &Arc<Mutex<DiagnosticsByFile>>) {
+async fn dispatch(message: Value, writer: &Writer, pending: &Pending, diagnostics: &Arc<Mutex<PublishedByFile>>, publishes: &AtomicU64) {
     let method = message.get("method").and_then(|m| m.as_str());
     let id = message.get("id").cloned().filter(|v| !v.is_null());
     match (method, id) {
@@ -325,8 +428,10 @@ async fn dispatch(message: Value, writer: &Writer, pending: &Pending, diagnostic
         (Some("textDocument/publishDiagnostics"), None) => {
             let Some(params) = message.get("params") else { return };
             let Some(uri) = params.get("uri").and_then(|v| v.as_str()) else { return };
-            let items: Vec<super::Diagnostic> = params.get("diagnostics").and_then(|d| serde_json::from_value(d.clone()).ok()).unwrap_or_default();
-            diagnostics.lock().await.insert(path_key(uri), items);
+            let items: Vec<Diagnostic> = params.get("diagnostics").and_then(|d| serde_json::from_value(d.clone()).ok()).unwrap_or_default();
+            let version = params.get("version").and_then(|v| v.as_i64());
+            let seq = publishes.fetch_add(1, Ordering::SeqCst) + 1;
+            diagnostics.lock().await.insert(path_key(uri), Published { items, version, seq, at: Instant::now() });
         }
         _ => {}
     }
@@ -409,5 +514,189 @@ mod tests {
     async fn unreadable_files_are_not_sent_as_empty_documents() {
         let (client, _server) = wired();
         assert!(client.touch_file("/definitely/not/here.rs").await.is_err());
+    }
+
+    // ── A0 / A2: a scripted server, and diagnostics for the text that was sent ──
+
+    /// The server's end of a client under test, keeping what it has read between frames.
+    struct Server {
+        r: BufReader<tokio::io::ReadHalf<DuplexStream>>,
+        w: tokio::io::WriteHalf<DuplexStream>,
+    }
+
+    impl Server {
+        async fn recv(&mut self) -> Value {
+            match tokio::time::timeout(Duration::from_secs(5), read_frame(&mut self.r)).await.expect("the client sent nothing") {
+                Frame::Message(m) => m,
+                _ => panic!("no frame"),
+            }
+        }
+
+        /// The next message that is this method, skipping others.
+        async fn recv_method(&mut self, method: &str) -> Value {
+            loop {
+                let m = self.recv().await;
+                if m["method"] == method {
+                    return m;
+                }
+            }
+        }
+
+        async fn send(&mut self, v: Value) {
+            let body = v.to_string();
+            self.w.write_all(format!("Content-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        }
+
+        async fn publish(&mut self, path: &str, version: Option<i64>, messages: &[&str]) {
+            let items: Vec<Value> = messages.iter().map(|m| json!({ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } }, "severity": 1, "message": m })).collect();
+            let mut params = json!({ "uri": path_to_uri(path), "diagnostics": items });
+            if let Some(v) = version {
+                params["version"] = json!(v);
+            }
+            self.send(json!({ "jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": params })).await;
+        }
+    }
+
+    fn scripted() -> (Arc<LspClient>, Server) {
+        let (client_end, server_end) = duplex(1 << 20);
+        let (r, w) = tokio::io::split(client_end);
+        let (sr, sw) = tokio::io::split(server_end);
+        (LspClient::over(Box::new(r), Box::new(w), None), Server { r: BufReader::new(sr), w: sw })
+    }
+
+    fn temp_file(text: &str) -> String {
+        let p = std::env::temp_dir().join(format!("viv-lsp-{}.rs", uuid::Uuid::new_v4()));
+        std::fs::write(&p, text).unwrap();
+        p.to_string_lossy().into_owned()
+    }
+
+    async fn wait_for_publish(client: &LspClient, path: &str) {
+        for _ in 0..100 {
+            if client.diagnostics.lock().await.contains_key(&path_key(path)) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the publish never arrived");
+    }
+
+    #[tokio::test]
+    async fn after_an_edit_only_a_report_for_the_new_text_counts() {
+        let path = temp_file("fn a() {}");
+        let (client, mut server) = scripted();
+        let first = client.touch_file(&path).await.unwrap();
+        assert_eq!(first.version, 1);
+        let opened = server.recv_method("textDocument/didOpen").await;
+        assert_eq!(opened["params"]["textDocument"]["version"], 1);
+        server.publish(&path, Some(1), &["old error"]).await;
+        let report = client.fresh_report(&path, &first, Duration::from_secs(2)).await.expect("the report for version 1");
+        assert_eq!(report[0].message, "old error");
+
+        // An edit makes version 2. Version 1's report is what the server said about text that is gone.
+        std::fs::write(&path, "fn b() {}").unwrap();
+        let second = client.touch_file(&path).await.unwrap();
+        assert_eq!(second.version, 2);
+        assert!(client.fresh_report(&path, &second, Duration::from_millis(300)).await.is_none(), "a stale report must not read as the answer");
+        let changed = server.recv_method("textDocument/didChange").await;
+        assert_eq!(changed["params"]["textDocument"]["version"], 2);
+        server.publish(&path, Some(2), &[]).await;
+        let report = client.fresh_report(&path, &second, Duration::from_secs(2)).await.expect("the report for version 2");
+        assert!(report.is_empty(), "the error is fixed: {report:?}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn a_publish_with_no_version_counts_only_after_the_edit_and_once_it_has_settled() {
+        let path = temp_file("x");
+        let (client, mut server) = scripted();
+        // Published before the edit: about older text.
+        server.publish(&path, None, &["before the edit"]).await;
+        wait_for_publish(&client, &path).await;
+        let mark = client.touch_file(&path).await.unwrap();
+        assert!(client.fresh_report(&path, &mark, Duration::from_millis(400)).await.is_none(), "older than the edit");
+
+        server.publish(&path, None, &["after the edit"]).await;
+        let at = Instant::now();
+        let report = client.fresh_report(&path, &mark, Duration::from_secs(3)).await.expect("the settled publish");
+        assert_eq!(report[0].message, "after the edit");
+        assert!(at.elapsed() >= Duration::from_millis(200), "taken only once nothing newer followed it: {:?}", at.elapsed());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn a_young_servers_empty_publish_is_not_taken_for_no_problems() {
+        let path = temp_file("x");
+        let (client, mut server) = scripted();
+        let mark = client.touch_file(&path).await.unwrap();
+        server.publish(&path, None, &[]).await;
+        assert!(client.fresh_report(&path, &mark, Duration::from_millis(800)).await.is_none(), "it may only mean the server has not looked yet");
+        // The same publish with a version is a real answer.
+        server.publish(&path, Some(mark.version), &[]).await;
+        assert_eq!(client.fresh_report(&path, &mark, Duration::from_secs(2)).await.map(|r| r.len()), Some(0));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn a_server_that_can_be_asked_is_asked_and_asked_again_when_it_was_busy() {
+        let path = temp_file("x");
+        let (client, mut server) = scripted();
+        *client.capabilities.lock().await = json!({ "diagnosticProvider": { "interFileDependencies": false } });
+        let mark = client.touch_file(&path).await.unwrap();
+        let (c, p) = (client.clone(), path.clone());
+        let ask = tokio::spawn(async move { c.fresh_report(&p, &mark, Duration::from_secs(3)).await });
+        let busy = server.recv_method("textDocument/diagnostic").await;
+        assert_eq!(busy["params"]["textDocument"]["uri"], path_to_uri(&path));
+        server.send(json!({ "jsonrpc": "2.0", "id": busy["id"], "error": { "code": -32801, "message": "content modified" } })).await;
+        let again = server.recv_method("textDocument/diagnostic").await;
+        server
+            .send(json!({ "jsonrpc": "2.0", "id": again["id"], "result": { "kind": "full", "items": [{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } }, "severity": 1, "message": "pulled" }] } }))
+            .await;
+        let report = ask.await.unwrap().expect("the pulled report");
+        assert_eq!(report[0].message, "pulled");
+        // What was pulled is kept, so a later "unchanged" has something to stand on.
+        assert_eq!(client.diagnostics.lock().await.get(&path_key(&path)).map(|p| p.items.len()), Some(1));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn a_server_that_declines_to_answer_is_waited_on_for_its_publish() {
+        let path = temp_file("x");
+        let (client, mut server) = scripted();
+        *client.capabilities.lock().await = json!({ "diagnosticProvider": {} });
+        let mark = client.touch_file(&path).await.unwrap();
+        let (c, p) = (client.clone(), path.clone());
+        let ask = tokio::spawn(async move { c.fresh_report(&p, &mark, Duration::from_secs(3)).await });
+        let pull = server.recv_method("textDocument/diagnostic").await;
+        server.send(json!({ "jsonrpc": "2.0", "id": pull["id"], "result": null })).await;
+        server.publish(&path, Some(mark.version), &["pushed"]).await;
+        let report = ask.await.unwrap().expect("the pushed report");
+        assert_eq!(report[0].message, "pushed");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn what_makes_a_publish_fresh() {
+        let now = Instant::now();
+        let long_ago = now - Duration::from_secs(5);
+        let publish = |version: Option<i64>, seq: u64, empty: bool, at: Instant| Published {
+            items: if empty { Vec::new() } else { vec![Diagnostic { range: super::super::Range { start: super::super::Position { line: 0, character: 0 }, end: super::super::Position { line: 0, character: 1 } }, severity: Some(1), message: "m".into(), source: None, code: None }] },
+            version,
+            seq,
+            at,
+        };
+        let mark = SyncMark { version: 3, seq: 10 };
+        let old = Duration::from_secs(60);
+        let young = Duration::from_secs(1);
+        // Versioned: the edit's version or a later one.
+        assert!(is_fresh(&publish(Some(3), 11, false, now), &mark, old, now));
+        assert!(is_fresh(&publish(Some(4), 11, false, now), &mark, old, now), "a later edit's report covers this one");
+        assert!(!is_fresh(&publish(Some(2), 11, false, now), &mark, old, now), "an earlier version");
+        // Unversioned: after the edit, settled, and not a cold server's empty publish.
+        assert!(is_fresh(&publish(None, 11, false, long_ago), &mark, old, now));
+        assert!(!is_fresh(&publish(None, 10, false, long_ago), &mark, old, now), "not after the edit");
+        assert!(!is_fresh(&publish(None, 11, false, now), &mark, old, now), "not settled yet");
+        assert!(!is_fresh(&publish(None, 11, true, long_ago), &mark, young, now), "a young server's empty publish");
+        assert!(is_fresh(&publish(None, 11, true, long_ago), &mark, old, now), "an old server's empty publish is a clean file");
+        assert!(is_fresh(&publish(None, 11, false, long_ago), &mark, young, now), "a young server's non-empty publish is real");
     }
 }
