@@ -19,6 +19,7 @@ pub mod defense;
 pub mod entities;
 pub mod evolve;
 pub mod graph;
+pub mod observations;
 pub mod rerank;
 pub mod rrf;
 pub mod sleep;
@@ -148,6 +149,7 @@ pub fn category_half_life_days(kind: &str) -> f64 {
         "instruction" => 180.0,
         "auto" => 45.0,
         "episode" => 120.0,
+        "observation" => 120.0,
         _ => 45.0, // "fact" and unknown kinds default to 45 days
     }
 }

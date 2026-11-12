@@ -437,6 +437,7 @@ pub fn provenance_label(kind: &str) -> &'static str {
         "episodic" => "happened before",
         "auto" => "session note",
         "episode" => "session summary",
+        "observation" => "belief drawn from several facts",
         _ => "note",
     }
 }

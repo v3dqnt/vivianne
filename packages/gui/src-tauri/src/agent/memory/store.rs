@@ -204,6 +204,9 @@ fn open_and_init_uncached(root: &str) -> Result<Connection, String> {
     let _ = ensure_column(&conn, "occurred_at", "INTEGER");
     let _ = ensure_column(&conn, "perspective", "TEXT");
     super::entities::init(&conn)?;
+    // An observation whose evidence has since been corrected or archived (see `observations`).
+    let _ = ensure_column(&conn, "stale", "INTEGER NOT NULL DEFAULT 0");
+    super::observations::init(&conn)?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS memory_vec_indexes (model TEXT PRIMARY KEY, dim INTEGER NOT NULL);",
     )
