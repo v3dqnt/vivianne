@@ -2377,6 +2377,20 @@ pub async fn cmd_memory_configure_extraction(
 }
 
 #[tauri::command]
+pub async fn cmd_memory_configure_defense(
+    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] blockSecrets: bool) -> Result<crate::agent::memory::MemoryState, String> {
+    crate::agent::memory::configure_defense(&memory_root_for(&state.agent_state).await, blockSecrets).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_configure_pages(
+    state: State<'_, Arc<AppState>>,
+    pages: Vec<crate::agent::memory::pages::PageDef>) -> Result<crate::agent::memory::MemoryState, String> {
+    crate::agent::memory::configure_pages(&memory_root_for(&state.agent_state).await, pages).await
+}
+
+#[tauri::command]
 pub async fn cmd_memory_remember(
     state: State<'_, Arc<AppState>>,
     

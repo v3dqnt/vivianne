@@ -422,8 +422,10 @@ pub async fn core_block(root: &str) -> Option<String> {
         body.truncate(end);
         body.push_str("\n…");
     }
+    // Which pages exist, by name only: what they say is found with recall.
+    let pages = super::pages::titles_line(&super::state_snapshot(root).await.pages).map(|l| format!("\n\n{l}")).unwrap_or_default();
     Some(format!(
-        "<core_memory>\nFrom memory, always in view. Follow the user's instructions here unless they say otherwise now; use recall for anything else from before.\n\n{body}\n</core_memory>"
+        "<core_memory>\nFrom memory, always in view. Follow the user's instructions here unless they say otherwise now; use recall for anything else from before.\n\n{body}{pages}\n</core_memory>"
     ))
 }
 
@@ -438,6 +440,8 @@ pub fn provenance_label(kind: &str) -> &'static str {
         "auto" => "session note",
         "episode" => "session summary",
         "observation" => "belief drawn from several facts",
+        "page" => "project page, kept up to date",
+        "external" => "from Hindsight",
         _ => "note",
     }
 }

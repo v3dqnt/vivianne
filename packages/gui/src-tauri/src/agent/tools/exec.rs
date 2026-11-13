@@ -477,7 +477,7 @@ pub(crate) fn delegated_ask_refusal(depth: usize) -> Option<String> {
 /// `Tool` registry in `agent::tools::builtin`; MCP tools come last. Adding a
 /// tool here is all its dispatch needs: the consistency tests read this table.
 pub(crate) static AGENT_TOOLS: &[AgentTool] = &[
-    tool!("remember", "recall" => |cx| execute_memory_tool(cx.name, cx.args, cx.state, cx.app).await),
+    tool!("remember", "recall", "reflect" => |cx| execute_memory_tool(cx.name, cx.args, cx.state, cx.app).await),
     tool!("read_skill" => |cx| execute_read_skill_tool(cx.args).await),
     tool!("question" => |cx| if let Some(refusal) = delegated_ask_refusal(cx.depth) { text_result(refusal) } else { match cx.args.get("confirm").and_then(|v| v.as_str()) {
         Some(message) => {
@@ -3161,6 +3161,18 @@ async fn execute_memory_tool(name: &str, args: &serde_json::Value, state: &Agent
                 Err(e) => format!("Error: {e}"),
             }
         }
+        "reflect" => {
+            let question = args.get("question").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            if question.is_empty() {
+                "Error: question must not be empty".to_string()
+            } else {
+                let model = state.model().await;
+                match crate::agent::memory::reflect::answer(app, &root, &model, &question).await {
+                    Ok(t) => t,
+                    Err(e) => format!("Error: {e}"),
+                }
+            }
+        }
         _ => {
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -3187,19 +3199,30 @@ async fn execute_memory_tool(name: &str, args: &serde_json::Value, state: &Agent
             });
 
             let as_of = args.get("as_of").and_then(|v| v.as_str()).and_then(crate::agent::memory::parse_as_of);
-            let hits = crate::agent::memory::recall_at(&root, query, as_of, Some(&auth), reranker).await;
+            use crate::agent::memory::budget;
+            let depth = args.get("depth").and_then(|v| v.as_str()).and_then(budget::Depth::parse).unwrap_or_default();
+            let max_tokens = budget::clamp_tokens(args.get("max_tokens").and_then(|v| v.as_u64()).map(|n| n as usize), depth);
+            let hits = crate::agent::memory::recall_with(&root, true, query, as_of, Some(&auth), reranker, depth).await;
             if hits.is_empty() {
                 "No matching memories found.".to_string()
             } else {
                 // Labelled by source, so a user's own words outrank an
-                // inference when two memories disagree.
-                hits.iter()
+                // inference when two memories disagree. A belief or a page
+                // carries its id, which `reflect` can expand into what it rests on.
+                let lines: Vec<String> = hits
+                    .iter()
                     .map(|h| {
                         let scope = if h.user_wide { ", about you" } else { "" };
-                        format!("- [{}{scope}] {}", crate::agent::memory::evolve::provenance_label(&h.kind), h.text)
+                        let id = if matches!(h.kind.as_str(), "observation" | "page") { format!(" (id {})", h.id.get(..8).unwrap_or(&h.id)) } else { String::new() };
+                        format!("- [{}{scope}] {}{id}", crate::agent::memory::evolve::provenance_label(&h.kind), h.text)
                     })
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                    .collect();
+                let (shown, left) = budget::pack(&lines, max_tokens);
+                let mut out = shown.join("\n");
+                if left > 0 {
+                    out.push_str(&format!("\n({left} more not shown: ask with a larger max_tokens, or use reflect for a worked answer)"));
+                }
+                out
             }
         }
     };

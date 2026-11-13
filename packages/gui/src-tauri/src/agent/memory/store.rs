@@ -126,6 +126,27 @@ fn entries_jsonl_path(root: &str) -> PathBuf {
     memory_dir(root).join("entries.jsonl")
 }
 
+/// The schema version this build writes. 2: entities, two times, observations and pages (all additive).
+const SCHEMA_VERSION: i64 = 2;
+
+/// Before the first open by a build that changes the schema, keep a consistent copy of an existing store next to it
+/// (`memory.db.before-v2`). The changes are only additions, so nothing is expected to go wrong; this is for the day one does. Never fails the open.
+fn backup_before_upgrade(conn: &Connection, dir: &std::path::Path) {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap_or(0);
+    let has_data: bool = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'memories'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0;
+    if version >= SCHEMA_VERSION || !has_data {
+        return;
+    }
+    let target = dir.join(format!("memory.db.before-v{SCHEMA_VERSION}"));
+    if target.exists() {
+        return;
+    }
+    let path = target.to_string_lossy().replace('\'', "''");
+    if let Err(e) = conn.execute_batch(&format!("VACUUM INTO '{path}'")) {
+        log::warn!("[memory_store] could not back up the store before upgrading it: {e}");
+    }
+}
+
 fn open_and_init_uncached(root: &str) -> Result<Connection, String> {
     let dir = memory_dir(root);
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create memory dir: {e}"))?;
@@ -134,6 +155,7 @@ fn open_and_init_uncached(root: &str) -> Result<Connection, String> {
     // INSERT OR REPLACE deletes the old row; without this its delete
     // triggers never fire and the FTS and vector indexes keep stale rows.
     conn.execute_batch("PRAGMA recursive_triggers = ON;").map_err(|e| format!("failed to set pragmas: {e}"))?;
+    backup_before_upgrade(&conn, &dir);
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS memories (
@@ -207,6 +229,7 @@ fn open_and_init_uncached(root: &str) -> Result<Connection, String> {
     // An observation whose evidence has since been corrected or archived (see `observations`).
     let _ = ensure_column(&conn, "stale", "INTEGER NOT NULL DEFAULT 0");
     super::observations::init(&conn)?;
+    super::pages::init(&conn)?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS memory_vec_indexes (model TEXT PRIMARY KEY, dim INTEGER NOT NULL);",
     )
@@ -217,6 +240,9 @@ fn open_and_init_uncached(root: &str) -> Result<Connection, String> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap_or(0);
     if version < 1 {
         let _ = conn.execute_batch("INSERT INTO memories_fts(memories_fts) VALUES('rebuild'); PRAGMA user_version = 1;");
+    }
+    if version < SCHEMA_VERSION {
+        let _ = conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"));
     }
 
     migrate_from_jsonl(&conn, root)?;
@@ -1228,6 +1254,36 @@ mod tests {
         let then: Vec<String> = search_fts_at(&root, "editor", 10, Some(3_000)).await.unwrap().into_iter().map(|e| e.id).collect();
         assert_eq!(then, vec!["old".to_string()]);
         assert_eq!(entry_count(&root).await.unwrap(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An existing store is copied aside once, before the first open by a build that changes the layout; a new or current one is not.
+    #[test]
+    fn an_old_store_is_backed_up_once_before_the_upgrade() {
+        let dir = std::env::temp_dir().join(format!("vivianne_memstore_backup_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join(format!("memory.db.before-v{SCHEMA_VERSION}"));
+        // Nothing stored yet: nothing to keep.
+        let fresh = Connection::open(dir.join("fresh.db")).unwrap();
+        backup_before_upgrade(&fresh, &dir);
+        assert!(!target.exists());
+        // An old store with a fact in it.
+        let old = Connection::open(dir.join("memory.db")).unwrap();
+        old.execute_batch("CREATE TABLE memories (id TEXT PRIMARY KEY, text TEXT); INSERT INTO memories VALUES ('a', 'kept');").unwrap();
+        backup_before_upgrade(&old, &dir);
+        assert!(target.exists(), "a copy is made");
+        let copy = Connection::open(&target).unwrap();
+        assert_eq!(copy.query_row("SELECT text FROM memories WHERE id = 'a'", [], |r| r.get::<_, String>(0)).unwrap(), "kept");
+        drop(copy);
+        // Done once: a later change to the live store does not overwrite the copy.
+        old.execute("UPDATE memories SET text = 'changed'", []).unwrap();
+        backup_before_upgrade(&old, &dir);
+        assert_eq!(Connection::open(&target).unwrap().query_row("SELECT text FROM memories", [], |r| r.get::<_, String>(0)).unwrap(), "kept");
+        // Already current: no copy.
+        std::fs::remove_file(&target).unwrap();
+        old.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};")).unwrap();
+        backup_before_upgrade(&old, &dir);
+        assert!(!target.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

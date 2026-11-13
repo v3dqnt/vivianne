@@ -216,9 +216,9 @@ pub const GROUPS: &[CapabilityGroup] = &[
     CapabilityGroup {
         name: "Remember across sessions",
         when: "A durable fact worth carrying forward, or the start of a task that likely touches earlier work.",
-        tools: &["remember", "recall", "read_skill"],
+        tools: &["remember", "recall", "reflect", "read_skill"],
         how: Some(
-            "recall at the start of a task that plausibly relates to something from before. \
+            "recall at the start of a task that plausibly relates to something from before; reflect when the answer has to be put together from several memories. \
              remember for lasting facts and corrections — not for what the repo already records. \
              read_skill pulls in the full instructions for any skill in your catalog; read the relevant one BEFORE attempting \
              a task it covers, not after getting stuck.",

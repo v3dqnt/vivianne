@@ -65,6 +65,7 @@ pub struct SleepReport {
     pub merged: usize,
     pub archived: usize,
     pub observations: usize,
+    pub pages: usize,
 }
 
 impl SleepReport {
@@ -74,6 +75,7 @@ impl SleepReport {
         self.merged += o.merged;
         self.archived += o.archived;
         self.observations += o.observations;
+        self.pages += o.pages;
     }
 }
 
@@ -103,13 +105,14 @@ pub async fn run(app: &tauri::AppHandle, root: &str, model: Option<&crate::agent
     if let Some(model) = model {
         report.episodes = write_episodes(app, root, model, &auth).await;
         report.observations = super::observations::consolidate(app, root, model, &auth).await;
+        report.pages = super::pages::refresh(app, root, model, &auth, &super::state_snapshot(root).await.pages).await;
     }
     report.merged = dedupe(root).await;
     report.archived = archive_unused(root).await;
     let mut state = super::state_snapshot(root).await;
     state.last_sleep_at = Some(now_ms());
     let _ = super::save_state(root, &state).await;
-    if report.reembedded + report.episodes + report.merged + report.archived + report.observations > 0 {
+    if report.reembedded + report.episodes + report.merged + report.archived + report.observations + report.pages > 0 {
         log::info!(
             "[memory_sleep] {root}: {} re-embedded, {} episodes, {} merged, {} archived",
             report.reembedded, report.episodes, report.merged, report.archived

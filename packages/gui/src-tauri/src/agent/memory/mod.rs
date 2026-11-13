@@ -18,8 +18,12 @@
 pub mod defense;
 pub mod entities;
 pub mod evolve;
+pub mod budget;
 pub mod graph;
+pub mod hindsight;
 pub mod observations;
+pub mod pages;
+pub mod reflect;
 pub mod rerank;
 pub mod rrf;
 pub mod sleep;
@@ -32,7 +36,6 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 const MAX_CONTEXT_BYTES: usize = 8_000;
-const MAX_RECALL_HITS: usize = 8;
 
 /// How many new turn-close (`kind = "auto"`) entries accumulate before an L1
 /// extraction batch runs. Chosen to bound cost — extraction is an opt-in LLM
@@ -150,6 +153,7 @@ pub fn category_half_life_days(kind: &str) -> f64 {
         "auto" => 45.0,
         "episode" => 120.0,
         "observation" => 120.0,
+        "page" => 120.0,
         _ => 45.0, // "fact" and unknown kinds default to 45 days
     }
 }
@@ -211,6 +215,15 @@ pub struct MemoryState {
     pub last_episode_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_sleep_at: Option<u64>,
+    /// The project's pages: named questions whose answers are kept up to date (see `pages`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pages: Vec<pages::PageDef>,
+    /// Memory defense: refuse to remember text that holds a secret or a card number, instead of saving it with the secret hidden.
+    #[serde(default)]
+    pub block_secrets: bool,
+    /// How many secrets and card numbers memory defense has hidden or refused in this store.
+    #[serde(default)]
+    pub redacted_count: u64,
 }
 
 impl Default for MemoryState {
@@ -227,6 +240,9 @@ impl Default for MemoryState {
             last_model: None,
             last_episode_at: None,
             last_sleep_at: None,
+            pages: Vec::new(),
+            block_secrets: false,
+            redacted_count: 0,
         }
     }
 }
@@ -450,6 +466,26 @@ pub async fn configure_extraction(root: &str, enabled: bool) -> Result<MemorySta
     Ok(state)
 }
 
+/// Memory defense policy: refuse text that holds a secret (true), or save it with the secret hidden (false, the default).
+pub async fn configure_defense(root: &str, block_secrets: bool) -> Result<MemoryState, String> {
+    let mut state = read_state(root).await;
+    state.block_secrets = block_secrets;
+    state.updated_at = now_ms();
+    write_state(root, &state).await?;
+    Ok(state)
+}
+
+/// Set the project's pages. Pages dropped here are removed at the next sleep pass.
+pub async fn configure_pages(root: &str, defs: Vec<pages::PageDef>) -> Result<MemoryState, String> {
+    let defs = pages::clean_defs(defs)?;
+    let mut state = read_state(root).await;
+    state.pages = defs;
+    state.updated_at = now_ms();
+    write_state(root, &state).await?;
+    self::sleep::mark_dirty(root);
+    Ok(state)
+}
+
 pub async fn purge(root: &str) -> Result<bool, String> {
     let dir = memory_dir(root);
     if !dir.exists() {
@@ -490,7 +526,19 @@ pub async fn remember(
     if text.trim().is_empty() {
         return Err("text must not be empty".to_string());
     }
-    let text = redact_secrets(text.trim());
+    // Memory defense: secrets and card numbers are hidden (or the memory refused), and counted.
+    let mut state = read_state(root).await;
+    let policy = if state.block_secrets { defense::Policy::Block } else { defense::Policy::Redact };
+    let screened = match defense::screen(text.trim(), policy) {
+        Some(s) => s,
+        None => {
+            state.redacted_count += defense::apply_redaction(text.trim()).count as u64;
+            let _ = write_state(root, &state).await;
+            return Err("That text holds a secret or a card number, so it was not saved (memory defense is set to refuse these).".to_string());
+        }
+    };
+    state.redacted_count += screened.count as u64;
+    let text = screened.text;
     let entry = MemoryEntry {
         id: uuid::Uuid::new_v4().to_string(),
         key: key.unwrap_or_else(|| slug(&text)),
@@ -514,9 +562,11 @@ pub async fn remember(
     let _ = self::store::insert_entry(root, &entry).await;
     spawn_background_dedup(root, &entry, auth);
     self::sleep::mark_dirty(root);
-    let mut state = read_state(root).await;
     state.updated_at = now_ms();
     write_state(root, &state).await?;
+    // To a Hindsight server, when one is connected and sending is switched on (redacted again there).
+    let mirrored = entry.text.clone();
+    tokio::spawn(async move { self::hindsight::retain(&mirrored).await });
     Ok(entry)
 }
 
@@ -542,9 +592,6 @@ pub async fn forget(root: &str, query: &str) -> Result<usize, String> {
 /// recall output. Lower values surface more distantly-related memories.
 const CASCADE_WEIGHT_FLOOR: f32 = 0.3;
 
-/// Maximum depth for BFS cascade traversal starting from seed entries.
-/// 3 hops captures indirectly-related facts without drifting too far.
-const CASCADE_MAX_DEPTH: usize = 3;
 
 /// Load the edge slice reachable from `seeds` within `max_depth` hops — the
 /// input `graph::bfs_cascade` walks. Instead of loading the store's whole
@@ -669,6 +716,22 @@ pub(crate) async fn recall_in(
     auth: Option<&std::sync::Arc<crate::ai::auth::AuthState>>,
     reranker: Option<RerankerOptions<'_>>,
 ) -> Vec<MemoryEntry> {
+    recall_with(root, include_user, query, as_of, auth, reranker, self::budget::Depth::Mid).await
+}
+
+/// `recall_in` at a chosen depth: how many hits, how many graph hops, and whether the reranker runs (see `budget`).
+pub(crate) async fn recall_with(
+    root: &str,
+    include_user: bool,
+    query: &str,
+    as_of: Option<u64>,
+    auth: Option<&std::sync::Arc<crate::ai::auth::AuthState>>,
+    reranker: Option<RerankerOptions<'_>>,
+    depth: self::budget::Depth,
+) -> Vec<MemoryEntry> {
+    let hits_cap = depth.hits();
+    let hops = depth.hops();
+    let reranker = if depth.rerank() { reranker } else { None };
     let user_store = include_user && user_store_exists();
     let query = query.trim();
     if query.is_empty() {
@@ -687,9 +750,9 @@ pub(crate) async fn recall_in(
             if user_wide && !user_store {
                 return Vec::new();
             }
-            let fts = self::store::search_fts_at(&store_root, query, MAX_RECALL_HITS * 3, as_of).await.unwrap_or_default();
+            let fts = self::store::search_fts_at(&store_root, query, hits_cap * 3, as_of).await.unwrap_or_default();
             let vec = match embedding {
-                Some(e) => self::store::search_vector_scored_at(&store_root, &e, MAX_RECALL_HITS * 3, as_of)
+                Some(e) => self::store::search_vector_scored_at(&store_root, &e, hits_cap * 3, as_of)
                     .await
                     .map(|hits| hits.into_iter().map(|(e, _)| e).collect())
                     .unwrap_or_default(),
@@ -707,14 +770,18 @@ pub(crate) async fn recall_in(
                 None => named,
             };
             let timed = match window {
-                Some(w) => self::store::entries_in_window(&store_root, w.start, w.end, MAX_RECALL_HITS * 2).await.unwrap_or_default(),
+                Some(w) => self::store::entries_in_window(&store_root, w.start, w.end, hits_cap * 2).await.unwrap_or_default(),
                 None => Vec::new(),
             };
             vec![mark(fts), mark(vec), mark(named), mark(timed)]
         }
     };
-    let (project_lists, user_lists) = tokio::join!(search("", false), search(USER_ROOT, true));
-    let lists: Vec<Vec<MemoryEntry>> = project_lists.into_iter().chain(user_lists).filter(|l| !l.is_empty()).collect();
+    // A connected Hindsight server answers too; what it says joins the ranking as one more list.
+    let external = async {
+        if as_of.is_some() { Vec::new() } else { self::hindsight::recall(query).await }
+    };
+    let (project_lists, user_lists, external) = tokio::join!(search("", false), search(USER_ROOT, true), external);
+    let lists: Vec<Vec<MemoryEntry>> = project_lists.into_iter().chain(user_lists).chain(std::iter::once(external)).filter(|l| !l.is_empty()).collect();
 
     if lists.is_empty() {
         return Vec::new();
@@ -764,7 +831,7 @@ pub(crate) async fn recall_in(
     // merge is BM25-only and its scores are noisier, so a slightly relaxed
     // relative floor keeps paraphrase hits from being cut on spread alone.
     let gate_floor = if embedding.is_some() { GATE_REL_FLOOR } else { GATE_REL_FLOOR_BM25_ONLY };
-    let heuristic_results = dynamic_gate_select_with(confidence_decayed, MAX_RECALL_HITS, gate_floor);
+    let heuristic_results = dynamic_gate_select_with(confidence_decayed, hits_cap, gate_floor);
 
     // Step 4: Optional LLM reranker (with topic-stability gate)
     let selected: Vec<MemoryEntry> = if let Some(opts) = reranker {
@@ -795,7 +862,7 @@ pub(crate) async fn recall_in(
             match result {
                 Some(reordered) => {
                     // Apply the dynamic gate on top of the LLM's ranking
-                    self::rerank::rerank_and_gate(reordered, MAX_RECALL_HITS)
+                    self::rerank::rerank_and_gate(reordered, hits_cap)
                 }
                 None => {
                     // Reranker failed — fall back to heuristic results
@@ -830,14 +897,14 @@ pub(crate) async fn recall_in(
         if seed_ids.is_empty() {
             continue;
         }
-        let edges = cascade_edges(store, &seed_ids, CASCADE_MAX_DEPTH).await;
+        let edges = cascade_edges(store, &seed_ids, hops).await;
         if edges.is_empty() {
             continue;
         }
         let cascade = self::graph::bfs_cascade(
             &seed_ids,
             &edges,
-            CASCADE_MAX_DEPTH,
+            hops,
             CASCADE_WEIGHT_FLOOR,
         );
         if cascade.is_empty() {

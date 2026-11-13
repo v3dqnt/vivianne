@@ -534,9 +534,22 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "What to search memory for" },
-                    "as_of": { "type": "string", "description": "Optional date (YYYY-MM-DD, or YYYY-MM): recall what was true then instead of now. Facts that were later corrected are kept on record, so this answers \"what did we decide in March\"." }
+                    "as_of": { "type": "string", "description": "Optional date (YYYY-MM-DD, or YYYY-MM): recall what was true then instead of now. Facts that were later corrected are kept on record, so this answers \"what did we decide in March\"." },
+                    "depth": { "type": "string", "enum": ["low", "mid", "high"], "description": "How hard to look: low is a quick lookup, high a thorough search for a hard question (default mid)" },
+                    "max_tokens": { "type": "number", "description": "The most this may return, in tokens (100 to 8000; the default follows depth)" }
                 },
                 "required": ["query"]
+            }
+        }),
+        serde_json::json!({
+            "name": "reflect",
+            "description": "Answer a question from project memory and say where the answer came from. It looks at the project's pages first, then its beliefs, then raw facts, in a few steps, and returns the answer with the memories it rests on. Use it for a question that needs putting facts together (\"how do we release?\", \"what do I prefer for tests?\"); use recall to just look something up.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": { "type": "string", "description": "The question to answer from memory" }
+                },
+                "required": ["question"]
             }
         }),
         serde_json::json!({
