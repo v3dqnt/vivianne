@@ -767,7 +767,13 @@ pub async fn run_agent_loop_continue(
             &context.messages,
         );
         if context.delegate_depth >= 1 {
-            tool_defs.retain(|t| !matches!(t.get("name").and_then(|n| n.as_str()), Some("task" | "team_run" | "question")));
+            // An employee (depth 1, delegation allowed) may hand work to plain subagents; `execute_task_tool` allows it, so the tool must be there.
+            let employee = context.delegate_depth == 1 && state.delegation_allowed().await;
+            tool_defs.retain(|t| match t.get("name").and_then(|n| n.as_str()) {
+                Some("team_run" | "question") => false,
+                Some("task") => employee,
+                _ => true,
+            });
         } else if crate::agent::tools::profile::is_lean_provider(&model.provider) {
             // A lead with a team must be able to hand work to it, and the lean
             // set has no delegation tools: add them when there is a team.
@@ -2693,6 +2699,7 @@ async fn call_provider_stream_and_await(
         if let Some(thread) = crate::agent::orchestration::turn_thread() {
             crate::agent::orchestration::record_usage(&thread, &provider, &model_id, &usage);
         }
+        crate::agent::runtime::subagents::record_spend(usage.total_tokens as u64, usage.cost.as_ref().map_or(0.0, |c| c.total));
         tokio::spawn(async move {
             crate::agent::models::usage_store::record_usage(&usage, &provider, &model_id).await;
             crate::agent::models::usage_store::record_usage_tagged(&usage, &provider, &model_id, &source_tag).await;

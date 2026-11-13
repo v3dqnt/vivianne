@@ -1030,7 +1030,8 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "instruction": { "type": "string", "description": "What the new thread should do, complete enough that it needs nothing else from you." }
+                    "instruction": { "type": "string", "description": "What the new thread should do, complete enough that it needs nothing else from you." },
+                    "project": { "type": "string", "description": "The project it works in, by name (default: this thread's). A 24/7 agent must name one." }
                 },
                 "required": ["instruction"]
             }

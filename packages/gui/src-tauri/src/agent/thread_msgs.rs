@@ -41,7 +41,40 @@ fn next_hop(from: &str) -> Result<u32, String> {
 }
 
 fn frame(from_title: &str, from_id: &str, hop: u32, text: &str) -> String {
+    if from_id.starts_with("bot:") {
+        // A 24/7 agent acts for the user: what it sends a coding thread is a directive to carry out, within that thread's own approvals.
+        return format!(
+            "[Directive from {from_title} ({from_id}), hop {hop} of {MAX_HOPS}. It acts for the user: carry this out as you would their request, within your approvals. When it is done or you are blocked, reply with message_thread to {from_id}.]\n\n{text}"
+        );
+    }
     format!("[Message from the thread \"{from_title}\" ({from_id}), hop {hop} of {MAX_HOPS}. If it needs an answer, reply with message_thread.]\n\n{text}")
+}
+
+/// A 24/7 agent's thread id, `bot:<root>:<id>`, as its root and id.
+pub fn bot_parts(thread: &str) -> Option<(&str, &str)> {
+    thread.strip_prefix("bot:")?.rsplit_once(':').filter(|(root, id)| !root.is_empty() && !id.is_empty())
+}
+
+/// What a sender is called in a message: a thread's title, or a 24/7 agent's name.
+fn sender_title(from: &str) -> String {
+    match bot_parts(from) {
+        Some((root, id)) => format!("the 24/7 agent \"{}\"", crate::agent::team::bots::agent_name(root, id)),
+        None => title_of(from),
+    }
+}
+
+/// The thread a tool call is sent from: a 24/7 agent's `bot:` thread, or this thread's saved session.
+async fn sender(state: &crate::agent::runtime::state::AgentState) -> Option<String> {
+    match crate::agent::orchestration::turn_thread() {
+        Some(t) if t.starts_with("bot:") => Some(t),
+        _ => state.session_tag().await,
+    }
+}
+
+/// The project a name or id names: an exact id, else a name without regard to case.
+pub fn find_project<'a>(projects: &'a [crate::agent::sessions::projects::Project], wanted: &str) -> Option<&'a crate::agent::sessions::projects::Project> {
+    let w = wanted.trim();
+    projects.iter().find(|p| p.id == w).or_else(|| projects.iter().find(|p| p.name.eq_ignore_ascii_case(w)))
 }
 
 fn result(text: impl Into<String>) -> AgentToolResult {
@@ -69,6 +102,11 @@ pub async fn deliver(app: &tauri::AppHandle, from: &str, to: &str, text: &str) -
     if from == to {
         return Err("A thread can't message itself.".into());
     }
+    if let Some((root, id)) = bot_parts(to) {
+        let hop = next_hop(from)?;
+        crate::agent::team::bots::message_from_thread(app, root, id, frame(&sender_title(from), from, hop, text));
+        return Ok(Delivered::Queued);
+    }
     if crate::agent::orchestration::thread_info(to).is_none() {
         return Err(format!("There is no thread with the id `{to}`. Use list_threads to see them."));
     }
@@ -82,7 +120,7 @@ pub async fn deliver(app: &tauri::AppHandle, from: &str, to: &str, text: &str) -
         crate::agent::runtime::commands::cmd_load_session(to.to_string(), Some(to.to_string()), None, app.state::<AgentRegistry>()).await?;
     }
     hops().lock().unwrap_or_else(|e| e.into_inner()).insert(to.to_string(), hop);
-    let framed = frame(&title_of(from), from, hop, text);
+    let framed = frame(&sender_title(from), from, hop, text);
 
     if target.is_idle() {
         crate::agent::orchestration::record_new(to, "thread.message_received", json!({ "from": from, "hop": hop, "mode": "woke" }));
@@ -248,7 +286,7 @@ pub async fn execute_read_thread(args: &Value, state: &crate::agent::runtime::st
 
 pub async fn execute_message_thread(args: &Value, state: &crate::agent::runtime::state::AgentState, app: &tauri::AppHandle) -> AgentToolResult {
     let (Some(to), Some(text)) = (arg(args, "thread_id"), arg(args, "text")) else { return result("Error: thread_id and text are required.") };
-    let Some(from) = state.session_tag().await else { return result("Error: this thread has no saved session yet, so it can't send messages.") };
+    let Some(from) = sender(state).await else { return result("Error: this thread has no saved session yet, so it can't send messages.") };
     match deliver(app, &from, to, text).await {
         Ok(Delivered::Woke(_)) => result(format!("Sent. The thread \"{}\" was idle, so it is working on your message now.", title_of(to))),
         Ok(Delivered::Queued) => result(format!("Sent. The thread \"{}\" is busy, so it will read your message when its current turn ends.", title_of(to))),
@@ -258,7 +296,7 @@ pub async fn execute_message_thread(args: &Value, state: &crate::agent::runtime:
 
 pub async fn execute_ask_thread(args: &Value, state: &crate::agent::runtime::state::AgentState, app: &tauri::AppHandle) -> AgentToolResult {
     let (Some(to), Some(text)) = (arg(args, "thread_id"), arg(args, "text")) else { return result("Error: thread_id and text are required.") };
-    let Some(from) = state.session_tag().await else { return result("Error: this thread has no saved session yet, so it can't send messages.") };
+    let Some(from) = sender(state).await else { return result("Error: this thread has no saved session yet, so it can't send messages.") };
     match deliver(app, &from, to, text).await {
         Ok(Delivered::Woke(handle)) => match tokio::time::timeout(std::time::Duration::from_secs(600), handle).await {
             Ok(Ok(Ok(messages))) => {
@@ -283,25 +321,47 @@ pub async fn execute_ask_thread(args: &Value, state: &crate::agent::runtime::sta
 /// Start a new thread, in the same project as this one, with an instruction to work on.
 pub async fn execute_spawn_thread(args: &Value, state: &crate::agent::runtime::state::AgentState, app: &tauri::AppHandle) -> AgentToolResult {
     let Some(instruction) = arg(args, "instruction") else { return result("Error: instruction is required: say what the new thread should do.") };
-    let Some(parent) = state.session_tag().await else { return result("Error: this thread has no saved session yet, so it can't start others.") };
+    let Some(parent) = sender(state).await else { return result("Error: this thread has no saved session yet, so it can't start others.") };
+    let from_agent = parent.starts_with("bot:");
+    let projects = crate::agent::sessions::projects::list_all();
+    let names = || projects.iter().map(|p| format!("\"{}\"", p.name)).collect::<Vec<_>>().join(", ");
+    let chosen = match arg(args, "project") {
+        Some(p) => match find_project(&projects, p) {
+            Some(found) => Some(found.clone()),
+            None => return result(format!("Error: there is no project called '{p}'. Projects: {}.", names())),
+        },
+        None if from_agent => return result(format!("Error: say which project the coding thread works in (project: its name). Projects: {}.", names())),
+        None => None,
+    };
     if crate::agent::orchestration::ancestors(&parent).len() >= MAX_DEPTH {
         return result(format!("Error: threads started by threads can only go {MAX_DEPTH} levels deep. Do this work yourself, or ask the user."));
     }
     let id = format!("session_{}", crate::agent::runtime::commands::now_ms());
     let registry = app.state::<AgentRegistry>();
-    if let Err(e) = crate::agent::runtime::commands::cmd_new_session(Some(id.clone()), Some(parent.clone()), app.state::<AgentRegistry>()).await {
+    // A 24/7 agent's own thread is not a coding thread to inherit settings from.
+    let inherit = (!from_agent).then(|| parent.clone());
+    if let Err(e) = crate::agent::runtime::commands::cmd_new_session(Some(id.clone()), inherit, app.state::<AgentRegistry>()).await {
         return result(format!("Error: couldn't start a thread: {e}"));
     }
-    drop(registry);
-    let project = crate::agent::sessions::projects::cmd_get_session_project_map().await.ok().and_then(|m| m.get(&parent).cloned());
+    let project = match &chosen {
+        Some(p) => Some(p.id.clone()),
+        None => crate::agent::sessions::projects::cmd_get_session_project_map().await.ok().and_then(|m| m.get(&parent).cloned()),
+    };
     if let Some(p) = project {
         let _ = crate::agent::sessions::projects::cmd_assign_session_project(id.clone(), Some(p)).await;
     }
+    // The thread works in the project's folder.
+    if let Some(path) = chosen.as_ref().and_then(|p| p.path.clone()).filter(|p| !p.trim().is_empty()) {
+        let thread = registry.resolve(Some(&id)).await;
+        let mode = thread.agent_state.access_mode().await;
+        thread.agent_state.set_workspace(vec![path], mode).await;
+    }
+    drop(registry);
     crate::agent::orchestration::record_new(&id, "thread.spawned", json!({ "parent": parent, "relationship": "child" }));
     crate::agent::orchestration::record_new(&parent, "thread.child_spawned", json!({ "child": id }));
     let _ = app.emit("thread:spawned", json!({ "id": id, "parent": parent }));
     match deliver(app, &parent, &id, instruction).await {
-        Ok(_) => result(format!("Started the thread `{id}`. It is working on your instruction now; use read_thread to see how it's going, or ask_thread to wait for an answer from it.")),
+        Ok(_) => result(format!("Started the thread `{id}`{}. It is working on your instruction now; use read_thread to see how it's going, message_thread to direct it further, or ask_thread to wait for an answer from it.", chosen.as_ref().map(|p| format!(" in the project \"{}\"", p.name)).unwrap_or_default())),
         Err(e) => result(format!("The thread `{id}` was made, but the instruction wasn't delivered: {e}")),
     }
 }
@@ -326,6 +386,25 @@ mod tests {
         assert!(next_hop(me).unwrap_err().contains("passed along 5 times"));
         user_turn(me);
         assert_eq!(next_hop(me), Ok(1));
+    }
+
+    #[test]
+    fn a_24_7_agent_sends_directives_and_is_found_by_its_thread_id() {
+        assert_eq!(bot_parts("bot:C:\\Users\\me\\agents:ada"), Some(("C:\\Users\\me\\agents", "ada")), "the root may hold colons");
+        assert_eq!(bot_parts("session_12"), None);
+        assert_eq!(bot_parts("bot::ada"), None);
+        let f = frame("the 24/7 agent \"Ada\"", "bot:/r:ada", 1, "add a dark mode toggle");
+        assert!(f.starts_with("[Directive from the 24/7 agent \"Ada\" (bot:/r:ada), hop 1 of 5. It acts for the user"), "{f}");
+        assert!(f.contains("reply with message_thread to bot:/r:ada"));
+    }
+
+    #[test]
+    fn a_project_is_found_by_id_or_by_name_in_any_case() {
+        let p = |id: &str, name: &str| crate::agent::sessions::projects::Project { id: id.into(), name: name.into(), ..serde_json::from_value(serde_json::json!({ "id": "", "name": "", "created_at": "" })).unwrap() };
+        let all = vec![p("p1", "Vivianne"), p("p2", "Site")];
+        assert_eq!(find_project(&all, "p2").map(|x| x.name.as_str()), Some("Site"));
+        assert_eq!(find_project(&all, " vivianne ").map(|x| x.id.as_str()), Some("p1"));
+        assert!(find_project(&all, "nope").is_none());
     }
 
     #[test]
