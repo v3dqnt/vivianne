@@ -1527,7 +1527,7 @@ fn run_headless(html: &str, flags: &[String], out: &Path) -> Result<(), String> 
     let url = url::Url::from_file_path(&page).map_err(|_| "bad temp path".to_string())?;
     let _ = std::fs::remove_file(out);
 
-    let mut cmd = std::process::Command::new(&browser);
+    let mut cmd = crate::proc::quiet_std(&browser);
     cmd.args([
         "--headless=new",
         "--disable-gpu",

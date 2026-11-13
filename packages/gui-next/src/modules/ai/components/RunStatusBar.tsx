@@ -121,7 +121,7 @@ export function RunStatusBar() {
         px: 0.75,
         py: 0.25,
         borderRadius: '6px',
-        fontSize: '0.6875rem',
+        fontSize: '0.75rem',
         fontWeight: 500,
         color: strong ? 'text.primary' : 'text.secondary',
         flexShrink: 0,
@@ -157,15 +157,15 @@ export function RunStatusBar() {
         ) : (
           <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color, flexShrink: 0, mx: '7px' }} />
         )}
-        <Typography variant="caption" sx={{ fontWeight: 500, color, flexShrink: 0, fontSize: '0.6875rem' }}>
+        <Typography variant="caption" sx={{ fontWeight: 500, color, flexShrink: 0, fontSize: '0.75rem' }}>
           {label}
           {status === 'waiting' && waitUntil ? ` · ${formatDuration(waitUntil - now)}` : ''}
         </Typography>
-        <Typography variant="caption" color="text.secondary" noWrap sx={{ minWidth: 0, flex: 1, fontSize: '0.6875rem' }} title={note ?? ledger?.objective}>
+        <Typography variant="caption" color="text.secondary" noWrap sx={{ minWidth: 0, flex: 1, fontSize: '0.75rem' }} title={note ?? ledger?.objective}>
           {note ?? ledger?.objective ?? ''}
         </Typography>
         {meta.length > 0 && (
-          <Typography className="cq-label" variant="caption" color="text.disabled" noWrap sx={{ flexShrink: 0, fontSize: '0.6875rem' }}>
+          <Typography className="cq-label" variant="caption" color="text.disabled" noWrap sx={{ flexShrink: 0, fontSize: '0.75rem' }}>
             {meta.join(' · ')}
           </Typography>
         )}

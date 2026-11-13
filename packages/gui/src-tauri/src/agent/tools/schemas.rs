@@ -126,15 +126,17 @@ pub(crate) fn static_tool_definitions() -> Vec<serde_json::Value> {
     let mut defs = vec![
         serde_json::json!({
             "name": "read",
-            "description": "Read the contents of a file. Text files are returned line-numbered (like `cat -n`), with the total line count stated so you know whether you saw the whole file or need offset/limit to continue. Handles PDFs (page count + extracted text via 'pages' param) and Jupyter notebooks (.ipynb, cell-by-cell) the same way. Images are shown to you directly (downscaled if oversized) alongside a text summary (format/dimensions) — set ocr=true to also extract any text in the image instead of just seeing it. If the current model can't take image input, an image is OCR'd automatically instead of shown, so you still get any text it contains.",
+            "description": "Read the contents of a file. Text files are returned line-numbered (like `cat -n`), with the total line count stated so you know whether you saw the whole file or need offset/limit to continue. Documents are parsed properly: PDF text page by page (pages without a usable text layer, such as scans, are attached as page images, or OCR'd for models without vision; pass render=true to see any page's layout, figures or equations), Word (.docx: headings, lists, tables, footnotes), PowerPoint (.pptx: each slide's text, tables and speaker notes) and spreadsheets (.xlsx/.xlsm/.xlsb/.xls/.ods: every sheet as rows with A1 coordinates and the values Excel shows). Jupyter notebooks (.ipynb) are read cell by cell. Images are shown to you directly (downscaled if oversized) alongside a text summary (format/dimensions) — set ocr=true to also extract any text in the image instead of just seeing it. If the current model can't take image input, an image is OCR'd automatically instead of shown, so you still get any text it contains.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Relative path of the file" },
                     "offset": { "type": "number", "description": "Start reading at this line (1-indexed) — text files only" },
                     "limit": { "type": "number", "description": "Maximum lines to read — text files only" },
-                    "pages": { "type": "string", "description": "PDF page range, e.g. \"1-5\" or \"3\" — PDF files only" },
-                    "ocr": { "type": "boolean", "description": "If true, also run OCR on image files to extract literal text (requires HUGGINGFACE_TOKEN, with a local RapidOCR fallback)." }
+                    "pages": { "type": "string", "description": "PDF pages or PowerPoint slides to read, e.g. \"1-5\", \"3\" or \"2,7-9\". Use it to continue a long document." },
+                    "render": { "type": "boolean", "description": "PDF only: attach images of the requested pages (up to 6) so you can see figures, equations, tables and layout. Use with pages." },
+                    "sheet": { "type": "string", "description": "Spreadsheets only: read just this sheet (all of its rows, up to the cap)." },
+                    "ocr": { "type": "boolean", "description": "If true, also run OCR on image files (and on PDF pages without a text layer) to extract literal text (requires HUGGINGFACE_TOKEN, with a local RapidOCR fallback)." }
                 },
                 "required": ["path"]
             }
@@ -232,6 +234,7 @@ pub(crate) fn static_tool_definitions() -> Vec<serde_json::Value> {
                         "description": "[x, y] in the last screenshot's pixels (screen pixels if you haven't taken one)."
                     },
                     "start_coordinate": { "type": "array", "items": { "type": "number" }, "description": "left_click_drag: where to start (default: the current cursor)." },
+                    "relative": { "type": "boolean", "description": "coordinate / start_coordinate are 0-999 thousandths of the target window (0,0 top-left, 999,999 bottom-right) instead of screenshot pixels. They stay right if the window moves or resizes." },
                     "text": { "type": "string", "description": "type: the text. key / hold_key / key_down / key_up: a key or combination like \"ctrl+shift+t\". point_at / highlight: a caption." },
                     "repeat": { "type": "number", "description": "key: press it this many times (e.g. down x5)." },
                     "duration": { "type": "number", "description": "Seconds — wait, or how long hold_key holds." },
@@ -397,16 +400,41 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
         }),
         serde_json::json!({
             "name": "lsp",
-            "description": "Code navigation through the file's language server: goToDefinition, findReferences, goToImplementation, hover (type and docs). Choose it when text search is ambiguous (an overloaded or common name, a method on a specific type). line and column are 1-based, as shown by read; put the column on the symbol. Needs a language server for the file type on PATH; read-only.",
+            "description": "Code navigation and checks through the file's language server: goToDefinition, goToTypeDefinition, findReferences, goToImplementation, hover (type and docs), symbols (a file's outline, or with query a search across the workspace), diagnostics (errors for one file, waiting for the server), status (which servers run) and capabilities (what this file's server can do). Choose it when text search is ambiguous (an overloaded or common name, a method on a specific type). line and column are 1-based, as shown by read; put the column on the symbol. Needs a language server for the file type on PATH; read-only.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "operation": { "type": "string", "enum": ["goToDefinition", "findReferences", "goToImplementation", "hover"] },
-                    "path": { "type": "string", "description": "File containing the symbol, absolute or relative to the workspace" },
-                    "line": { "type": "number", "description": "1-based line" },
-                    "column": { "type": "number", "description": "1-based column (characters)" }
+                    "operation": { "type": "string", "enum": ["goToDefinition", "goToTypeDefinition", "findReferences", "goToImplementation", "hover", "symbols", "diagnostics", "status", "capabilities"] },
+                    "path": { "type": "string", "description": "File containing the symbol, absolute or relative to the workspace (any file of the language for a workspace symbol search; not needed for status)" },
+                    "line": { "type": "number", "description": "1-based line (goTo*, findReferences, hover)" },
+                    "column": { "type": "number", "description": "1-based column (characters); or give symbol instead" },
+                    "symbol": { "type": "string", "description": "The name on that line, instead of a column; name#2 for its second occurrence" },
+                    "query": { "type": "string", "description": "symbols: search the whole workspace for this name instead of listing the file" }
                 },
-                "required": ["operation", "path", "line", "column"]
+                "required": ["operation"]
+            }
+        }),
+        serde_json::json!({
+            "name": "lsp_edit",
+            "description": "Change code through the language server, which knows every reference: rename a symbol (rename), move or rename a file and update what imports it (rename_file), list or apply a code action such as a quick fix or an import (code_actions), format a file (format), run the project's own checker such as cargo check or tsc (check), restart the workspace's servers (reload), or send a raw request (request). Edits stay inside the workspace and apply all or nothing. Prefer it to find-and-replace for renames. line and column are 1-based, as shown by read.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["rename", "rename_file", "code_actions", "format", "check", "reload", "request"] },
+                    "path": { "type": "string", "description": "The file (not needed for reload)" },
+                    "line": { "type": "number", "description": "rename, code_actions: 1-based line" },
+                    "column": { "type": "number", "description": "rename, code_actions: 1-based column; or give symbol instead" },
+                    "symbol": { "type": "string", "description": "rename, code_actions: the name on that line, instead of a column; name#2 for its second occurrence" },
+                    "apply": { "type": "boolean", "description": "rename: false to preview what would change (default true)" },
+                    "end_line": { "type": "number", "description": "code_actions: end of the range, when it is a selection" },
+                    "end_column": { "type": "number", "description": "code_actions: end column of the range" },
+                    "new_name": { "type": "string", "description": "rename: the new name" },
+                    "new_path": { "type": "string", "description": "rename_file: where the file goes" },
+                    "apply_action": { "type": "number", "description": "code_actions: the number of the action to apply, from the listing you got without it" },
+                    "method": { "type": "string", "description": "request: the LSP method, for example textDocument/signatureHelp" },
+                    "params": { "type": "object", "description": "request: its params" }
+                },
+                "required": ["action"]
             }
         }),
         serde_json::json!({
@@ -418,6 +446,74 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
                     "path": { "type": "string", "description": "Path to the file to check" }
                 },
                 "required": ["path"]
+            }
+        }),
+        serde_json::json!({
+            "name": "debug",
+            "description": "Look at a program being debugged (started with debug_run launch or attach). Changes nothing. status says where it is; stack_trace, scopes and variables read it while it is stopped; output is what it printed; breakpoints lists them; threads lists its threads; exception_info says why it stopped on an exception; modules, loaded_sources, disassemble and read_memory look at the program itself; completions suggests what to type in an expression.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["status", "sessions", "output", "breakpoints", "threads", "stack_trace", "scopes", "variables", "exception_info", "modules", "loaded_sources", "disassemble", "read_memory", "completions"], "default": "status" },
+                    "levels": { "type": "number", "description": "stack_trace: how many frames (default 20, at most 100)" },
+                    "frame_id": { "type": "number", "description": "scopes, completions: a frame id from stack_trace (default: the top frame)" },
+                    "variable_ref": { "type": "number", "description": "variables: a variable_ref from scopes or from another variable" },
+                    "start": { "type": "number", "description": "variables: skip this many" },
+                    "count": { "type": "number", "description": "variables: how many (default 100, at most 200); read_memory: how many bytes (at most 4096)" },
+                    "start_module": { "type": "number", "description": "modules: skip this many" },
+                    "module_count": { "type": "number", "description": "modules: how many (at most 100)" },
+                    "memory_reference": { "type": "string", "description": "read_memory, disassemble: the address or reference (from a variable, or disassemble); disassemble defaults to the current instruction" },
+                    "offset": { "type": "number", "description": "read_memory, disassemble: bytes from the reference" },
+                    "instruction_offset": { "type": "number", "description": "disassemble: instructions from the reference (negative for before)" },
+                    "instruction_count": { "type": "number", "description": "disassemble: how many (default 20, at most 200)" },
+                    "resolve_symbols": { "type": "boolean", "description": "disassemble: name the symbols (default true)" },
+                    "text": { "type": "string", "description": "completions: what has been typed so far" },
+                    "column": { "type": "number", "description": "completions: where the cursor is in text (1-based, default the end)" }
+                }
+            }
+        }),
+        serde_json::json!({
+            "name": "debug_run",
+            "description": "Debug a program: launch it under a debug adapter (debugpy for Python, lldb-dap, gdb or codelldb for Rust and C/C++, netcoredbg for .NET, delve for Go, js-debug for JavaScript) or attach to a running one, set breakpoints (conditions, hit counts, log points, functions, exceptions, instructions, watched data), run and step, evaluate expressions, change variables or memory, end it. The program stops at its start, so set breakpoints, then continue. A wait that runs out says the program is still running. Use it when reading the code does not explain a failure; read the result with debug. A launch or attach asks the user first and shows the command it starts; anything the adapter itself asks to run asks again.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["launch", "attach", "set_breakpoint", "remove_breakpoint", "exception_breakpoints", "set_instruction_breakpoint", "remove_instruction_breakpoint", "data_breakpoint_info", "set_data_breakpoint", "remove_data_breakpoint", "continue", "step_over", "step_in", "step_out", "pause", "restart", "goto", "evaluate", "set_variable", "write_memory", "custom_request", "terminate"] },
+                    "program": { "type": "string", "description": "launch: the file to run (a script, a built binary, or for delve a Go package directory)" },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "launch: the program's arguments" },
+                    "cwd": { "type": "string", "description": "launch, attach: the working directory (default: the workspace)" },
+                    "adapter": { "type": "string", "enum": ["debugpy", "lldb-dap", "gdb", "codelldb", "netcoredbg", "delve", "js-debug"], "description": "launch, attach: only to override the choice made from the file type (a dap.json may define others)" },
+                    "pid": { "type": "number", "description": "attach: the process to attach to" },
+                    "port": { "type": "number", "description": "attach: a port the program listens on for a debugger (debugpy)" },
+                    "host": { "type": "string", "description": "attach: the host for port (default 127.0.0.1)" },
+                    "breakpoints": { "type": "array", "items": { "type": "object", "properties": { "file": { "type": "string" }, "line": { "type": "number" }, "condition": { "type": "string" } }, "required": ["file", "line"] }, "description": "launch, attach: breakpoints set before the program runs" },
+                    "file": { "type": "string", "description": "set_breakpoint, remove_breakpoint, goto: the file" },
+                    "line": { "type": "number", "description": "set_breakpoint, remove_breakpoint, goto: 1-based line" },
+                    "function": { "type": "string", "description": "set_breakpoint, remove_breakpoint: a function name instead of file and line" },
+                    "condition": { "type": "string", "description": "breakpoints: stop only when this is true" },
+                    "hit_condition": { "type": "string", "description": "breakpoints: stop only on this hit count (for example 5, or > 3)" },
+                    "log_message": { "type": "string", "description": "set_breakpoint: print this instead of stopping ({expression} is evaluated)" },
+                    "filters": { "type": "array", "items": { "type": "string" }, "description": "exception_breakpoints: the adapter's filters (for example raised, uncaught); an empty list clears them" },
+                    "instruction_reference": { "type": "string", "description": "instruction breakpoints: the address or reference" },
+                    "offset": { "type": "number", "description": "instruction breakpoints, write_memory: bytes from the reference" },
+                    "name": { "type": "string", "description": "set_variable, data_breakpoint_info: the variable" },
+                    "variable_ref": { "type": "number", "description": "set_variable, data_breakpoint_info: the scope or variable that holds it" },
+                    "data_id": { "type": "string", "description": "set_data_breakpoint, remove_data_breakpoint: from data_breakpoint_info" },
+                    "access_type": { "type": "string", "enum": ["read", "write", "readWrite"], "description": "set_data_breakpoint: what triggers it" },
+                    "expression": { "type": "string", "description": "evaluate: runs in the program, in the stopped frame" },
+                    "frame_id": { "type": "number", "description": "evaluate, data_breakpoint_info: a frame id from debug stack_trace (default: the top frame)" },
+                    "context": { "type": "string", "description": "evaluate: repl (default), watch or hover" },
+                    "value": { "type": "string", "description": "set_variable: the new value, as an expression in the program's language" },
+                    "memory_reference": { "type": "string", "description": "write_memory: where" },
+                    "data": { "type": "string", "description": "write_memory: the bytes, base64 (at most 4096)" },
+                    "allow_partial": { "type": "boolean", "description": "write_memory: accept a partial write" },
+                    "command": { "type": "string", "description": "custom_request: a debug adapter request that has no action here" },
+                    "arguments": { "type": "object", "description": "custom_request: its arguments" },
+                    "granularity": { "type": "string", "enum": ["statement", "line", "instruction"], "description": "steps: how far one step goes" },
+                    "single_thread": { "type": "boolean", "description": "steps and continue: move only the thread that stopped" },
+                    "timeout": { "type": "number", "description": "continue, steps, restart, goto: seconds to wait for the next stop (5 to 300, default 30)" }
+                },
+                "required": ["action"]
             }
         }),
         serde_json::json!({
@@ -439,9 +535,22 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "What to search memory for" },
-                    "as_of": { "type": "string", "description": "Optional date (YYYY-MM-DD, or YYYY-MM): recall what was true then instead of now. Facts that were later corrected are kept on record, so this answers \"what did we decide in March\"." }
+                    "as_of": { "type": "string", "description": "Optional date (YYYY-MM-DD, or YYYY-MM): recall what was true then instead of now. Facts that were later corrected are kept on record, so this answers \"what did we decide in March\"." },
+                    "depth": { "type": "string", "enum": ["low", "mid", "high"], "description": "How hard to look: low is a quick lookup, high a thorough search for a hard question (default mid)" },
+                    "max_tokens": { "type": "number", "description": "The most this may return, in tokens (100 to 8000; the default follows depth)" }
                 },
                 "required": ["query"]
+            }
+        }),
+        serde_json::json!({
+            "name": "reflect",
+            "description": "Answer a question from project memory and say where the answer came from. It looks at the project's pages first, then its beliefs, then raw facts, in a few steps, and returns the answer with the memories it rests on. Use it for a question that needs putting facts together (\"how do we release?\", \"what do I prefer for tests?\"); use recall to just look something up.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": { "type": "string", "description": "The question to answer from memory" }
+                },
+                "required": ["question"]
             }
         }),
         serde_json::json!({
@@ -751,7 +860,7 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
                     "run_in_background": { "type": "boolean", "description": "false to wait for the result", "default": true },
                     "name": { "type": "string", "description": "A name to address it by afterwards (lower-case letters, digits, dashes; e.g. \"auditor\"). Defaults to agent-1, agent-2…" },
                     "fork": { "type": "boolean", "description": "true to start the subagent from this conversation so far (it already knows what you know), instead of from a blank page. Then prompt can be short.", "default": false },
-                    "provider": { "type": "string", "description": "With model: run this subagent on a specific route (see list_subagent_models). Omit both to use the default." },
+                    "provider": { "type": "string", "description": "With model: run this subagent on a specific route (see list_subagent_models). Omit both to use the default. \"harness\" hands the prompt to another coding agent (model is its id, e.g. claude-acp or codex-acp) and waits for its report." },
                     "model": { "type": "string", "description": "With provider." },
                     "output_schema": { "type": "object", "description": "A JSON schema. The subagent must answer with one JSON object matching it; you get it parsed, and a reply that doesn't fit counts as a failure." }
                 },
@@ -921,7 +1030,8 @@ png: `html` and `size` {width, height} in pixels: posters, social images, covers
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "instruction": { "type": "string", "description": "What the new thread should do, complete enough that it needs nothing else from you." }
+                    "instruction": { "type": "string", "description": "What the new thread should do, complete enough that it needs nothing else from you." },
+                    "project": { "type": "string", "description": "The project it works in, by name (default: this thread's). A 24/7 agent must name one." }
                 },
                 "required": ["instruction"]
             }

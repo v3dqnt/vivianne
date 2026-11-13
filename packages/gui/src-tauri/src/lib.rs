@@ -1,9 +1,13 @@
+// The tool schemas are big `json!` literals; the macro needs room to expand them.
+#![recursion_limit = "256"]
+
 use std::sync::Arc;
 
 use tauri::Manager;
 
 pub mod browser;
 pub mod system;
+pub mod proc;
 pub mod ui;
 pub mod models;
 pub mod skills;
@@ -27,6 +31,7 @@ use crate::multiplayer::MultiplayerState;
 
 // New modules
 pub mod lsp;
+pub mod dap;
 pub mod mcp;
 
 /// Makes `cargo test` able to run at all on Windows.
@@ -232,6 +237,8 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::runtime::commands::cmd_agent_set_steering_mode,
       crate::agent::runtime::commands::cmd_agent_set_follow_up_mode,
       crate::agent::runtime::commands::cmd_debug_agent_status,
+      crate::dap::ui::cmd_debug_snapshot,
+      crate::dap::ui::cmd_debug_control,
       crate::agent::runtime::commands::cmd_agent_session_stats,
       crate::agent::runtime::commands::cmd_get_models_config,
       crate::agent::runtime::commands::cmd_save_models_config,
@@ -256,6 +263,7 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::team::runs::cmd_read_run_messages,
       crate::agent::team::runs::cmd_comment_on_run,
       crate::agent::tools::office::cmd_read_document_bytes,
+      crate::agent::tools::office::cmd_extract_attachment,
       crate::agent::runtime::commands::cmd_system_roots,
       crate::multiplayer::commands::cmd_multiplayer_launch_test_partner,
       crate::multiplayer::commands::cmd_multiplayer_test_partner_id,
@@ -407,6 +415,7 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::harness::cmd_harness_install,
       crate::agent::harness::cmd_harness_trace,
       crate::agent::harness::cmd_harness_reset,
+      crate::agent::harness::cmd_harness_session_info,
       crate::agent::runtime::commands::cmd_agent_answer_question,
       crate::agent::runtime::commands::cmd_agent_respond_confirmation,
       crate::agent::runtime::commands::cmd_memory_status,
@@ -414,6 +423,11 @@ try `viv help`", cli::program_args()[0]);
       crate::agent::runtime::commands::cmd_memory_disable,
       crate::agent::runtime::commands::cmd_memory_configure,
       crate::agent::runtime::commands::cmd_memory_configure_extraction,
+      crate::agent::runtime::commands::cmd_memory_configure_pages,
+      crate::agent::runtime::commands::cmd_memory_configure_defense,
+      crate::agent::memory::hindsight::cmd_hindsight_get,
+      crate::agent::memory::hindsight::cmd_hindsight_set,
+      crate::agent::memory::hindsight::cmd_hindsight_test,
       crate::agent::runtime::commands::cmd_memory_purge,
       crate::agent::runtime::commands::cmd_memory_remember,
       crate::agent::runtime::commands::cmd_memory_forget,
@@ -1025,6 +1039,8 @@ try `viv help`", cli::program_args()[0]);
       if let tauri::RunEvent::Exit = event {
         crate::ai::laya::stop();
         tauri::async_runtime::block_on(async {
+          // No debug adapter, and no program under one, outlives the app.
+          crate::dap::session::shutdown_all().await;
           if let Some(registry) = app_handle.try_state::<crate::agent::runtime::commands::AgentRegistry>() {
             registry.cancel_all(crate::agent::runtime::cancel::CancelKind::Shutdown, "the app closed").await;
           }
@@ -1047,7 +1063,7 @@ try `viv help`", cli::program_args()[0]);
 #[cfg(target_os = "macos")]
 fn fix_macos_path() {
   let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-  let out = std::process::Command::new(&shell)
+  let out = crate::proc::quiet_std(&shell)
     .args(["-l", "-i", "-c", "printf '__VIV_PATH__%s' \"$PATH\""])
     .stdin(std::process::Stdio::null())
     .output();

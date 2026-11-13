@@ -335,7 +335,7 @@ fn now_ms() -> u64 {
 fn pid_alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
-        std::process::Command::new("tasklist")
+        crate::proc::quiet_std("tasklist")
             .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("\"{pid}\"")))
@@ -343,18 +343,18 @@ fn pid_alive(pid: u32) -> bool {
     }
     #[cfg(not(windows))]
     {
-        std::process::Command::new("kill").args(["-0", &pid.to_string()]).output().map(|o| o.status.success()).unwrap_or(false)
+        crate::proc::quiet_std("kill").args(["-0", &pid.to_string()]).output().map(|o| o.status.success()).unwrap_or(false)
     }
 }
 
 fn kill_pid(pid: u32) {
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F", "/T"]).output();
+        let _ = crate::proc::quiet_std("taskkill").args(["/PID", &pid.to_string(), "/F", "/T"]).output();
     }
     #[cfg(not(windows))]
     {
-        let _ = std::process::Command::new("kill").arg(pid.to_string()).output();
+        let _ = crate::proc::quiet_std("kill").arg(pid.to_string()).output();
     }
 }
 
@@ -445,7 +445,7 @@ async fn load(o: &Opts) -> Res {
 
     let log_path = servers_dir().join(format!("{id}.log"));
     let log = std::fs::File::create(&log_path).map_err(|e| format!("could not open the log: {e}"))?;
-    let mut cmd = std::process::Command::new(&server);
+    let mut cmd = crate::proc::quiet_std(&server);
     cmd.args(&args).stdin(std::process::Stdio::null()).stdout(log.try_clone().map_err(|e| e.to_string())?).stderr(log);
     #[cfg(windows)]
     {

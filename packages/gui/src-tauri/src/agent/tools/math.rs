@@ -151,7 +151,7 @@ fn env_python(env: &Path) -> PathBuf {
 
 fn command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
     #[allow(unused_mut)]
-    let mut cmd = tokio::process::Command::new(program);
+    let mut cmd = crate::proc::quiet(program);
     #[cfg(windows)]
     {
         // No console window flashing up for every calculation.

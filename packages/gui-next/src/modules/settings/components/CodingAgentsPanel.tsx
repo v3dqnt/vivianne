@@ -117,7 +117,7 @@ function AgentRow({ h }: { h: Harness }) {
 
 function Log({ lines }: { lines: string[] }) {
   return (
-    <Box sx={{ fontFamily: MONO, fontSize: '0.6875rem', color: 'text.secondary', bgcolor: 'action.hover', borderRadius: '8px', p: 1, maxHeight: 220, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+    <Box sx={{ fontFamily: MONO, fontSize: '0.75rem', color: 'text.secondary', bgcolor: 'action.hover', borderRadius: '8px', p: 1, maxHeight: 220, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
       {lines.length ? lines.join('\n') : 'Nothing logged yet.'}
     </Box>
   )

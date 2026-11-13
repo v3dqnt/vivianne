@@ -2,6 +2,7 @@
 //! Automation on Windows and Accessibility on macOS, and on-screen OCR.
 
 pub mod computer;
+pub mod consent;
 pub mod ocr;
 #[cfg(target_os = "windows")]
 pub mod dip;

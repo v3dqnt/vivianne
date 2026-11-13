@@ -146,11 +146,13 @@ export function outputLangFor(tool: string, output: string, file: string | null)
   return looksLikeJson(output) ? 'json' : 'text'
 }
 
+import { commandLabel } from '../lib/commandLabel'
+
 export function argSummary(args: Record<string, unknown> | undefined): string | null {
   if (!args) return null
   const key = ['path', 'file_path', 'command', 'query', 'pattern', 'url', 'name'].find((k) => typeof args[k] === 'string')
   if (!key) return null
-  return String(args[key])
+  return key === 'command' ? commandLabel(String(args[key])) : String(args[key])
 }
 
 interface FileDiff {
@@ -338,7 +340,7 @@ export function ToolCallCard({
           <Box component="span" sx={{ flexShrink: 0, fontSize: '0.75rem', color: 'error.main' }}>{String((message.details as { failure: string }).failure).replace(/-/g, ' ')}</Box>
         )}
         {outcome && (
-          <Box component="span" sx={{ flexShrink: 0, px: '6px', height: 18, display: 'inline-flex', alignItems: 'center', borderRadius: '6px', fontSize: '0.6875rem', fontFamily: '"Geist Mono", ui-monospace, monospace', color: outcome.tone === 'bad' ? 'error.main' : 'warning.main', bgcolor: 'action.hover' }}>
+          <Box component="span" sx={{ flexShrink: 0, px: '6px', height: 18, display: 'inline-flex', alignItems: 'center', borderRadius: '6px', fontSize: '0.75rem', fontFamily: '"Geist Mono", ui-monospace, monospace', color: outcome.tone === 'bad' ? 'error.main' : 'warning.main', bgcolor: 'action.hover' }}>
             {outcome.label}
           </Box>
         )}
@@ -360,7 +362,7 @@ export function ToolCallCard({
             overflow: 'hidden',
             ...TOOL_BODY_SX,
             fontFamily: '"Geist Mono", ui-monospace, monospace',
-            fontSize: '0.6875rem',
+            fontSize: '0.75rem',
             lineHeight: 1.5,
           }}
         >
@@ -447,7 +449,7 @@ function TodoOutput({ text }: { text: string }) {
                 display: 'grid',
                 placeItems: 'center',
                 color: 'background.paper',
-                fontSize: '0.6875rem',
+                fontSize: '0.75rem',
                 fontWeight: 500,
                 lineHeight: 1,
               }}
@@ -460,7 +462,7 @@ function TodoOutput({ text }: { text: string }) {
           </Stack>
         )
       })}
-      {footer && <Box sx={{ mt: '4px', fontSize: '0.6875rem', lineHeight: '16px', color: 'text.secondary' }}>{footer}</Box>}
+      {footer && <Box sx={{ mt: '4px', fontSize: '0.75rem', lineHeight: '16px', color: 'text.secondary' }}>{footer}</Box>}
     </Stack>
   )
 }

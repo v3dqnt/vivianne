@@ -1,3 +1,4 @@
+import { ConfirmHost } from './components/ConfirmDialog'
 import { useEffect } from 'react'
 import { ModsRuntime } from './modules/mods/components/ModsRuntime'
 import { Box, Stack } from './ui'
@@ -66,6 +67,7 @@ function App() {
 
       <SettingsDialog />
       <ModsRuntime />
+      <ConfirmHost />
       <WorkflowConfirm />
       <OptionalComponentsModal />
       <UpdateSurfaces />

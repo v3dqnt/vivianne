@@ -141,7 +141,7 @@ function BannerPicker({ open, project, color, onClose }: { open: boolean; projec
                 justifyContent: 'flex-start',
                 p: '4px 6px',
                 color: '#fff',
-                fontSize: '0.6875rem',
+                fontSize: '0.75rem',
                 fontWeight: 500,
                 textShadow: '0 1px 2px rgba(0,0,0,0.6)',
               }}

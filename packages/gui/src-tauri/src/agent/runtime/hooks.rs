@@ -250,7 +250,7 @@ async fn run_one(command: &str, stdin_json: &str, timeout_secs: u64) -> Result<S
     // The other call sites get away with `args` because they only ever pass
     // quote-free commands like `npm run dev`.
     let mut cmd = if cfg!(windows) {
-        let mut c = tokio::process::Command::new("cmd");
+        let mut c = crate::proc::quiet("cmd");
         c.arg("/C");
         #[cfg(windows)]
         {
@@ -259,7 +259,7 @@ async fn run_one(command: &str, stdin_json: &str, timeout_secs: u64) -> Result<S
         }
         c
     } else {
-        let mut c = tokio::process::Command::new("sh");
+        let mut c = crate::proc::quiet("sh");
         c.args(["-c", command]);
         c
     };

@@ -27,7 +27,7 @@ export function StatusMark({ status }: { status: FileChange['status'] }) {
         display: 'inline-grid',
         placeItems: 'center',
         fontFamily: MONO,
-        fontSize: '0.6875rem',
+        fontSize: '0.75rem',
         fontWeight: 500,
         color: spec.color,
         bgcolor: alpha(spec.color, 0.14),
@@ -40,7 +40,7 @@ export function StatusMark({ status }: { status: FileChange['status'] }) {
 
 export function Counts({ additions, deletions }: { additions: number; deletions: number }) {
   return (
-    <Box component="span" sx={{ fontFamily: MONO, fontSize: '0.6875rem', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+    <Box component="span" sx={{ fontFamily: MONO, fontSize: '0.75rem', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
       {additions > 0 && <Box component="span" sx={{ color: 'success.main' }}>+{additions}</Box>}
       {additions > 0 && deletions > 0 && ' '}
       {deletions > 0 && <Box component="span" sx={{ color: 'error.main' }}>−{deletions}</Box>}
@@ -128,7 +128,7 @@ function DiffView({ file }: { file: FileChange }) {
               <Typography component="span" sx={{ fontSize: '0.75rem', fontWeight: 500, color: 'text.secondary', fontFamily: 'inherit' }}>
                 Lines {h.newStart}–{last}
               </Typography>
-              <Typography component="span" sx={{ fontSize: '0.6875rem', color: 'text.disabled', fontFamily: 'inherit' }}>
+              <Typography component="span" sx={{ fontSize: '0.75rem', color: 'text.disabled', fontFamily: 'inherit' }}>
                 {`@@ -${h.oldStart} +${h.newStart} @@`}
               </Typography>
             </Stack>
@@ -149,8 +149,8 @@ function DiffView({ file }: { file: FileChange }) {
                   <Box sx={{ bgcolor: bar }} />
                   {/* Line numbers are not selectable, so copying a block
                       copies code rather than gutter numbers. */}
-                  <Box sx={{ textAlign: 'right', pr: '10px', color: kind === 'del' ? alpha(red, 0.8) : 'text.disabled', userSelect: 'none', fontSize: '0.6875rem' }}>{l.oldNo ?? ''}</Box>
-                  <Box sx={{ textAlign: 'right', pr: '10px', color: kind === 'add' ? alpha(green, 0.85) : 'text.disabled', userSelect: 'none', fontSize: '0.6875rem' }}>{l.newNo ?? ''}</Box>
+                  <Box sx={{ textAlign: 'right', pr: '10px', color: kind === 'del' ? alpha(red, 0.8) : 'text.disabled', userSelect: 'none', fontSize: '0.75rem' }}>{l.oldNo ?? ''}</Box>
+                  <Box sx={{ textAlign: 'right', pr: '10px', color: kind === 'add' ? alpha(green, 0.85) : 'text.disabled', userSelect: 'none', fontSize: '0.75rem' }}>{l.newNo ?? ''}</Box>
                   <Box sx={{ userSelect: 'none', textAlign: 'center', fontWeight: 600, color: kind === 'add' ? green : kind === 'del' ? red : 'transparent' }}>{kind === 'add' ? '+' : kind === 'del' ? '−' : ''}</Box>
                   <Box component="pre" sx={{ m: 0, pr: '24px', whiteSpace: 'pre', font: 'inherit', color: 'text.primary', opacity: kind === 'ctx' ? 0.78 : 1 }}>
                     {line ? line.map((t, ti) => (

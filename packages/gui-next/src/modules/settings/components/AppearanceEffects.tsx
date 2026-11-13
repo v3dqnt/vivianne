@@ -10,7 +10,7 @@ const CHAT_WIDTH: Record<ChatWidth, string> = {
 
 /** Chat type sizes and card header height per density. */
 const DENSITY: Record<Density, { text: string; title: string; meta: string; header: string; gap: string }> = {
-  compact: { text: '0.8125rem', title: '0.75rem', meta: '0.6875rem', header: '32px', gap: '6px' },
+  compact: { text: '0.8125rem', title: '0.75rem', meta: '0.75rem', header: '32px', gap: '6px' },
   comfortable: { text: '0.875rem', title: '0.8125rem', meta: '0.75rem', header: '38px', gap: '10px' },
   roomy: { text: '0.9375rem', title: '0.875rem', meta: '0.8125rem', header: '44px', gap: '14px' },
 }

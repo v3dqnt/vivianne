@@ -196,7 +196,7 @@ export function SkillsHub({ onInstalled }: { onInstalled: () => void }) {
                   {s.name}
                 </Typography>
                 {s.hasCard && (
-                  <Typography variant="caption" sx={{ fontSize: '0.6875rem', fontWeight: 500, color: 'text.secondary', border: 1, borderColor: 'divider', borderRadius: '4px', px: 0.5 }}>
+                  <Typography variant="caption" sx={{ fontSize: '0.75rem', fontWeight: 500, color: 'text.secondary', border: 1, borderColor: 'divider', borderRadius: '4px', px: 0.5 }}>
                     SKILL CARD
                   </Typography>
                 )}
@@ -283,7 +283,7 @@ export function SkillsHub({ onInstalled }: { onInstalled: () => void }) {
                   </Typography>
                   {review.preview.report.findings.slice(0, 40).map((f, i) => (
                     <Stack key={i} direction="row" sx={{ gap: 1, alignItems: 'baseline' }}>
-                      <Typography variant="caption" sx={{ width: 44, fontWeight: 600, color: sevColor(f.severity), textTransform: 'uppercase', fontSize: '0.6875rem' }}>
+                      <Typography variant="caption" sx={{ width: 44, fontWeight: 600, color: sevColor(f.severity), textTransform: 'uppercase', fontSize: '0.75rem' }}>
                         {f.severity}
                       </Typography>
                       <Typography variant="caption" sx={{ flex: 1, minWidth: 0 }}>
@@ -302,7 +302,7 @@ export function SkillsHub({ onInstalled }: { onInstalled: () => void }) {
                 <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
                   {review.preview.card ? 'Skill card' : 'No skill card'}
                 </Typography>
-                <Box component="pre" sx={{ m: 0, p: 1.25, maxHeight: 200, overflow: 'auto', borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.04), fontSize: '0.6875rem', fontFamily: '"Geist Mono", ui-monospace, monospace', whiteSpace: 'pre-wrap' }}>
+                <Box component="pre" sx={{ m: 0, p: 1.25, maxHeight: 200, overflow: 'auto', borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.04), fontSize: '0.75rem', fontFamily: '"Geist Mono", ui-monospace, monospace', whiteSpace: 'pre-wrap' }}>
                   {review.preview.card ?? 'This skill has no card, so there is no stated owner, dependency list or known-risk note to read. Read SKILL.md instead.'}
                 </Box>
               </Stack>
@@ -311,7 +311,7 @@ export function SkillsHub({ onInstalled }: { onInstalled: () => void }) {
                 <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'text.secondary' }}>
                   SKILL.md
                 </Typography>
-                <Box component="pre" sx={{ m: 0, p: 1.25, maxHeight: 220, overflow: 'auto', borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.04), fontSize: '0.6875rem', fontFamily: '"Geist Mono", ui-monospace, monospace', whiteSpace: 'pre-wrap' }}>
+                <Box component="pre" sx={{ m: 0, p: 1.25, maxHeight: 220, overflow: 'auto', borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.04), fontSize: '0.75rem', fontFamily: '"Geist Mono", ui-monospace, monospace', whiteSpace: 'pre-wrap' }}>
                   {review.preview.skillMd?.slice(0, 6000)}
                 </Box>
               </Stack>

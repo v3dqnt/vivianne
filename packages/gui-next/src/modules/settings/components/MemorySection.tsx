@@ -4,6 +4,8 @@ import { ArchiveBookLinear, SearchNormalLinear, TrashLinear } from '../../../ico
 import { useMemoryStore } from '../store/memoryStore'
 import { LocalEmbedderRow } from './LocalEmbedderRow'
 import { CloudEmbedderRow } from './CloudEmbedderRow'
+import { MemoryPagesRow } from './MemoryPagesRow'
+import { HindsightRow } from './HindsightRow'
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -46,6 +48,7 @@ export function MemorySection() {
   const toggleEnabled = useMemoryStore((s) => s.toggleEnabled)
   const toggleAutoConsolidate = useMemoryStore((s) => s.toggleAutoConsolidate)
   const toggleExtraction = useMemoryStore((s) => s.toggleExtraction)
+  const setBlockSecrets = useMemoryStore((s) => s.setBlockSecrets)
   const purge = useMemoryStore((s) => s.purge)
   const recall = useMemoryStore((s) => s.recall)
   const sleepNow = useMemoryStore((s) => s.sleepNow)
@@ -65,6 +68,8 @@ export function MemorySection() {
           r.episodes && `${r.episodes} session ${r.episodes === 1 ? 'summary' : 'summaries'} written`,
           r.merged && `${r.merged} duplicate${r.merged === 1 ? '' : 's'} merged`,
           r.archived && `${r.archived} unused ${r.archived === 1 ? 'fact' : 'facts'} archived`,
+          r.observations && `${r.observations} belief${r.observations === 1 ? '' : 's'} updated`,
+          r.pages && `${r.pages} page${r.pages === 1 ? '' : 's'} refreshed`,
           r.reembedded && `${r.reembedded} re-indexed`,
         ].filter(Boolean)
         setTidyResult(parts.length ? `${parts.join(' · ')}.` : 'Already tidy.')
@@ -143,6 +148,21 @@ export function MemorySection() {
         disabled={!status.state.enabled}
         onToggle={() => void toggleExtraction()}
       />
+      <ToggleRow
+        label="Refuse secrets"
+        description={`Passwords, API keys and card numbers are always hidden before anything is saved. Turn this on to refuse the memory instead of saving it with the secret hidden.${status.state.redactedCount ? ` ${status.state.redactedCount} hidden so far.` : ''}`}
+        checked={!!status.state.blockSecrets}
+        disabled={!status.state.enabled}
+        onToggle={() => void setBlockSecrets(!status.state.blockSecrets)}
+      />
+
+      <Divider sx={{ my: 1 }} />
+
+      <MemoryPagesRow />
+
+      <Divider sx={{ my: 1 }} />
+
+      <HindsightRow />
 
 
       <Divider sx={{ my: 1 }} />

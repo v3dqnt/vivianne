@@ -164,7 +164,7 @@ print(json.dumps(list(result.txts) if result and result.txts else []))
 const RAPIDOCR_TIMEOUT_SECS: u64 = 180;
 
 async fn ocr_via_rapidocr(path: &Path) -> Result<String, String> {
-    let child = tokio::process::Command::new("python")
+    let child = crate::proc::quiet("python")
         .arg("-c").arg(RAPIDOCR_SCRIPT).arg(path)
         // Least-privilege env, same as bash/powershell: an image-reading
         // subprocess has no business seeing provider API keys.

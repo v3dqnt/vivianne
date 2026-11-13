@@ -77,7 +77,7 @@ function Activity({ tools, color }: { tools: ToolResult[]; color: string }) {
               <Typography key={t.toolCallId} sx={{ fontSize: '0.75rem', color: t.isError ? 'error.main' : 'text.secondary', lineHeight: '20px' }} noWrap>
                 {t.toolName}
                 {target && (
-                  <Box component="span" sx={{ color: 'text.disabled', ml: '6px', fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.6875rem' }}>
+                  <Box component="span" sx={{ color: 'text.disabled', ml: '6px', fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem' }}>
                     {target.slice(0, 80)}
                   </Box>
                 )}
@@ -130,7 +130,7 @@ function Bubble({
             ))}
           </Stack>
         )}
-        {other && first && <Typography sx={{ fontSize: '0.6875rem', fontWeight: 500, color: colorOf(other), mb: '3px', px: '6px' }}>{other.name}</Typography>}
+        {other && first && <Typography sx={{ fontSize: '0.75rem', fontWeight: 500, color: colorOf(other), mb: '3px', px: '6px' }}>{other.name}</Typography>}
         {item.text && (
           <Box
             sx={{
@@ -162,7 +162,7 @@ function Bubble({
           </Box>
         )}
         {last && (
-          <Typography sx={{ fontSize: '0.6875rem', color: 'text.disabled', mt: '4px', px: '6px' }}>{clock(item.ts)}</Typography>
+          <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled', mt: '4px', px: '6px' }}>{clock(item.ts)}</Typography>
         )}
       </Stack>
     </Stack>
@@ -300,7 +300,7 @@ export function AgentMessenger({ root, agent, team = [], status, onEdit }: { roo
             {items.map((item, i) => {
               if (item.kind === 'day')
                 return (
-                  <Typography key={item.key} sx={{ textAlign: 'center', fontSize: '0.6875rem', fontWeight: 500, color: 'text.disabled', mt: '20px', mb: '4px' }}>
+                  <Typography key={item.key} sx={{ textAlign: 'center', fontSize: '0.75rem', fontWeight: 500, color: 'text.disabled', mt: '20px', mb: '4px' }}>
                     {item.label}
                   </Typography>
                 )
@@ -364,7 +364,7 @@ export function AgentMessenger({ root, agent, team = [], status, onEdit }: { roo
                   <Typography sx={{ fontSize: '0.8125rem', fontWeight: 500 }} noWrap>
                     {o.name}
                   </Typography>
-                  <Typography sx={{ fontSize: '0.6875rem', color: 'text.secondary' }} noWrap>
+                  <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }} noWrap>
                     @{o.id}
                     {o.role ? ` · ${o.role}` : ''}
                   </Typography>

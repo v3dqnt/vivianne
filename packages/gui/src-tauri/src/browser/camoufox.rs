@@ -140,11 +140,11 @@ pub fn package_installed() -> bool {
 /// On Windows `npm` is a `.cmd` shim, which only `cmd /C` can launch.
 fn npm(dir: &std::path::Path, args: &[&str]) -> tokio::process::Command {
     let mut c = if cfg!(windows) {
-        let mut c = tokio::process::Command::new("cmd");
+        let mut c = crate::proc::quiet("cmd");
         c.args(["/C", "npm"]);
         c
     } else {
-        tokio::process::Command::new("npm")
+        crate::proc::quiet("npm")
     };
     c.args(args)
         .current_dir(dir)
@@ -356,7 +356,7 @@ fn spawn_camoufox() -> Result<(), String> {
     }
 
     let dir = install_dir()?;
-    let mut cmd = std::process::Command::new("node");
+    let mut cmd = crate::proc::quiet_std("node");
     // stderr went to /dev/null, so every launch failure looked identical from
     // the outside: "couldn't reach camoufox-browser". The server itself reports
     // exactly what went wrong — the failure that prompted this change was
@@ -855,7 +855,7 @@ pub async fn fetch_with_progress(app: &tauri::AppHandle) -> Result<(), String> {
     crate::optional_components::emit(app, "camoufox", None, "Downloading the Camoufox browser engine...");
 
     let dir = install_dir()?;
-    let mut cmd = tokio::process::Command::new("node");
+    let mut cmd = crate::proc::quiet("node");
     cmd.arg(&bin)
         .arg("fetch")
         .current_dir(&dir)

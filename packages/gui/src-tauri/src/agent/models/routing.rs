@@ -104,13 +104,8 @@ pub async fn route_task(text: &str, default: &ModelRef) -> (ModelRef, Option<Ver
         return (default.clone(), None);
     }
     let verdict = crate::agent::models::difficulty::classify(text).await;
-    let mut keyed = std::collections::HashMap::new();
-    for m in cfg.tiers.iter().flatten().chain(cfg.quick.iter()) {
-        if !keyed.contains_key(&m.provider) {
-            keyed.insert(m.provider.clone(), provider_has_key(&m.provider).await);
-        }
-    }
-    let model = choose_tier(&cfg, verdict.level, default, |m| keyed.get(&m.provider).copied().unwrap_or(false));
+    let keyed = usable_models(cfg.tiers.iter().flatten().chain(cfg.quick.iter())).await;
+    let model = choose_tier(&cfg, verdict.level, default, |m| keyed.contains(&model_key(m)));
     (model, Some(verdict))
 }
 
@@ -127,6 +122,36 @@ pub(crate) async fn provider_has_key(provider: &str) -> bool {
     provider == "local"
         || crate::ai::auth::stored_api_key(provider).await.is_some()
         || crate::ai::env_api_keys::get_env_api_key(provider, None).is_some()
+}
+
+fn model_key(m: &ModelRef) -> String {
+    format!("{}/{}", m.provider, m.id)
+}
+
+/// The models among these that can run now. An API model needs its provider's key; a coding agent (Claude Code, Codex…) needs to be
+/// installed, because it signs in on its own and has no key here. Without this check a tier set to an agent was never chosen.
+async fn usable_models<'a>(models: impl Iterator<Item = &'a ModelRef>) -> std::collections::HashSet<String> {
+    let mut keyed: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut agents: Option<Vec<crate::agent::harness::Harness>> = None;
+    let mut usable = std::collections::HashSet::new();
+    for m in models {
+        let ok = if m.provider == crate::agent::harness::PROVIDER {
+            if agents.is_none() {
+                agents = Some(crate::agent::harness::harnesses().await);
+            }
+            crate::agent::harness::is_usable(agents.as_deref().unwrap_or_default(), &m.id)
+        } else if let Some(k) = keyed.get(&m.provider) {
+            *k
+        } else {
+            let k = provider_has_key(&m.provider).await;
+            keyed.insert(m.provider.clone(), k);
+            k
+        };
+        if ok {
+            usable.insert(model_key(m));
+        }
+    }
+    usable
 }
 
 /// The model to use for `role`, given the one the caller would have used.
@@ -174,13 +199,8 @@ pub async fn resolve_router(text: &str) -> Result<(ModelRef, Option<Verdict>), S
         return Ok((default, None));
     }
     let verdict = crate::agent::models::difficulty::classify(text).await;
-    let mut keyed = std::collections::HashMap::new();
-    for m in cfg.tiers.iter().flatten().chain(cfg.quick.iter()) {
-        if !keyed.contains_key(&m.provider) {
-            keyed.insert(m.provider.clone(), provider_has_key(&m.provider).await);
-        }
-    }
-    let model = choose_tier(&cfg, verdict.level, &default, |m| keyed.get(&m.provider).copied().unwrap_or(false));
+    let keyed = usable_models(cfg.tiers.iter().flatten().chain(cfg.quick.iter())).await;
+    let model = choose_tier(&cfg, verdict.level, &default, |m| keyed.contains(&model_key(m)));
     Ok((model, Some(verdict)))
 }
 
@@ -266,6 +286,17 @@ mod tests {
     }
     fn cfg(enabled: bool, quick: Option<ModelRef>) -> Config {
         Config { enabled, quick, auto: false, tiers: [None, None, None] }
+    }
+
+    #[test]
+    fn a_hard_task_lands_on_an_installed_coding_agent_and_skips_one_that_is_not() {
+        let agent = model("claude-acp", crate::agent::harness::PROVIDER);
+        let api = model("big", "nebius");
+        let cfg = Config { enabled: true, quick: None, auto: true, tiers: [None, Some(api.clone()), Some(agent.clone())] };
+        let installed = |m: &ModelRef| m.provider == crate::agent::harness::PROVIDER || m.provider == "nebius";
+        assert_eq!(choose_tier(&cfg, Difficulty::Hard, &api, installed).id, "claude-acp");
+        let not_installed = |m: &ModelRef| m.provider == "nebius";
+        assert_eq!(choose_tier(&cfg, Difficulty::Hard, &api, not_installed).id, "big", "an agent that is not installed is skipped, not chosen");
     }
 
     #[test]

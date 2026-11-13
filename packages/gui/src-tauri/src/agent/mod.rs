@@ -17,6 +17,7 @@
 pub mod background;
 pub mod harness;
 pub mod harness_install;
+pub mod harness_mcp;
 pub mod changes;
 pub mod models;
 pub mod orchestration;

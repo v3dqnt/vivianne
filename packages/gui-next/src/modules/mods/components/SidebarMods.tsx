@@ -35,7 +35,7 @@ export function SidebarMods() {
               <Box component="span" sx={{ display: 'inline-flex', transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform 120ms' }}>
                 <ArrowDownLinear size={12} color="currentColor" />
               </Box>
-              <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, fontSize: '0.6875rem' }}>
+              <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, fontSize: '0.75rem' }}>
                 {section.title}
               </Typography>
             </ButtonBase>

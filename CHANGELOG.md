@@ -2,6 +2,24 @@
 
 All notable changes to Vivianne are documented here.
 
+## [1.9.1-rdv2-silent] — 2026-11-10
+
+### Fixed
+
+- **No more flashing terminal windows.** On Windows, switching tabs or opening anything git-related made a console window blink up for a split second for every background command. Background programs (git, docker, taskkill, nvidia-smi and the rest) now start without a window. Terminals you open yourself are unchanged.
+
+### Changed
+
+- **Coding agents (Claude Code, Codex, Gemini CLI…) know the conversation.** An agent that joins a thread, or a thread that comes back after a restart, is handed the newest part of what was said; agents that can reopen their own session carry on in it.
+- **Coding agents get your MCP servers,** and Vivianne reads what an agent says it can do: images only go to agents that take them, and a mismatched protocol version is reported instead of failing oddly.
+- **Delegate to a coding agent.** The `task` tool can hand a self-contained job to an installed coding agent and wait for its report. Stop reaches it, and it is not available in plan mode.
+- **Usage for coding agents.** Tokens and cost are recorded per thread when the agent reports them.
+- **Calmer interface.** Themed confirm dialogs replace the system ones, failed removals and resets show the error instead of failing silently, text is never smaller than 12px, tool rows drop the `cd <folder> &&` prefix, short narration before a tool call reads quieter, and diffs and large-file previews follow the theme. Home has proper empty states.
+
+### Note
+
+- Coding-agent changes were checked by tests and a build, not yet against every agent. Usage and cost show only for agents that report them.
+
 ## [1.9.1-rdv2] — 2026-11-08
 
 ### Changed

@@ -47,7 +47,7 @@ function MemberRow({ m }: { m: TeamRunMember }) {
           <Typography variant="caption" sx={{ fontWeight: 500 }} noWrap>
             {m.name}
           </Typography>
-          <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: '0.6875rem' }}>
+          <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: '0.75rem' }}>
             {m.role}
           </Typography>
         </Stack>
@@ -155,7 +155,7 @@ export function TeamRunCard({ runId, pending }: { runId: string | null; pending:
                     <AgentMark color={colorOf(msg.from)} size={16} />
                   </Box>
                   <Box sx={{ minWidth: 0, px: 1, py: 0.5, borderRadius: '8px', bgcolor: alpha(theme.palette.text.primary, 0.04) }}>
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.6875rem' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.75rem' }}>
                       {nameOf(msg.from)} → {nameOf(msg.to)}
                     </Typography>
                     <Typography variant="caption" sx={{ display: 'block', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>

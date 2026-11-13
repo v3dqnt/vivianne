@@ -33,7 +33,7 @@ export function WidgetLab() {
             const state = states[i] ?? card.state
             return (
               <Stack key={i} sx={{ gap: '6px' }}>
-                <Typography sx={{ fontSize: '0.6875rem', fontWeight: 500, color: 'text.disabled', pl: '44px' }}>
+                <Typography sx={{ fontSize: '0.75rem', fontWeight: 500, color: 'text.disabled', pl: '44px' }}>
                   {card.label} · {card.state}
                 </Typography>
                 <Stack direction="row" sx={{ alignItems: 'flex-end', gap: '8px' }}>

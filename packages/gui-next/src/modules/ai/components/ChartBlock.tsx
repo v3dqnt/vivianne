@@ -198,7 +198,7 @@ export function ChartBlock({ code }: { code: string }) {
         )}
         <ButtonBase
           onClick={() => setShowTable((v) => !v)}
-          sx={{ ml: 'auto', fontSize: '0.6875rem', color: 'text.secondary', borderRadius: 0.8, px: 0.75, py: 0.25, '&:hover': { bgcolor: 'action.hover' } }}
+          sx={{ ml: 'auto', fontSize: '0.75rem', color: 'text.secondary', borderRadius: 0.8, px: 0.75, py: 0.25, '&:hover': { bgcolor: 'action.hover' } }}
         >
           {showTable ? 'Chart' : 'Table'}
         </ButtonBase>
@@ -390,7 +390,7 @@ export function ChartBlock({ code }: { code: string }) {
                 border: 1,
                 borderColor: 'divider',
                 boxShadow: 3,
-                fontSize: '0.6875rem',
+                fontSize: '0.75rem',
                 whiteSpace: 'nowrap',
                 pointerEvents: 'none',
               }}

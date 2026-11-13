@@ -90,7 +90,7 @@ fn probe() -> HardwareInfo {
     #[cfg(target_os = "macos")]
     {
         let sysctl = |k: &str| {
-            std::process::Command::new("sysctl").args(["-n", k]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            crate::proc::quiet_std("sysctl").args(["-n", k]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         };
         let ram = sysctl("hw.memsize").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
         let unified = cfg!(target_arch = "aarch64");
@@ -105,7 +105,7 @@ fn probe() -> HardwareInfo {
             .and_then(|s| s.lines().find(|l| l.starts_with("MemTotal:")).and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok()))
             .unwrap_or(0)
             * 1024;
-        let gpus = std::process::Command::new("nvidia-smi")
+        let gpus = crate::proc::quiet_std("nvidia-smi")
             .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
             .output()
             .ok()

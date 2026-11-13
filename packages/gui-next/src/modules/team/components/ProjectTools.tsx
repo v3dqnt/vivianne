@@ -14,6 +14,8 @@ import { RailTabs } from '../../rail/RailTabs'
 import { FilesTab } from '../../rail/FilesTab'
 import { PreviewTab } from '../../rail/PreviewTab'
 import { TerminalTab } from '../../rail/TerminalTab'
+import { DebugTab } from '../../debug/DebugTab'
+import { watchDebug } from '../../debug/debugStore'
 import { isWide, useRail, type RailTab } from '../../rail/railStore'
 
 /** Every action in the column is the same row: left-aligned on one edge,
@@ -59,7 +61,7 @@ export const RAIL_EASE = '320ms cubic-bezier(0.2, 0.8, 0.2, 1)'
 /** The chat leaves the rail plus a 24px gutter either side. */
 export const RAIL_RESERVE = 'calc(var(--rail-w) + 48px)'
 
-export const LABEL = { fontSize: '0.6875rem', fontWeight: 500, color: 'text.disabled', px: '8px', pb: '4px' } as const
+export const LABEL = { fontSize: '0.75rem', fontWeight: 500, color: 'text.disabled', px: '8px', pb: '4px' } as const
 
 const KEY = 'viv.projectRail.closed'
 const readClosed = (): string[] => {
@@ -119,6 +121,8 @@ export function ProjectTools() {
   const tab: RailTab = hasFolder ? chosen : 'overview'
   const wide = isWide(tab)
   // The terminal stays mounted once opened, so its scrollback survives a trip to another tab.
+  // The Debug tab shows up once the agent is debugging something in this thread.
+  useEffect(() => (todayId ? watchDebug(todayId) : undefined), [todayId])
   const [terminalOpened, setTerminalOpened] = useState(tab === 'terminal')
   useEffect(() => {
     if (tab === 'terminal') setTerminalOpened(true)
@@ -145,6 +149,7 @@ export function ProjectTools() {
       <RailTabs hasFolder={hasFolder} />
       {tab === 'files' && <Pane><FilesTab /></Pane>}
       {tab === 'preview' && <Pane><PreviewTab /></Pane>}
+      {tab === 'debug' && <Pane><DebugTab /></Pane>}
       {terminalOpened && hasFolder && (
         <Box sx={{ display: tab === 'terminal' ? 'flex' : 'none', flex: 1, minHeight: 0, animation: tab === 'terminal' ? 'viv-rail-in 220ms ease-out' : undefined }}>
           <TerminalTab visible={tab === 'terminal'} />

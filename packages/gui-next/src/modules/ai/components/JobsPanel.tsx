@@ -45,7 +45,7 @@ function JobRow({ job }: { job: Job }) {
         )}
       </Stack>
       {open && job.outputTail && (
-        <Box component="pre" sx={{ m: 0, mb: 0.5, p: 1, borderRadius: '8px', bgcolor: 'action.hover', fontFamily: MONO, fontSize: '0.6875rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflowY: 'auto' }}>
+        <Box component="pre" sx={{ m: 0, mb: 0.5, p: 1, borderRadius: '8px', bgcolor: 'action.hover', fontFamily: MONO, fontSize: '0.75rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflowY: 'auto' }}>
           {job.outputTail}
         </Box>
       )}

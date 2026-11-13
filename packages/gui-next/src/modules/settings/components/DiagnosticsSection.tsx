@@ -201,7 +201,7 @@ export function DiagnosticsSection() {
                       p: 1,
                       bgcolor: 'action.hover',
                       borderRadius: 0.8,
-                      fontSize: '0.6875rem',
+                      fontSize: '0.75rem',
                       overflowX: 'auto',
                       maxHeight: 200,
                     }}

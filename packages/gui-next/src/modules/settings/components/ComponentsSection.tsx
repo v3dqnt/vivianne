@@ -39,7 +39,7 @@ function Row({
             {onRemove && (
               <ButtonBase
                 onClick={onRemove}
-                sx={{ ml: 1, px: 0.75, py: 0.25, borderRadius: '6px', fontSize: '0.6875rem', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'error.main' } }}
+                sx={{ ml: 1, px: 0.75, py: 0.25, borderRadius: '6px', fontSize: '0.75rem', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'error.main' } }}
               >
                 Remove
               </ButtonBase>

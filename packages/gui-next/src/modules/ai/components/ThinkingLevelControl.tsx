@@ -129,10 +129,10 @@ export function ThinkingLevelControl() {
           {/* Endpoint anchors: six labels will not fit across 236px, but the
               two that define the scale do, and the header names the rest. */}
           <Stack direction="row" sx={{ justifyContent: 'space-between', mt: -0.25 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem', opacity: 0.7 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem', opacity: 0.7 }}>
               {LEVELS.off.label}
             </Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem', opacity: 0.7 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem', opacity: 0.7 }}>
               {LEVELS.xhigh.label}
             </Typography>
           </Stack>

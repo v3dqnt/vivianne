@@ -240,7 +240,7 @@ async fn compile(lang: Lang, code: &str) -> Result<(PathBuf, bool), String> {
     if let Some((name, text)) = sdk {
         std::fs::write(dir.join(name), text).map_err(|e| e.to_string())?;
     }
-    let mut command = tokio::process::Command::new(compiler);
+    let mut command = crate::proc::quiet(compiler);
     match lang {
         Lang::Rust => command.args(["--edition", "2021", "-C", "opt-level=2", "main.rs", "-o", exe_name()]),
         Lang::Cpp => command.args(["-std=c++17", "-O2", "main.cpp", "-o", exe_name()]),
@@ -279,7 +279,7 @@ pub(crate) async fn execute_native_tool(args: &serde_json::Value, delegate_depth
         Err(e) => return text(format!("Error: {e}")),
     };
     let cwd = state.primary_workspace_folder().await.map(PathBuf::from).or_else(|| std::env::current_dir().ok());
-    let mut command = tokio::process::Command::new(&exe);
+    let mut command = crate::proc::quiet(&exe);
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     if let Some(c) = &cwd {
         command.current_dir(c);
@@ -401,7 +401,7 @@ mod tests {
                 continue;
             }
             let (exe, _) = compile(lang, code).await.unwrap_or_else(|e| panic!("{lang:?}: {e}"));
-            let out = std::process::Command::new(&exe).output().unwrap();
+            let out = crate::proc::quiet_std(&exe).output().unwrap();
             assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hi \"a\\\"b\"", "{lang:?}");
         }
     }

@@ -47,7 +47,7 @@ function StatusPill({ status }: { status: AgentRun['status'] }) {
       ) : (
         <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: c }} />
       )}
-      <Typography component="span" sx={{ fontSize: '0.6875rem', fontWeight: 500, lineHeight: '18px' }}>
+      <Typography component="span" sx={{ fontSize: '0.75rem', fontWeight: 500, lineHeight: '18px' }}>
         {label}
       </Typography>
     </Stack>
@@ -135,7 +135,7 @@ export function AgentPage({ root, agent, onBack, onEdit }: { root: string; agent
                       <Typography variant="body2" sx={{ fontSize: '0.8125rem', whiteSpace: 'pre-wrap' }}>
                         {f.text}
                       </Typography>
-                      <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
+                      <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.75rem' }}>
                         {f.date}
                         {f.task ? ` · on “${f.task}”` : ''}
                       </Typography>
@@ -179,7 +179,7 @@ function RunCard({ run, open, onToggle }: { run: AgentRun; open: boolean; onTogg
           <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }} noWrap>
             {run.description || 'Task'}
           </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
             {ago(run.startedAt)} · {duration(run)} · {run.toolCalls} tool call{run.toolCalls === 1 ? '' : 's'}
             {run.comments.length ? ` · ${run.comments.length} comment${run.comments.length === 1 ? '' : 's'}` : ''}
           </Typography>
@@ -254,7 +254,7 @@ function RunBody({ run }: { run: AgentRun }) {
               <Typography variant="body2" sx={{ fontSize: '0.8125rem', whiteSpace: 'pre-wrap' }}>
                 {c.text}
               </Typography>
-              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>
+              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
                 You · {ago(c.at)} · {c.duringRun ? 'sent while it worked' : 'after it finished'} · remembered
               </Typography>
             </Stack>
@@ -271,7 +271,7 @@ function RunBody({ run }: { run: AgentRun }) {
         placeholder={live ? 'Steer it — it reads this on its next step…' : 'Comment on this work — it will remember next time…'}
       />
       {run.output && !live && (
-        <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
+        <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.75rem' }}>
           Its final report went back to the master.
         </Typography>
       )}

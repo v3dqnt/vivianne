@@ -139,7 +139,7 @@ function ModRow({ mod, onConsent }: { mod: ModInfo; onConsent: (m: ModInfo) => v
             {mod.manifest.description}
           </Typography>
         )}
-        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', fontSize: '0.6875rem' }}>
+        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
           {summary(mod)}
         </Typography>
         {mod.error && (

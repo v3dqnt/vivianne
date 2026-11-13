@@ -66,7 +66,7 @@ fn cache_path_for(label: &str) -> PathBuf {
 const GIT_TIMEOUT_SECS: u64 = 120;
 
 async fn run_git(args: &[&str], cwd: &Path) -> Result<String, String> {
-    let child = tokio::process::Command::new("git")
+    let child = crate::proc::quiet("git")
         .args(args)
         .current_dir(cwd)
         // Never let a stalled remote fall back to an interactive credential

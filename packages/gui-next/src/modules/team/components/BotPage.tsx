@@ -1,3 +1,4 @@
+import { confirm, orToast } from '../../../components/ConfirmDialog'
 import { useEffect, useMemo, useState } from 'react'
 import { Box, Button, ButtonBase, IconButton, InputBase, Orb, Stack, Switch, TextField, Tooltip, Typography, alpha, useTheme } from '../../../ui'
 import { ArrowLeftLinear, EditLinear, TrashLinear } from '../../../icons'
@@ -51,7 +52,7 @@ function Segmented({ value, onChange }: { value: Level; onChange: (v: Level) => 
             px: 1,
             py: 0.375,
             borderRadius: '6px',
-            fontSize: '0.6875rem',
+            fontSize: '0.75rem',
             fontWeight: 500,
             color: value === l.value ? 'text.primary' : 'text.secondary',
             bgcolor: value === l.value ? 'background.paper' : 'transparent',
@@ -86,7 +87,7 @@ function RoutineEditor({ initial, onSave, onCancel }: { initial: Partial<Routine
           <ButtonBase
             key={p.cron}
             onClick={() => setR({ ...r, cron: p.cron })}
-            sx={{ px: 1, py: 0.375, borderRadius: '999px', fontSize: '0.6875rem', border: 1, borderColor: r.cron === p.cron ? 'text.primary' : 'divider', color: r.cron === p.cron ? 'text.primary' : 'text.secondary' }}
+            sx={{ px: 1, py: 0.375, borderRadius: '999px', fontSize: '0.75rem', border: 1, borderColor: r.cron === p.cron ? 'text.primary' : 'divider', color: r.cron === p.cron ? 'text.primary' : 'text.secondary' }}
           >
             {p.label}
           </ButtonBase>
@@ -250,13 +251,13 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
             <Button
               size="small"
               color="inherit"
-              onClick={() => {
-                if (window.confirm(`Reset ${agent.name}? Its conversation, direct messages and memory are deleted.`)) {
-                  void call('cmd_bots_reset', args).then(() => {
-                    void loadDm(root, agent.id)
-                    setMemory('')
-                  })
-                }
+              onClick={async () => {
+                if (!(await confirm(`Reset ${agent.name}? Its conversation, direct messages and memory are deleted.`, { action: 'Reset' }))) return
+                await orToast('Could not reset the agent', async () => {
+                  await call('cmd_bots_reset', args)
+                  void loadDm(root, agent.id)
+                  setMemory('')
+                })
               }}
               sx={{ borderRadius: '8px', color: 'text.secondary' }}
             >
@@ -310,7 +311,7 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
                   <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>
                     {r.prompt}
                   </Typography>
-                  <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem' }}>
+                  <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.75rem' }}>
                     {PRESETS.find((p) => p.cron === r.cron)?.label ?? r.cron} · next {r.enabled ? when(r.nextRun) : 'off'} · {r.runs.length} recent run
                     {r.runs.length === 1 ? '' : 's'}
                     {r.runs.length ? ` · last ${when(r.runs[r.runs.length - 1].at)}` : ''}
@@ -322,7 +323,7 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
                     <Button size="small" onClick={() => setEditing(r)}>
                       Edit
                     </Button>
-                    <IconButton size="small" onClick={() => void call<Routine[]>('cmd_bots_delete_routine', { ...args, routineId: r.id }).then((all) => setRoutines(all ?? []))}>
+                    <IconButton size="small" aria-label="Delete routine" onClick={async () => (await confirm(`Delete the "${r.title}" routine?`)) && void orToast('Could not delete the routine', async () => setRoutines((await call<Routine[]>('cmd_bots_delete_routine', { ...args, routineId: r.id })) ?? []))}>
                       <TrashLinear size={14} color="currentColor" />
                     </IconButton>
                   </Stack>
@@ -362,7 +363,7 @@ export function BotPage({ root, agent, onBack, onEdit }: { root: string; agent: 
                     <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }}>
                       {r.label}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
                       {r.hint}
                     </Typography>
                   </Stack>

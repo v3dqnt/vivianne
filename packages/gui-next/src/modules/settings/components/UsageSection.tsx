@@ -232,7 +232,7 @@ export function UsageSection() {
             }}
           >
             <Typography sx={{ fontSize: '1.5rem', fontWeight: 600, lineHeight: 1.2 }}>{s.value}</Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
               {s.label}
             </Typography>
           </Box>
@@ -317,7 +317,7 @@ export function UsageSection() {
                     key={`${m.name}-${m.col}`}
                     variant="caption"
                     color="text.secondary"
-                    sx={{ position: 'absolute', left: m.col * 14, fontSize: '0.6875rem' }}
+                    sx={{ position: 'absolute', left: m.col * 14, fontSize: '0.75rem' }}
                   >
                     {m.name}
                   </Typography>

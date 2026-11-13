@@ -220,7 +220,7 @@ pub async fn cmd_create_multiplayer_project(
     std::fs::create_dir_all(folder).map_err(|e| format!("Failed to create project folder: {e}"))?;
 
     if !folder.join(".git").is_dir() {
-        match std::process::Command::new("git").arg("init").current_dir(folder).output() {
+        match crate::proc::quiet_std("git").arg("init").current_dir(folder).output() {
             Ok(out) if !out.status.success() => {
                 log::warn!("[projects] `git init` in {path} failed: {}", String::from_utf8_lossy(&out.stderr));
             }
@@ -232,8 +232,8 @@ pub async fn cmd_create_multiplayer_project(
         // `remote add` fails if `origin` already exists — `set-url` first
         // (itself failing harmlessly on a fresh repo with no `origin` yet)
         // makes this idempotent either way instead of erroring on a re-run.
-        let _ = std::process::Command::new("git").args(["remote", "set-url", "origin", remote]).current_dir(folder).output();
-        if let Ok(out) = std::process::Command::new("git").args(["remote", "add", "origin", remote]).current_dir(folder).output() {
+        let _ = crate::proc::quiet_std("git").args(["remote", "set-url", "origin", remote]).current_dir(folder).output();
+        if let Ok(out) = crate::proc::quiet_std("git").args(["remote", "add", "origin", remote]).current_dir(folder).output() {
             if !out.status.success() && !String::from_utf8_lossy(&out.stderr).contains("already exists") {
                 log::warn!("[projects] `git remote add origin` in {path} failed: {}", String::from_utf8_lossy(&out.stderr));
             }

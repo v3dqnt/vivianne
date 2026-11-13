@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core'
 import type { ImageAttachment, FileAttachment } from './types'
 
 // A truncated attachment still gives the model useful context; a multi-MB
@@ -71,6 +72,43 @@ function binaryPlaceholder(file: File): string {
     .join('\n')
 }
 
+/** Documents the backend parses properly (text page by page, tables as rows,
+ * scanned pages as images). Read here as text, they were zip or PDF bytes. */
+const DOCUMENT_EXTS = new Set(['pdf', 'docx', 'docm', 'pptx', 'pptm', 'xlsx', 'xlsm', 'xlsb', 'xls', 'ods'])
+/** Old binary formats nothing parses: say so instead of inlining garbage. */
+const LEGACY_EXTS = new Set(['doc', 'ppt', 'rtf', 'pages', 'key', 'numbers'])
+
+interface AttachmentReading {
+  content: string
+  truncated: boolean
+  path: string
+  images: ImageAttachment[]
+}
+
+function toBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(((reader.result as string) ?? '').split(',')[1] ?? '')
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+/** Parse a document attachment in the backend. Any page images it renders
+ * (pages with no text layer) travel with the message as images. */
+async function documentAttachment(file: File): Promise<{ file: FileAttachment; images: ImageAttachment[] }> {
+  try {
+    const r = await invoke<AttachmentReading>('cmd_extract_attachment', { name: file.name, base64: await toBase64(file) })
+    return { file: { name: file.name, content: r.content, truncated: r.truncated }, images: r.images }
+  } catch (e) {
+    const content = [
+      `[${file.name}: could not be parsed: ${String(e)}]`,
+      binaryPlaceholder(file),
+    ].join('\n')
+    return { file: { name: file.name, content, truncated: false }, images: [] }
+  }
+}
+
 async function fileAttachment(file: File): Promise<FileAttachment> {
   const ext = extOf(file.name)
   const isTextByExt = TEXT_EXTS.has(ext) || TEXT_EXTS.has(file.name.toLowerCase())
@@ -105,11 +143,23 @@ export interface SplitAttachments {
 export async function buildAttachments(files: File[]): Promise<SplitAttachments> {
   const images = files.filter((f) => f.type.startsWith('image/'))
   const rest = files.filter((f) => !f.type.startsWith('image/'))
-  const [imageAttachments, fileAttachments] = await Promise.all([
+  const docs = rest.filter((f) => DOCUMENT_EXTS.has(extOf(f.name)))
+  const legacy = rest.filter((f) => LEGACY_EXTS.has(extOf(f.name)))
+  const plain = rest.filter((f) => !docs.includes(f) && !legacy.includes(f))
+  const [imageAttachments, docAttachments, fileAttachments] = await Promise.all([
     Promise.all(images.map(imageAttachment)),
-    Promise.all(rest.map(fileAttachment)),
+    Promise.all(docs.map(documentAttachment)),
+    Promise.all(plain.map(fileAttachment)),
   ])
-  return { images: imageAttachments, files: fileAttachments }
+  const legacyAttachments: FileAttachment[] = legacy.map((f) => ({
+    name: f.name,
+    content: `[${f.name}: .${extOf(f.name)} is an old binary format this app can't read. Ask the user to save it as a modern file (.docx, .pptx, .xlsx) or as a PDF and attach that.]`,
+    truncated: false,
+  }))
+  return {
+    images: [...imageAttachments, ...docAttachments.flatMap((d) => d.images)],
+    files: [...docAttachments.map((d) => d.file), ...legacyAttachments, ...fileAttachments],
+  }
 }
 
 /** Files carried by a paste or drop event, from either `files` or the

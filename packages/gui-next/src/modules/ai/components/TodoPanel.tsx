@@ -141,7 +141,7 @@ export const TodoPanel = memo(function TodoPanel({ messages }: { messages?: Agen
                       {t.content}
                     </Typography>
                     {(done && doneAt.has(t.content)) || current ? (
-                      <Typography variant="caption" color="text.disabled" sx={{ display: 'block', fontSize: '0.6875rem' }}>
+                      <Typography variant="caption" color="text.disabled" sx={{ display: 'block', fontSize: '0.75rem' }}>
                         {current ? 'In progress' : `Done ${time(doneAt.get(t.content)!)}`}
                         {done && t.summary ? ` — ${t.summary}` : ''}
                       </Typography>

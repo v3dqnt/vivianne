@@ -123,7 +123,7 @@ export function FilesTab() {
           <Branch nodes={shown} depth={0} expanded={expanded} toggle={toggle} forceOpen={!!query.trim()} />
         )}
       </Box>
-      <Typography noWrap title={root} sx={{ fontSize: '0.6875rem', color: 'text.disabled', fontFamily: MONO, px: '8px', flexShrink: 0 }}>
+      <Typography noWrap title={root} sx={{ fontSize: '0.75rem', color: 'text.disabled', fontFamily: MONO, px: '8px', flexShrink: 0 }}>
         {root}
       </Typography>
     </Stack>

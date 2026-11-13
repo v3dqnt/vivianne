@@ -92,7 +92,7 @@ impl Tool for ModTool {
                 details: None,
             };
         }
-        let mut cmd = tokio::process::Command::new("bash");
+        let mut cmd = crate::proc::quiet("bash");
         cmd.arg("-c").arg(&command).current_dir(&self.cwd).kill_on_drop(true);
         cmd.env_clear().envs(crate::agent::tools::code::sandbox::filtered_env());
         cmd.stdout(std::process::Stdio::piped());

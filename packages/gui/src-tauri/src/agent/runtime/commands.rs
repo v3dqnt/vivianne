@@ -566,6 +566,8 @@ pub async fn cmd_agent_abort(#[allow(non_snake_case)] threadId: Option<String>,
     // thread's; track them per thread if two threads run plans at once.
     crate::agent::team::plans::cancel_all();
     crate::agent::team::run::cancel_all();
+    // The thread's background subagents too: Stop used to end only the thread's own loop and leave them spending.
+    crate::agent::runtime::subagents::SubagentRegistry::global().cancel_thread(threadId.as_deref());
     Ok(())
 }
 
@@ -1191,6 +1193,13 @@ pub async fn cmd_agent_session_stats(
 
     let context_tokens = calculate_context_tokens(&messages);
     let context_window = model.context_window.max(1);
+    // A coding agent keeps the conversation in its own session and says how
+    // full it is: its figure, not an estimate from the messages Vivianne kept.
+    let from_agent = if model.provider == crate::agent::harness::PROVIDER { crate::agent::harness::context_usage(threadId.as_deref().unwrap_or("")) } else { None };
+    let (context_tokens, context_window) = match from_agent {
+        Some((used, size)) => (used.min(u32::MAX as u64) as u32, size.clamp(1, u32::MAX as u64) as u32),
+        None => (context_tokens, context_window),
+    };
     let context_percent =
         ((context_tokens as f64 / context_window as f64) * 100.0).min(100.0);
 
@@ -2368,6 +2377,20 @@ pub async fn cmd_memory_configure_extraction(
 }
 
 #[tauri::command]
+pub async fn cmd_memory_configure_defense(
+    state: State<'_, Arc<AppState>>,
+    #[allow(non_snake_case)] blockSecrets: bool) -> Result<crate::agent::memory::MemoryState, String> {
+    crate::agent::memory::configure_defense(&memory_root_for(&state.agent_state).await, blockSecrets).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_configure_pages(
+    state: State<'_, Arc<AppState>>,
+    pages: Vec<crate::agent::memory::pages::PageDef>) -> Result<crate::agent::memory::MemoryState, String> {
+    crate::agent::memory::configure_pages(&memory_root_for(&state.agent_state).await, pages).await
+}
+
+#[tauri::command]
 pub async fn cmd_memory_remember(
     state: State<'_, Arc<AppState>>,
     
@@ -2601,7 +2624,7 @@ pub async fn cmd_lsp_diagnostics(
 /// common "not a repo" case, only for a genuinely missing `git` binary.
 #[tauri::command]
 pub async fn cmd_git_current_branch(path: String) -> Result<Option<String>, String> {
-    let output = tokio::process::Command::new("git")
+    let output = crate::proc::quiet("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(&path)
         .output()
@@ -2632,7 +2655,7 @@ pub struct GitRemote {
 /// commands here.
 #[tauri::command]
 pub async fn cmd_git_remote(path: String) -> Result<Option<GitRemote>, String> {
-    let output = tokio::process::Command::new("git")
+    let output = crate::proc::quiet("git")
         .args(["remote", "get-url", "origin"])
         .current_dir(&path)
         .output()
@@ -2680,7 +2703,7 @@ pub struct GitCommit {
 #[tauri::command]
 pub async fn cmd_git_log(path: String, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
     let limit = limit.unwrap_or(50).clamp(1, 500);
-    let output = tokio::process::Command::new("git")
+    let output = crate::proc::quiet("git")
         .args(["log", &format!("-n{limit}"), "--date=iso-strict", "--pretty=format:%H%x1f%an%x1f%ad%x1f%s"])
         .current_dir(&path)
         .output()
@@ -2716,7 +2739,7 @@ pub struct GitBranch {
 /// Local + remote-tracking branches for a workspace folder.
 #[tauri::command]
 pub async fn cmd_git_branches(path: String) -> Result<Vec<GitBranch>, String> {
-    let output = tokio::process::Command::new("git")
+    let output = crate::proc::quiet("git")
         .args(["branch", "-a", "--format=%(HEAD)%09%(refname:short)"])
         .current_dir(&path)
         .output()
@@ -2765,7 +2788,7 @@ pub fn cmd_is_own_source(path: String) -> bool {
 
 #[tauri::command]
 pub async fn cmd_git_checkout_branch(path: String, branch: String) -> Result<(), String> {
-    let output = tokio::process::Command::new("git")
+    let output = crate::proc::quiet("git")
         .args(["checkout", &branch])
         .current_dir(&path)
         .output()
@@ -2779,7 +2802,7 @@ pub async fn cmd_git_checkout_branch(path: String, branch: String) -> Result<(),
 
 /// Run git in `dir`; its stdout, or its stderr as the error.
 async fn git_in(dir: &str, args: &[&str]) -> Result<String, String> {
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = crate::proc::quiet("git");
     cmd.args(args).current_dir(dir);
     #[cfg(windows)]
     {
@@ -2856,7 +2879,7 @@ pub async fn cmd_git_checkout(path: String, branch: String, pr: Option<u64>, wor
 /// Create a new branch off the current HEAD and switch to it (`git checkout -b`).
 #[tauri::command]
 pub async fn cmd_git_create_branch(path: String, name: String) -> Result<(), String> {
-    let output = tokio::process::Command::new("git")
+    let output = crate::proc::quiet("git")
         .args(["checkout", "-b", &name])
         .current_dir(&path)
         .output()
@@ -2900,7 +2923,7 @@ pub struct GitFileChange {
 /// unchanged when it isn't inside a git repo at all (the git commands
 /// downstream just return empty results in that case, same as before).
 async fn git_toplevel(path: &str) -> String {
-    let output = tokio::process::Command::new("git")
+    let output = crate::proc::quiet("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(path)
         .output()
@@ -2926,7 +2949,7 @@ pub async fn cmd_git_diff_stat(path: String, staged: bool) -> Result<Vec<GitFile
     if staged {
         args.push("--cached");
     }
-    let output = tokio::process::Command::new("git")
+    let output = crate::proc::quiet("git")
         .args(&args)
         .current_dir(&path)
         .output()
@@ -2956,7 +2979,7 @@ pub async fn cmd_git_diff_stat(path: String, staged: bool) -> Result<Vec<GitFile
         .collect();
 
     if !staged {
-        let untracked = tokio::process::Command::new("git")
+        let untracked = crate::proc::quiet("git")
             .args(["ls-files", "--others", "--exclude-standard"])
             .current_dir(&path)
             .output()
@@ -3002,7 +3025,7 @@ pub async fn cmd_git_diff_file(path: String, file: String, staged: bool, context
     }
     args.push("--".to_string());
     args.push(file.clone());
-    let output = tokio::process::Command::new("git")
+    let output = crate::proc::quiet("git")
         .args(&args)
         .current_dir(&path)
         .output()
@@ -3028,7 +3051,7 @@ pub async fn cmd_git_diff_file(path: String, file: String, staged: bool, context
 #[tauri::command]
 pub async fn cmd_git_status(path: String) -> Result<Vec<GitStatusEntry>, String> {
     let path = git_toplevel(&path).await;
-    let output = tokio::process::Command::new("git")
+    let output = crate::proc::quiet("git")
         .args(["status", "--porcelain"])
         .current_dir(&path)
         .output()

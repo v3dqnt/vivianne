@@ -48,7 +48,7 @@ export async function drawPhysics(root: HTMLElement, scene: Scene, c: SciColors,
     renderer: 'svg',
   })
   if (scene.axes && board.defaultAxes) {
-    const axis = { strokeColor: c.muted, highlight: false, ticks: { strokeColor: c.muted, label: { strokeColor: c.muted, fontSize: '0.6875rem' } } }
+    const axis = { strokeColor: c.muted, highlight: false, ticks: { strokeColor: c.muted, label: { strokeColor: c.muted, fontSize: '0.75rem' } } }
     board.defaultAxes.x.setAttribute(axis)
     board.defaultAxes.y.setAttribute(axis)
   }

@@ -256,8 +256,57 @@ fn coordinate(args: &serde_json::Value, key: &str) -> Option<(i32, i32)> {
     let a = args.get(key)?.as_array()?;
     let x = a.first()?.as_f64()?;
     let y = a.get(1)?.as_f64()?;
+    if args.get("relative").and_then(|r| r.as_bool()) == Some(true) {
+        return relative_rect(args).map(|r| relative_to_screen((x, y), r));
+    }
     Some(frame().to_screen(x, y))
 }
+
+/// The point a call's `coordinate` names, in screen pixels.
+pub(crate) fn screen_point(args: &serde_json::Value) -> Option<(i32, i32)> {
+    coordinate(args, "coordinate")
+}
+
+/// `[0, 999]` thousandths of a rectangle `(x, y, width, height)` as screen pixels: the corners are 0 and 999 whatever the size, so the same
+/// numbers mean the same place after the window is resized, moved or the screen scaled. (The DeepSeek harness's "relative" coordinates.)
+pub fn relative_to_screen(rel: (f64, f64), rect: (i32, i32, i32, i32)) -> (i32, i32) {
+    let at = |v: f64, origin: i32, len: i32| origin + ((v.clamp(0.0, 999.0) / 999.0) * (len - 1).max(0) as f64).round() as i32;
+    (at(rel.0, rect.0, rect.2), at(rel.1, rect.1, rect.3))
+}
+
+/// What relative coordinates are relative to: the target window, else the monitor.
+fn relative_rect(args: &serde_json::Value) -> Option<(i32, i32, i32, i32)> {
+    #[cfg(target_os = "windows")]
+    if let Some(r) = crate::agent::tools::desktop::win::target().and_then(crate::agent::tools::desktop::win::rect) {
+        return Some(r);
+    }
+    let m = pick_monitor(args).ok()?;
+    Some((m.x().unwrap_or(0), m.y().unwrap_or(0), m.width().unwrap_or(0) as i32, m.height().unwrap_or(0) as i32))
+}
+
+/// The window a window-only screenshot showed, and where it was: coordinates from that screenshot mean nothing once the window has moved.
+static SHOT_WINDOW: Mutex<Option<(isize, (i32, i32, i32, i32))>> = Mutex::new(None);
+
+/// Whether a window is no longer where a screenshot saw it.
+pub fn rect_moved(shot: (i32, i32, i32, i32), now: Option<(i32, i32, i32, i32)>) -> bool {
+    now != Some(shot)
+}
+
+/// An error for a call that uses screenshot coordinates after the window they came from moved or resized, else `None`.
+#[cfg(target_os = "windows")]
+fn stale_screenshot(args: &serde_json::Value) -> Option<String> {
+    let uses_shot = args.get("relative").and_then(|r| r.as_bool()) != Some(true) && (args.get("coordinate").is_some() || args.get("start_coordinate").is_some());
+    if !uses_shot {
+        return None;
+    }
+    let (h, rect) = (*SHOT_WINDOW.lock().unwrap_or_else(|e| e.into_inner()))?;
+    rect_moved(rect, crate::agent::tools::desktop::win::rect(h)).then(|| {
+        "SCREENSHOT_REQUIRED: the window has moved or been resized since your last screenshot, so its coordinates no longer point where they did. Take a new screenshot (or pass relative: true with 0-999 coordinates, which follow the window).".to_string()
+    })
+}
+
+/// Appended to every action that sends input: sent is not done.
+const DISPATCHED: &str = "(Dispatched, not verified: look again with a screenshot or snapshot before relying on it.)";
 
 // ── Capturing ──────────────────────────────────────────────────────────────
 
@@ -324,6 +373,8 @@ fn capture_screenshot_for(args: serde_json::Value) -> impl FnOnce() -> ToolResul
         let mut region = (mx, my, mw, mh);
         #[allow(unused_mut)]
         let mut what = "the screen".to_string();
+        #[allow(unused_mut)]
+        let mut shot_window: Option<(isize, (i32, i32, i32, i32))> = None;
         #[cfg(target_os = "windows")]
         {
             let want_window = args.get("window").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -337,6 +388,7 @@ fn capture_screenshot_for(args: serde_json::Value) -> impl FnOnce() -> ToolResul
                         if x1 > x0 && y1 > y0 {
                             region = (x0, y0, (x1 - x0) as u32, (y1 - y0) as u32);
                             what = format!("'{}'", crate::agent::tools::desktop::win::title(t));
+                            shot_window = Some((t, (x, y, w, h)));
                         }
                     }
                 }
@@ -358,6 +410,7 @@ fn capture_screenshot_for(args: serde_json::Value) -> impl FnOnce() -> ToolResul
         };
         let f = Frame { origin: (region.0, region.1), scale };
         *FRAME.lock().unwrap_or_else(|e| e.into_inner()) = f;
+        *SHOT_WINDOW.lock().unwrap_or_else(|e| e.into_inner()) = shot_window;
         image_result(
             format!(
                 "Screenshot of {what} [{w}x{h}]. Coordinates you pass from now on are in this image's pixels — they're mapped to the screen for you."
@@ -428,6 +481,9 @@ fn windows_pointer_action(args: &serde_json::Value, app: &tauri::AppHandle) -> T
     use crate::agent::tools::desktop::win::{self, MouseButton};
     let action = args.get("action").and_then(|v| v.as_str()).unwrap_or_default();
     let text = args.get("text").and_then(|v| v.as_str());
+    if let Some(stale) = stale_screenshot(args) {
+        return err(stale);
+    }
     let at = coordinate(args, "coordinate");
 
     // A click lands in whatever window is under it — which then becomes the
@@ -520,7 +576,7 @@ fn windows_pointer_action(args: &serde_json::Value, app: &tauri::AppHandle) -> T
         }
         "hold_key" => {
             let combo = text.ok_or("'text' is required for hold_key")?;
-            let secs = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.5).clamp(0.05, 10.0);
+            let secs = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.5).clamp(0.05, 5.0);
             let keys = win::parse_combo(combo)?;
             keyboard_ready()?;
             win::key_down(&keys)?;
@@ -543,7 +599,9 @@ fn windows_pointer_action(args: &serde_json::Value, app: &tauri::AppHandle) -> T
         other => Err(format!("unknown action '{other}'")),
     })();
     match result {
-        Ok(msg) => ok(msg),
+        // A typed text is read back by the caller; the rest are sent and not known to have landed.
+        Ok(msg) if matches!(action, "type" | "cursor_position" | "mouse_move") => ok(msg),
+        Ok(msg) => ok(format!("{msg} {DISPATCHED}")),
         Err(e) => err(e),
     }
 }
@@ -701,6 +759,27 @@ pub fn cmd_capture_screen() -> Result<serde_json::Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relative_coordinates_span_the_rectangle_corner_to_corner() {
+        let win = (100, 50, 800, 600);
+        assert_eq!(relative_to_screen((0.0, 0.0), win), (100, 50));
+        assert_eq!(relative_to_screen((999.0, 999.0), win), (899, 649), "the last pixel, not one past it");
+        assert_eq!(relative_to_screen((500.0, 500.0), win), (500, 350));
+        assert_eq!(relative_to_screen((-40.0, 5000.0), win), (100, 649), "out of range is clamped, never off the window");
+        // The same numbers follow the window when it is resized.
+        assert_eq!(relative_to_screen((999.0, 0.0), (0, 0, 1000, 500)), (999, 0));
+        assert_eq!(relative_to_screen((10.0, 10.0), (5, 5, 0, 0)), (5, 5), "an empty rectangle does not panic");
+    }
+
+    #[test]
+    fn a_window_that_moved_or_resized_makes_old_screenshot_coordinates_stale() {
+        let shot = (10, 20, 300, 200);
+        assert!(!rect_moved(shot, Some(shot)));
+        assert!(rect_moved(shot, Some((11, 20, 300, 200))), "moved");
+        assert!(rect_moved(shot, Some((10, 20, 320, 200))), "resized");
+        assert!(rect_moved(shot, None), "gone");
+    }
 
     #[test]
     fn frames_map_image_pixels_to_the_screen_and_back() {

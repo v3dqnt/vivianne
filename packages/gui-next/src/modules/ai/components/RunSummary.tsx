@@ -28,7 +28,7 @@ export function RunSummary({ ledger }: { ledger: RunLedger }) {
   return (
     <Stack direction="row" sx={{ alignItems: 'center', gap: 1, px: 0.5 }}>
       <Box sx={{ width: 16, height: '1px', bgcolor: 'divider' }} />
-      <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6875rem', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
+      <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.75rem', fontFamily: '"Geist Mono", ui-monospace, monospace' }}>
         {parts.join('  ·  ')}
       </Typography>
     </Stack>

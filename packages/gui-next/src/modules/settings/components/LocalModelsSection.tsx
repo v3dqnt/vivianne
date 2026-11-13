@@ -1,3 +1,4 @@
+import { confirm, orToast } from '../../../components/ConfirmDialog'
 import { DiscoverModels } from './DiscoverModels'
 import { ImageModelsPanel } from './ImageModelsPanel'
 import { useEffect, useState } from 'react'
@@ -405,10 +406,10 @@ function EndpointRow({ endpoint, onEdit }: { endpoint: LlamaEndpoint; onEdit: ()
       <IconButton size="small" onClick={onEdit} disabled={busy} title="Edit context size / GPU layers">
         <SettingLinear size={15} color="currentColor" />
       </IconButton>
-      <IconButton size="small" onClick={() => void toggle()} disabled={busy || busyStatus}>
+      <IconButton size="small" aria-label={running ? 'Stop' : 'Start'} onClick={() => void toggle()} disabled={busy || busyStatus}>
         {busy || busyStatus ? <CircularProgress size={14} /> : running ? <StopCircleLinear size={16} color="currentColor" /> : <PlayCircleLinear size={16} color="currentColor" />}
       </IconButton>
-      <IconButton size="small" onClick={() => void removeEndpoint(endpoint.id)} disabled={busy}>
+      <IconButton size="small" aria-label="Remove endpoint" onClick={async () => (await confirm(`Remove "${endpoint.name}" from your local models?`, { action: 'Remove' })) && void orToast('Could not remove the model', () => removeEndpoint(endpoint.id))} disabled={busy}>
         <TrashLinear size={15} color="currentColor" />
       </IconButton>
     </Stack>

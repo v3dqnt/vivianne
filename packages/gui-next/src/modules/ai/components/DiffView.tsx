@@ -3,8 +3,8 @@ import { Box } from '../../../ui'
 import { diffLines } from '../lib/diff'
 
 const LINE_STYLE = {
-  add: { bgcolor: 'rgba(46,160,67,0.15)', color: '#3fb950' },
-  remove: { bgcolor: 'rgba(248,81,73,0.15)', color: '#f85149' },
+  add: { bgcolor: 'rgba(46,160,67,0.15)', color: 'success.main' },
+  remove: { bgcolor: 'rgba(248,81,73,0.15)', color: 'error.main' },
   context: { bgcolor: 'transparent', color: 'text.secondary' },
 } as const
 

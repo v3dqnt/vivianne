@@ -11,10 +11,46 @@ import { ProjectTools, RAIL_VARS } from '../modules/team/components/ProjectTools
 import { ChatView } from '../modules/ai/components/ChatView'
 import { WidgetLab } from '../modules/team/components/WidgetLab'
 import { BotChat } from '../modules/team/components/BotChat'
+import { DebugPanel, type DebugSession } from '../modules/debug/components/DebugPanel'
 import { Boundary } from './Boundary'
 import { DEMO_MESSAGES, DEMO_TEAM, DEMO_BOT_MESSAGES, DEMO_APPROVALS } from './demoData'
 
 const ROOT = 'C:/demo'
+
+const DEBUG_STOPPED: DebugSession = {
+  adapter: 'debugpy', program: 'C:/demo/app/billing.py', status: 'stopped', reason: 'breakpoint', selectedFrame: 1,
+  frames: [
+    { id: 1, name: 'apply_discount', file: 'C:/demo/app/billing.py', line: 42 },
+    { id: 2, name: 'total', file: 'C:/demo/app/billing.py', line: 77 },
+    { id: 3, name: 'checkout', file: 'C:/demo/app/cart.py', line: 18 },
+    { id: 4, name: '<module>', file: 'C:/demo/app/main.py', line: 9 },
+  ],
+  scopes: [
+    { name: 'Locals', variables: [
+      { name: 'price', value: '49.0', type: 'float' },
+      { name: 'rate', value: '0.15', type: 'float' },
+      { name: 'items', value: 'list (3)', type: 'list', children: [
+        { name: '0', value: "{'sku': 'A1', 'qty': 2}", type: 'dict' },
+        { name: '1', value: "{'sku': 'B7', 'qty': 1}", type: 'dict' },
+        { name: '2', value: "{'sku': 'C3', 'qty': 4}", type: 'dict' },
+      ] },
+    ] },
+    { name: 'Globals', variables: [{ name: 'TAX', value: '0.2', type: 'float' }] },
+  ],
+  breakpoints: [
+    { file: 'C:/demo/app/billing.py', line: 42, verified: true },
+    { file: 'C:/demo/app/billing.py', line: 77, condition: 'total > 100', verified: true },
+    { file: 'C:/demo/app/cart.py', line: 31, verified: false },
+  ],
+  output: 'Loading cart for user 14\nApplying code SPRING15\n',
+}
+const DEBUG_CRASH: DebugSession = {
+  ...DEBUG_STOPPED, reason: 'exception',
+  exception: { type: 'ZeroDivisionError', message: 'division by zero, in apply_discount at billing.py:42' },
+}
+const DEBUG_RUNNING: DebugSession = { ...DEBUG_STOPPED, status: 'running', reason: undefined, frames: [], scopes: [] }
+const DEBUG_ENDED: DebugSession = { ...DEBUG_STOPPED, status: 'exited', reason: 'exited', exitCode: 1, frames: [], scopes: [], output: 'Traceback (most recent call last):\n  File "billing.py", line 42\nZeroDivisionError: division by zero\n' }
+const NOOP = { onContinue() {}, onPause() {}, onStepOver() {}, onStepIn() {}, onStepOut() {}, onRestart() {}, onStop() {}, onSelectFrame() {}, onRemoveBreakpoint() {} }
 
 /** Fill the app's stores with a believable session, so whole screens draw as they do in the app. */
 function seed() {
@@ -78,6 +114,22 @@ export function ScenesSection() {
 
       <Scene title="Project rail, large window" note="Project, goal and version control side by side with context." height={420}>
         <Box sx={{ ...RAIL_VARS, '--rail-w': '620px', position: 'relative', flex: 1 }}><ProjectTools /></Box>
+      </Scene>
+
+      <Scene title="Debugger: paused at a breakpoint" note="Stack, variables, breakpoints and output of a program the agent is debugging." height={520}>
+        <Box sx={{ width: 380, flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}><DebugPanel session={DEBUG_STOPPED} {...NOOP} /></Box>
+      </Scene>
+
+      <Scene title="Debugger: stopped on an exception" height={520}>
+        <Box sx={{ width: 380, flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}><DebugPanel session={DEBUG_CRASH} {...NOOP} /></Box>
+      </Scene>
+
+      <Scene title="Debugger: running, ended, and nothing started" note="The three quiet states." height={420}>
+        <Box sx={{ display: 'flex', flex: 1, minHeight: 0, gap: '1px', bgcolor: 'divider' }}>
+          {[DEBUG_RUNNING, DEBUG_ENDED, null].map((s, i) => (
+            <Box key={i} sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}><DebugPanel session={s} {...NOOP} /></Box>
+          ))}
+        </Box>
       </Scene>
 
       <Scene title="Main chat" note="A conversation with tool calls and results, a failed step, and the composer." height={720}>

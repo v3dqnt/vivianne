@@ -69,6 +69,7 @@ pub fn create_coding_tools(cwd: String) -> Vec<Box<dyn Tool>> {
         Box::new(TodoWriteTool::new()),
         Box::new(DiagnosticsTool::new(cwd.clone())),
         Box::new(crate::agent::tools::lsp_nav::LspTool::new(cwd.clone())),
+        Box::new(crate::agent::tools::lsp_nav::LspEditTool::new(cwd.clone())),
         // ── Grok-parity: subagent orchestration ────────────────────────────
         // No `task` entry here: it is in `exec::AGENT_TOOLS`, which the loop
         // consults before this registry, so a
@@ -1741,37 +1742,15 @@ impl Tool for ReadTool {
             return read_image(path.clone(), full.clone(), false).await;
         }
 
-        // ── PDF ──
-        if ext == "pdf" {
-            let pages = args["pages"].as_str().unwrap_or("").to_string();
-            return read_pdf_summary(&path, &full, &pages).await;
-        }
-
-        // ── Word, Excel, PowerPoint ──
-        // Their text, part by part, rather than a hexdump of the zip: an agent
-        // that wrote a document must be able to read it back to check it.
-        if matches!(ext.as_str(), "docx" | "xlsx" | "pptx") {
-            let p = full.clone();
-            return match tokio::task::spawn_blocking(move || crate::agent::tools::files::documents::inspect(&p)).await {
-                Ok(Ok(parts)) => {
-                    let filled: Vec<_> = parts.iter().filter(|x| !x.text.trim().is_empty()).collect();
-                    let body = filled.iter().map(|x| format!("[{}] {}", x.label, x.text)).collect::<Vec<_>>().join("\n");
-                    let empty = parts.len() - filled.len();
-                    ToolResult {
-                        content: format!(
-                            "{path}: {} parts, {} with text{}\n\n{}",
-                            parts.len(),
-                            filled.len(),
-                            if empty > 0 { format!(", {empty} empty") } else { String::new() },
-                            if body.is_empty() { "(no text in this document)".to_string() } else { body }
-                        ),
-                        is_error: false,
-                        details: Some(json!({ "path": path, "parts": parts.len(), "withText": filled.len() })),
-                    }
-                }
-                Ok(Err(e)) => ToolResult { content: format!("Couldn't read {path}: {e}"), is_error: true, details: None },
-                Err(e) => ToolResult { content: format!("Couldn't read {path}: {e}"), is_error: true, details: None },
-            };
+        // ── PDF, Word, PowerPoint, spreadsheets ──
+        // Real parsers (see `files::extract`): text page by page, tables as
+        // rows, and pages without a usable text layer rendered so they can
+        // be seen or OCR'd.
+        let ext_l = ext.to_ascii_lowercase();
+        if crate::agent::tools::files::extract::READABLE.contains(&ext_l.as_str())
+            || crate::agent::tools::files::extract::LEGACY.contains(&ext_l.as_str())
+        {
+            return read_document(&path, &full, args).await;
         }
 
         // ── Text ──
@@ -1840,6 +1819,123 @@ pub(crate) fn is_image_ext(ext: &str) -> bool {
 /// this a multi-megapixel screenshot goes over the wire at full resolution
 /// for no accuracy benefit, just token/bandwidth cost.
 const MAX_IMAGE_EDGE: u32 = 1568;
+
+/// Most pages a single `read` renders to images.
+const MAX_RENDERED_PAGES: usize = 6;
+
+/// `read` on a PDF, Word, PowerPoint or spreadsheet file.
+///
+/// Text comes from `files::extract`. PDF pages without a usable text layer
+/// (scans, fonts with no Unicode map), and any page asked for with
+/// `render: true`, are rendered and attached as images; with `ocr` (forced
+/// for models that can't see) they are OCR'd into the text instead.
+async fn read_document(display: &str, full: &PathBuf, args: &serde_json::Value) -> ToolResult {
+    use crate::agent::tools::files::extract;
+    let want = extract::Want {
+        pages: args["pages"].as_str().map(str::to_string).or_else(|| args["pages"].as_u64().map(|n| n.to_string())).unwrap_or_default(),
+        sheet: args["sheet"].as_str().map(str::to_string),
+    };
+    let force_render = args["render"].as_bool().unwrap_or(false);
+    let do_ocr = args["ocr"].as_bool().unwrap_or(false);
+    let p = full.clone();
+    let res = tokio::task::spawn_blocking(move || -> Result<(extract::Reading, Vec<(usize, Vec<u8>)>), String> {
+        let reading = extract::read(&p, &want)?;
+        let mut shots = Vec::new();
+        if reading.kind == "pdf" {
+            let pages: Vec<usize> = if force_render { extract::parse_range(&want.pages, reading.total) } else { reading.visual_pages.clone() };
+            if !pages.is_empty() {
+                let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
+                let take: Vec<usize> = pages.into_iter().take(MAX_RENDERED_PAGES).collect();
+                // A page the renderer can't draw still leaves its text.
+                shots = extract::pdf_render(&bytes, &take).unwrap_or_default();
+            }
+        }
+        Ok((reading, shots))
+    })
+    .await;
+    let (reading, shots) = match res {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return ToolResult { content: format!("Couldn't read {display}: {e}"), is_error: true, details: None },
+        Err(e) => return ToolResult { content: format!("Couldn't read {display}: {e}"), is_error: true, details: None },
+    };
+
+    let mut body = reading.text.clone();
+    let mut images = Vec::new();
+    let mut ocr_note = String::new();
+    if do_ocr && !shots.is_empty() {
+        let dir = std::env::temp_dir().join("vivianne-pdf-ocr");
+        let _ = std::fs::create_dir_all(&dir);
+        for (n, png) in &shots {
+            let f = dir.join(format!("{}-p{n}.png", uuid::Uuid::new_v4()));
+            if std::fs::write(&f, png).is_err() {
+                continue;
+            }
+            let r = crate::agent::tools::desktop::ocr::ocr_image(&f).await;
+            let _ = std::fs::remove_file(&f);
+            if r.method == crate::agent::tools::desktop::ocr::OcrMethod::Unavailable {
+                ocr_note = "\nOCR is not available here, so pages without a text layer could not be read.".into();
+            }
+            let text = if r.text.trim().is_empty() { "(OCR found no text on this page)".to_string() } else { format!("[OCR] {}", r.text.trim()) };
+            let marker = format!("--- Page {n} ---\n");
+            if let Some(at) = body.find(&marker) {
+                let start = at + marker.len();
+                let end = body[start..].find("\n--- Page ").map(|e| start + e).unwrap_or(body.len());
+                body.replace_range(start..end, &format!("{text}\n"));
+            }
+        }
+    } else {
+        use base64::Engine;
+        for (_, png) in &shots {
+            images.push(json!({ "base64": base64::engine::general_purpose::STANDARD.encode(png), "media_type": "image/png" }));
+        }
+    }
+
+    let (clipped, truncated) = truncate_text(&body, MAX_READ_LINES, MAX_READ_BYTES);
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let what = match reading.kind {
+        "pdf" => format!("PDF, {} page{}", reading.total, plural(reading.total)),
+        "pptx" => format!("PowerPoint, {} slide{}", reading.total, plural(reading.total)),
+        "docx" => "Word document".into(),
+        _ => "spreadsheet".into(),
+    };
+    let mut content = format!("{display} ({what})\n\n{}", if clipped.trim().is_empty() { "(no text found)".to_string() } else { clipped });
+    if truncated {
+        content.push_str(match reading.kind {
+            "pdf" => "\n\n[Truncated. Read the rest with pages, e.g. pages: \"10-20\".]",
+            "pptx" => "\n\n[Truncated. Read the rest with pages (slide numbers), e.g. pages: \"10-20\".]",
+            "sheet" => "\n\n[Truncated. Read one sheet at a time with sheet: \"<name>\".]",
+            _ => "\n\n[Truncated.]",
+        });
+    }
+    if !images.is_empty() {
+        let nums: Vec<String> = shots.iter().map(|(n, _)| n.to_string()).collect();
+        content.push_str(&format!(
+            "\n\nAttached: image{} of page{} {}, in order. Equations, diagrams, tables and handwriting are often only readable there.",
+            plural(nums.len()),
+            plural(nums.len()),
+            nums.join(", ")
+        ));
+    }
+    let left = reading.visual_pages.iter().filter(|n| !shots.iter().any(|(s, _)| s == *n)).count();
+    if left > 0 {
+        content.push_str(&format!("\n{left} more page(s) have no readable text layer; read them with pages and render: true, a few at a time."));
+    }
+    content.push_str(&ocr_note);
+    if reading.kind == "pdf" && !force_render && shots.is_empty() {
+        content.push_str("\n(If a figure, an equation or the layout matters, read that page again with render: true to see it.)");
+    }
+    let mut details = json!({
+        "path": display,
+        "kind": reading.kind,
+        "total": reading.total,
+        "truncated": truncated,
+        "renderedPages": shots.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+    });
+    if !images.is_empty() {
+        details["images"] = serde_json::Value::Array(images);
+    }
+    ToolResult { content, is_error: false, details: Some(details) }
+}
 
 async fn read_image(display_path: String, full: PathBuf, do_ocr: bool) -> ToolResult {
     let (w, h, fmt, bytes, image_b64, media_type, encode_err) = {
@@ -1955,83 +2051,6 @@ async fn read_image(display_path: String, full: PathBuf, do_ocr: bool) -> ToolRe
     }
 
     ToolResult { content, is_error: false, details: Some(details) }
-}
-
-async fn read_pdf_summary(display_path: &str, full: &PathBuf, pages: &str) -> ToolResult {
-    let display = display_path.to_string();
-    let full = full.clone();
-    let pages = pages.to_string();
-    let result = tokio::task::spawn_blocking(move || -> Result<(usize, String, u64), String> {
-        let bytes = std::fs::read(&full).map_err(|e| e.to_string())?;
-        if !bytes.starts_with(b"%PDF-") {
-            return Err("not a PDF (missing %PDF- header)".to_string());
-        }
-        let size = bytes.len() as u64;
-        // Cheap page count: `/Type /Page` object occurrences (not /Pages).
-        // Regex on the raw bytes; this misses encrypted PDFs but doesn't crash.
-        let text = String::from_utf8_lossy(&bytes).to_string();
-        let re = regex::Regex::new(r"/Type\s*/Page[^s]").unwrap();
-        let page_count = re.find_iter(&text).count();
-        // Best-effort text: extract every parenthesized string inside a `BT ... ET`
-        // block. This is a real PDF text extractor's toy version — hits the
-        // common case of "text in a form-XObject" without decoding CMAP fonts.
-        let mut extracted = String::new();
-        let bt = regex::Regex::new(r"(?s)BT\b(.*?)\bET").unwrap();
-        let tj = regex::Regex::new(r"\((?:\\.|[^\\)])*\)").unwrap();
-        for cap in bt.captures_iter(&text) {
-            let block = &cap[1];
-            for m in tj.find_iter(block) {
-                let s = &m.as_str()[1..m.as_str().len() - 1];
-                extracted.push_str(&s.replace("\\(", "(").replace("\\)", ")"));
-                extracted.push(' ');
-            }
-            extracted.push('\n');
-        }
-        let extracted = extracted.trim().to_string();
-
-        // Page filter: keep the requested slice of extracted output when `pages`
-        // is set. Since our extractor isn't page-aware, we approximate by
-        // splitting on double-newline as a page separator.
-        let extracted = if pages.is_empty() {
-            extracted
-        } else {
-            let ranges = parse_page_range(&pages, page_count);
-            let all_pages: Vec<&str> = extracted.split("\n\n").collect();
-            let mut buf = String::new();
-            for (i, p) in all_pages.iter().enumerate() {
-                if ranges.contains(&(i + 1)) {
-                    buf.push_str(p);
-                    buf.push_str("\n\n");
-                }
-            }
-            buf.trim().to_string()
-        };
-        Ok((page_count, extracted, size))
-    }).await;
-    match result {
-        Ok(Ok((pages_n, text, size))) => {
-            let (clipped, truncated) = truncate_text(&text, MAX_READ_LINES, MAX_READ_BYTES);
-            let body = if clipped.trim().is_empty() {
-                "(no text extracted — PDF may be image-only, encrypted, or use custom fonts)".to_string()
-            } else { clipped };
-            ToolResult {
-                content: format!(
-                    "PDF: {}\n  pages: {pages_n}\n  bytes: {size}\n  extracted text:\n\n{body}",
-                    display
-                ),
-                is_error: false,
-                details: Some(json!({
-                    "path": display,
-                    "kind": "pdf",
-                    "pages": pages_n,
-                    "bytes": size,
-                    "truncated": truncated,
-                })),
-            }
-        }
-        Ok(Err(e)) => ToolResult { content: format!("Error reading PDF: {e}"), is_error: true, details: None },
-        Err(e) => ToolResult { content: format!("Internal error: {e}"), is_error: true, details: None },
-    }
 }
 
 fn parse_page_range(spec: &str, total: usize) -> Vec<usize> {

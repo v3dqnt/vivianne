@@ -74,6 +74,10 @@ function MessageBubbleImpl({
   // The backend adds "(N images attached to this message ...)" so models don't claim
   // they can't see an image; it's for the model, not for the reader.
   const text = contentToText(message.content).replace(/\n\n\(\d+ images? attached to this message — look at it\/them before answering\.\)$/, '')
+  // A line said on the way to a tool call ("let me check…"): part of the
+  // work, not the answer, so it reads quieter. Anything longer, or with a
+  // second paragraph, is content and keeps full ink.
+  const narration = message.type === 'assistant' && !streaming && text.length <= 240 && !text.includes('\n\n') && message.content.some((c) => c.type === 'toolCall')
   // A new day's handoff note rides in a user message but isn't from the user.
   if (isUser && isHandoffText(text)) return <HandoffDivider text={text} />
   if (isUser && isSummaryText(text)) return <SummaryDivider text={text} />
@@ -150,7 +154,7 @@ function MessageBubbleImpl({
             // column, so who said what reads at a glance.
             isUser
               ? { maxWidth: CHAT_MAX_WIDTH, minWidth: 0, px: 2, py: 1, border: 0, bgcolor: (t: Theme) => alpha(t.palette.text.primary, t.palette.mode === 'dark' ? 0.09 : 0.06), color: 'text.primary', borderRadius: '16px', fontSize: CHAT_FONT.text }
-              : { width: '100%', minWidth: 0, px: CHAT_GUTTER, py: 0, border: 0, bgcolor: 'transparent', color: 'text.primary', borderRadius: 0, fontSize: CHAT_FONT.text }
+              : { width: '100%', minWidth: 0, px: CHAT_GUTTER, py: 0, border: 0, bgcolor: 'transparent', color: narration ? 'text.secondary' : 'text.primary', borderRadius: 0, fontSize: CHAT_FONT.text }
           }
         >
           {isEmptyStreamingAssistant ? (
@@ -188,12 +192,12 @@ function MessageBubbleImpl({
           }}
         >
           {showTime && (
-            <Typography variant="caption" sx={{ fontSize: '0.6875rem' }}>
+            <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
               {formatTimestamp(message.timestamp)}
             </Typography>
           )}
           {showTime && tokensPerSec !== undefined && (
-            <Typography variant="caption" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.6875rem' }}>
+            <Typography variant="caption" sx={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: '0.75rem' }}>
               {tokensPerSec.toFixed(1)} tok/s
             </Typography>
           )}

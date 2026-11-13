@@ -13,9 +13,9 @@ import { seriesColorOf } from './plotColors'
 function plotStyles(c: SciColors) {
   return {
     '& svg': { display: 'block', maxWidth: '100%', overflow: 'visible' },
-    '& .function-plot': { fontFamily: 'inherit', fontSize: '0.6875rem' },
+    '& .function-plot': { fontFamily: 'inherit', fontSize: '0.75rem' },
     '& .function-plot .tick line': { stroke: c.line, opacity: 0.9 },
-    '& .function-plot .tick text': { fill: c.muted, fontSize: '0.6875rem' },
+    '& .function-plot .tick text': { fill: c.muted, fontSize: '0.75rem' },
     '& .function-plot .domain': { stroke: c.muted },
     '& .function-plot .origin': { stroke: c.muted, opacity: 0.8 },
     '& .function-plot .axis-label, & .function-plot text.title': { fill: c.ink, fontSize: '0.75rem' },

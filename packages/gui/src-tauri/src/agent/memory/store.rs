@@ -88,7 +88,7 @@ fn ensure_column(conn: &Connection, column_name: &str, columndef: &str) -> Resul
 /// Execute `f` with a cached (or freshly opened) SQLite connection for
 /// `root`. The connection is kept alive between calls, so schema init,
 /// page cache warmth, and WAL state survive across operations.
-fn with_conn<T>(root: &str, f: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
+pub(crate) fn with_conn<T>(root: &str, f: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
     let cache = DB_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = cache.lock().map_err(|_| "DB cache lock poisoned".to_string())?;
 
@@ -126,6 +126,27 @@ fn entries_jsonl_path(root: &str) -> PathBuf {
     memory_dir(root).join("entries.jsonl")
 }
 
+/// The schema version this build writes. 2: entities, two times, observations and pages (all additive).
+const SCHEMA_VERSION: i64 = 2;
+
+/// Before the first open by a build that changes the schema, keep a consistent copy of an existing store next to it
+/// (`memory.db.before-v2`). The changes are only additions, so nothing is expected to go wrong; this is for the day one does. Never fails the open.
+fn backup_before_upgrade(conn: &Connection, dir: &std::path::Path) {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap_or(0);
+    let has_data: bool = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'memories'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0;
+    if version >= SCHEMA_VERSION || !has_data {
+        return;
+    }
+    let target = dir.join(format!("memory.db.before-v{SCHEMA_VERSION}"));
+    if target.exists() {
+        return;
+    }
+    let path = target.to_string_lossy().replace('\'', "''");
+    if let Err(e) = conn.execute_batch(&format!("VACUUM INTO '{path}'")) {
+        log::warn!("[memory_store] could not back up the store before upgrading it: {e}");
+    }
+}
+
 fn open_and_init_uncached(root: &str) -> Result<Connection, String> {
     let dir = memory_dir(root);
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create memory dir: {e}"))?;
@@ -134,6 +155,7 @@ fn open_and_init_uncached(root: &str) -> Result<Connection, String> {
     // INSERT OR REPLACE deletes the old row; without this its delete
     // triggers never fire and the FTS and vector indexes keep stale rows.
     conn.execute_batch("PRAGMA recursive_triggers = ON;").map_err(|e| format!("failed to set pragmas: {e}"))?;
+    backup_before_upgrade(&conn, &dir);
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS memories (
@@ -199,6 +221,15 @@ fn open_and_init_uncached(root: &str) -> Result<Connection, String> {
     // Archived: still true, but unused for so long that recall stops
     // offering it (sleep-time forgetting). Kept, so "as of" still finds it.
     let _ = ensure_column(&conn, "archived_at", "INTEGER");
+    // When the fact happened, as opposed to when it was learned (`created_at`), and whether it is the agent's own experience (`self`) or about
+    // the world. Both come from extraction and are optional.
+    let _ = ensure_column(&conn, "occurred_at", "INTEGER");
+    let _ = ensure_column(&conn, "perspective", "TEXT");
+    super::entities::init(&conn)?;
+    // An observation whose evidence has since been corrected or archived (see `observations`).
+    let _ = ensure_column(&conn, "stale", "INTEGER NOT NULL DEFAULT 0");
+    super::observations::init(&conn)?;
+    super::pages::init(&conn)?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS memory_vec_indexes (model TEXT PRIMARY KEY, dim INTEGER NOT NULL);",
     )
@@ -209,6 +240,9 @@ fn open_and_init_uncached(root: &str) -> Result<Connection, String> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap_or(0);
     if version < 1 {
         let _ = conn.execute_batch("INSERT INTO memories_fts(memories_fts) VALUES('rebuild'); PRAGMA user_version = 1;");
+    }
+    if version < SCHEMA_VERSION {
+        let _ = conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"));
     }
 
     migrate_from_jsonl(&conn, root)?;
@@ -1025,6 +1059,47 @@ pub async fn entries_with_scene(root: &str, scene_name: &str, limit: usize) -> R
     .map_err(|e| format!("scene query task panicked: {e}"))?
 }
 
+/// Live entries whose time (when it happened, else when it was learned) falls in `[start, end)`, newest first.
+pub async fn entries_in_window(root: &str, start: u64, end: u64, limit: usize) -> Result<Vec<MemoryEntry>, String> {
+    let root = root.to_string();
+    tokio::task::spawn_blocking(move || {
+        with_conn(&root, |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, key, text, kind, session_id, created_at, confidence, access_count, last_accessed_at, embedding_model
+                     FROM memories WHERE COALESCE(occurred_at, created_at) >= ?1 AND COALESCE(occurred_at, created_at) < ?2
+                       AND invalid_at IS NULL AND archived_at IS NULL ORDER BY COALESCE(occurred_at, created_at) DESC LIMIT ?3",
+                )
+                .map_err(|e| format!("failed to prepare query: {e}"))?;
+            let rows = stmt.query_map(params![start as i64, end as i64, limit as i64], row_to_entry).map_err(|e| format!("failed to query window: {e}"))?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("failed to read window: {e}"))
+        })
+    })
+    .await
+    .map_err(|e| format!("query task panicked: {e}"))?
+}
+
+/// When each of these entries happened (or was learned), by id.
+pub async fn times_of(root: &str, ids: &[String]) -> Result<std::collections::HashMap<String, u64>, String> {
+    if ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let root = root.to_string();
+    let ids = ids.to_vec();
+    tokio::task::spawn_blocking(move || {
+        with_conn(&root, |conn| {
+            let placeholders: Vec<String> = (0..ids.len()).map(|i| format!("?{}", i + 1)).collect();
+            let sql = format!("SELECT id, COALESCE(occurred_at, created_at) FROM memories WHERE id IN ({})", placeholders.join(", "));
+            let mut stmt = conn.prepare(&sql).map_err(|e| format!("failed to prepare query: {e}"))?;
+            let params: Vec<&dyn rusqlite::types::ToSql> = ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+            let rows = stmt.query_map(params.as_slice(), |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))).map_err(|e| format!("failed to query times: {e}"))?;
+            rows.collect::<Result<_, _>>().map_err(|e| format!("failed to read times: {e}"))
+        })
+    })
+    .await
+    .map_err(|e| format!("query task panicked: {e}"))?
+}
+
 /// Load multiple memory entries by their IDs in one query.
 pub async fn get_entries_by_ids(root: &str, ids: &[String]) -> Result<Vec<MemoryEntry>, String> {
     if ids.is_empty() {
@@ -1179,6 +1254,64 @@ mod tests {
         let then: Vec<String> = search_fts_at(&root, "editor", 10, Some(3_000)).await.unwrap().into_iter().map(|e| e.id).collect();
         assert_eq!(then, vec!["old".to_string()]);
         assert_eq!(entry_count(&root).await.unwrap(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An existing store is copied aside once, before the first open by a build that changes the layout; a new or current one is not.
+    #[test]
+    fn an_old_store_is_backed_up_once_before_the_upgrade() {
+        let dir = std::env::temp_dir().join(format!("vivianne_memstore_backup_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join(format!("memory.db.before-v{SCHEMA_VERSION}"));
+        // Nothing stored yet: nothing to keep.
+        let fresh = Connection::open(dir.join("fresh.db")).unwrap();
+        backup_before_upgrade(&fresh, &dir);
+        assert!(!target.exists());
+        // An old store with a fact in it.
+        let old = Connection::open(dir.join("memory.db")).unwrap();
+        old.execute_batch("CREATE TABLE memories (id TEXT PRIMARY KEY, text TEXT); INSERT INTO memories VALUES ('a', 'kept');").unwrap();
+        backup_before_upgrade(&old, &dir);
+        assert!(target.exists(), "a copy is made");
+        let copy = Connection::open(&target).unwrap();
+        assert_eq!(copy.query_row("SELECT text FROM memories WHERE id = 'a'", [], |r| r.get::<_, String>(0)).unwrap(), "kept");
+        drop(copy);
+        // Done once: a later change to the live store does not overwrite the copy.
+        old.execute("UPDATE memories SET text = 'changed'", []).unwrap();
+        backup_before_upgrade(&old, &dir);
+        assert_eq!(Connection::open(&target).unwrap().query_row("SELECT text FROM memories", [], |r| r.get::<_, String>(0)).unwrap(), "kept");
+        // Already current: no copy.
+        std::fs::remove_file(&target).unwrap();
+        old.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};")).unwrap();
+        backup_before_upgrade(&old, &dir);
+        assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A fact is placed in time by when it happened when that is known, and by when it was learned otherwise.
+    #[tokio::test]
+    async fn a_time_window_uses_when_it_happened_before_when_it_was_learned() {
+        let dir = std::env::temp_dir().join(format!("vivianne_memstore_window_{}", uuid::Uuid::new_v4()));
+        let root = dir.to_string_lossy().to_string();
+        let fact = |id: &str, at: u64| MemoryEntry {
+            id: id.into(), key: id.into(), text: format!("fact {id}"), kind: "episodic".into(), session_id: None, created_at: at,
+            confidence: 1.0, access_count: 0, last_accessed_at: 0, embedding_model: None, user_wide: false,
+        };
+        insert_entry(&root, &fact("learned_inside", 5_000)).await.unwrap();
+        insert_entry(&root, &fact("learned_outside", 50_000)).await.unwrap();
+        // Learned long after the window, but it happened inside it.
+        insert_entry(&root, &fact("happened_inside", 90_000)).await.unwrap();
+        // Learned inside the window, but it happened long before.
+        insert_entry(&root, &fact("happened_outside", 6_000)).await.unwrap();
+        with_conn(&root, |c| {
+            c.execute("UPDATE memories SET occurred_at = 4000 WHERE id = 'happened_inside'", []).map_err(|e| e.to_string())?;
+            c.execute("UPDATE memories SET occurred_at = 100 WHERE id = 'happened_outside'", []).map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+        let ids: Vec<String> = entries_in_window(&root, 1_000, 10_000, 10).await.unwrap().into_iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec!["learned_inside".to_string(), "happened_inside".to_string()], "newest first by the time it counts as");
+        let times = times_of(&root, &["happened_inside".to_string(), "learned_outside".to_string()]).await.unwrap();
+        assert_eq!((times["happened_inside"], times["learned_outside"]), (4_000, 50_000));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { call } from '../../../ipc'
-import type { MemoryEntry, MemoryState, MemoryStatus, SleepReport } from '../lib/memory'
+import type { HindsightConfig, MemoryEntry, MemoryState, MemoryStatus, SleepReport } from '../lib/memory'
 
 interface MemoryStoreState {
   status: MemoryStatus | null
@@ -11,6 +11,12 @@ interface MemoryStoreState {
   toggleAutoConsolidate: () => Promise<void>
   toggleExtraction: () => Promise<void>
   purge: () => Promise<void>
+  setBlockSecrets: (block: boolean) => Promise<void>
+  setPages: (pages: { name: string; question: string }[]) => Promise<string | null>
+  hindsight: HindsightConfig | null
+  loadHindsight: () => Promise<void>
+  saveHindsight: (config: HindsightConfig, apiKey?: string) => Promise<string | null>
+  testHindsight: (config: HindsightConfig) => Promise<string>
   recall: (query: string) => Promise<void>
   /** Run a tidy-up pass now instead of waiting for the app to go idle. */
   sleepNow: () => Promise<SleepReport | null>
@@ -20,6 +26,46 @@ export const useMemoryStore = create<MemoryStoreState>((set, get) => ({
   status: null,
   recallResults: [],
   loading: false,
+  hindsight: null,
+
+  setBlockSecrets: async (block) => {
+    const state = await call<MemoryState>('cmd_memory_configure_defense', { blockSecrets: block })
+    if (state) set((s) => (s.status ? { status: { ...s.status, state } } : s))
+  },
+
+  /** Returns an error message, or null when saved. */
+  setPages: async (pages) => {
+    try {
+      const state = await call<MemoryState>('cmd_memory_configure_pages', { pages })
+      if (state) set((s) => (s.status ? { status: { ...s.status, state } } : s))
+      return null
+    } catch (e) {
+      return String(e)
+    }
+  },
+
+  loadHindsight: async () => {
+    const h = await call<HindsightConfig>('cmd_hindsight_get')
+    set({ hindsight: h ?? null })
+  },
+
+  saveHindsight: async (config, apiKey) => {
+    try {
+      const h = await call<HindsightConfig>('cmd_hindsight_set', { config: { enabled: config.enabled, url: config.url, bank: config.bank, retain: config.retain }, apiKey })
+      set({ hindsight: h ?? null })
+      return null
+    } catch (e) {
+      return String(e)
+    }
+  },
+
+  testHindsight: async (config) => {
+    try {
+      return (await call<string>('cmd_hindsight_test', { config: { enabled: true, url: config.url, bank: config.bank, retain: config.retain } })) ?? 'No answer.'
+    } catch (e) {
+      return String(e)
+    }
+  },
 
   refresh: async () => {
     set({ loading: true })

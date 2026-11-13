@@ -159,11 +159,11 @@ impl DevServerManager {
         // `npm run dev` isn't a literal executable — needs a shell. Same
         // split every other shell-out in this codebase uses for Windows vs POSIX.
         let mut cmd = if cfg!(windows) {
-            let mut c = tokio::process::Command::new("cmd");
+            let mut c = crate::proc::quiet("cmd");
             c.args(["/C", &config.command]);
             c
         } else {
-            let mut c = tokio::process::Command::new("sh");
+            let mut c = crate::proc::quiet("sh");
             c.args(["-c", &config.command]);
             c
         };

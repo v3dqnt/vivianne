@@ -124,7 +124,7 @@ function FitTag({ fit }: { fit: Fit | null }) {
   if (!fit) return null
   const color = fit === 'well' ? 'success.main' : fit === 'slow' ? 'warning.main' : 'text.disabled'
   return (
-    <Box component="span" sx={{ fontSize: '0.6875rem', fontWeight: 500, color, whiteSpace: 'nowrap' }}>
+    <Box component="span" sx={{ fontSize: '0.75rem', fontWeight: 500, color, whiteSpace: 'nowrap' }}>
       {FIT_LABEL[fit]}
     </Box>
   )
@@ -246,7 +246,7 @@ export function DiscoverModels() {
       return (
         <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, width: 150 }}>
           <LinearProgress variant="determinate" value={pct} sx={{ flex: 1 }} />
-          <Typography sx={{ fontSize: '0.6875rem', width: 30, textAlign: 'right' }}>{pct}%</Typography>
+          <Typography sx={{ fontSize: '0.75rem', width: 30, textAlign: 'right' }}>{pct}%</Typography>
           <ButtonBase aria-label="Cancel download" onClick={() => void call('cmd_local_model_cancel', { file: local })} sx={{ borderRadius: '50%', color: 'text.secondary' }}>
             <CloseLinear size={13} color="currentColor" />
           </ButtonBase>
@@ -279,14 +279,14 @@ export function DiscoverModels() {
           (installing !== null ? (
             <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75, width: 160 }}>
               <LinearProgress variant="determinate" value={installing} sx={{ flex: 1 }} />
-              <Typography sx={{ fontSize: '0.6875rem' }}>{installing}%</Typography>
+              <Typography sx={{ fontSize: '0.75rem' }}>{installing}%</Typography>
             </Stack>
           ) : (
             <Button size="small" variant="contained" onClick={() => void install()} sx={{ textTransform: 'none' }}>
               Install llama.cpp
             </Button>
           ))}
-        {server && <Typography sx={{ fontSize: '0.6875rem', color: 'success.main', fontWeight: 500 }}>llama.cpp ready</Typography>}
+        {server && <Typography sx={{ fontSize: '0.75rem', color: 'success.main', fontWeight: 500 }}>llama.cpp ready</Typography>}
       </Stack>
       {server === null && (
         <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary', mt: -0.5 }}>
@@ -309,7 +309,7 @@ export function DiscoverModels() {
                 <Typography sx={{ fontSize: '0.875rem', fontWeight: 600 }}>
                   {r.family} {r.label}
                 </Typography>
-                <Typography sx={{ fontSize: '0.6875rem', color: 'text.secondary' }}>
+                <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
                   ~{fmtGb(r.gb)} · <FitTag fit="well" />
                 </Typography>
                 <Box sx={{ mt: 0.5 }}>{action(r.repo, () => void downloadStarter(r.repo, r.quant, `${r.family} ${r.label}`))}</Box>
@@ -366,7 +366,7 @@ export function DiscoverModels() {
               <Typography noWrap sx={{ fontSize: '0.8125rem', flex: 1, minWidth: 0 }}>
                 {r.id}
               </Typography>
-              <Typography sx={{ fontSize: '0.6875rem', color: 'text.disabled' }}>{r.downloads.toLocaleString()} downloads</Typography>
+              <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled' }}>{r.downloads.toLocaleString()} downloads</Typography>
             </Stack>
             {openRepo?.repo === r.id && (
               <Stack sx={{ pl: 2, pb: 1, gap: 0.5 }}>
@@ -377,7 +377,7 @@ export function DiscoverModels() {
                     <Typography noWrap sx={{ fontSize: '0.75rem', fontFamily: '"Geist Mono", ui-monospace, monospace', flex: 1, minWidth: 0 }} title={f.path}>
                       {f.path}
                     </Typography>
-                    <Typography sx={{ fontSize: '0.6875rem', color: 'text.secondary', width: 60, textAlign: 'right' }}>{fmtGb(gb(f.size))}</Typography>
+                    <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary', width: 60, textAlign: 'right' }}>{fmtGb(gb(f.size))}</Typography>
                     <Box sx={{ width: 80 }}>
                       <FitTag fit={fitOf(gb(f.size), hw)} />
                     </Box>
@@ -463,7 +463,7 @@ function OllamaModels() {
         return (
           <Stack key={m.name} direction="row" sx={{ alignItems: 'center', gap: 1, px: 1 }}>
             <Typography sx={{ fontSize: '0.8125rem', flex: 1 }}>{m.name}</Typography>
-            <Typography sx={{ fontSize: '0.6875rem', color: 'text.secondary' }}>{fmtGb(gb(m.size))}</Typography>
+            <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>{fmtGb(gb(m.size))}</Typography>
             {added ? (
               <Typography sx={{ fontSize: '0.75rem', color: 'success.main', fontWeight: 500 }}>In the picker</Typography>
             ) : (

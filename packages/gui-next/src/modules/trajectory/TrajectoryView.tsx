@@ -114,7 +114,7 @@ function Timeline({ turns, start, end, onPick }: { turns: Turn[]; start: number;
     <Box sx={{ flexShrink: 0, px: '16px', py: '8px', borderBottom: 1, borderColor: 'divider' }}>
       {lanes.map((lane) => (
         <Stack key={lane.label} direction="row" sx={{ alignItems: 'center', height: 20 }}>
-          <Typography sx={{ width: 48, fontSize: '0.6875rem', color: 'text.disabled' }}>{lane.label}</Typography>
+          <Typography sx={{ width: 48, fontSize: '0.75rem', color: 'text.disabled' }}>{lane.label}</Typography>
           <Box sx={{ position: 'relative', flex: 1, height: 10 }}>
             {turns.map((t) => {
               const [from, len] = lane.at(t)
@@ -131,7 +131,7 @@ function Timeline({ turns, start, end, onPick }: { turns: Turn[]; start: number;
           </Box>
         </Stack>
       ))}
-      <Stack direction="row" sx={{ justifyContent: 'space-between', pl: '48px', fontSize: '0.6875rem', color: 'text.disabled', fontFamily: MONO }}>
+      <Stack direction="row" sx={{ justifyContent: 'space-between', pl: '48px', fontSize: '0.75rem', color: 'text.disabled', fontFamily: MONO }}>
         <span>{clock(start)}</span>
         <span>{ms(span)}</span>
       </Stack>
@@ -145,21 +145,22 @@ function RowLine({ row, active, first, onOpen }: { row: Row; active: boolean; fi
       onClick={onOpen}
       sx={{ display: 'flex', width: '100%', justifyContent: 'flex-start', alignItems: 'center', gap: '12px', px: '16px', height: 36, borderBottom: 1, borderColor: 'divider', textAlign: 'left', bgcolor: active ? 'action.selected' : 'transparent', '&:hover': { bgcolor: active ? 'action.selected' : 'action.hover' } }}
     >
-      <Box sx={{ width: 22, height: 24, flexShrink: 0, borderRadius: '6px', display: 'grid', placeItems: 'center', fontSize: '0.6875rem', fontFamily: MONO, bgcolor: 'action.hover', color: row.failed ? 'error.main' : 'text.secondary' }}>{GLYPH[row.kind]}</Box>
+      <Box sx={{ width: 22, height: 24, flexShrink: 0, borderRadius: '6px', display: 'grid', placeItems: 'center', fontSize: '0.75rem', fontFamily: MONO, bgcolor: 'action.hover', color: row.failed ? 'error.main' : 'text.secondary' }}>{GLYPH[row.kind]}</Box>
       <Typography noWrap sx={{ flexShrink: 0, maxWidth: 260, fontSize: '0.8125rem', fontWeight: row.kind === 'user' || row.kind === 'assistant' ? 500 : 400, color: row.failed ? 'error.main' : 'text.primary', fontFamily: row.kind === 'call' ? MONO : 'inherit' }}>{row.title}</Typography>
       <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: '0.8125rem', color: 'text.secondary' }}>{row.summary}</Typography>
-      <Typography sx={{ flexShrink: 0, fontSize: '0.6875rem', color: 'text.disabled', fontFamily: MONO }}>+{ms(row.t - first)}</Typography>
+      <Typography sx={{ flexShrink: 0, fontSize: '0.75rem', color: 'text.disabled', fontFamily: MONO }}>+{ms(row.t - first)}</Typography>
     </ButtonBase>
   )
 }
 
-function Pretty({ label, value }: { label: string; value: unknown }) {
+/** `full`: no height cap, so nothing is behind an inner scrollbar (the system prompt must be readable in one piece). */
+function Pretty({ label, value, full }: { label: string; value: unknown; full?: boolean }) {
   if (value === undefined || value === null || value === '') return null
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
   return (
     <Box sx={{ mb: '12px' }}>
-      <Typography sx={{ fontSize: '0.6875rem', fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'text.disabled', mb: '4px' }}>{label}</Typography>
-      <Box component="pre" sx={{ m: 0, p: '10px', borderRadius: '8px', bgcolor: 'action.hover', fontFamily: MONO, fontSize: '0.75rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 360, overflow: 'auto' }}>{text}</Box>
+      <Typography sx={{ fontSize: '0.75rem', fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'text.disabled', mb: '4px' }}>{label}</Typography>
+      <Box component="pre" sx={{ m: 0, p: '10px', borderRadius: '8px', bgcolor: 'action.hover', fontFamily: MONO, fontSize: '0.75rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', ...(full ? {} : { maxHeight: 360, overflow: 'auto' }) }}>{text}</Box>
     </Box>
   )
 }
@@ -181,7 +182,7 @@ function Detail({ row, onClose }: { row: Row; onClose: () => void; accent: strin
             ))}
           </Stack>
           {(tab === 'prompt' && row.prompt) || !row.tools ? (
-            <Pretty label="System prompt" value={row.prompt} />
+            <Pretty label="System prompt" value={row.prompt} full />
           ) : (
             row.tools.map((t) => (
               <Box key={t.name} sx={{ py: '6px', borderBottom: 1, borderColor: 'divider' }}>
