@@ -57,14 +57,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
         when: "Anything involving a real website: searching, reading a page, following links, filling a form, clicking through a flow, checking how a page behaves, or anything in the user's own browser (their tabs, sites they're signed in to).",
         tools: &["web_search", "web_fetch", "user_browser_driver"],
         how: Some(
-            "First, make sure the browser is there: if it isn't connected, call user_browser_driver with action launch. It opens the browser that has the Vivianne extension (Chrome, Edge, Brave, Arc, Opera, Vivaldi, Helium or another Chromium browser) and waits for it to connect; pass browser to choose one. action browsers lists which browsers are installed, which have the extension and which are connected. \
-             Then all browsing happens there, in the user's own browser with their sign-ins: open a url, snapshot to get [ref]s, then click/type by ref; snapshot again after the page changes. \
-             read gives the page text, evaluate runs JavaScript, read_console shows the console. Say done when finished so the browser's debugging banner goes away. \
-             web_search and web_fetch are for a quick lookup that needs no page. \
-             Never type passwords or payment details; if a site needs a sign-in, ask the user to sign in themselves. \
-             If launch finds no browser with the extension, tell the user to install it (Settings, Web & browser, Set up). \
-             With more than one browser connected, pass browser to pick one.",
-
+            "Browsing happens in the user's own browser, with their sign-ins. If it isn't connected, call user_browser_driver with action launch (it opens a browser that has the Vivianne extension and waits; pass browser to choose; action browsers lists what's installed and connected). Then: open a url, snapshot to get [ref]s, click/type by ref, snapshot again after the page changes. read gives page text, evaluate runs JavaScript, read_console shows the console. Say done when finished so the debugging banner goes away. web_search and web_fetch are for a quick lookup that needs no page. Never type passwords or payment details: ask the user to sign in themselves. If launch finds no browser with the extension, point them to Settings, Web & browser, Set up.",
         ),
         triggers: &["google", "search the web", "search for", "look up", "look it up", "browse", "website", "web site", "web page", "webpage", "the internet", "online", "http://", "https://", ".com", ".org", ".io", "open a site", "go to ", "helium", "chrome", "edge", "brave", "my browser", "my tabs", "in the browser", "signed in", "logged in", "my gmail", "my email", "my account"],
     },
@@ -82,7 +75,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
         when: "Work too heavy for this computer: fine-tuning, benchmarks, training, batch processing, rendering, or anything the user asks to run on a GPU or in the cloud.",
         tools: &["nebius_job"],
         how: Some(
-            "nebius_job runs a container on a Nebius machine and stops by itself at its time limit. Run status first to see the CLI works. submit takes an image, a one-line command, optionally platform, preset and max_hours (keep it short: 1 hour unless the work needs more). The user is asked each time and sees the machine, the time limit and the cost. Then read progress with logs and the job id from submit, and report what it produced; cancel stops it early. Never put secrets in env. Prefer running locally when this computer can do the job.",
+            "nebius_job runs a container on a Nebius machine and stops at its time limit. Run status first. submit takes an image and a one-line command, optionally platform, preset and max_hours (1 hour unless the work needs more); the user is asked each time and sees the machine, limit and cost. Read progress with logs and the job id; cancel stops it early. Never put secrets in env. Prefer running locally when this computer can do the job.",
         ),
         triggers: &["gpu", "fine-tune", "finetune", "fine tune", "train a model", "training run", "nebius", "cloud gpu", "h100", "h200", "l40s", "run it in the cloud", "batch job"],
     },
@@ -100,15 +93,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
         when: "Driving a desktop application, or anything that needs the real mouse, keyboard, or screen rather than a browser.",
         tools: &["dip"],
         how: Some(
-            "One tool with an `action`. On Windows, prefer structured mode over guessing pixels: \
-             action=list_windows to see what's open, then action=snapshot WITH that window's id to read its \
-             real UI tree with an id for each element, then action=interact to click or type into one by id. \
-             Always pass the window id to snapshot — without it snapshot reads whatever currently has focus, \
-             which is normally Vivianne itself rather than the app you mean. \
-             action=launch_app first if the app isn't running. \
-             Re-snapshot after each interact — ids only last until the next snapshot. \
-             Fall back to action=screenshot plus coordinate clicks only when snapshot finds nothing \
-             (canvas-drawn apps and games). Read the `dip` skill before your first call.",
+            "One tool with an `action`. On Windows prefer structured mode over guessing pixels: list_windows, then snapshot WITH that window's id (without it, snapshot reads whatever has focus, normally Vivianne itself) to read its UI tree with an id per element, then interact to click or type by id. launch_app first if it isn't running. Re-snapshot after each interact: ids last only until the next snapshot. Use screenshot plus coordinate clicks only when snapshot finds nothing (canvas-drawn apps, games). Read the `dip` skill before your first call.",
         ),
         triggers: &["screenshot", "screen shot", "my screen", "click on", "desktop", "open the app", "launch ", "window", "type into", "gui"],
     },
@@ -146,7 +131,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
         when: "The user wants an actual FILE they can open or share — a report, letter, CV, invoice, deck, spreadsheet, poster, social image or picture — rather than text in the chat.",
         tools: &["create_document", "inspect_document", "edit_document", "generate_image"],
         how: Some(
-            "The look is the user's call: follow their style, colours, fonts and references, and ask when it matters and they left it open. Read the              format guide (`guide` design/formats/pdf, slides, docx, xlsx or graphics) before making anything. create_document writes pdf, docx, xlsx, pptx or png: blocks for documents,              slides for decks, sheets for spreadsheets, your own html for anything else (any size, shape or colour; png for graphics).              Pick the theme for the occasion. Look at the preview it returns and fix what looks wrong before saying it's done. If the file              ALREADY exists, don't regenerate it (that discards the user's own edits): inspect_document, then edit_document by part id.              generate_image makes pictures. Name files for the reader and tell the user the path.",
+            "The look is the user's call: follow their style, colours and references, and ask when it matters and they left it open. Read the format guide (`guide` design/formats/pdf, slides, docx, xlsx or graphics) before making anything. create_document writes pdf, docx, xlsx, pptx or png (blocks for documents, slides for decks, sheets for spreadsheets, your own html for anything else); check the preview it returns and fix what looks wrong before saying it's done. If the file already exists, don't regenerate it (that discards the user's edits): inspect_document, then edit_document by part id. generate_image makes pictures. Name files for the reader and tell the user the path.",
         ),
         triggers: &["make a report", "spreadsheet", "excel", "word document", "powerpoint", "slide deck", "presentation", "pdf", "docx", "xlsx", "pptx", "poster", "flyer", "invoice", "resume", "cv", "letter", "brochure", "one-pager", "social post", "instagram", "thumbnail", "generate an image", "draw me", "edit the document", "change the doc", "update the spreadsheet", "fix the slide", "design"],
     },
@@ -164,7 +149,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
         when: "Starting a new project, working on one for the first time, or any substantial work on a project: know what it is, how it's built and where it's going before acting.",
         tools: &["guide"],
         how: Some(
-            "A new project: read `guide` projects/new-project. A project you haven't worked on before (or whose .viv/charter.md, map.md, roadmap.md              don't exist yet): read projects/existing-project and build those files first. Before substantial work, read the project's              .viv/charter.md, map.md, roadmap.md and journal.md, and check what matters against the real project. After, update them and add a              journal entry (projects/working). guide also holds the design guides (design/…).",
+            "A new project: read `guide` projects/new-project. One you haven't worked on (or with no .viv/charter.md, map.md, roadmap.md): read projects/existing-project and build those first. Before substantial work read the project's .viv/charter.md, map.md, roadmap.md and journal.md; after, update them and add a journal entry (projects/working). guide also holds the design guides (design/...).",
         ),
         triggers: &["new project", "start a project", "kick off", "this codebase", "this repo", "this project", "onboard", "get familiar", "understand the project", "roadmap", "where are we", "what's next", "architecture"],
     },
@@ -189,9 +174,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
         when: "A self-contained chunk of work that would otherwise flood your own context — a broad search, an independent investigation.",
         tools: &["task", "list_subagent_profiles", "task_output", "kill_task", "interrupt_agent", "list_agents", "list_subagent_models", "message_parent", "hire_agent", "ask_agent"],
         how: Some(
-            "list_subagent_profiles first: pointing at an existing profile costs far fewer tokens than writing a full prompt. \
-             Runs in the background by default — keep working while it does, then collect with task_output. \
-             Don't delegate anything you could finish in one or two tool calls yourself.",
+            "list_subagent_profiles first: pointing at a profile costs far fewer tokens than writing a full prompt. A subagent runs in the background by default: keep working, then collect with task_output; run_in_background=false only for a single one-off. Don't delegate what you could finish in one or two calls.",
         ),
         triggers: &["in parallel", "delegate", "subagent"],
     },
@@ -218,10 +201,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
         when: "A durable fact worth carrying forward, or the start of a task that likely touches earlier work.",
         tools: &["remember", "recall", "reflect", "read_skill"],
         how: Some(
-            "recall at the start of a task that plausibly relates to something from before; reflect when the answer has to be put together from several memories. \
-             remember for lasting facts and corrections — not for what the repo already records. \
-             read_skill pulls in the full instructions for any skill in your catalog; read the relevant one BEFORE attempting \
-             a task it covers, not after getting stuck.",
+            "recall at the start of a task that may touch earlier work; reflect to put several memories together; remember lasting facts and corrections, not what the repo already records. read_skill pulls in a skill's full instructions: read the relevant one BEFORE a task it covers.",
         ),
         triggers: &["remember that", "recall", "last time", "previously"],
     },
@@ -281,9 +261,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
         when: "Any calculation beyond trivial arithmetic — algebra, calculus, equations, linear algebra, statistics, optimisation, differential equations, modelling, or a plot — and any chemistry, biology or physics worth drawing: a structure, reaction, mechanism, molecule, sequence, pathway, graph or circuit.",
         tools: &["math", "check_diagram"],
         how: Some(
-            "Compute with math rather than in your head, and show the result it gave. Prefer an exact symbolic answer, \
-             then its numeric value. Write mathematics in your reply as LaTeX — $...$ inline, $$...$$ on its own lines for \
-             display — it is rendered. For a model, state its assumptions and variables before the result.              Science is drawn, not described: in your reply, $\\ce{2H2 + O2 -> 2H2O}$ and $\\pu{9.81 m/s^2}$ render chemistry and units,              and these fences render figures — ```chem (SMILES, reactions, mechanisms), ```mol3d (3D molecules and proteins),              ```bio (sequence, plasmid, tree, pathway, cell), ```plot (function graphs with sliders), ```physics (free-body,              optics, circuits, waves). Read `guide` science/chemistry, science/biology or science/physics before your first one,              and run non-trivial scripts through check_diagram so a bad ring or a typo is fixed before the user sees it.",
+            "Compute with math instead of in your head and show its result; prefer an exact symbolic answer, then the numeric value. Write mathematics as LaTeX ($...$ inline, $$...$$ for display); for a model, state assumptions and variables first. Science is drawn, not described: $\\ce{2H2 + O2 -> 2H2O}$ and $\\pu{9.81 m/s^2}$ render chemistry and units, and these fences render figures: ```chem, ```mol3d, ```bio, ```plot, ```physics. Read `guide` science/chemistry, science/biology or science/physics before your first one, and run non-trivial scripts through check_diagram first.",
         ),
         triggers: &[
             "solve", "equation", "integral", "integrate", "derivative", "differentiate", "calculate", "compute", "prove",
@@ -296,7 +274,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
         when: "A task needs something no tool does, and it will likely come up again — or the set of tools you've written needs tidying.",
         tools: &["create_tool", "list_custom_tools", "delete_tool"],
         how: Some(
-            "Write it once with create_tool (Python, `def run(**args)`, always with test_args) and it becomes a tool for every model              from your next step. Reuse beats rewriting: check your tool list first, and improve an existing tool with replace: true              rather than adding a near-duplicate. Tools you wrote are marked [Your tool].",
+            "Write it once with create_tool (Python, `def run(**args)`, always with test_args) and it becomes a tool from your next step. Check your tool list first and improve an existing tool with replace: true rather than adding a near-duplicate.",
         ),
         triggers: &["make a tool", "create a tool", "write a tool", "custom tool", "reusable", "shred"],
     },
@@ -305,10 +283,7 @@ pub const GROUPS: &[CapabilityGroup] = &[
         when: "Occasional needs.",
         tools: &["run_script", "run_native", "connect_mcp_server", "list_tools", "search_tools", "load_tools", "get_current_time", "sleep"],
         how: Some(
-            "list_tools returns your full live tool list with descriptions — call it if you are ever unsure whether \
-             you have some capability, instead of telling the user you lack it. search_tools finds the tool for a job \
-             from a description of it (\"schedule something every morning\") and loads the best matches, MCP tools \
-             included: use it when a tool you need is not in your function list and you do not know its group.",
+            "list_tools returns your live tool list: call it when unsure whether you have a capability. search_tools finds and loads the tool for a job (MCP tools included) when it isn't in your function list.",
         ),
         triggers: &["rust script", "c++ script", "cpp script", "native script", "compile a program", "write a program to"],
     },

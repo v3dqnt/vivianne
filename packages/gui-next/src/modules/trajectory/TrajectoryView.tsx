@@ -153,13 +153,14 @@ function RowLine({ row, active, first, onOpen }: { row: Row; active: boolean; fi
   )
 }
 
-function Pretty({ label, value }: { label: string; value: unknown }) {
+/** `full`: no height cap, so nothing is behind an inner scrollbar (the system prompt must be readable in one piece). */
+function Pretty({ label, value, full }: { label: string; value: unknown; full?: boolean }) {
   if (value === undefined || value === null || value === '') return null
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
   return (
     <Box sx={{ mb: '12px' }}>
       <Typography sx={{ fontSize: '0.75rem', fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'text.disabled', mb: '4px' }}>{label}</Typography>
-      <Box component="pre" sx={{ m: 0, p: '10px', borderRadius: '8px', bgcolor: 'action.hover', fontFamily: MONO, fontSize: '0.75rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 360, overflow: 'auto' }}>{text}</Box>
+      <Box component="pre" sx={{ m: 0, p: '10px', borderRadius: '8px', bgcolor: 'action.hover', fontFamily: MONO, fontSize: '0.75rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', ...(full ? {} : { maxHeight: 360, overflow: 'auto' }) }}>{text}</Box>
     </Box>
   )
 }
@@ -181,7 +182,7 @@ function Detail({ row, onClose }: { row: Row; onClose: () => void; accent: strin
             ))}
           </Stack>
           {(tab === 'prompt' && row.prompt) || !row.tools ? (
-            <Pretty label="System prompt" value={row.prompt} />
+            <Pretty label="System prompt" value={row.prompt} full />
           ) : (
             row.tools.map((t) => (
               <Box key={t.name} sx={{ py: '6px', borderBottom: 1, borderColor: 'divider' }}>
