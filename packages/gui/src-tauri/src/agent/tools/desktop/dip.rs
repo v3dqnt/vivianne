@@ -692,7 +692,7 @@ pub(crate) async fn execute_dip_read_text_tool(args: &serde_json::Value) -> Tool
 
 static LAST_WINDOWS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 
-fn window_by_id(id: usize) -> Result<isize, String> {
+pub(crate) fn window_by_id(id: usize) -> Result<isize, String> {
     LAST_WINDOWS
         .lock()
         .unwrap_or_else(|e| e.into_inner())

@@ -1237,12 +1237,29 @@ pub async fn execute_tool_calls(
                 continue;
             }
             Verdict::Ask { why, .. } => {
-                let cwd = state.primary_workspace_folder().await.unwrap_or_else(|| ".".to_string());
-                let why = describe_sensitive(&tool_call, &cwd).await.or(why);
-                if !ask_permission(emit, &tool_call, why).await {
-                    let text = format!("Error: Permission denied by user for tool '{}'.", tool_call.name);
-                    slots[slot_idx] = Some(finish_call(emit, tool_call, text_result(text), true));
-                    continue;
+                use crate::agent::tools::desktop::consent::{self, Need};
+                // Driving the desktop is approved per app, once per conversation, not per click.
+                let need = if matches!(tool_call.name.as_str(), "dip" | "computer") { consent::need(&tool_call.arguments) } else { Need::Each };
+                let thread = crate::agent::orchestration::turn_thread().unwrap_or_default();
+                let already = match &need {
+                    Need::Free => true,
+                    Need::App { key, .. } => consent::granted(&thread, key),
+                    Need::Each => false,
+                };
+                if !already {
+                    let cwd = state.primary_workspace_folder().await.unwrap_or_else(|| ".".to_string());
+                    let why = match &need {
+                        Need::App { label, .. } => Some(format!("wants to control {label}: you are asked once for it in this conversation")),
+                        _ => describe_sensitive(&tool_call, &cwd).await.or(why),
+                    };
+                    if !ask_permission(emit, &tool_call, why).await {
+                        let text = format!("Error: Permission denied by user for tool '{}'.", tool_call.name);
+                        slots[slot_idx] = Some(finish_call(emit, tool_call, text_result(text), true));
+                        continue;
+                    }
+                    if let Need::App { key, .. } = &need {
+                        consent::grant(&thread, key);
+                    }
                 }
             }
         }

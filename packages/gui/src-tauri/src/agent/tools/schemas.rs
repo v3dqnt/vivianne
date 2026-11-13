@@ -234,6 +234,7 @@ pub(crate) fn static_tool_definitions() -> Vec<serde_json::Value> {
                         "description": "[x, y] in the last screenshot's pixels (screen pixels if you haven't taken one)."
                     },
                     "start_coordinate": { "type": "array", "items": { "type": "number" }, "description": "left_click_drag: where to start (default: the current cursor)." },
+                    "relative": { "type": "boolean", "description": "coordinate / start_coordinate are 0-999 thousandths of the target window (0,0 top-left, 999,999 bottom-right) instead of screenshot pixels. They stay right if the window moves or resizes." },
                     "text": { "type": "string", "description": "type: the text. key / hold_key / key_down / key_up: a key or combination like \"ctrl+shift+t\". point_at / highlight: a caption." },
                     "repeat": { "type": "number", "description": "key: press it this many times (e.g. down x5)." },
                     "duration": { "type": "number", "description": "Seconds — wait, or how long hold_key holds." },
