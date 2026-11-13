@@ -546,9 +546,14 @@ mod tests {
         assert!(e.message.contains("could not be trusted"), "{e}");
     }
 
+    /// A Python that runs: on Windows `python3` is often a Microsoft Store stub that only prints an install hint.
+    fn working_python() -> Option<std::path::PathBuf> {
+        ["python", "python3"].iter().filter_map(|n| which::which(n).ok()).find(|p| std::process::Command::new(p).arg("--version").output().is_ok_and(|o| o.status.success()))
+    }
+
     #[tokio::test]
     async fn an_adapter_that_listens_on_a_port_is_started_and_connected_to() {
-        let Ok(python) = which::which("python3").or_else(|_| which::which("python")) else { return };
+        let Some(python) = working_python() else { return };
         let script = "import socket,sys,json\ns=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('127.0.0.1',int(sys.argv[1])));s.listen(1);c,_=s.accept();f=c.makefile('rb')\nn=0\nwhile True:\n  l=f.readline()\n  if l.lower().startswith(b'content-length:'): n=int(l.split(b':')[1])\n  if l in (b'\\r\\n',b'\\n'):\n    m=json.loads(f.read(n));b=json.dumps({'seq':1,'type':'response','request_seq':m['seq'],'success':True,'command':m['command'],'body':{'threads':[]}}).encode();c.sendall(b'Content-Length: %d\\r\\n\\r\\n'%len(b)+b);break\n";
         let (client, _events) = DapClient::spawn_listening(&python.to_string_lossy(), &["-c".into(), script.into(), "{port}".into()], &std::env::temp_dir().to_string_lossy(), &Env::new()).await.expect("connected");
         let reply = client.request("threads", Value::Null, Duration::from_secs(5)).await.expect("answered");
@@ -557,7 +562,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_adapter_that_exits_before_listening_says_what_it_said() {
-        let Ok(python) = which::which("python3").or_else(|_| which::which("python")) else { return };
+        let Some(python) = working_python() else { return };
         let e = DapClient::spawn_listening(&python.to_string_lossy(), &["-c".into(), "import sys; print('no such flag'); sys.exit(3)".into()], &std::env::temp_dir().to_string_lossy(), &Env::new()).await.err().expect("failed");
         assert!(e.contains("exited") && e.contains("no such flag"), "{e}");
     }

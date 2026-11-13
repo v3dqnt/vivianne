@@ -568,9 +568,9 @@ mod tests {
         let l = load_with(Some(user), None, false);
         let path = |_: &str| None;
         let f = |_: &str| false;
-        let is_file = |p: &str| p == "/w/tools/my-dap" || p == "/opt/gdb14/bin/gdb";
+        let is_file = |p: &str| matches!(p.replace('\\', "/").as_str(), "/w/tools/my-dap" | "/opt/gdb14/bin/gdb");
         let pr = Probe { on_path: &path, has_file: &f, is_file: &is_file, is_dir: false, root: "/w" };
-        assert_eq!(select_in(&l.adapters, "x.foo", None, &pr).unwrap().command, "/w/tools/my-dap", "a path is joined to the project");
+        assert_eq!(select_in(&l.adapters, "x.foo", None, &pr).unwrap().command.replace('\\', "/"), "/w/tools/my-dap", "a path is joined to the project");
         assert_eq!(select_in(&l.adapters, "x", Some("gdb"), &pr).unwrap().command, "/opt/gdb14/bin/gdb", "the user's own gdb");
         // The same text, for a built-in that the user did not override, never takes a path.
         let plain = Probe { on_path: &|c| Some(format!("/usr/bin/{c}")), ..clone_probe(&pr) };

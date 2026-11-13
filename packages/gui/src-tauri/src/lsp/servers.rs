@@ -246,7 +246,7 @@ mod tests {
         let root = Path::new("/w");
         let exists = |p: &Path| p == Path::new("/w/node_modules/.bin/pyright-langserver");
         let path = |c: &str| Some(format!("/usr/bin/{c}"));
-        assert_eq!(resolve_command_with("pyright-langserver", root, true, &exists, &path).as_deref(), Some("/w/node_modules/.bin/pyright-langserver"));
+        assert_eq!(resolve_command_with("pyright-langserver", root, true, &exists, &path).map(|p| p.replace('\\', "/")).as_deref(), Some("/w/node_modules/.bin/pyright-langserver"));
         assert_eq!(resolve_command_with("pyright-langserver", root, false, &exists, &path).as_deref(), Some("/usr/bin/pyright-langserver"), "untrusted: PATH only");
         assert_eq!(resolve_command_with("./x/ls", root, true, &exists, &path).as_deref(), Some("/usr/bin/./x/ls"), "a path is never looked up in the project's bin dirs");
         assert_eq!(resolve_command_with("gopls", root, true, &|_| false, &|_| None), None);

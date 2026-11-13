@@ -714,7 +714,8 @@ mod tests {
         let (from, to) = (d.join("src").to_string_lossy().into_owned(), d.join("lib").to_string_lossy().into_owned());
         let pairs = file_pairs(&from, &to).unwrap();
         assert_eq!(pairs.len(), 2);
-        assert!(pairs[0].1.ends_with("lib/a.ts") && pairs[1].1.ends_with("lib/sub/b.ts"), "{pairs:?}");
+        let unix = |s: &str| s.replace('\\', "/");
+        assert!(unix(&pairs[0].1).ends_with("lib/a.ts") && unix(&pairs[1].1).ends_with("lib/sub/b.ts"), "{pairs:?}");
         // A single file is one pair.
         let one = file_pairs(&d.join("src/a.ts").to_string_lossy(), "/x/y.ts").unwrap();
         assert_eq!(one.len(), 1);
