@@ -84,7 +84,21 @@ pub fn builtin() -> Vec<Adapter> {
     // CodeLLDB serves DAP on a port it is given (omp starts it with `--port 0` and then talks stdio to it, which cannot work).
     let mut codelldb = def("codelldb", &["codelldb"], &["--port", "{port}"], &["c", "cc", "cpp", "cxx", "rs", "zig"], &["Cargo.toml", "CMakeLists.txt"], "install the CodeLLDB adapter (vadimcn/codelldb) and put `codelldb` on PATH");
     codelldb.listen = true;
-    vec![
+    // From oh-my-pi's dap/defaults.json. Like the rest of this table, none has been launched here: each needs one real run.
+    let with = |mut a: Adapter, launch: Value| {
+        a.launch_defaults = launch;
+        a
+    };
+    let more = vec![
+        with(def("kotlin-debug-adapter", &["kotlin-debug-adapter"], &[], &["kt", "kts"], &["build.gradle", "build.gradle.kts", "pom.xml", "settings.gradle", "settings.gradle.kts"], "install kotlin-debug-adapter (fwcd/kotlin-debug-adapter)"), json!({ "mainClass": "", "projectRoot": "" })),
+        // rdbg's arguments are omp's; `--open` is a socket mode, so this one is the likeliest to need a fix on first launch.
+        with(def("rdbg", &["rdbg"], &["--open", "--command", "--"], &["rb", "rake", "gemspec"], &["Gemfile", "Rakefile", ".ruby-version"], "install it with `gem install debug`"), json!({ "type": "rdbg" })),
+        with(def("php-debug-adapter", &["php-debug-adapter"], &[], &["php", "phtml"], &["composer.json", "composer.lock"], "install the PHP debug adapter (xdebug/vscode-php-debug) and put `php-debug-adapter` on PATH"), json!({ "stopOnEntry": true })),
+        with(def("bash-debug-adapter", &["bash-debug-adapter"], &[], &["sh", "bash"], &[".git"], "install bash-debug-adapter (it needs bashdb)"), json!({ "type": "bashdb", "pathBashdb": "bashdb", "pathBash": "bash" })),
+        with(def("dart-debug-adapter", &["dart"], &["debug_adapter"], &["dart"], &["pubspec.yaml", "pubspec.lock"], "it comes with the Dart SDK"), json!({ "stopOnEntry": true })),
+        with(def("elixir-ls-debugger", &["elixir-ls-debugger"], &[], &["ex", "exs", "heex", "eex"], &["mix.exs", "mix.lock"], "install ElixirLS and put `elixir-ls-debugger` on PATH"), json!({ "type": "mix_task", "task": "run", "stopOnEntry": true })),
+    ];
+    let mut all = vec![
         def("debugpy", &["python", "python3"], &["-m", "debugpy.adapter"], &["py", "pyw"], &["pyproject.toml", "setup.py", "requirements.txt"], "install it with `pip install debugpy`"),
         def("lldb-dap", &["lldb-dap"], &[], &["rs", "c", "cc", "cpp", "cxx", "h", "hpp", "m", "mm", "swift", "zig", ""], &["Cargo.toml", "CMakeLists.txt", "Package.swift", "build.zig"], "it comes with LLVM"),
         def("gdb", &["gdb"], &["-i", "dap"], &["rs", "c", "cc", "cpp", "cxx", ""], &["Cargo.toml", "CMakeLists.txt", "Makefile"], "it needs GDB 14 or newer"),
@@ -92,7 +106,9 @@ pub fn builtin() -> Vec<Adapter> {
         def("netcoredbg", &["netcoredbg"], &["--interpreter=vscode"], &["cs", "fs", "dll"], &["global.json"], "install netcoredbg from Samsung/netcoredbg"),
         delve,
         js,
-    ]
+    ];
+    all.extend(more);
+    all
 }
 
 /// Which of several adapters for one file wins a tie, after root markers. oh-my-pi puts gdb first; here lldb-dap is first, because gdb's DAP
@@ -151,7 +167,7 @@ fn merge_object(base: &mut Value, over: &Value) {
 /// Apply one config file to `adapters`. Returns what was wrong with it, or `Ok` with the command lines it defines (for the caller that
 /// ignores it). `apply == false` only reads, to report what an untrusted project asks for.
 pub fn apply_config(adapters: &mut Vec<Adapter>, text: &str, source: Source, apply: bool) -> Result<Vec<String>, String> {
-    let doc: Value = serde_json::from_str(text).map_err(|e| format!("not valid JSON: {e}"))?;
+    let doc = crate::lsp::servers::parse_config(text)?;
     let map = doc.get("adapters").and_then(|a| a.as_object()).or_else(|| doc.as_object()).ok_or("not an object")?;
     let mut lines = Vec::new();
     for (name, entry) in map {
@@ -245,8 +261,8 @@ pub fn load_with(user: Option<&str>, project: Option<&str>, project_trusted: boo
 
 /// The adapters for work in `cwd`: the user's `dap.json` from their Vivianne folder and the project's `.viv/dap.json`.
 pub fn load(cwd: &str) -> Loaded {
-    let user = std::fs::read_to_string(crate::agent::system::paths::viv_home_path(&["dap.json"])).ok();
-    let project = std::fs::read_to_string(Path::new(cwd).join(".viv").join("dap.json")).ok();
+    let user = crate::lsp::servers::read_config(&crate::agent::system::paths::viv_home_path(&["dap"]));
+    let project = crate::lsp::servers::read_config(&Path::new(cwd).join(".viv").join("dap"));
     let trusted = project.is_some() && crate::mods::project_trusted(cwd);
     load_with(user.as_deref(), project.as_deref(), trusted)
 }
@@ -560,6 +576,21 @@ mod tests {
         let g = trusted.adapters.iter().find(|a| a.name == "gdb").unwrap();
         assert_eq!((g.commands.clone(), g.args.clone(), g.source), (vec!["./evil/gdb".to_string()], vec!["--x".to_string()], Source::Project));
         assert!(trusted.ignored.is_empty());
+    }
+
+    #[test]
+    fn the_six_adapters_from_omp_are_chosen_by_extension_and_carry_their_launch_fields() {
+        let all = |c: &str| Some(format!("/bin/{c}"));
+        let l = load_with(None, None, false);
+        let probe = Probe { on_path: &all, has_file: &|_| false, is_file: &|_| false, is_dir: false, root: "/w" };
+        for (file, name) in [("a.kt", "kotlin-debug-adapter"), ("a.rb", "rdbg"), ("a.php", "php-debug-adapter"), ("a.sh", "bash-debug-adapter"), ("a.dart", "dart-debug-adapter"), ("a.exs", "elixir-ls-debugger")] {
+            assert_eq!(select_in(&l.adapters, file, None, &probe).unwrap().adapter.name, name, "{file}");
+        }
+        let get = |n: &str| l.adapters.iter().find(|a| a.name == n).unwrap();
+        assert_eq!(get("bash-debug-adapter").launch_defaults["type"], "bashdb");
+        assert_eq!(get("elixir-ls-debugger").launch_defaults["task"], "run");
+        assert_eq!(get("dart-debug-adapter").args, vec!["debug_adapter".to_string()]);
+        assert_eq!(get("php-debug-adapter").launch_defaults["stopOnEntry"], true);
     }
 
     #[test]

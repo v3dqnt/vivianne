@@ -406,7 +406,11 @@ impl LspClient {
                         _ => return None,
                     };
                     let seq = self.publishes.fetch_add(1, Ordering::SeqCst) + 1;
-                    self.diagnostics.lock().await.insert(key.to_string(), Published { items: items.clone(), version: Some(mark.version), seq, at: Instant::now() });
+                    let mut held = self.diagnostics.lock().await;
+                    // What the server pushed for this same text counts too: some servers report different things each way.
+                    let pushed = held.get(key).filter(|p| is_fresh(p, mark, self.started.elapsed(), Instant::now())).map(|p| p.items.clone()).unwrap_or_default();
+                    let items = merge_diagnostics(items, pushed);
+                    held.insert(key.to_string(), Published { items: items.clone(), version: Some(mark.version), seq, at: Instant::now() });
                     return Some(items);
                 }
                 // The server was busy with a change (-32801) or cancelled the request (-32802): ask again shortly.
@@ -580,6 +584,16 @@ fn is_fresh(p: &Published, mark: &SyncMark, server_age: Duration, now: Instant) 
     }
 }
 
+/// `pulled` followed by whatever in `pushed` it does not already say (same range, severity, message and code).
+pub(crate) fn merge_diagnostics(mut pulled: Vec<Diagnostic>, pushed: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    for d in pushed {
+        if !pulled.contains(&d) {
+            pulled.push(d);
+        }
+    }
+    pulled
+}
+
 /// What the reading task needs from the client.
 struct Shared {
     writer: Writer,
@@ -689,6 +703,21 @@ async fn dispatch(message: Value, shared: &Shared) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pushed_diagnostics_are_added_to_pulled_ones_without_repeats() {
+        let d = |line: u32, msg: &str| Diagnostic {
+            range: crate::lsp::Range { start: crate::lsp::Position { line, character: 0 }, end: crate::lsp::Position { line, character: 1 } },
+            severity: Some(1),
+            message: msg.into(),
+            source: None,
+            code: None,
+        };
+        let merged = merge_diagnostics(vec![d(1, "a"), d(2, "b")], vec![d(2, "b"), d(3, "c"), d(1, "different")]);
+        assert_eq!(merged, vec![d(1, "a"), d(2, "b"), d(3, "c"), d(1, "different")]);
+        assert_eq!(merge_diagnostics(vec![], vec![d(1, "a")]), vec![d(1, "a")]);
+        assert_eq!(merge_diagnostics(vec![d(1, "a")], vec![]), vec![d(1, "a")]);
+    }
     use tokio::io::{duplex, DuplexStream};
 
     /// A client wired to an in-memory "server" end the test drives by hand.

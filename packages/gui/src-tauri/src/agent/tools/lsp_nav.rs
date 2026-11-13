@@ -118,6 +118,54 @@ fn render_symbols(result: &Value, cwd: &str) -> String {
     out.trim_end().to_string()
 }
 
+/// Files a glob names, for `diagnostics` over many files at once. Bounded: each file is a request to a language server.
+const MAX_GLOB_FILES: usize = 15;
+
+/// Files under `root` matching `pattern` (as the `glob` tool reads it), in walk order, at most `cap`; the second number is how many matched.
+fn expand_glob(root: &std::path::Path, pattern: &str, cap: usize) -> Result<(Vec<std::path::PathBuf>, usize), String> {
+    let matcher = super::builtin::glob_to_regex(pattern).map_err(|e| format!("invalid glob pattern '{pattern}': {e}"))?;
+    let (mut found, mut total) = (Vec::new(), 0usize);
+    super::builtin::walk_files(root, usize::MAX, |p| {
+        let rel = p.strip_prefix(root).unwrap_or(p).to_string_lossy().replace('\\', "/");
+        if matcher.is_match(&rel) {
+            total += 1;
+            if found.len() < cap {
+                found.push(p.to_path_buf());
+            }
+        }
+        total < cap * 20
+    });
+    Ok((found, total))
+}
+
+async fn glob_diagnostics(cwd: &str, pattern: &str) -> String {
+    use crate::lsp::manager::Report;
+    let root = std::path::PathBuf::from(cwd);
+    let (root2, pat) = (root.clone(), pattern.to_string());
+    let (files, total) = match tokio::task::spawn_blocking(move || expand_glob(&root2, &pat, MAX_GLOB_FILES)).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return format!("Error: {e}"),
+        Err(e) => return format!("Error: {e}"),
+    };
+    if files.is_empty() {
+        return format!("No files match {pattern}.");
+    }
+    let (mut out, mut clean, mut unknown) = (Vec::new(), 0usize, 0usize);
+    for f in &files {
+        let shown = super::builtin::display_path(f, &root);
+        match crate::lsp::manager::report(&f.display().to_string(), cwd, std::time::Duration::from_secs(6)).await {
+            Report::Published(items) if items.is_empty() => clean += 1,
+            Report::NoServer | Report::NotReported => unknown += 1,
+            r => out.push(render_diagnostics(&shown, r)),
+        }
+    }
+    out.push(format!("{} file(s) checked: {clean} clean, {unknown} with no answer from a language server.", files.len()));
+    if total > files.len() {
+        out.push(format!("[{} more files match; only the first {MAX_GLOB_FILES} were checked. Use a narrower pattern.]", total - files.len()));
+    }
+    out.join("\n\n")
+}
+
 fn render_diagnostics(path: &str, report: crate::lsp::manager::Report) -> String {
     use crate::lsp::manager::Report;
     match report {
@@ -164,6 +212,9 @@ impl Tool for LspTool {
         }
         if path.is_empty() {
             return fail("'path' is required".into());
+        }
+        if op == "diagnostics" && path.contains(['*', '?', '[', '{']) {
+            return ok(glob_diagnostics(&self.cwd, path).await);
         }
         let full = super::builtin::resolve_path(&self.cwd, path);
         if !full.is_file() {
@@ -354,6 +405,23 @@ impl Tool for LspEditTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_glob_names_files_under_the_workspace_and_is_capped() {
+        let d = std::env::temp_dir().join(format!("viv-glob-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(d.join("src/sub")).unwrap();
+        for f in ["src/a.ts", "src/b.ts", "src/sub/c.ts", "src/d.js"] {
+            std::fs::write(d.join(f), "").unwrap();
+        }
+        let (all, total) = expand_glob(&d, "src/**/*.ts", 10).unwrap();
+        let names: std::collections::BTreeSet<String> = all.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!((names.len(), total), (3, 3));
+        assert!(names.contains("c.ts") && !names.contains("d.js"));
+        let (some, total) = expand_glob(&d, "src/**/*.ts", 2).unwrap();
+        assert_eq!((some.len(), total), (2, 3), "capped, and the real count said");
+        assert!(expand_glob(&d, "src/**/*.rs", 10).unwrap().0.is_empty());
+        std::fs::remove_dir_all(&d).ok();
+    }
     use serde_json::json;
 
     #[test]

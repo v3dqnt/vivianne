@@ -108,7 +108,7 @@ fn parse_entry(entry: &Value, source: Source) -> Option<ServerDef> {
 
 /// The definitions a config file gives `language_id`. A file that isn't valid JSON gives none (and the caller says so).
 pub fn from_config(text: &str, language_id: &str, source: Source) -> Result<Vec<ServerDef>, String> {
-    let doc: Value = serde_json::from_str(text).map_err(|e| format!("not valid JSON: {e}"))?;
+    let doc = parse_config(text)?;
     // `{ "servers": { "python": ... } }`, or the same map at the top level.
     let entry = if doc.get("servers").is_some() { doc.pointer(&format!("/servers/{language_id}")) } else { doc.get(language_id) };
     let Some(entry) = entry else { return Ok(Vec::new()) };
@@ -175,10 +175,20 @@ pub fn candidates_with(language_id: &str, user_cfg: Option<&str>, project_cfg: O
     out
 }
 
-/// The same, reading the files: the user's from their Vivianne folder, the project's from `<workspace>/.viv/lsp.json`.
+/// A config file's text: JSON, or YAML when it is not JSON (`lsp.yaml`, `dap.yml`). The error is the JSON one, which is what most files are.
+pub(crate) fn parse_config(text: &str) -> Result<Value, String> {
+    serde_json::from_str(text).or_else(|je| serde_yaml::from_str::<Value>(text).map_err(|_| format!("not valid JSON or YAML: {je}")))
+}
+
+/// The first of `<stem>.json`, `.yaml`, `.yml` that exists.
+pub(crate) fn read_config(stem: &Path) -> Option<String> {
+    ["json", "yaml", "yml"].iter().find_map(|e| std::fs::read_to_string(stem.with_extension(e)).ok())
+}
+
+/// The same, reading the files: the user's from their Vivianne folder, the project's from `<workspace>/.viv/lsp.json` (or `.yaml`).
 pub fn candidates(language_id: &str, workspace: &str) -> Candidates {
-    let user = std::fs::read_to_string(crate::agent::system::paths::viv_home_path(&["lsp.json"])).ok();
-    let project = std::fs::read_to_string(Path::new(workspace).join(".viv").join("lsp.json")).ok();
+    let user = read_config(&crate::agent::system::paths::viv_home_path(&["lsp"]));
+    let project = read_config(&Path::new(workspace).join(".viv").join("lsp"));
     let trusted = project.is_some() && crate::mods::project_trusted(workspace);
     candidates_with(language_id, user.as_deref(), project.as_deref(), trusted)
 }
@@ -239,6 +249,22 @@ mod tests {
         assert_eq!(find_root(&file, &ws.to_string_lossy(), &["nothing".to_string()]), ws.to_string_lossy());
         assert_eq!(find_root(Path::new("/elsewhere/x.rs"), &ws.to_string_lossy(), &markers), ws.to_string_lossy());
         std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn a_config_file_may_be_json_or_yaml() {
+        let json = parse_config(r#"{ "servers": { "x": { "command": "xls" } } }"#).unwrap();
+        let yaml = parse_config("servers:\n  x:\n    command: xls\n").unwrap();
+        assert_eq!(json, yaml);
+        assert!(parse_config("{ not: [valid").unwrap_err().contains("JSON or YAML"));
+        let d = std::env::temp_dir().join(format!("viv-cfg-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        assert_eq!(read_config(&d.join("lsp")), None);
+        std::fs::write(d.join("lsp.yml"), "a: 1").unwrap();
+        assert_eq!(read_config(&d.join("lsp")).as_deref(), Some("a: 1"));
+        std::fs::write(d.join("lsp.json"), "{}").unwrap();
+        assert_eq!(read_config(&d.join("lsp")).as_deref(), Some("{}"), "json first");
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

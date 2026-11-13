@@ -63,6 +63,12 @@ pub fn language_id_for_extension(ext: &str) -> Option<&'static str> {
         ("nix", "nix"),
         ("gleam", "gleam"),
         ("jl", "julia"),
+        ("tla", "tlaplus"), ("tlaplus", "tlaplus"),
+        ("astro", "astro"),
+        ("odin", "odin"),
+        ("tex", "latex"), ("bib", "latex"), ("sty", "latex"), ("cls", "latex"),
+        ("prisma", "prisma"),
+        ("vim", "vim"),
     ];
     map.iter().find(|(e, _)| *e == ext).map(|(_, id)| *id)
 }
@@ -80,6 +86,9 @@ pub fn server_candidates(language_id: &str) -> &'static [(&'static str, &'static
             ("basedpyright-langserver", &["--stdio"]),
             ("pylsp", &[]),
             ("jedi-language-server", &[]),
+            // Linters that speak LSP: with no full server installed they still give diagnostics.
+            ("ty", &["server"]),
+            ("ruff", &["server"]),
         ],
         "rust" => &[
             ("rust-analyzer", &[]),
@@ -113,6 +122,7 @@ pub fn server_candidates(language_id: &str) -> &'static [(&'static str, &'static
         "proto" => &[("buf", &["beta", "lsp"])],
         "php" => &[
             ("intelephense", &["--stdio"]),
+            ("phpactor", &["language-server"]),
         ],
         "lua" => &[
             ("lua-language-server", &[]),
@@ -127,10 +137,16 @@ pub fn server_candidates(language_id: &str) -> &'static [(&'static str, &'static
         "graphql" => &[("graphql-lsp", &["server", "-m", "stream"])],
         "vue" => &[("vue-language-server", &["--stdio"])],
         "haskell" => &[("haskell-language-server-wrapper", &["--lsp"])],
-        "elixir" => &[("elixir-ls", &[])],
+        "elixir" => &[("elixir-ls", &[]), ("expert", &["--stdio"])],
+        "tlaplus" => &[("tlapm_lsp", &["--stdio"])],
+        "astro" => &[("astro-ls", &["--stdio"])],
+        "odin" => &[("ols", &[])],
+        "latex" => &[("texlab", &[])],
+        "prisma" => &[("prisma-language-server", &["--stdio"])],
+        "vim" => &[("vim-language-server", &["--stdio"])],
         "zig" => &[("zls", &[])],
         "swift" => &[("sourcekit-lsp", &[])],
-        "kotlin" => &[("kotlin-language-server", &[])],
+        "kotlin" => &[("kotlin-language-server", &[]), ("kotlin-lsp", &["--stdio"])],
         "scala" => &[("metals", &[])],
         _ => &[],
     }
